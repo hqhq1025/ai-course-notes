@@ -1,0 +1,771 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 5: GPUs}
+\newcommand{\noteauthors}{基于 Tatsu Hashimoto 授课内容整理}
+\newcommand{\notedate}{2025年5月1日}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-05-01}
+\newcommand{\videoduration}{1:14:21}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=6OBtO9niT00}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: GPU 架构 ==========
+
+\section{引言：为什么要理解 GPU}
+
+本节课有两个核心学习目标：（1）理解 GPU 的工作原理，让 CUDA 和 GPU 不再``神秘''；（2）掌握加速算法的基本思路，能够针对新架构设计高性能实现。
+
+\begin{importantbox}{课程两大目标}
+\begin{enumerate}
+    \item 理解 GPU 何时变慢、为什么变慢——揭开矩阵乘法性能曲线中那些``诡异波动''的谜底
+    \item 掌握加速算法设计的核心思路——理解 FlashAttention 等算法为何能大幅提升性能
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{课程大纲与目标：左侧为方阵乘法的 TF/s 性能曲线（标注了 Tiling、Compute Intensity、Wave Quantization 三大现象），右侧为 FlashAttention 的 tiled 计算示意图及性能对比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。矩阵乘法性能数据来自 \url{https://www.thonking.ai/p/what-shapes-do-matrix-multiplications}；FlashAttention 图来自 Dao et al.}
+
+课程的整体组织分为三部分：
+
+\begin{enumerate}
+    \item \textbf{Part 1}：GPU 深度剖析——硬件结构与关键组件
+    \item \textbf{Part 2}：理解 GPU 性能——如何让 ML 工作负载跑得更快
+    \item \textbf{Part 3}：综合应用——拆解 FlashAttention
+\end{enumerate}
+
+\subsection{计算驱动性能提升}
+
+Scaling laws 告诉我们：更多的计算资源能带来可预测的语言模型性能提升。Kaplan 等人的研究表明，验证损失与计算量之间存在幂律关系 $L = 2.57 \cdot C^{-0.048}$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{Neural Scaling Laws：计算量（PetaFLOP/s-days）与验证损失的关系\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。图来自 Kaplan et al., Neural Scaling Laws。}
+
+更快的硬件、更好的利用率、更高效的并行化，这些才是真正驱动性能进步的因素。因此，理解硬件是构建高效语言模型的必要前提。
+
+\subsection{从 Dennard Scaling 到并行计算}
+
+在半导体发展的早期（1980s--2000s），芯片依靠 \textbf{Dennard Scaling} 来提升性能：更小的晶体管 $\rightarrow$ 更高的时钟频率 $\rightarrow$ 更低的功耗 $\rightarrow$ 更高的性能。但 Dennard Scaling 在 2000 年代初期逐渐失效，单线程性能增长趋于平缓。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{Hennessy \& Patterson 经典图表：42年处理器数据，单线程性能（蓝色）约2000年后趋平\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+\begin{knowledgebox}{Dennard Scaling 与 Moore's Law}
+\textbf{Moore's Law}：晶体管数量每1--2年翻倍（仍在延续）。\\
+\textbf{Dennard Scaling}：更小的晶体管可以在更高频率下以更低功耗运行（已失效）。\\
+失效的原因：漏电流增大、散热极限。此后，性能提升转向\textbf{并行化}。
+\end{knowledgebox}
+
+GPU 并行计算的扩展在过去 10 年实现了超过 \textbf{1000x} 的性能提升（从 K20X 到 H100）。这一增长来自四个维度：
+
+\begin{itemize}
+    \item \textbf{数值表示}（FP32 $\rightarrow$ FP16 $\rightarrow$ Int8）：$\sim$16x
+    \item \textbf{复杂指令}（DP4, HMMA, IMMA）：$\sim$12.5x
+    \item \textbf{制程进步}（28nm $\rightarrow$ 5nm）：$\sim$2.5x
+    \item \textbf{稀疏性}：$\sim$2x
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{Bill Dally HotChips 演讲：单芯片推理性能 10 年增长 1000x\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+\begin{importantbox}{没有 GPU 扩展就没有 LLM 扩展}
+``There is no LLM scaling without GPU scaling.'' GPU 的并行计算能力是大语言模型得以存在的硬件基础。
+\end{importantbox}
+
+\subsection{本章小结}
+
+半导体性能提升已从频率驱动转向并行驱动。GPU 通过大规模并行计算实现了指数级的性能增长，是支撑大语言模型训练和推理的核心硬件。理解 GPU 的工作原理和性能特征，是设计高效 ML 系统的必要条件。
+
+%% ========== GPU 架构 ==========
+
+\section{GPU 架构剖析}
+
+\subsection{CPU vs GPU：设计哲学的根本差异}
+
+CPU 和 GPU 的芯片面积分配方式截然不同：
+
+\begin{itemize}
+    \item \textbf{CPU}：大量面积用于控制逻辑（分支预测、乱序执行）和缓存，少量 ALU。优化目标是\textbf{延迟（latency）}——让单个任务尽快完成。
+    \item \textbf{GPU}：大量面积用于计算单元（ALU），极少的控制逻辑。优化目标是\textbf{吞吐量（throughput）}——在给定时间内处理尽可能多的数据。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-007.jpg}
+\caption{CPU vs GPU 架构对比：CPU 芯片面积主要用于 Control 和 Cache，GPU 主要用于大量 ALU\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页。}
+
+右上角的调度示意图清楚地展示了二者的区别：CPU 串行完成 T1$\rightarrow$T2$\rightarrow$T3$\rightarrow$T4（每个任务快速完成），GPU 则让 T1--T4 并行执行（单个任务可能等待数据，但整体吞吐量高）。
+
+\subsection{GPU 的执行单元：SM 与 SP}
+
+GPU 由大量 \textbf{SM（Streaming Multiprocessor，流式多处理器）} 组成，每个 SM 内部包含多个 \textbf{SP（Streaming Processor，流处理器）}。以 A100 为例，拥有 \textbf{128 个 SM}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{GA100 GPU 芯片结构：左侧为单个 SM 的内部组成（Tensor Core、FP32/INT32 单元、Register File），右侧为完整芯片的 128 个 SM 布局\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\begin{importantbox}{GPU 执行层次}
+\textbf{GPU} $\supset$ \textbf{SM}（流式多处理器）$\supset$ \textbf{SP}（流处理器）\\
+每个 SM 独立执行一组``Block''（任务），每个 SP 可以并行执行多个线程。A100 拥有 128 个 SM，每个 SM 含多个 Tensor Core 和大量 FP32/INT32 计算单元。
+\end{importantbox}
+
+\subsection{GPU 内存层次}
+
+GPU 性能优化的核心在于\textbf{内存}。越靠近 SM 的内存越快：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{内存类型} & \textbf{访问延迟 (cycles)} & \textbf{位置} \\
+\midrule
+Shared Memory (SRAM) & 23/19 (load/store) & SM 内部 \\
+L1 Cache & 33 & SM 内部 \\
+L2 Cache & 200 & 芯片上 \\
+Global Memory (HBM/DRAM) & 290 & 芯片外 \\
+\bottomrule
+\end{tabular}
+\caption{A100 GPU 各级内存访问延迟}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{GPU 内存层次结构：Shared Memory 在 SM 内部（最快），L2 Cache 在芯片上，HBM 在芯片外部（最慢）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。PCIe A100 实物照片展示了 GPU 芯片与外部 HBM 芯片的物理距离。}
+
+\begin{warningbox}{内存是性能的关键瓶颈}
+SRAM（shared/cache）比 DRAM（global memory）快约 \textbf{8x}，但贵约 \textbf{100x}。全局内存访问延迟（290 cycles）是共享内存（23 cycles）的 \textbf{12.6 倍}。如果你的计算需要频繁访问全局内存，SM 上的计算单元就会空闲等待数据，造成严重的性能浪费。
+\end{warningbox}
+
+\subsection{GPU 执行模型：Thread, Block, Warp}
+
+GPU 的编程模型有三个关键概念：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{GPU 执行模型：CUDA Program 被划分为多个 Block，每个 Block 分配到一个 SM，Block 内线程以 Warp（32线程）为单位执行\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+\begin{importantbox}{GPU 执行模型三要素}
+\begin{itemize}
+    \item \textbf{Thread（线程）}：执行实际计算的最小单位。所有线程执行\textbf{相同的指令}，但操作\textbf{不同的数据}——这就是 \textbf{SIMT}（Single Instruction, Multiple Threads）模型。
+    \item \textbf{Block（线程块）}：一组线程的集合。每个 Block 运行在一个 SM 上，Block 内的线程共享该 SM 的 Shared Memory。
+    \item \textbf{Warp（线程束）}：Block 内的线程以 \textbf{32 个为一组}同步执行，称为一个 Warp。Warp 是 GPU 调度的基本单位。
+\end{itemize}
+\end{importantbox}
+
+\subsection{GPU 内存模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-011.jpg}
+\caption{GPU 内存模型：每个线程有自己的 Register，Block 内线程共享 Shared Memory，Block 间通过 Global Memory 通信\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第12页。}
+
+理想的执行模式：每个 Block 的数据都在 Shared Memory 中，Block 内线程高速访问，计算完成后一次性写回全局内存。如果线程需要频繁访问分散在全局内存各处的数据，性能就会急剧下降。
+
+\begin{warningbox}{跨 Block 通信代价高昂}
+Block 之间\textbf{无法直接通信}——必须通过全局内存中转。这意味着算法设计时应尽量让每个 Block 独立完成计算，最小化跨 Block 数据依赖。
+\end{warningbox}
+
+\subsection{TPU 简介}
+
+Google 的 TPU（Tensor Processing Unit）与 GPU 在高层架构上非常相似：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{TPU 架构：Scalar Unit（控制）、VPU（向量运算）、MXU（矩阵乘法）、高速片上内存和外部 HBM\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+TPU 与 GPU 的核心共同点：轻量控制逻辑 + 大型矩阵乘法单元 + 快速片上内存。
+主要差异：（1）TPU 没有 Warp 的概念，编程模型更简单；（2）加速器间的互联方式不同（在并行化课程中详细讨论）；（3）GPU 有更多 SM，TPU 有更少但更大的 TensorCore（矩阵乘法性能接近）。
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item GPU 是大规模并行处理系统，使用 SIMT 模型在大量线程上执行相同指令
+    \item SM 是 GPU 的核心执行单元，Block 映射到 SM，线程以 Warp（32线程）为单位调度
+    \item \textbf{计算（尤其是 matmul）的扩展速度远快于内存带宽}——这决定了性能优化的核心策略
+    \item 必须\textbf{尊重内存层次结构}：尽量让数据停留在快速的 Shared Memory 中
+\end{itemize}
+
+%% ========== Part 2: GPU 性能优化 ==========
+
+\section{GPU 性能分析与优化}
+
+\subsection{Matmul 性能的``诡异''曲线}
+
+方阵矩阵乘法的性能曲线看起来非常``诡异''——随着矩阵尺寸增大，性能不是单调递增，而是呈现出波浪状的起伏：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{方阵乘法（NxN @ NxN）在 A100 上的 TF/s 性能：标注了 Compute Intensity（粉色）、Tiling（橙色）、Wave Quantization（绿色）三大影响因素\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。数据来自 Horace He 的博客。}
+
+本节的目标：\textbf{到课程结束时，你将完全理解这条曲线中每一个波动的成因}。
+
+\subsection{Matmul 是``特权运算''}
+
+现代 GPU 中的 \textbf{Tensor Core} 是专为矩阵乘法设计的硬件电路。Matmul 的峰值吞吐量比普通浮点运算（如加法、ReLU）高 \textbf{10x 以上}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{slides-images/slide-016.jpg}
+\caption{各代 NVIDIA GPU 的 matmul vs non-matmul TFLOP/s 对比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第17页。}
+
+\begin{importantbox}{设计神经网络架构的黄金法则}
+你的工作负载中，\textbf{大部分 FLOP 应该花在矩阵乘法上}。任何不是 matmul 的操作，相对于 matmul 而言都极其缓慢。这就是为什么 Transformer 架构如此成功——它的核心计算几乎全是矩阵乘法。
+\end{importantbox}
+
+\subsection{计算扩展快于内存扩展}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{过去 20 年的扩展趋势：HW FLOPS 每2年增长 3.0x（灰色），DRAM 带宽每2年仅增长 1.6x（绿色），互联带宽增长更慢\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。来源：\url{https://medium.com/riselab/ai-and-memory-wall-2cb4265cb0b8}}
+
+\begin{warningbox}{Memory Wall：内存墙}
+计算能力的增长速度（每2年 3.0x）远快于内存带宽（每2年 1.6x）和互联带宽（每2年 1.4x）。这意味着：
+\begin{itemize}
+    \item 早期 GPU（如 K80）上，瓶颈往往是计算不够快
+    \item 现代 GPU（如 A100/H100）上，瓶颈越来越多地变成\textbf{内存带宽不足}——数据送不到计算单元
+\end{itemize}
+这个差距会越来越大。设计高效算法必须越来越多地关注内存。
+\end{warningbox}
+
+\subsection{Roofline 模型：理解性能上限}
+
+Roofline 模型将工作负载分为两个区域：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-020.jpg}
+\caption{Roofline 模型：x 轴是操作强度（FLOPs/byte），y 轴是吞吐量。Dense matmul（菱形）在计算受限区域，Sparse matmul（圆形）在内存受限区域\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\begin{importantbox}{Roofline 模型的两个区域}
+\begin{itemize}
+    \item \textbf{内存受限区域}（Memory-bound，对角线部分）：操作强度低，吞吐量受限于内存带宽。增加计算不会更快，因为数据供不上。
+    \item \textbf{计算受限区域}（Compute-bound，平坦部分）：操作强度高，吞吐量受限于计算单元峰值性能。这是理想状态。
+\end{itemize}
+本节的核心问题：\textbf{如何避免被内存带宽限制住？}
+\end{importantbox}
+
+\subsection{优化技巧总览}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{slides-images/slide-021.jpg}
+\caption{六大 GPU 性能优化技巧\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+课程介绍了六种核心优化手段：
+\begin{enumerate}
+    \item \textbf{Control Divergence}（控制分歧）——非内存瓶颈
+    \item \textbf{Low Precision Computation}（低精度计算）
+    \item \textbf{Operator Fusion}（算子融合）
+    \item \textbf{Recomputation}（重计算）
+    \item \textbf{Coalescing Memory}（内存合并访问）
+    \item \textbf{Tiling}（分块计算）
+\end{enumerate}
+
+其中第 1 项不涉及内存，其余 5 项都围绕\textbf{减少或优化内存访问}展开。
+
+\subsection{技巧 0：避免 Control Divergence}
+
+GPU 的 SIMT 模型要求 Warp 内所有 32 个线程执行\textbf{相同的指令}。如果代码中有条件分支（if-else），会发生什么？
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{Control Divergence 示意：if-else 导致 Warp 内线程分化，必须串行执行两个分支\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+\begin{lstlisting}[caption={触发 Control Divergence 的代码示例},language=C]
+if (threadIdx.x < 4) {
+    A; B;
+} else {
+    X; Y;
+}
+Z;
+\end{lstlisting}
+
+当 Warp 中不同线程走不同分支时，GPU 会\textbf{先暂停一半线程，执行另一半的分支，然后切换}。在上面的例子中，线程 0--3 先执行 A、B（线程 4--7 空闲），然后线程 4--7 执行 X、Y（线程 0--3 空闲），最后所有线程一起执行 Z。
+
+\begin{warningbox}{Warp 内的条件分支是性能杀手}
+Control divergence 会导致 Warp 的有效并行度减半甚至更低。在编写 CUDA kernel 时，应尽量避免在同一个 Warp 内的线程走不同的执行路径。如果必须使用条件分支，尽量让分支按 Warp 边界对齐。
+\end{warningbox}
+
+\subsection{技巧 1：低精度计算}
+
+更少的比特 = 更少的数据搬运 = 更高的\textbf{算术强度}（FLOPs/byte）。
+
+以 elementwise ReLU（$x = \max(0, x)$）为例：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+& \textbf{Float32} & \textbf{Float16} \\
+\midrule
+内存访问 & 1 read + 1 write = 8 bytes & 1 read + 1 write = 4 bytes \\
+计算量 & 1 comparison, 1 FLOP & 1 comparison, 1 FLOP \\
+算术强度 & 8 bytes/FLOP & 4 bytes/FLOP \\
+\bottomrule
+\end{tabular}
+\caption{ReLU 操作在不同精度下的算术强度对比}
+\end{table}
+
+从 FP32 切到 FP16，内存瓶颈直接减半。但并非所有操作都适合低精度：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{Tensor Core 混合精度计算：16-bit 输入相乘，用 FP32 累加器累加部分和\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+\begin{knowledgebox}{混合精度训练的三类操作}
+\begin{itemize}
+    \item \textbf{可以用 16-bit}（FP16/BF16）：矩阵乘法、大多数 pointwise 操作（relu、tanh、add 等）
+    \item \textbf{需要更高精度}（FP32/FP16 累加器）：涉及求和的操作（sum、softmax、normalization）——小值累加会导致舍入误差
+    \item \textbf{需要更大动态范围}（FP32/BF16）：$|f(x)| \gg |x|$ 的操作（exp、log、pow）以及 loss 函数——否则可能上溢或下溢
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{技巧 2：算子融合（Operator Fusion）}
+
+Horace He 用工厂比喻来解释内存瓶颈：GPU 就像一个工厂（Compute），原料存放在仓库（Memory）。如果每完成一步加工就要把半成品运回仓库，再从仓库取出来做下一步，搬运成本就会远超加工成本。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-027.jpg}
+\caption{左：Naive 执行——每步操作都要在 Memory 和 Compute 之间搬运数据；右：Fused kernel——所有操作在 Compute 内一次性完成\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第28页。}
+
+以计算 $\sin^2(x) + \cos^2(x)$ 为例：朴素实现会启动 5 个 CUDA kernel（sin、pow、cos、pow、add），每次都要从全局内存读写中间结果。使用 \texttt{torch.compile} 进行算子融合后，这 5 个 pointwise 操作可以合并为\textbf{一次 CUDA kernel 调用}，只需一次全局内存读和一次写。
+
+\begin{importantbox}{torch.compile 是必备工具}
+如果你还没有在使用 \texttt{torch.compile}，强烈建议开始使用。它能自动完成大量``简单''的算子融合，显著减少不必要的全局内存往返。
+\end{importantbox}
+
+\subsection{技巧 3：重计算（Recomputation）}
+
+在反向传播中，我们需要存储前向传播的中间激活值（activations），以便计算梯度。但存储和读取这些激活值涉及大量全局内存访问。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{三层 sigmoid 的朴素实现：前向 1 read + 3 writes，反向 3 reads + 1 write = 共 8 次全局内存访问\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第32页。}
+
+\textbf{核心洞察}：与其存储激活值然后从全局内存读取，不如在反向传播时\textbf{重新计算}它们。这用额外的计算换取了更少的内存访问。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{重计算优化：前向 1 read + 1 write，反向 2 reads + 1 write = 共 4 次全局内存访问（减少 5/8）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+\begin{importantbox}{用计算换内存是划算的交易}
+在 memory-bound 场景下，计算资源是过剩的，内存带宽是稀缺的。重计算用多余的计算能力换取宝贵的内存带宽，减少 $5/8$ 的内存访问。注意：这与``gradient checkpointing''用的是相同技术，但目标不同——前者是为了\textbf{加速执行}，后者是为了\textbf{节省显存}。
+\end{importantbox}
+
+\subsection{技巧 4：内存合并访问（Coalescing）}
+
+DRAM 使用\textbf{Burst Mode}读取数据：每次访问一个地址，硬件会自动返回该地址所在的整个 burst section（通常 128 bytes）内的所有数据。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-033.jpg}
+\caption{DRAM Burst Mode：地址空间被划分为 burst sections，访问任何一个地址会返回整个 section\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第34页。}
+
+\textbf{内存合并}：当 Warp 中所有线程访问的地址\textbf{落在同一个 burst section 内}时，只需要一次 DRAM 请求即可满足所有线程的需求。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{矩阵乘法中的 coalescing：(A) 线程沿行遍历——\textbf{不连续}，非 coalesced；(B) 线程沿列遍历——\textbf{连续}，coalesced\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+对于 row-major 存储的矩阵，\textbf{线程沿行方向遍历是非 coalesced 的}（每个线程访问不同行的同一列，内存地址不连续），而\textbf{线程沿列方向遍历是 coalesced 的}（相邻线程访问相邻内存地址）。
+
+\subsection{技巧 5（核心）：Tiling（分块计算）}
+
+Tiling 是本课程中最重要的优化技巧，也是 FlashAttention 的基础。
+
+核心思想：将大矩阵切分为小块（tile），将小块加载到 Shared Memory 中，在高速内存中完成尽可能多的计算，再加载下一块。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-038.jpg}
+\caption{Tiled 矩阵乘法：将矩阵 M 和 N 切分为小 tile，每次加载一对 tile 到 Shared Memory，计算部分和，逐步累加\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第39页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{Tiling 数学分析：Non-tiled 每个输入从全局内存读 $N$ 次；Tiled 版本只读 $N/T$ 次（$T$ 为 tile 大小），减少 $T$ 倍全局内存访问\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+$$\text{Non-tiled: 每个输入读 } N \text{ 次} \qquad \text{Tiled: 每个输入读 } \frac{N}{T} \text{ 次}$$
+
+\begin{itemize}
+    \item $N$：矩阵维度
+    \item $T$：tile 大小（受 Shared Memory 容量限制）
+\end{itemize}
+
+Tiling 将全局内存访问量减少了 $T$ 倍。如果 Shared Memory 能容纳大的 tile，效果就越显著。
+
+\begin{importantbox}{Tiling 的双重优势}
+\begin{enumerate}
+    \item \textbf{减少全局内存访问}：重复读取从 Shared Memory 而非 Global Memory 进行
+    \item \textbf{改善 Coalescing}：tile 内的内存访问模式更容易做到连续
+\end{enumerate}
+\end{importantbox}
+
+\subsubsection{Tiling 的复杂性：Discretization 与 Memory Alignment}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{Tile size 与矩阵维度不整除时的问题：(a) 256 可被 128 整除，(b) 257 不能被 128 整除，最后一列 tile 几乎全是浪费\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+如果矩阵维度不能被 tile size 整除，最后的 tile 将大部分为空，浪费 SM 资源。此外，如果 tile 边界与 burst section 不对齐，一次本应只需一次 DRAM 读取的 tile 加载可能需要两次。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-041.jpg}
+\caption{内存对齐问题：Aligned Layout（左）一次 burst 即可加载整个 tile；Unaligned Layout（右）需要两次 burst 读取\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第42页。}
+
+\begin{warningbox}{不要选择质数维度}
+矩阵维度应选择能被常见 tile size（64、128、256）整除的值。Andrej Karpathy 曾分享一个经典案例：将 nanoGPT 的词表大小从 50257 增加到 50304（最近的 64 的倍数），带来了 \textbf{25\%} 的速度提升——仅仅是添加了 47 个无用维度！
+\end{warningbox}
+
+\subsection{破解矩阵乘法性能曲线之谜}
+
+现在我们可以完整解释开头那条``诡异''的性能曲线了：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{性能曲线按矩阵维度的可整除性着色：能被 128 整除的（橙色）性能最好，不能被任何小数整除的性能最差\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。}
+
+\textbf{Part 1：Tiling 对齐效应}。能被 128 整除的矩阵维度（橙色点）性能最高，能被 32 整除的次之，不能被任何常见因子整除的（如质数维度）性能最差。
+
+\textbf{Part 2：Wave Quantization}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-044.jpg}
+\caption{Wave Quantization：从 1792 到 1793 的性能骤降。1792 产生 $7 \times 14 = 98$ 个 tile（$<$ 108 SMs，一波完成），1793 产生 $8 \times 15 = 120$ 个 tile（$>$ 108 SMs，需要两波）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第45页。}
+
+A100 有 108 个 SM。当 tile 数 $\leq$ 108 时，所有 tile 可以一波并行执行（满利用率）。当 tile 数 = 120 时，第一波执行 108 个，第二波只执行 12 个——\textbf{第二波中 96 个 SM 空闲}。这就是周期性的性能骤降。
+
+\subsection{本章小结}
+
+GPU 性能优化的核心策略可以归结为三类：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-045.jpg}
+\caption{Part 2 总结：三类优化策略——减少内存访问（Coalescing + Fusion）、将数据移到快速内存（Tiling）、用计算/精度换内存（Quantization + Recomputation）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+\begin{importantbox}{GPU 性能优化三板斧}
+\begin{enumerate}
+    \item \textbf{减少内存访问次数}：Coalescing（合并访问）+ Fusion（算子融合）
+    \item \textbf{将数据移到快速内存}：Tiling（分块加载到 Shared Memory）
+    \item \textbf{用计算或精度换内存}：Quantization（低精度减少数据量）+ Recomputation（重计算避免存储中间结果）
+\end{enumerate}
+\end{importantbox}
+
+%% ========== Part 3: FlashAttention ==========
+
+\section{综合应用：拆解 FlashAttention}
+
+现在我们用前面学到的所有知识来理解 FlashAttention——一个将前述优化技巧融会贯通的经典算法。
+
+\subsection{Attention 计算回顾}
+
+标准 Attention 计算包含三次矩阵乘法，中间夹一个 softmax：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{Attention 计算流程：$Q \cdot K^T$ 得到 $n \times n$ 的注意力分数矩阵，经 softmax 后与 $V$ 相乘得到输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+$$\text{Output} = \text{softmax}\left(\frac{QK^T}{\sqrt{d}}\right) V$$
+
+矩阵乘法部分可以直接应用 Tiling 技巧。\textbf{真正的难点在于 softmax}——它是一个\textbf{全局操作}，需要对整行求和和求最大值，这似乎要求所有数据必须同时可用。
+
+\subsection{FlashAttention 的核心思想}
+
+FlashAttention 的关键贡献：通过 Tiling + Recomputation + Online Softmax，实现\textbf{亚二次方的 HBM 访问量}（$O(N^2 d^2 M^{-1})$ vs 标准实现的 $O(N^2 d + N^2)$），同时保持精确计算（非近似）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{FlashAttention 性能：标准实现 HBM 读写 40.3 GB，FlashAttention 仅 4.4 GB，运行时间从 41.7ms 降到 7.3ms\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{FlashAttention 的 Tiling 策略：K 和 V 的 tile 被复制到 SRAM，Q 的 tile 在内层循环中逐块处理，结果输出到 HBM\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。FlashAttention Figure 1，Dao et al.}
+
+\subsection{Online Softmax：tile-by-tile 计算全局 softmax}
+
+标准 softmax 需要三次遍历数据：（1）求最大值 $m$，（2）计算 $\sum e^{x_i - m}$，（3）归一化。Online softmax（Milakov \& Gimelshein 2018）将这些步骤融合，只需一次遍历：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-049.jpg}
+\caption{Normal softmax（左，Algorithm 2）vs Online softmax（右，Algorithm 3）：通过增量更新 $m_j$ 和 $d_j$，实现 tile-by-tile 的 softmax 计算\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第50页。来自 Milakov and Gimelshein 2018。}
+
+Online softmax 的核心在于维护两个运行变量：
+\begin{itemize}
+    \item $m_j = \max(m_{j-1}, x_j)$：当前已见过的最大值
+    \item $d_j = d_{j-1} \times e^{m_{j-1} - m_j} + e^{x_j - m_j}$：``伸缩求和''——每次更新最大值时，用乘法修正之前的累计量
+\end{itemize}
+
+这使得 softmax 可以\textbf{逐 tile 增量计算}，不需要等到所有数据就绪。
+
+\subsection{FlashAttention Forward Pass 全貌}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{FlashAttention 前向传播全流程：$S^{(1)} = Q(K^{(1)})^T$，$S^{(2)} = Q(K^{(2)})^T$，然后 tile-wise 计算 softmax 并修正归一化因子，最终得到精确输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。来自 Dao 2023。}
+
+FlashAttention 综合了本课所有优化技巧：
+
+\begin{enumerate}
+    \item \textbf{Tiling}：对 KQV 矩阵乘法进行 tile-wise 计算，最小化 HBM 访问
+    \item \textbf{Fusion}：将指数运算与矩阵乘法融合在同一个 kernel 中
+    \item \textbf{Online Softmax}：通过伸缩求和实现 tile-by-tile 的精确 softmax
+    \item \textbf{Recomputation}（反向传播中）：不存储 $N^2$ 大小的注意力矩阵，在反向传播时 tile-by-tile 重新计算
+\end{enumerate}
+
+\begin{importantbox}{FlashAttention = Tiling + Fusion + Online Softmax + Recomputation}
+FlashAttention 不是一个全新的算法，而是将 GPU 性能优化的所有经典技巧\textbf{巧妙组合}的结果。理解了本课介绍的每一种优化手段，你就能理解 FlashAttention 的每一个设计决策。
+\end{importantbox}
+
+\subsection{本章小结}
+
+FlashAttention 通过 tiling 将 attention 的 HBM 读写从 40.3 GB 减少到 4.4 GB，运行时间减少 5.7x。它的成功完全建立在对 GPU 内存层次的深刻理解之上：将数据保持在 SRAM 中，通过 online softmax 避免全局同步，通过 recomputation 避免存储 $N^2$ 中间矩阵。
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Horace He's Blog: \url{https://horace.io/brrr_intro.html} —— GPU 性能优化入门必读
+    \item ``What shapes do matrix multiplications'': \url{https://www.thonking.ai/p/what-shapes-do-matrix-multiplications} —— 矩阵维度对性能的影响
+    \item CUDA Mode Group: \url{https://github.com/cuda-mode} —— CUDA 学习社区
+    \item Dao et al., FlashAttention: \url{https://arxiv.org/abs/2205.14135}
+    \item Dao, FlashAttention-2: \url{https://arxiv.org/abs/2307.08691}
+    \item Milakov \& Gimelshein, Online Softmax: \url{https://arxiv.org/abs/1805.02867}
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{全课总结\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页（最后一页）。}
+
+Tatsu Hashimoto 在课程结尾强调了三点：
+\begin{enumerate}
+    \item \textbf{硬件驱动规模化}：底层硬件细节决定了什么能规模化、什么不能
+    \item \textbf{以 matmul + 数据搬运为中心思考}：当前基于 GPU 的计算体系，要求算法设计者时刻关注矩阵乘法和数据移动
+    \item \textbf{细致的 GPU 优化带来真正的性能提升}：Coalescing、Tiling、Fusion 等看似底层的技巧，是 FlashAttention 等突破性算法的基石
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+本课建立了一条从硬件到算法的完整认知链：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3cm, minimum height=0.7cm, font=\small}]
+\node (hw) {GPU 硬件架构};
+\node (mem) [below=of hw] {内存层次与瓶颈};
+\node (opt) [below=of mem] {六大优化技巧};
+\node (flash) [below=of opt] {FlashAttention};
+\draw[->, thick] (hw) -- (mem);
+\draw[->, thick] (mem) -- (opt);
+\draw[->, thick] (opt) -- (flash);
+\node[draw=none, right=1cm of hw, text width=5cm, font=\scriptsize] {SM/SP、Thread/Block/Warp、SIMT};
+\node[draw=none, right=1cm of mem, text width=5cm, font=\scriptsize] {SRAM vs HBM、Roofline Model、Memory Wall};
+\node[draw=none, right=1cm of opt, text width=5cm, font=\scriptsize] {Divergence、Low Precision、Fusion、Recompute、Coalescing、Tiling};
+\node[draw=none, right=1cm of flash, text width=5cm, font=\scriptsize] {Tiled KQV + Online Softmax + Recomputation};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{内存是新的瓶颈}：现代 GPU 上，计算速度远快于内存带宽，大多数优化围绕减少内存访问展开
+    \item \textbf{Matmul 是``特权运算''}：尽量让你的工作负载以 matmul 为主，避免大量非 matmul 操作
+    \item \textbf{矩阵维度要``友好''}：选择 64/128/256 的倍数，避免质数维度
+    \item \textbf{数据要尽量留在 SRAM}：通过 Tiling 将工作数据加载到 Shared Memory，最小化全局内存访问
+    \item \textbf{FlashAttention 不是魔法}：它是 Tiling + Fusion + Online Softmax + Recomputation 的精妙组合
+\end{enumerate}
+\end{importantbox}
+
+\end{document}
