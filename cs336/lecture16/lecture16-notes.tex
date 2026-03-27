@@ -1,0 +1,543 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 16: Reinforcement Learning from Verifiable Rewards}
+\newcommand{\noteauthors}{基于课堂字幕与 slides 整理}
+\newcommand{\notedate}{2025年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025年春季}
+\newcommand{\videoduration}{1:20:29}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{开场：从 RLHF 走向 RLVR}
+
+这节课是 \textbf{post-training} 系列的第二讲。主线很明确：先补完上一讲的 RLHF 讨论，再把视角切到 \textbf{reinforcement learning from verifiable rewards}，也就是在那些“答案能被快速、准确地验证”的任务上，怎么把 RL 真正做成一个可扩展的训练工具。
+
+\begin{importantbox}{这一讲的核心目标}
+\begin{enumerate}
+    \item 搞清楚 RLHF 为什么会遇到过优化、校准性变差、实现复杂等问题。
+    \item 搞清楚 PPO 为什么能工作，但工程上很笨重。
+    \item 搞清楚 GRPO 为什么会成为更轻量的替代方案。
+    \item 看三个真实系统案例：DeepSeek R1、Kimi K1.5、Qwen 3。
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-000.jpg}
+\caption{标题页：RL from verifiable rewards}
+\end{figure}
+
+\subsection{先回顾上一讲：DPO 为什么流行}
+
+上一讲已经把 RLHF 的基础目标讲清楚了：对成对偏好数据做优化，让模型更倾向于输出“好样本”。在这个框架里，\textbf{DPO} 之所以爆火，是因为它把原本复杂的 RL 问题，压缩成了一个很像监督学习的目标。
+
+可以把它理解成两步：
+\begin{enumerate}
+    \item 在非参数化假设下，把奖励和策略写成某种闭式关系。
+    \item 用偏好对比损失去更新策略，让“好回答”的概率上升，“坏回答”的概率下降。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{DPO 的直觉：去掉 reward model，去掉 on-policy rollouts，把优化变成对好坏样本的直接梯度更新}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{DPO 形式化推导：先解出 implied reward，再把它重新参数化回策略}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{DPO 的关键思想：把 reward 写回 policy ratio，然后对 pairwise preference 做监督式优化}
+\end{figure}
+
+\subsection{DPO 的变体和经验性结论}
+
+课堂里特别强调了一个经验事实：\textbf{RL 论文里的结论非常依赖具体设置}。同样是 DPO、PO 或者它们的变体，不同的 base model、不同的数据、不同的 SFT 配方，最后可能给出完全不同的结果。
+
+这也是为什么后来出现了大量 DPO 变体。课堂里点名了两个最近特别常见的方向：
+\begin{itemize}
+    \item \textbf{SimPO}：不再依赖 reference policy，更像是把优化目标重新写成一个更直接的打分问题。
+    \item \textbf{Length-normalized DPO}：保留 DPO 的结构，但把长度偏差显式处理掉。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{DPO 的一些后续变体：SimPO 和 length-normalized DPO}
+\end{figure}
+
+\begin{importantbox}{RLHF 里的一个重要提醒}
+不要把单篇论文里的实验结果当成普适真理。RLHF 的曲线、胜率、稳定性，都高度依赖任务、模型、数据和训练细节。
+\end{importantbox}
+
+\subsection{两个必须记住的问题}
+
+课上后半段把两个问题提得很重。
+
+第一个是 \textbf{overoptimization}。reward model 是从人类偏好或偏好代理上学来的，模型继续朝这个代理目标优化时，容易把 reward model 本身“学坏”，但真实的人类偏好并没有同步改善。
+
+第二个是 \textbf{calibration}。RLHF 以后，模型已经不再是一个干净的概率模型；它更像一个 policy。于是很多原本从生成建模视角默认存在的“校准性”，在这里都不能再想当然。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{RLHF 训练里常见的风险：reward 过优化之后，proxy reward 和真实偏好开始分叉}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-013.jpg}
+\caption{RLHF 之后模型不再天然校准，temperature=1 时经常会更自信但不一定更可靠}
+\end{figure}
+
+\section{为什么要从 RLHF 转到 RLVR}
+
+从工程和研究两个角度看，人类反馈都很难规模化。它贵、慢、噪声大，而且容易被 hack。于是课堂自然把问题转到另一个方向：\textbf{有没有一种奖励，我们能直接验证它对不对？}
+
+这就是 \textbf{verifiable rewards} 的出发点。数学、代码、某些形式化推理题，都是典型例子。只要任务有可验证的终局 reward，我们就可以把 RL 真正跑起来，而不是只盯着人类主观偏好。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{前半段训练把模型推到类 GPT-3.5，今天的目标是继续把它往 o1 / r1 的风格推进}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{核心问题：如果 RLHF 会过优化，那能不能切到 reward 更明确、可精确验证的领域}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-016.jpg}
+\caption{本讲结构：先讲算法，再讲案例；算法部分从 PPO 走到 GRPO}
+\end{figure}
+
+\section{PPO：能用，但不轻}
+
+\subsection{从 policy gradient 到 PPO}
+
+课上先快速回顾了 PPO 的理论谱系：
+\begin{enumerate}
+    \item 直接 policy gradient：概念最简单，但方差很高。
+    \item TRPO：用重要性采样和 trust region 控制 policy 漂移。
+    \item PPO：把更新约束成 clip 形式，既稳定又容易实现。
+\end{enumerate}
+
+核心目标可以写成标准的 clipped objective：
+\[
+\mathcal{L}_{\mathrm{PPO}}(\theta)
+=
+\mathbb{E}\left[
+\min\Big(r_t(\theta) A_t,\ \mathrm{clip}(r_t(\theta),1-\epsilon,1+\epsilon)A_t\Big)
+\right].
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{PPO 的理论回顾：policy gradient、TRPO、PPO clip}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{PPO 在概念上其实不难：就是一个带裁剪的目标函数}
+\end{figure}
+
+\subsection{工程上为什么麻烦}
+
+课堂里强调，PPO 的“理论版本”和“代码版本”差距很大。真正麻烦的地方主要有三类：
+\begin{itemize}
+    \item \textbf{rollouts} 很贵。每次更新都要跑模型采样，生成样本是最慢的那部分。
+    \item \textbf{value function} 让系统更重。它要额外占显存，还引入了训练调参压力。
+    \item \textbf{reward shaping} 和 \textbf{GAE} 让实现细节变多。虽然都不是神秘概念，但凑在一起就很容易把训练管线搞复杂。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{语言模型里的 PPO 近似成一个 bandit：token 动作序列，末端一个 dense reward}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-023.jpg}
+\caption{PPO 的一个实际实现：outer loop 先采样，再在 inner loop 里做梯度更新}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{PPO 的 loss 计算：policy loss、value loss、clip range 等部分要一起维护}
+\end{figure}
+
+\subsection{reward shaping 和 GAE}
+
+在语言模型里，PPO 往往被当成一个 contextual bandit：输入一个 prompt，输出一个整段回答，最后再看 reward。为了让学习更稳定，实践里经常把 reward 分解成两类：
+\begin{itemize}
+    \item per-token 的 KL 惩罚，用来约束新 policy 不要离 reference 太远。
+    \item 末端的任务成功 reward，用来表示真正的目标是否完成。
+\end{itemize}
+
+而 GAE 的作用，是把高方差的原始回报，变成一个更平滑的 advantage 估计。课堂里的关键点不是公式本身，而是它的工程意义：\textbf{如果没有这些技巧，PPO 很容易训练得又慢又不稳。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{reward shaping：per-token KL 惩罚加上末端任务 reward}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-027.jpg}
+\caption{GAE：用 advantage 去替代直接的 reward，降低梯度方差}
+\end{figure}
+
+\section{GRPO：把 PPO 再简化一层}
+
+\subsection{为什么需要 GRPO}
+
+课堂给出的动机很直接：
+\begin{itemize}
+    \item PPO 太复杂，value model 很占资源。
+    \item DPO 虽然简单，但它假设数据本身就是 pairwise preference。
+    \item 现实里的 RLVR 场景往往不是纯 pairwise 数据，而是更一般的 rollout + verifiable reward。
+\end{itemize}
+
+于是就有了 \textbf{GRPO}。它的思路可以概括成一句话：\textbf{保留 PPO 的外壳，去掉 value function，把 advantage 变成 group 内标准化的分数。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{为什么还需要新算法：PPO 太重，DPO 不一定适用}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{GRPO：去掉 value function / advantage 估计，把优势定义成 group 内的 z-score}
+\end{figure}
+
+\subsection{GRPO 的简单实现}
+
+GRPO 在代码里非常短。最核心的流程就是：
+\begin{enumerate}
+    \item 对同一个 prompt 采样一组 rollouts。
+    \item 给每个 rollout 计算可验证 reward。
+    \item 在 group 内做均值和方差归一化，得到 advantage。
+    \item 加上 KL 约束，直接对 policy 做梯度更新。
+\end{enumerate}
+
+这也是为什么课堂里说它“看起来像是 policy gradient，但已经被整理得更像工程实现”。
+
+\[
+A_i = \frac{R_i - \mu_{\mathrm{group}}}{\sigma_{\mathrm{group}} + \epsilon}.
+\]
+
+如果把这个式子和 PPO 相比，你会发现它少了一个 value network，但代价是：这个“标准化”并不一定是严格无偏的 baseline。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{一个很短的 GRPO 代码实现：奖励、归一化、KL、梯度更新}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{GRPO 的 advantage 计算：本质上就是 group 内的标准化}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-034.jpg}
+\caption{GRPO 的一个关键问题：标准化项并不是一个严格无偏的 baseline}
+\end{figure}
+
+\subsection{length bias 和 unbiased 版本}
+
+GRPO 的一个副作用是 \textbf{长度偏差}。因为它对 group 内的分数做归一化，模型可能会学到偏向更长或更短的回答。课堂里还提到了后续工作对这点的修正：如果希望更严格地保持梯度无偏，标准化项和长度归一化项都要重新审视。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{GRPO 的无偏版本讨论：标准化分数并不等于严格的 baseline}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-036.jpg}
+\caption{GRPO 的长度偏差：分数归一化和长度归一化会改变模型偏好的回答长度}
+\end{figure}
+
+\section{Case Study 1: DeepSeek R1}
+
+DeepSeek R1 是课堂里第一个重点案例。它之所以重要，不只是因为性能强，还因为它把一条相对简洁的 RLVR recipe 推到了大众视野：\textbf{强 verification reward + GRPO + 合理的 SFT 初始化 + 后续蒸馏}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{案例总览：DeepSeek R1、Kimi K1.5、Qwen 3}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-038.jpg}
+\caption{DeepSeek R1 的重要性：性能强、公开 recipe 相对简单、改变了外界对 reasoning training 的预期}
+\end{figure}
+
+\subsection{R1-zero 和 R1}
+
+课堂区分了两个版本：
+\begin{itemize}
+    \item \textbf{R1-zero}：更“纯”的 RLVR 设置，用 accuracy reward 和 format reward 推动训练。
+    \item \textbf{R1}：在 R1-zero 的基础上，再加 SFT 初始化、语言一致性 reward、以及更实用的后处理阶段。
+\end{itemize}
+
+R1-zero 的有趣现象是：训练中会出现更长的 CoT，有时还会冒出所谓的 `aha moment`。但课上也提醒，不能把这些现象讲得太神秘，因为它们也可能部分来自目标函数偏置和基座模型本身的能力。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{R1-zero 的受控实验：accuracy reward + format reward}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-041.jpg}
+\caption{R1-zero 训练里的现象：更长的 CoT 和所谓的 `aha moment`}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{R1 的关键差异：SFT 初始化、语言一致性 reward、以及后续的非可验证任务阶段}
+\end{figure}
+
+\subsection{蒸馏和失败路线}
+
+DeepSeek R1 还有一个很重要的结论：\textbf{reasoning 能蒸馏}。也就是说，让大模型先用 RLVR 形成 reasoning traces，再把这些长 CoT 蒸馏给较小模型，是一条非常实用的路线。
+
+同时，课堂也提醒了另一个事实：很多大家曾经寄予厚望的路线，未必是最后赢家，例如 PRM、MCTS 等。这个领域里真正起作用的，往往不是“理论上最花哨的东西”，而是能稳定跑通的 recipe。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-049.jpg}
+\caption{蒸馏：用 R1 生成 CoT traces，再教给较小的 student model}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{一些没有最终跑通的路线：PRM、MCTS 等}
+\end{figure}
+
+\section{Case Study 2: Kimi K1.5}
+
+Kimi K1.5 和 R1 几乎是同时代的另一个重要例子。课堂把它挑出来，是因为它和 R1 有相似的目标，但在细节上提供了不同的工程视角。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{Kimi K1.5：另一个用 RL 把 reasoning 推上去的开放模型}
+\end{figure}
+
+\subsection{数据、长度控制和系统细节}
+
+Kimi 这条线的重点很实际：
+\begin{itemize}
+    \item 先做难度过滤和数据课程安排。
+    \item 先用长 CoT 的 SFT 打底。
+    \item 再用自己的 policy gradient / RL 配方去做强化。
+    \item 训练中还加入了长度控制，避免 CoT 无限制拉长。
+\end{itemize}
+
+课堂特别强调，RL 系统本身很吃工程：on-policy rollouts 慢、训练框架切换麻烦、长 CoT 让 batch 更不均匀。这些都不是“算法论文里一个公式”能解决的。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-052.jpg}
+\caption{Kimi 的长 CoT reasoning strategy：数据、SFT、RL 三步走}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{Kimi 的数据整理和 SFT：去掉太容易、太噪声、或格式不合适的样本}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-054.jpg}
+\caption{Kimi 的 RL：仍然是某种基于偏好或可验证 reward 的策略优化}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{长度控制：让更长的 rollout 不是无条件地更受鼓励}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-057.jpg}
+\caption{RL infra 的重要性：rollout、框架切换、长序列不均匀性都会影响训练效率}
+\end{figure}
+
+\section{Case Study 3: Qwen 3}
+
+最后一个案例是 Qwen 3。课堂给它的定位是“更晚出现、但更系统地整合了前面这些经验”的一个开放模型尝试。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-061.jpg}
+\caption{Qwen 3：更晚期的开源 reasoning model 尝试}
+\end{figure}
+
+\subsection{SFT + reasoning RL + 组合策略}
+
+Qwen 3 的 recipe 里有几个很清楚的点：
+\begin{itemize}
+    \item 对训练数据做难度过滤，优先保留模型最开始做不好的题。
+    \item 清理掉模型本来就能轻松做对的题，避免把算力浪费在简单样本上。
+    \item 对 CoT 的质量做人工或半人工过滤，区分“猜对”和“真推对”。
+    \item 用很小的一批样本也能启动 reasoning RL。
+\end{itemize}
+
+之后再进入更成熟的 post-training 流程：先 reasoning RL，再做常规 RLHF，最后配合蒸馏和 test-time scaling。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-063.jpg}
+\caption{Qwen 3 的 SFT + reasoning RL：数据过滤和 GRPO 是关键部分}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-064.jpg}
+\caption{thinking mode fusion：用标签和 early stop 控制 CoT 长度}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-065.jpg}
+\caption{test-time scaling：除了训练，推理时的计算也可以继续放大效果}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-066.jpg}
+\caption{整体阶段组合：math / STEM 往往在更一般的 RLHF 阶段里会略有回落}
+\end{figure}
+
+\section{本讲小结}
+
+这一讲的主结论可以压缩成四句：
+\begin{enumerate}
+    \item \textbf{RLHF 有用，但很难规模化}，而且容易出现 overoptimization 和 calibration 退化。
+    \item \textbf{PPO 能工作，但工程上重}，value function、rollout、reward shaping 都让系统复杂。
+    \item \textbf{GRPO 把 PPO 进一步简化}，去掉 value 网络，用 group normalization 代替复杂的 advantage 估计。
+    \item \textbf{RLVR 是 reasoning 模型的重要路线}，DeepSeek R1、Kimi K1.5、Qwen 3 都说明了这点。
+\end{enumerate}
+
+\begin{importantbox}{今天最值得带走的一句话}
+当 reward 可验证时，RL 不再只是“更难调的偏好优化”，它会变成一个能真正推动 reasoning 模型扩展的训练工具。
+\end{importantbox}
+
+\end{document}

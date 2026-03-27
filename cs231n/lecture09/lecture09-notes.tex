@@ -1,0 +1,582 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 9: Object Detection and Image Segmentation}
+\newcommand{\noteauthors}{基于 Ehsan Adeli 授课内容整理}
+\newcommand{\notedate}{2025}
+\newcommand{\videochannel}{Stanford University}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:13:40}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=PTypu6GqEd4}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: ViT 回顾与 Transformer 优化 ==========
+
+\section{引言与 Vision Transformer 回顾}
+
+本节课覆盖计算机视觉中若干核心任务——语义分割、目标检测、实例分割，以及神经网络的可视化与理解方法。在正式进入这些主题之前，讲者首先简要回顾了上节课介绍的 Vision Transformer（ViT）架构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{课程大纲：本节涵盖目标检测、语义分割、实例分割和可视化理解\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{ViT 架构核心}
+
+Vision Transformer 的核心思想是将图像分割为若干 patch（例如 $S \times S$ 的网格），将每个 patch 通过线性投影映射为 $D$ 维的 token，加上位置编码（positional embedding）后送入标准 Transformer encoder。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{ViT 架构：图像被切分为 patch，线性投影为 token，加上位置编码后送入 Transformer 层\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\begin{importantbox}{ViT 分类的两种方式}
+\begin{enumerate}
+    \item \textbf{Class Token}：添加一个可学习的特殊 token 作为输入，其对应的输出经过线性层映射为类别概率向量
+    \item \textbf{全局池化}：对所有输出 token 做 pooling，再映射为类别概率
+\end{enumerate}
+两种方式均使用 softmax 交叉熵损失进行监督训练。
+\end{importantbox}
+
+\subsection{现代 Transformer 的优化技巧}
+
+讲者介绍了几种在现代 Transformer 架构中广泛使用的优化手段：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{Transformer 优化技巧汇总：Pre-Norm、RMS Norm、SwiGLU MLP、Mixture of Experts\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\textbf{1. Pre-Norm（前置归一化）}：将 Layer Norm 放在自注意力和 MLP 之前（而非之后），以保留残差连接的恒等映射能力，使训练更加稳定。
+
+\textbf{2. RMS Norm}：使用均方根归一化代替标准 Layer Norm，省去均值中心化步骤，经验表明可以提高训练稳定性。
+
+\textbf{3. SwiGLU MLP}：使用门控非线性（gated nonlinearity），引入第三个权重矩阵 $W_3$，在保持参数量不变的情况下（隐藏层维度设为 $8d/3$）学习更高维的非线性表示。
+
+\textbf{4. Mixture of Experts (MoE)}：将 MLP 层替换为多组并行的 MLP ``专家''，通过 router 将不同 token 路由到不同专家。这增加了参数量但不成比例地增加计算量（每次只有部分专家被激活），被现代大型语言模型广泛采用。
+
+\begin{knowledgebox}{MoE 的设计权衡}
+MoE 通过增加参数量来提升模型容量，但由于每个 token 只被路由到少数专家，实际计算开销增长有限。专家数量是超参数，不同专家往往会学习到数据的不同模式。所有主流 LLM（如 GPT-4、Mixtral 等）均已采用 MoE 架构。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Vision Transformer 将图像视为 patch 序列，通过自注意力机制全局建模像素间关系。现代 Transformer 通过 Pre-Norm、RMS Norm、SwiGLU 和 MoE 等技巧进一步提升了训练稳定性和模型容量。这些改进构成了当前视觉和语言模型的标准组件。
+
+%% ========== Part 2: 语义分割 ==========
+
+\section{语义分割}
+
+\subsection{任务定义}
+
+语义分割（Semantic Segmentation）的目标是为图像中的每个像素分配一个类别标签。与图像分类（为整张图输出一个标签）不同，语义分割输出与输入图像等尺寸的标签图。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{计算机视觉核心任务对比：分类、语义分割、目标检测、实例分割\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+\begin{importantbox}{语义分割 vs 实例分割}
+\begin{itemize}
+    \item \textbf{语义分割}：只关心每个像素属于哪个类别（如``狗''、``草地''），不区分同类的不同个体
+    \item \textbf{实例分割}：不仅区分类别，还区分同类的不同实例（如``狗1''和``狗2''）
+\end{itemize}
+\end{importantbox}
+
+\subsection{朴素方法与全卷积网络}
+
+最朴素的做法是对每个像素取一个局部 patch，用分类网络判断中心像素的类别。但这种方法计算代价极高——每个像素都要跑一遍完整网络。
+
+更高效的方案是使用\textbf{全卷积网络（Fully Convolutional Network, FCN）}：训练一个端到端的网络，输入完整图像，直接输出像素级标签图。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{语义分割的编码器-解码器架构：先下采样减少空间分辨率，再上采样恢复到原始尺寸\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\begin{knowledgebox}{FCN 的损失函数}
+语义分割的训练目标非常直观：对图像中每个像素独立计算 softmax 交叉熵损失，然后对所有像素取平均。即：
+$$L = \frac{1}{HW}\sum_{i=1}^{H}\sum_{j=1}^{W} \text{CrossEntropy}(\hat{y}_{ij}, y_{ij})$$
+其中 $y_{ij}$ 是像素 $(i,j)$ 的真实标签，$\hat{y}_{ij}$ 是预测的类别概率分布。
+\end{knowledgebox}
+
+\subsection{上采样方法}
+
+FCN 的编码部分（下采样）可以使用标准的池化和步长卷积，但解码部分（上采样）需要专门设计：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{上采样方法：最近邻插值、Bed of Nails、Max Unpooling\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+\begin{enumerate}
+    \item \textbf{最近邻插值}：将低分辨率的值复制到对应的高分辨率区域
+    \item \textbf{Bed of Nails}：将值放在角落位置，其余填零
+    \item \textbf{Max Unpooling}：在编码阶段记录 max pooling 的位置索引，解码时将值放回对应位置
+    \item \textbf{转置卷积（Transpose Convolution）}：可学习的上采样——将卷积核翻转，对输入的每个值生成一个覆盖区域的输出，重叠部分相加
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{转置卷积的 1D 示例：每个输入值乘以滤波器权重生成输出，重叠区域求和\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第25页。}
+
+\begin{warningbox}{转置卷积 $\neq$ 反卷积}
+转置卷积（Transpose Convolution）有时被误称为``反卷积''（Deconvolution），但它并不是卷积的数学逆运算。它只是在矩阵运算层面使用了卷积矩阵的转置。滤波器权重是通过训练学习的，而非由下采样过程决定。
+\end{warningbox}
+
+\subsection{U-Net 架构}
+
+U-Net 是语义分割领域最具影响力的架构之一。其结构呈 U 形：左侧为编码器（下采样），右侧为解码器（上采样），关键创新在于\textbf{跳跃连接（skip connections）}——将编码器各层的特征图直接复制并拼接到解码器对应层。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{U-Net 架构：对称的编码器-解码器结构，通过跳跃连接保留高分辨率的空间细节信息\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+\begin{importantbox}{U-Net 跳跃连接的作用}
+下采样过程中空间信息不可避免地丢失。跳跃连接将编码器的高分辨率特征图直接传递给解码器，使得上采样过程能够恢复精细的边界信息。U-Net 至今仍是医学图像分割的主流架构，在不使用基础模型的场景下常常达到最优效果。
+\end{importantbox}
+
+\subsection{本章小结}
+
+语义分割是像素级分类任务。全卷积网络（FCN）通过编码器-解码器结构实现端到端训练。上采样方法从简单的插值到可学习的转置卷积，逐步提升了重建质量。U-Net 的跳跃连接设计有效解决了下采样导致的空间信息丢失问题，至今仍被广泛使用。
+
+%% ========== Part 3: 目标检测 ==========
+
+\section{目标检测}
+
+\subsection{从语义分割到目标检测}
+
+语义分割的局限在于：它只能为每个像素分配类别标签，但无法区分同类的不同实例。如果图像中有两只狗，语义分割只会标记所有``狗像素''为同一类，无法区分哪些像素属于哪只狗。要解决这个问题，我们首先需要\textbf{目标检测}——找到每个物体的位置（边界框）和类别。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{从语义分割到实例分割：需要先检测独立物体，再为每个物体生成像素级掩码\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\subsection{单物体检测}
+
+对于只含单个物体的图像，目标检测可以简化为一个\textbf{多任务学习}问题：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{单物体检测：CNN 同时输出类别概率（softmax loss）和边界框坐标（L2 loss）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+$$L_{\text{total}} = L_{\text{cls}}(\hat{y}, y) + \lambda \cdot L_{\text{box}}(\hat{b}, b)$$
+
+\begin{itemize}
+    \item $L_{\text{cls}}$：softmax 交叉熵损失，用于分类
+    \item $L_{\text{box}}$：L2 回归损失，用于预测边界框坐标 $(x, y, h, w)$
+    \item $\lambda$：平衡两个损失的权重
+\end{itemize}
+
+\begin{warningbox}{直接回归法不可扩展}
+当图像中有多个物体时，网络需要同时输出所有物体的边界框和类别。对于 $N$ 个物体，需要输出 $N \times (4 + C)$ 个数值（4 个坐标 + $C$ 类概率）。但 $N$ 事先未知，且可以很大——这使得直接回归方法不可扩展。
+\end{warningbox}
+
+\subsection{R-CNN 系列：基于区域提议的检测}
+
+面对多物体场景，经典方法是先生成\textbf{候选区域（Region Proposals）}，再对每个区域进行分类。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{R-CNN 流程：区域提议 $\rightarrow$ 裁剪 $\rightarrow$ CNN 特征提取 $\rightarrow$ 分类 + 边界框回归\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\textbf{R-CNN}（Regions with CNN, CVPR 2014）的流程：
+\begin{enumerate}
+    \item 使用选择性搜索（Selective Search）等算法生成约 2000 个候选区域
+    \item 将每个区域裁剪并缩放到固定大小
+    \item 用 CNN 提取特征，然后分类 + 回归边界框
+\end{enumerate}
+
+\textbf{Fast R-CNN} 的改进：不再对每个区域独立运行 CNN，而是先对整张图像运行一次 CNN 得到特征图，然后在特征图上裁剪对应区域（RoI Pooling），大幅减少重复计算。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{Fast R-CNN：先在整图上运行 CNN，再在特征图上提取区域特征\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+\textbf{Faster R-CNN} 进一步引入\textbf{区域提议网络（Region Proposal Network, RPN）}，用神经网络替代手工区域提议算法：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{RPN（区域提议网络）：在 CNN 特征图上滑动锚框，预测物体概率和边界框修正\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+\begin{knowledgebox}{R-CNN 系列的演进逻辑}
+\begin{itemize}
+    \item \textbf{R-CNN}：每个区域独立跑 CNN——准确但极慢
+    \item \textbf{Fast R-CNN}：共享 CNN 特征图——快了一个数量级
+    \item \textbf{Faster R-CNN}：用 RPN 替代手工区域提议——端到端训练
+\end{itemize}
+尽管如此，这些方法都是\textbf{两阶段}（two-stage）检测器：第一阶段生成候选区域，第二阶段分类和精调。
+\end{knowledgebox}
+
+\subsection{YOLO：单阶段目标检测}
+
+\textbf{YOLO（You Only Look Once）}是最具代表性的单阶段检测器，通过一次前向传播同时完成候选框生成和分类。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{YOLO 的设计思想：将图像划分为 $S \times S$ 网格，每个网格预测 $B$ 个边界框及其置信度和类别概率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。}
+
+YOLO 的核心设计：
+\begin{enumerate}
+    \item 将图像划分为 $S \times S$ 的网格（如 $7 \times 7$）
+    \item 每个网格单元预测 $B$ 个边界框（含位置、大小、置信度）和 $C$ 个类别概率
+    \item 输出张量大小为 $S \times S \times (5B + C)$
+    \item 通过阈值化和\textbf{非极大值抑制（Non-Maximum Suppression, NMS）}去除冗余框
+\end{enumerate}
+
+\begin{importantbox}{YOLO 的实际影响}
+YOLO 至今仍是工业界最常用的目标检测框架。它在实时检测场景（如自动驾驶、机器人、质量检测）中表现优异。从 YOLOv1 到最新版本（YOLOv8+），架构不断进化但核心的单阶段设计理念始终如一。
+\end{importantbox}
+
+\subsection{DETR：基于 Transformer 的目标检测}
+
+\textbf{DETR（DEtection TRansformer）}（ECCV 2020）是将 Transformer 应用于目标检测的里程碑工作。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{DETR 架构：CNN 提取特征 $\rightarrow$ Transformer Encoder $\rightarrow$ Transformer Decoder（带 Object Queries）$\rightarrow$ FFN 输出类别和边界框\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+DETR 的关键创新在于引入\textbf{Object Queries}：
+
+\begin{enumerate}
+    \item 用 CNN 将图像转换为 patch token，加上位置编码
+    \item Transformer Encoder 对 token 进行自注意力编码
+    \item Transformer Decoder 接收一组\textbf{可学习的 Object Queries}作为输入
+    \item 每个 Query 通过自注意力（queries 之间）和交叉注意力（query 与编码特征之间）生成输出
+    \item 每个输出经 FFN 映射为（类别, 边界框）或``无物体''
+\end{enumerate}
+
+\begin{importantbox}{Object Query 的本质}
+Object Queries 不是图像 patch，也不是边界框——它们是\textbf{纯粹的可学习参数}。每个 query 本质上在``询问''：``图像中是否有一个物体需要我检测？''通过训练，不同 query 学会关注图像中的不同位置和物体。query 数量决定了最多能检测多少个物体。
+\end{importantbox}
+
+\begin{warningbox}{DETR 的局限性}
+DETR 作为全监督方法，无法检测训练集中未出现过的新类别（zero-shot detection 需要额外技术支持）。如果 query 数量少于实际物体数量，只会检测出置信度最高的物体。目前 DETR 原始版本已较少直接使用，但其思想影响深远。
+\end{warningbox}
+
+\subsection{本章小结}
+
+目标检测经历了从两阶段（R-CNN 系列）到单阶段（YOLO）再到基于 Transformer（DETR）的演进。核心挑战在于：如何在保持高精度的同时高效处理数量未知的多个物体。R-CNN 通过区域提议解决了多物体问题但速度较慢；YOLO 通过网格化预测实现了实时检测；DETR 用 Transformer 的 Object Queries 优雅地回避了锚框设计和 NMS 后处理。
+
+%% ========== Part 4: 实例分割 ==========
+
+\section{实例分割}
+
+\subsection{Mask R-CNN}
+
+实例分割在目标检测的基础上，进一步为每个检测到的物体生成像素级掩码。\textbf{Mask R-CNN} 在 Faster R-CNN 的基础上增加了一个掩码预测分支：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-054.jpg}
+\caption{Mask R-CNN：在 Faster R-CNN 的基础上增加掩码预测分支，同时输出类别、边界框和实例掩码\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第55页。}
+
+\begin{enumerate}
+    \item 对整张图运行 CNN + RPN 获得区域提议
+    \item 对每个区域提取特征（RoI Align）
+    \item 三个并行输出头：
+    \begin{itemize}
+        \item 分类头：输出类别概率
+        \item 回归头：精调边界框坐标
+        \item \textbf{掩码头}：使用 FCN 输出与区域同尺寸的二值掩码
+    \end{itemize}
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{Mask R-CNN 的检测效果：同时输出类别、边界框和精确的实例掩码\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+\begin{knowledgebox}{实例分割 = 目标检测 + 语义分割}
+Mask R-CNN 的设计思路很直接：先用目标检测找到每个物体的位置，再在每个物体的区域内做语义分割（生成掩码）。这种``先检测后分割''的范式至今仍是实例分割的主流方法之一。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+实例分割通过在目标检测基础上添加掩码预测，实现了像素级的实例区分。Mask R-CNN 凭借其模块化设计成为标杆方法。虽然计算开销较大，但现代 GPU 和优化技术已使其在实际应用中可行。
+
+%% ========== Part 5: 可视化与理解 ==========
+
+\section{可视化与理解}
+
+理解神经网络的内部工作机制对于模型调试、安全评估和科学发现至关重要。讲者介绍了几种核心的可视化方法。
+
+\subsection{滤波器可视化}
+
+最直接的方法是可视化卷积层的滤波器权重。对于第一层（输入为 3 通道 RGB），可以直接将滤波器显示为小图片：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-060.jpg}
+\caption{CNN 第一层滤波器可视化：学到的低层特征包括边缘、颜色、纹理等基本模式\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第61页。}
+
+\begin{warningbox}{深层滤波器难以直接可视化}
+只有第一层滤波器（输入通道为 3，可映射为 RGB）能被直观可视化。深层滤波器通常有几十到几百个输入通道，无法直接显示为人眼可理解的图像。对于深层特征的理解，需要借助下面介绍的间接方法。
+\end{warningbox}
+
+\subsection{显著性图（Saliency Maps）}
+
+显著性图回答一个核心问题：\textbf{哪些像素对分类决策影响最大？}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-062.jpg}
+\caption{显著性图：通过计算类别得分对输入像素的梯度，高亮显示对分类最重要的像素区域\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第63页。}
+
+具体方法：计算目标类别得分 $S_c$ 对输入像素 $x_{ij}$ 的梯度：
+
+$$\text{Saliency}_{ij} = \left|\frac{\partial S_c}{\partial x_{ij}}\right|$$
+
+梯度绝对值大的像素意味着：微小改变该像素的值就会显著影响分类得分。这与训练时计算 $\partial L / \partial W$ 更新权重的原理完全一致，只是这里对输入求梯度而非对权重。
+
+\begin{importantbox}{显著性图的医学应用}
+在医学影像分析中，显著性图尤其重要。例如，当网络判断一张 CT 图像``有肿瘤''时，医生需要知道网络关注的是图像的哪个区域。如果网络关注的不是肿瘤区域而是图像伪影，就意味着模型学到了错误的模式。
+\end{importantbox}
+
+\subsection{类激活图（CAM）与 Grad-CAM}
+
+\textbf{CAM（Class Activation Mapping）}利用全局平均池化层的结构特性，将分类得分追溯到最后一个卷积层的空间位置：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-064.jpg}
+\caption{CAM 原理：通过最后一层卷积特征图的加权求和，生成类别特定的空间注意力图\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第65页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-065.jpg}
+\caption{CAM 效果展示：同一张图像对不同类别（宫殿、穹顶、教堂、祭坛）产生不同的类激活图\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第66页。}
+
+CAM 的局限在于\textbf{只能应用于最后一个卷积层之后紧接全局平均池化的架构}。\textbf{Grad-CAM} 通过使用梯度来计算权重，突破了这一限制：
+
+$$\alpha_k^c = \frac{1}{Z}\sum_i\sum_j \frac{\partial S_c}{\partial A^k_{ij}}$$
+
+$$\text{Grad-CAM}^c = \text{ReLU}\left(\sum_k \alpha_k^c \cdot A^k\right)$$
+
+其中 $A^k$ 是第 $k$ 个特征图，$\alpha_k^c$ 是梯度的全局平均池化。ReLU 确保只保留正向激活。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-067.jpg}
+\caption{Grad-CAM 效果：可以应用于任意卷积层，生成不同粒度的类激活热力图\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第68页。}
+
+\subsection{Transformer 的注意力可视化}
+
+对于 Vision Transformer，可视化注意力权重矩阵本身就是天然的``激活图''。Transformer 的自注意力机制会计算每对 token 之间的注意力分数，这些分数可以直接映射回图像空间，显示网络对各区域的关注程度。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-068.jpg}
+\caption{ViT 的注意力可视化：自注意力权重天然反映了网络对图像各区域的关注分布\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第69页。}
+
+\begin{knowledgebox}{CNN vs Transformer 的可解释性}
+\begin{itemize}
+    \item \textbf{CNN}：需要 Grad-CAM 等后处理方法来``反向追踪''模型的关注区域
+    \item \textbf{Transformer}：注意力权重本身就是可解释的——直接反映了哪些 token 对当前决策最重要
+\end{itemize}
+这是 Transformer 相对于 CNN 在可解释性方面的天然优势。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+神经网络可视化方法从低层（滤波器可视化）到高层（显著性图、CAM/Grad-CAM、注意力图），层层深入地揭示了模型的决策依据。显著性图通过梯度直接反映像素对分类的影响；CAM/Grad-CAM 将类别得分追溯到卷积特征图的空间位置；Transformer 的注意力机制天然具备可解释性。这些工具在模型调试、安全验证和医学应用中至关重要。
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{全课知识图谱}
+
+本节课建立了从基础任务到高级任务、从 CNN 到 Transformer 的完整视觉理解框架：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (cls) {图像分类};
+\node (seg) [below left=1cm and -0.5cm of cls] {语义分割};
+\node (det) [below right=1cm and -0.5cm of cls] {目标检测};
+\node (ins) [below=2.5cm of cls] {实例分割};
+\node (vis) [below=of ins] {可视化与理解};
+\draw[->, thick] (cls) -- (seg);
+\draw[->, thick] (cls) -- (det);
+\draw[->, thick] (seg) -- (ins);
+\draw[->, thick] (det) -- (ins);
+\draw[->, thick] (ins) -- (vis);
+\node[draw=none, right=0.8cm of seg, text width=4.5cm, font=\scriptsize] {FCN, U-Net, 转置卷积};
+\node[draw=none, left=0.3cm of det, text width=4cm, font=\scriptsize] {};
+\node[draw=none, right=0.8cm of det, text width=4.5cm, font=\scriptsize] {R-CNN, YOLO, DETR};
+\node[draw=none, right=0.8cm of ins, text width=4.5cm, font=\scriptsize] {Mask R-CNN};
+\node[draw=none, right=0.8cm of vis, text width=4.5cm, font=\scriptsize] {显著性图, Grad-CAM, 注意力图};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{核心要点}
+\begin{enumerate}
+    \item \textbf{语义分割是像素级分类}：编码器-解码器 + 跳跃连接（U-Net）是经典范式
+    \item \textbf{目标检测的两大路线}：两阶段（R-CNN 系列，精度高）和单阶段（YOLO，速度快），DETR 开启 Transformer 检测时代
+    \item \textbf{实例分割 = 检测 + 分割}：Mask R-CNN 证明了多任务学习的威力
+    \item \textbf{YOLO 仍是工业首选}：简单、快速、不断迭代，适合实时应用
+    \item \textbf{可视化是信任的基础}：显著性图和 Grad-CAM 不仅是研究工具，更是模型部署前的必要验证手段
+    \item \textbf{Transformer 天然可解释}：注意力权重直接反映模型关注区域，无需额外可视化算法
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Long et al., \textit{Fully Convolutional Networks for Semantic Segmentation}, CVPR 2015
+    \item Ronneberger et al., \textit{U-Net: Convolutional Networks for Biomedical Image Segmentation}, MICCAI 2015
+    \item Girshick et al., \textit{Rich Feature Hierarchies for Accurate Object Detection}, CVPR 2014
+    \item Ren et al., \textit{Faster R-CNN: Towards Real-Time Object Detection}, NeurIPS 2015
+    \item Redmon et al., \textit{You Only Look Once: Unified, Real-Time Object Detection}, CVPR 2016
+    \item Carion et al., \textit{End-to-End Object Detection with Transformers (DETR)}, ECCV 2020
+    \item He et al., \textit{Mask R-CNN}, ICCV 2017
+    \item Selvaraju et al., \textit{Grad-CAM: Visual Explanations from Deep Networks}, ICCV 2017
+    \item Ultralytics YOLO: \url{https://github.com/ultralytics/ultralytics}
+    \item Detectron2: \url{https://github.com/facebookresearch/detectron2}
+\end{itemize}
+
+\end{document}

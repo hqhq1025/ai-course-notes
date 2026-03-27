@@ -1,0 +1,766 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 15: Alignment - SFT/RLHF}
+\newcommand{\noteauthors}{基于 Tatsu Hashimoto 授课内容整理}
+\newcommand{\notedate}{2025年6月}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:14:47}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=Dfu7vC9jo4w}
+\newcommand{\videocoverpath}{cover_real.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== 第一部分：引言 ==========
+
+\section{引言：从预训练到后训练}
+
+本节课是 CS336 后训练（post-training）系列的第一讲，核心目标是理解如何将一个预训练模型（如 GPT-3）转化为一个可用的、安全的指令跟随模型（如 ChatGPT）。整节课的结构大致对应 InstructGPT 论文中的三步流程：监督微调（SFT）、奖励模型训练、以及基于强化学习的策略优化。
+
+\begin{importantbox}{本节课的核心问题}
+预训练赋予模型丰富的能力（推理、问答、编程等），但模型不会``开箱即用''地执行这些任务。后训练的目标是：
+\begin{enumerate}
+    \item 收集我们期望模型表现出的行为数据
+    \item 用合适的算法让模型学会这些行为
+    \item 在保证安全性的前提下规模化这一过程
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{从 GPT-3 到 ChatGPT 的转变：左侧展示了 GPT-3 时代的应用（如 Copy.ai 生成广告文案），右侧是 ChatGPT 带来的对话革命\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+GPT-3 虽然参数量巨大、能力丰富，但在产品层面并不实用——它不遵循指令、不进行对话、也不拒绝恶意请求。ChatGPT 的出现改变了这一切，其核心在于后训练流程的成功应用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{指令跟随能力的惊人之处：GPT-4 能够零样本地遵循复杂的嵌套复合指令，生成 matplotlib 代码并绘制精确图表\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。示例来自 Bubeck et al. 2023, ``Sparks of AGI''.}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{安全与内容审核的必要性：左图展示输入过滤器拦截仇恨言论请求；右图展示更复杂的社会工程攻击中输入和输出过滤器的协同工作\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\begin{knowledgebox}{预训练 vs. 后训练的心智模型}
+可以这样理解两者的关系：
+\begin{itemize}
+    \item \textbf{预训练}：将各种能力``装载''到模型参数中——模型在某处``知道''如何推理、回答问题等
+    \item \textbf{后训练}：让模型将这些能力``开箱即用''地展现出来——通过少量高质量数据引导行为
+\end{itemize}
+这一类比在后续讨论``SFT 能否教授新知识''和``幻觉问题''时会被反复提及。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{InstructGPT 的三步流程：Step 1 收集示范数据做 SFT；Step 2 收集比较数据训练奖励模型；Step 3 用 PPO 优化策略\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。来自 Ouyang et al. 2022.}
+
+
+%% ========== 第二部分：SFT ==========
+
+\section{监督微调（SFT）：数据与方法}
+
+监督微调是后训练流程的第一步，也是最直观的一步：收集高质量的``指令-回答''对，然后在预训练模型上做梯度下降。但看似简单的过程中，数据的选择和质量控制却是决定成败的关键。
+
+\subsection{指令微调数据的三种范式}
+
+课上详细对比了三个代表性数据集，它们分别代表三种不同的数据构建范式。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{三种指令微调数据集的对比：FLAN（NLP 任务聚合）、Stanford Alpaca（LLM 生成）和 Open Assistant（人类众包）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\subsubsection{FLAN：NLP 任务聚合}
+
+FLAN 由 Google 团队构建，其策略是将大量已有的 NLP 数据集（如 Natural Instructions V2、T0-SF、对抗性 QA、主题分类等）聚合成一个大的元数据集。每个数据集都被转换为``指令+输入+输出''的格式。
+
+\begin{knowledgebox}{FLAN 的优劣势}
+\textbf{优势}：数据量大、覆盖任务类型广泛、构建成本低（复用已有数据集）。\\
+\textbf{劣势}：任务格式不自然（如多选题、Enron 邮件主题生成等）；输出通常很短（一个词或短语）；与真实的聊天交互差异较大。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{FLAN 数据集随机样本：包含文章摘要、多选分类、邮件主题生成、数据库到文本等多种 NLP 任务\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+\subsubsection{Stanford Alpaca：LLM 生成数据}
+
+Alpaca 是早期使用语言模型生成指令微调数据的代表性工作。其流程是：用一组人工编写的种子指令作为上下文示例，让语言模型生成新的指令，再用 InstructGPT 生成对应的回复。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{Alpaca 数据集随机样本：指令更接近日常聊天风格，回复为长文本自然语言\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+与 FLAN 相比，Alpaca 的指令更接近用户可能输入到聊天机器人的内容，回复也更偏向长文本自然语言。但其输入多样性有限（指令往往较短且简单），且完全依赖 LLM 的生成质量。
+
+\subsubsection{Open Assistant：人类众包}
+
+Open Assistant 是 ChatGPT 发布后，由一群在线爱好者自发组织的众包项目。志愿者们编写了大量指令微调数据，其特点是：
+
+\begin{itemize}
+    \item 查询更复杂、更贴近真实需求
+    \item 回复非常详细，甚至包含引用文献
+    \item 数据质量参差不齐，但优质样本质量很高
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{Open Assistant 数据集随机样本：展示了更复杂的查询和包含引用的详细回复\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第12页。}
+
+\subsection{数据质量的关键维度}
+
+课上通过课堂互动实验揭示了指令微调数据面临的核心挑战。
+
+\subsubsection{长度偏差}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{不同指令微调数据集的输入/输出长度分布差异极大\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。来自 Wang et al. 2023 的综述。}
+
+长度是后训练数据中一个``房间里的大象''：
+
+\begin{warningbox}{长度偏差的危害}
+\begin{itemize}
+    \item 人类评估者对列表格式和较长输出有强烈偏好（约 60--70\% 的偏好率）
+    \item AI 评审（如 GPT-4 作为 judge）同样存在此偏差
+    \item 这意味着仅通过增加输出长度就可以``欺骗''评估系统，而非真正提升内容质量
+\end{itemize}
+一个好的后训练流程应该优化实质性内容（如减少幻觉、提升准确率），而非风格因素。
+\end{warningbox}
+
+有趣的是，这些长度相关因素对基准测试（如 MMLU）的影响较小——大多数指令微调数据集都能在基准测试上带来相对于基座模型的提升。因此，在评估后训练效果时，应当综合使用聊天式评估（如 Chatbot Arena、AlpacaEval）和标准基准测试，以避免长度偏差的干扰。
+
+\subsubsection{知识注入与幻觉的权衡}
+
+这是本课中最深刻的洞见之一。考虑 Open Assistant 中的一个示例：用户询问``单一消费者经济学''（monopsony），回复中包含了具体的学术引用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{SFT 数据中的知识注入问题：当回复包含模型可能不知道的引用时，微调同时教授两件事\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+当我们用这样的数据微调模型时，模型同时学到两件事：
+
+\begin{importantbox}{SFT 中的两种竞争机制}
+\begin{enumerate}
+    \item \textbf{知识关联}（正面）：将``单一消费者经济学''与特定引用关联起来
+    \item \textbf{格式模仿}（潜在负面）：学到``遇到复杂概念时，应在末尾添加参考文献''的模式
+\end{enumerate}
+如果模型参数中本就不包含该引用的知识，那么第二种机制会占主导——模型学会的不是检索正确引用，而是\textbf{编造一个看似合理的引用}。
+\end{importantbox}
+
+John Schulman（OpenAI）曾在 Berkeley 的报告中强调：如果模型不具备回答某问题的知识，强迫它回答只会教它幻觉。正确的做法是让模型学会说``我不知道''。
+
+\begin{warningbox}{反直觉的数据质量准则}
+一个``完全正确、信息丰富''的微调数据集，可能反而对模型有害——因为当数据的知识深度超出模型预训练时学到的内容时，模型会学到``编造事实以匹配回复格式''的捷径行为。这一问题在以下两种情况下尤其突出：
+\begin{itemize}
+    \item 蒸馏数据中教师模型远强于学生模型
+    \item 人类标注者的知识远超模型的能力
+\end{itemize}
+\end{warningbox}
+
+\subsection{安全微调}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{安全微调的核心权衡：在拒绝有害请求和避免过度拒绝之间找到平衡\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+安全微调面临一个核心权衡：模型需要拒绝有害请求（如``写一条仇恨言论的推文''），但不能过度拒绝合理请求（如``如何 kill 一个 Python 进程''）。
+
+关键发现包括：
+\begin{itemize}
+    \item 少量安全微调数据（甚至 500 个样本）就能显著提升模型的安全性
+    \item 这与指令微调的发现一致：强预训练模型 + 少量高质量数据 = 显著的行为改变
+    \item 但纯粹通过 SFT 来处理安全问题的细微之处非常困难
+\end{itemize}
+
+\subsection{SFT 的方法论}
+
+\subsubsection{基本方法：梯度下降}
+
+SFT 的基本操作非常直接：将指令和回复拼接为序列，对回复部分计算交叉熵损失，做梯度下降。在学术场景中，这通常就够了。
+
+\subsubsection{规模化：中间训练（Mid-training）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{MiniCPM 的两阶段训练流程：第一阶段为纯预训练，第二阶段（衰减阶段）混入指令微调数据\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。来自 MiniCPM 论文。}
+
+在前沿实验室中，现代指令微调流程正在与预训练流程融合。具体做法是：
+
+\begin{importantbox}{中间训练范式}
+\begin{enumerate}
+    \item \textbf{第一阶段}：纯预训练（使用 Common Crawl、代码数据等）
+    \item \textbf{第二阶段}（衰减/退火阶段）：在学习率下降的同时，逐步混入指令微调数据（如 UltraChat、Stack Exchange QA、代码 SFT 数据等）
+    \item \textbf{第三阶段}（可选）：在第二阶段完成后，进行一个短的纯指令微调轮次
+\end{enumerate}
+\end{importantbox}
+
+以 MiniCPM 为例，其第一阶段使用纯预训练数据（Common Crawl、代码预训练、Pile、Dolma 等），第二阶段在学习率衰减时混入代码 SFT、中文书籍、UltraChat、Stack Exchange QA 等指令微调相关数据。
+
+这种范式的优势包括：
+
+\begin{itemize}
+    \item 避免灾难性遗忘（因为预训练数据仍在混合中）
+    \item 指令微调数据能更深入地整合到模型中
+    \item 可以利用学习率衰减带来的大幅损失下降来``退火''模型进入正确的模式
+\end{itemize}
+
+\begin{warningbox}{``基座模型''概念的模糊化}
+在这种范式下，所谓的``基座模型''实际上已经通过中间训练阶段隐式地接受了指令微调。当我们看到 Qwen 等公司发布的``base model''时，它很可能已经经历了包含指令数据的衰减阶段。因此，``基座模型''这个术语正变得越来越具有歧义性。
+\end{warningbox}
+
+\subsection{本章小结}
+
+\begin{importantbox}{SFT 部分的三个核心要点}
+\begin{enumerate}
+    \item \textbf{指令微调惊人地强大}：即使使用标准的开源数据集（如 Open Hermes、Open Assistant），配合合理的超参数，就能得到一个行为类似 LLaMA 或 ChatGPT 的模型
+    \item \textbf{``高质量数据''的定义非常复杂}：完全正确的数据不一定是好数据；需要考虑模型的知识边界、幻觉风险等多个维度
+    \item \textbf{少量数据即可产生巨大影响}：500 个安全样本就能显著改变模型的安全行为
+\end{enumerate}
+\end{importantbox}
+
+
+%% ========== 第三部分：RLHF ==========
+
+\section{从模仿到优化：RLHF 的动机}
+
+\subsection{范式转变：从生成模型到策略优化}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{两种范式的对比——模仿学习（SFT）vs. 优化（RLHF）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+SFT 和 RLHF 代表了两种根本不同的视角：
+
+$$\text{SFT（模仿）: } \hat{p}(y|x) \approx p^*(y|x)$$
+
+其中 $p^*$ 是某个参考分布（专家示范数据的分布）。这是纯粹的生成建模视角——我们试图让模型分布逼近参考分布。
+
+$$\text{RLHF（优化）: } \text{找到 } \hat{p}(y|x) \text{ 使得 } \max_p \mathbb{E}_p[R(y,x)]$$
+
+其中 $R(y,x)$ 是奖励函数。在这个视角下，语言模型不再是某个分布的模型，而是需要最大化奖励的\textbf{策略}。
+
+\begin{importantbox}{为什么要做 RLHF？两个核心原因}
+\begin{enumerate}
+    \item \textbf{数据效率}：SFT 需要专家编写完整的回复（昂贵且费时），而 RLHF 只需要对现有回复做成对比较（更快、更便宜）
+    \item \textbf{生成-验证差距}：人类判断回复好坏的能力，往往优于自己生成高质量回复的能力
+\end{enumerate}
+\end{importantbox}
+
+\subsection{SFT 数据收集的高成本}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{后训练流程中不同阶段的成本分布：SFT 的人工数据收集成本远高于 RLHF 的成对比较数据\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+前沿实验室在后训练数据上的花费可达数百万美元。SFT 数据需要专家撰写长文本回复——正如课堂实验所展示的，即便是高度积极的斯坦福学生，在短时间内也很难写出高质量的长回复。相比之下，``A 比 B 好''这样的成对判断要容易得多。
+
+\subsection{生成-验证差距}
+
+一项来自 Tatsu 实验室的研究发现了一个令人惊讶的现象：自由撰稿专家在被要求写摘要后，评估时竟然更偏好 AI 生成的摘要而非自己写的。原因在于人类写作时会受到各种约束（时间压力、``应该用华丽语言''的心理预设等），但评估时却能更客观地判断质量。
+
+\begin{knowledgebox}{验证比生成更容易也更准确}
+这一发现（验证比生成更容易）不仅是 RLHF 的动机之一，也是计算复杂性理论中的经典命题（P vs NP）在实际场景中的体现。在后训练语境下，它意味着：利用人类的验证能力（通过成对比较）可能比利用人类的生成能力（通过撰写回复）更加高效和准确。
+\end{knowledgebox}
+
+
+%% ========== 第四部分：RLHF 数据 ==========
+
+\section{RLHF 数据收集}
+
+\subsection{成对反馈的标准流程}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{成对反馈收集的标准界面：标注者看到两个 AI 回复，选择哪个更好\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+成对反馈的基本流程是：
+\begin{enumerate}
+    \item 给定一个提示（prompt），模型生成多个不同的回复
+    \item 标注者比较这些回复，标记哪个更好
+    \item 收集大量这样的成对比较数据
+\end{enumerate}
+
+\subsection{标注指南的设计}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-036.jpg}
+\caption{InstructGPT 的标注指南：评估维度包括有用性（Helpful）、真实性（Truthful）和无害性（Harmless）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第37页。来自 InstructGPT 论文附录。}
+
+InstructGPT 的标注指南定义了三个评估维度（HHH）：
+
+\begin{itemize}
+    \item \textbf{有用性（Helpful）}：使用清晰语言、回答用户真正想问的问题、对国际化敏感（如``football''不应默认为美式足球）
+    \item \textbf{真实性（Truthful）}：不产生幻觉输出
+    \item \textbf{无害性（Harmless）}：不包含有毒内容、不生成 NSFW 内容
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{泄露的 Google Bard 标注指南：类似的有用性、风格、安全性评估维度，标注者每个问题仅有约一分钟\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+InstructGPT 通过 Scale 和 Upwork 平台收集了约 40 名标注者的数据。Google Bard 的指南包含类似的维度（有用性、风格、安全性），但据报道标注者每个问题仅有约一分钟的判断时间。
+
+\subsection{众包标注的挑战}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{众包数据收集面临的三大挑战\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+课堂互动实验生动地展示了成对标注的困难。在约 5 分钟的时间内，斯坦福学生需要对多组回复进行比较判断：
+
+\begin{warningbox}{成对标注中的三大陷阱}
+\begin{enumerate}
+    \item \textbf{难以获得高质量、可验证的标注者}：即便是有动力的学生也会出错
+    \item \textbf{难以让标注者真正核查事实正确性}：大多数学生在 5 分钟内无法逐一验证回复中的所有事实声称
+    \item \textbf{GPT-4 作弊问题}：一些标注者会直接将任务丢给 GPT-4，导致标注数据反映的是 AI 的偏好而非人类的真实判断
+\end{enumerate}
+\end{warningbox}
+
+实验的一个关键发现是：许多更长的回复实际上包含了幻觉内容，但大多数人仍然选择了更长的版本。这直接说明了为什么长度偏差在 RLHF 数据中如此普遍。
+
+\subsection{标注者偏见与多样性问题}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-042.jpg}
+\caption{标注者背景对模型价值观的影响：InstructGPT 的标注者主要来自菲律宾和孟加拉国\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第43页。}
+
+RLHF 处于训练流程的末端，因此对模型最终行为有极强的影响力。Tatsu 团队的研究发现，InstructGPT 在训练后变得更加认同东南亚宗教的观点——而查看论文附录后发现，标注者主要来自菲律宾和孟加拉国（仅 17\% 为美国人）。这一发现提醒我们：
+
+\begin{warningbox}{标注者构成决定模型价值观}
+由于 RLHF 在流程末端、对模型行为影响最大，标注者的文化背景、教育水平、个人偏好会直接影响模型的价值观取向。不同标注者群体关注的维度也不同——研究者/作者更关注事实正确性，而众包工人更关注格式美观度。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{不同标注者群体的关注点差异：研究者（Authors）更关注事实性，众包工人（Crowd workers）更关注格式\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。来自 Hosking, Blunam, \& Barlo 的研究。}
+
+\subsection{AI 反馈：从 RLHF 到 RLAIF}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-045.jpg}
+\caption{AI 反馈的有效性：GPT-4 与人类评审的一致性与人类之间的一致性相当\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+鉴于人类标注的种种挑战，AI 反馈（RLAIF）成为了一个越来越流行的替代方案。核心发现包括：
+
+\begin{itemize}
+    \item GPT-4 的成对偏好判断与人类评审的一致性（Agreement），与人类之间的相互一致性大致相当
+    \item AI 反馈的成本远低于人类标注
+    \item Hugging Face 在构建 Zephyr 7B 模型时，最初坚持使用人类众包数据，但最终发现 GPT-4 生成的反馈效果更好
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{Tulu 3 的数据构建流程：使用不同模型生成回复，再由 LM 进行成对偏好判断\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。来自 AI2 Tulu 3 项目。}
+
+这一趋势可以追溯到 Anthropic 的 Constitutional AI 论文，该工作首次系统性地提出用 AI 反馈替代人类反馈进行对齐训练。现代实践中，如 Tulu 3（AI2）等项目，已经完全采用 LM 生成的反馈数据。
+
+\begin{knowledgebox}{AI 反馈的注意事项}
+\begin{itemize}
+    \item \textbf{自我偏好偏差}：大多数模型对自己的输出有可检测的偏好，使用同一模型既生成又评判时需要特别小心
+    \item \textbf{长度偏差}：AI 评审同样偏好更长的回复，可能导致模型输出越来越冗长
+    \item \textbf{风格偏好}：AI 评审可能将特定风格（如列表格式）与质量混淆
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{importantbox}{RLHF 数据收集的核心教训}
+\begin{enumerate}
+    \item 成对反馈虽然比 SFT 数据更容易收集，但仍面临事实核查困难、长度偏差、标注者偏见等严峻挑战
+    \item 标注者背景对模型价值观有直接影响，需要审慎考虑标注团队的多样性和代表性
+    \item AI 反馈已经成为主流替代方案，但自身也带来新的偏差问题
+\end{enumerate}
+\end{importantbox}
+
+
+%% ========== 第五部分：RLHF 算法 ==========
+
+\section{RLHF 算法}
+
+\subsection{奖励建模：Bradley-Terry 模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{Bradley-Terry 模型：假设每个序列有一个标量奖励 $R$，成对偏好的概率由两个奖励的差决定\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+RLHF 的核心假设是 Bradley-Terry 偏好模型：
+
+\begin{importantbox}{Bradley-Terry 偏好模型}
+假设世界上每个可能的输出序列 $y$ 都有一个潜在的标量奖励 $R(y, x)$。当标注者比较两个回复 $y_A$ 和 $y_B$ 时，偏好 $y_A$ 的概率为：
+$$P(y_A \succ y_B | x) = \sigma(R(y_A, x) - R(y_B, x))$$
+其中 $\sigma$ 是 sigmoid 函数。
+
+我们无法直接观测 $R$，只能通过有噪声的成对比较间接推断它。奖励模型 $r_\theta(x, y)$ 就是对这个潜在奖励的参数化近似。
+\end{importantbox}
+
+\subsection{RLHF 目标函数}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{InstructGPT 论文中的 RLHF 目标函数（Equation 2）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。来自 Ouyang et al. 2022.}
+
+InstructGPT 的 RLHF 目标函数为：
+
+$$\text{objective}(\phi) = \mathbb{E}_{(x,y) \sim D_{\pi^{\text{RL}}_\phi}} \left[ r_\theta(x, y) - \beta \log \frac{\pi^{\text{RL}}_\phi(y|x)}{\pi^{\text{SFT}}(y|x)} \right] + \gamma \mathbb{E}_{x \sim D_{\text{pretrain}}} \left[ \log \pi^{\text{RL}}_\phi(x) \right]$$
+
+各项含义：
+\begin{itemize}
+    \item $r_\theta(x, y)$：奖励模型给出的奖励分数
+    \item $\beta \log \frac{\pi^{\text{RL}}_\phi(y|x)}{\pi^{\text{SFT}}(y|x)}$：RL 策略与 SFT 模型之间的 KL 散度惩罚项，防止 RL 偏离太远
+    \item $\gamma \mathbb{E}_{x \sim D_{\text{pretrain}}} [\log \pi^{\text{RL}}_\phi(x)]$：预训练损失混入项，防止灾难性遗忘
+\end{itemize}
+
+\begin{knowledgebox}{KL 惩罚的重要性}
+KL 散度项 $D_{\text{KL}}[\pi^{\text{RL}} \| \pi^{\text{SFT}}]$ 是 RLHF 中最关键的正则化手段。没有它，策略优化会``过度利用''（exploit）奖励模型的漏洞——找到奖励模型给出高分但实际质量很差的输出。这个现象称为\textbf{奖励黑客}（reward hacking），是 RLHF 中最常见的失败模式之一。
+\end{knowledgebox}
+
+\subsection{PPO：经典的 RL 优化算法}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{从策略梯度到 PPO 的推导过程\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第54页。}
+
+PPO（Proximal Policy Optimization）是 InstructGPT 使用的核心 RL 算法。其推导过程可以分为三步：
+
+\textbf{第一步：策略梯度定理}
+
+优化目标 $\max_\theta \mathbb{E}_{y \sim p_\theta}[R(y)]$ 的梯度为：
+
+$$\nabla_\theta \mathbb{E}_{y \sim p_\theta}[R(y)] = \mathbb{E}_{y \sim p_\theta}[R(y) \cdot \nabla_\theta \log p_\theta(y)]$$
+
+直观含义：如果某个输出的奖励 $R(y)$ 为正，增大其概率；如果为负，减小其概率。这就是 REINFORCE 算法。
+
+\textbf{第二步：方差缩减与优势函数}
+
+将奖励替换为\textbf{优势函数}（Advantage）$A = R - V$，其中 $V$ 是值函数基线。这在不改变梯度期望的前提下大幅降低方差。
+
+\textbf{第三步：重要性采样与截断}
+
+为了从一次采样（rollout）中获取多个梯度步骤，引入重要性权重比率 $\frac{\pi_\theta(y|x)}{\pi_{\theta_{\text{old}}}(y|x)}$。PPO 的核心创新是对这个比率进行\textbf{截断}（clipping），使其保持在 $[1-\epsilon, 1+\epsilon]$ 范围内，从而自然地约束策略不会偏离太远。
+
+\begin{warningbox}{PPO 的实现复杂性}
+PPO 在语言模型中的实现非常复杂——需要同时维护策略模型、值函数模型、奖励模型和参考模型四个模型的前向/反向传播。CS336 曾考虑但最终放弃了让学生实现 PPO 的作业。
+\end{warningbox}
+
+\subsection{DPO：将 RL 问题转化为监督学习}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{DPO 的推导起点：从 RLHF 目标函数出发\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+DPO（Direct Preference Optimization）的动机是消除 PPO 的复杂性。其推导过程精巧但直接：
+
+\textbf{第一步：写出 RLHF 目标函数}
+
+$$\max_{\pi_\theta} \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_\theta(y|x)} \left[ r_\phi(x, y) \right] - \beta \mathbb{D}_{\text{KL}} \left[ \pi_\theta(y|x) \| \pi_{\text{ref}}(y|x) \right]$$
+
+\textbf{第二步：非参数假设下的最优策略}
+
+假设 $\pi_\theta$ 不限于某个参数族，而是任意函数。则最优策略为：
+
+$$\pi_r(y|x) = \frac{1}{Z(x)} \pi_{\text{ref}}(y|x) \exp\left(\frac{1}{\beta} r(x, y)\right)$$
+
+\begin{importantbox}{DPO 的核心洞见：策略与奖励的等价性}
+从上式可以反解出\textbf{隐含奖励}（implied reward）：
+$$r(x, y) = \beta \log \frac{\pi_r(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)$$
+这意味着：在非参数假设下，每个策略唯一对应一个奖励函数。与其分别学习奖励模型和策略，不如直接学习策略——策略本身就隐含了奖励信息。
+\end{importantbox}
+
+\textbf{第三步：代入 Bradley-Terry 模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-057.jpg}
+\caption{DPO 推导的最后一步：将隐含奖励代入 Bradley-Terry 模型，得到纯监督学习目标\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第58页。}
+
+将隐含奖励代入 Bradley-Terry 模型的对数似然中（注意 $Z(x)$ 项在差值中消除）：
+
+$$\mathcal{L}_{\text{DPO}}(\pi_\theta; \pi_{\text{ref}}) = -\mathbb{E} \left[ \log \sigma \left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right) \right]$$
+
+其中 $y_w$ 是被偏好的（winning）回复，$y_l$ 是不被偏好的（losing）回复。
+
+\begin{importantbox}{DPO 的直观理解}
+DPO 的损失函数有一个非常简洁的解释：
+\begin{itemize}
+    \item 增大被偏好回复相对于参考模型的对数概率比值
+    \item 减小不被偏好回复相对于参考模型的对数概率比值
+    \item 参考模型 $\pi_{\text{ref}}$ 起到了正则化的作用，防止概率偏离太远
+\end{itemize}
+整个过程不需要奖励模型、不需要在线采样、不需要重要性权重——只需要对成对偏好数据做标准的梯度下降。
+\end{importantbox}
+
+\subsection{DPO 的替代方案与变体}
+
+在 DPO 出现之前，人们尝试了多种简化 PPO 的方法，但效果都不理想：
+
+\begin{enumerate}
+    \item \textbf{条件生成}：在被偏好/不被偏好的回复前分别加上``good''/``bad''标记，生成时条件于``good'' $\rightarrow$ 效果不佳
+    \item \textbf{仅训练被偏好回复}：只对 chosen 回复做 SFT $\rightarrow$ 效果不够好
+    \item \textbf{Best-of-N}：用奖励模型选出 N 个样本中的最佳回复，再做 SFT $\rightarrow$ 效果一般
+\end{enumerate}
+
+DPO 之后也出现了大量变体：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-060.jpg}
+\caption{DPO 的两个重要变体：SimPO（去除参考模型）和长度归一化 DPO\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第61页。}
+
+\begin{itemize}
+    \item \textbf{SimPO}：去除参考模型 $\pi_{\text{ref}}$，用长度归一化的对数概率作为隐含奖励，同时引入 margin 项 $\gamma$
+    \item \textbf{长度归一化 DPO}：在 DPO 基础上对对数概率按序列长度归一化，缓解长度偏差
+\end{itemize}
+
+这些变体的共同思路是在保持 DPO 简洁性的同时，解决其在实践中遇到的特定问题（如长度偏差、对参考模型的依赖等）。
+
+\subsection{本章小结}
+
+\begin{importantbox}{RLHF 算法的核心要点}
+\begin{enumerate}
+    \item Bradley-Terry 模型是 RLHF 的概率基础，假设偏好由潜在标量奖励的差值决定
+    \item PPO 是经典但复杂的 RL 优化方法，需要维护四个模型
+    \item DPO 通过策略-奖励等价性将 RL 问题转化为监督学习问题，大幅降低了实现复杂度
+    \item KL 散度惩罚（无论是显式还是隐式）对防止奖励黑客至关重要
+\end{enumerate}
+\end{importantbox}
+
+
+%% ========== 第六部分：On-policy vs Off-policy ==========
+
+\section{在线策略 vs. 离线策略}
+
+\begin{knowledgebox}{On-policy 与 Off-policy 的区别}
+\begin{itemize}
+    \item \textbf{离线策略（Off-policy）}：成对比较数据不是来自当前模型的输出。例如 Tulu 3 中使用多个不同模型生成回复，再用 LM 评判。数据一次性收集完毕后反复使用。
+    \item \textbf{在线策略（On-policy）}：成对比较数据来自当前正在训练的模型的最新输出。PPO 本质上是 on-policy 方法，需要模型实时生成输出并获取反馈。
+\end{itemize}
+Off-policy 数据告诉你关于``你不在的地方''的偏好景观；On-policy 数据帮助你``精炼自己''。Tulu 3 同时使用了两种数据。
+\end{knowledgebox}
+
+DPO 通常以 off-policy 方式使用（因为数据在训练前就已收集完毕），而 PPO 天然是 on-policy 的。这一区别在实践中有重要影响——on-policy 方法通常能更好地避免 SFT 中讨论的幻觉问题，因为它只让模型在自己的知识范围内优化。
+
+
+%% ========== 第七部分：总结与延伸 ==========
+
+\section{总结与延伸}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-065.jpg}
+\caption{本节课总结\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第66页。}
+
+\subsection{核心要点回顾}
+
+本节课完整覆盖了从预训练模型到对齐模型的后训练流程，核心内容包括：
+
+\textbf{SFT 部分}：
+\begin{enumerate}
+    \item 指令微调数据有三种主要范式：NLP 任务聚合（FLAN）、LLM 生成（Alpaca）、人类众包（Open Assistant）
+    \item ``高质量数据''的定义远比想象中复杂——完全正确的数据可能教模型幻觉
+    \item 少量数据即可产生巨大影响（包括安全微调）
+    \item 现代实践中，SFT 与预训练正通过中间训练阶段融合
+\end{enumerate}
+
+\textbf{RLHF 部分}：
+\begin{enumerate}
+    \item RLHF 数据收集面临诸多挑战：长度偏差、标注者偏见、事实核查困难、GPT-4 作弊
+    \item AI 反馈（RLAIF）已成为主流趋势，效果可与人类标注媲美
+    \item PPO 是经典但复杂的 RL 优化算法
+    \item DPO 通过优雅的数学推导将 RL 问题化归为监督学习
+    \item 警惕奖励过度优化和奖励黑客现象
+\end{enumerate}
+
+\subsection{开放问题与前沿方向}
+
+\begin{itemize}
+    \item \textbf{自我改进的上限在哪里？} 模型能从自身反馈中提取多少改进？理论上上限很高（模型包含了整个预训练语料的信息），但实际效果取决于具体实现
+    \item \textbf{如何从根本上解决幻觉？} SFT 和 RLHF 都无法完全解决幻觉问题，可能需要在预训练阶段引入 RL 风格的自适应训练
+    \item \textbf{可验证奖励的 RL}（下一讲主题）：在数学等可验证领域，可以用正确性作为奖励信号，避免人类/AI 标注的各种偏差
+    \item \textbf{后训练的伦理问题}：标注工人的薪酬和工作条件、文化偏见的传播等
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Ouyang et al. (2022). \textit{Training language models to follow instructions with human feedback} (InstructGPT)
+    \item Rafailov et al. (2023). \textit{Direct Preference Optimization: Your Language Model is Secretly a Reward Model} (DPO)
+    \item Bai et al. (2022). \textit{Constitutional AI: Harmlessness from AI Feedback} (Anthropic)
+    \item Schulman et al. (2017). \textit{Proximal Policy Optimization Algorithms} (PPO)
+    \item Wang et al. (2023). \textit{How Far Can Camels Go? Exploring the State of Instruction Tuning on Open Resources}
+    \item Hu et al. (2024). \textit{MiniCPM: Unveiling the Potential of Small Language Models with Scalable Training Strategies}
+    \item Lambert et al. (2024). \textit{Tulu 3: Pushing Frontiers in Open Language Model Post-Training}
+    \item Meng et al. (2024). \textit{SimPO: Simple Preference Optimization with a Reference-Free Reward}
+    \item Zelikman et al. (2022). \textit{STaR: Bootstrapping Reasoning With Reasoning} 以及后续的 Quiet-STaR
+    \item John Schulman. \textit{Reinforcement Learning from Human Feedback: Progress and Challenges} (Berkeley 报告)
+\end{itemize}
+
+\end{document}

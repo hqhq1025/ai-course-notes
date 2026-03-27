@@ -1,0 +1,775 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, decorations.pathreplacing}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS224N Lecture 7: Attention and LLM Intro}
+\newcommand{\noteauthors}{基于 Chris Manning 授课内容整理}
+\newcommand{\notedate}{2024年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2024}
+\newcommand{\videoduration}{约80分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=J7ruSOIzhrE}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 机器翻译评估 ==========
+
+\section{机器翻译评估}
+
+本讲的第一部分承接上一讲的序列到序列（Sequence-to-Sequence）机器翻译模型，讨论如何评估机器翻译系统的质量。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{本讲课程大纲：涵盖 MT 评估、注意力机制、期末项目指导及实践建议\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{序列到序列模型回顾}
+
+在上一讲中，我们介绍了基于多层 LSTM 的编码器-解码器（Encoder-Decoder）架构用于机器翻译。编码器读入源语言句子，将信息压缩到最后一个隐藏状态中；解码器以此为初始状态，逐词生成目标语言翻译。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{多层深度编码器-解码器机器翻译网络：源句（德语）通过多层 LSTM 编码，解码器使用不同参数逐词生成翻译（英语）。底部标注``Conditioning = Bottleneck''指出了该架构的核心问题\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。参考 Sutskever et al. 2014; Luong et al. 2015。}
+
+\begin{warningbox}{信息瓶颈问题}
+在标准的 Seq2Seq 架构中，源句的\textbf{所有信息}必须被压缩到编码器最后一个隐藏状态向量中。对于短句子这或许可以接受，但当源句长达 40 个词时，将全部语义信息塞入一个固定大小的向量显然是不合理的。这个问题被称为\textbf{信息瓶颈（Information Bottleneck）}，也是注意力机制被发明的直接动因。
+\end{warningbox}
+
+\subsection{BLEU 评估指标}
+
+为了自动评估机器翻译质量，Papineni 等人（2002）提出了 \textbf{BLEU}（\textbf{B}ilingual \textbf{E}valuation \textbf{U}nderstudy）指标。在此之前，翻译质量只能通过人工评估来衡量，这虽然是金标准，但成本高昂且无法嵌入训练循环。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{BLEU 评估方法：将机器翻译与一个或多个参考翻译进行 n-gram 匹配\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。来源：Papineni et al., 2002。}
+
+\begin{importantbox}{BLEU 指标的核心思想}
+BLEU 通过计算机器翻译与人工参考翻译之间的 \textbf{n-gram 重叠度}来衡量翻译质量：
+\begin{itemize}
+    \item 计算 1-gram、2-gram、3-gram、4-gram 的精确率（precision）
+    \item 取这些精确率的\textbf{几何平均值}
+    \item 加入\textbf{简短惩罚}（brevity penalty），防止系统通过只翻译简单部分来获取高分
+\end{itemize}
+BLEU 分数理论上在 0--100 之间，但由于翻译的多样性，永远不会达到 100。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{BLEU 评分示例：机器翻译与4个参考翻译的 n-gram 匹配过程，圈出的词组表示匹配成功的片段\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{knowledgebox}{BLEU 分数的解读}
+\begin{itemize}
+    \item \textbf{20 分左右}：可以大致理解源文档的主题
+    \item \textbf{30--40 分}：翻译质量开始变得不错
+    \item \textbf{50--60 分}：现代神经机器翻译系统在一些语言对上已能达到的水平
+\end{itemize}
+原始设计建议使用多个参考翻译来更好地覆盖翻译空间，但实践中使用单个参考翻译也很常见。
+\end{knowledgebox}
+
+\begin{warningbox}{BLEU 的局限性}
+BLEU 是一个\textbf{有用但不完美}的指标：
+\begin{itemize}
+    \item 一个好的翻译可能因为措辞与参考翻译不同而获得低分
+    \item 一个差的翻译可能因为碰巧包含一些正确的词而获得一些分数
+    \item 它无法捕捉语义等价性——同义词替换会被错误惩罚
+\end{itemize}
+因此，人工评估在高风险场景中仍然是必不可少的。
+\end{warningbox}
+
+\subsection{机器翻译的历史进展}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{机器翻译 BLEU 分数随时间的变化（Edinburgh En-De WMT）：统计短语翻译（红色）进展缓慢，句法翻译（紫色）略有提升，神经机器翻译（青色）从2015年起呈现爆发式增长\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+机器翻译技术经历了三个重要阶段：
+
+\begin{enumerate}
+    \item \textbf{统计短语翻译}（Phrase-based SMT，1990s--2010s）：IBM 开创，Google Translate 最初使用此方法。进展缓慢，BLEU 分数几乎停滞。
+    \item \textbf{句法翻译}（Syntax-based SMT，2005--2015）：试图利用句法结构改善翻译，尤其针对词序差异大的语言对（如德-英、中-英），但改进幅度有限。
+    \item \textbf{神经机器翻译}（Neural MT，2014至今）：2014年首次出现，2015年在 bake-off 评测中亮相，2016年超越所有传统方法，此后一路高歌猛进。
+\end{enumerate}
+
+\begin{knowledgebox}{NMT 的崛起}
+Manning 教授指出，在 2005--2014 年间，机器翻译社区的主流观点是``要想做好翻译，必须理解句法结构''。然而，神经机器翻译的成功表明，端到端学习可以隐式地捕获这些结构信息，这彻底颠覆了传统思维。注意力机制是推动 NMT 成功的关键技术之一。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item BLEU 是最广泛使用的机器翻译自动评估指标，基于 n-gram 精确率的几何平均
+    \item BLEU 有用但不完美，好翻译可能低分，差翻译可能得分
+    \item 神经机器翻译从2014年起迅速超越传统方法，注意力机制是其成功的核心要素
+    \item 编码器-解码器架构存在信息瓶颈，这直接催生了注意力机制的发明
+\end{itemize}
+
+%% ========== Part 2: 注意力机制 ==========
+
+\section{注意力机制}
+
+注意力（Attention）是近年来神经网络领域最重要的创新之一。Manning 教授强调，前面课程中介绍的所有技术（前馈网络、RNN、LSTM、CNN）都是上世纪发明的，而注意力是2014年在神经机器翻译背景下\textbf{全新发明}的概念，它对提升神经网络的能力具有变革性意义。
+
+\subsection{动机：序列到序列的信息瓶颈}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{Seq2Seq 的信息瓶颈：Encoder RNN 将法语源句 ``il a m' entart\'{e}'' 编码为一个固定向量（橙色框），Decoder RNN 必须仅凭这个向量生成完整的英语翻译 ``he hit me with a pie''\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-007.jpg}
+\caption{信息瓶颈问题的明确表述：编码器的最后一个隐藏状态必须捕获源句的\textbf{全部}信息，这构成了信息瓶颈\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页。}
+
+标准 Seq2Seq 模型的核心问题在于：
+
+\begin{itemize}
+    \item 编码器将整个源句压缩为\textbf{单一向量}
+    \item 对于长句子，这个向量无法承载所有必要信息
+    \item 粗暴的解决方案（增大隐藏状态、增加层数）效果有限
+    \item 人类翻译时会\textbf{回头查看}源句的不同部分，而不是一次性记住所有内容
+\end{itemize}
+
+\begin{importantbox}{注意力的核心思想}
+在解码器的\textbf{每一步}，建立与编码器的\textbf{直接连接}，让解码器能够\textbf{聚焦}于源序列的特定部分，从而按需获取信息。这就像人类翻译时回头查看原文的特定词语一样。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{注意力机制的核心思想：在解码器的每一步，使用与编码器的直接连接来聚焦于源序列的特定部分\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\subsection{注意力机制的工作流程}
+
+注意力机制在 Seq2Seq 中的完整工作流程可以分解为以下步骤：
+
+\subsubsection{Step 1: 计算注意力分数}
+
+在解码器的每个时间步 $t$，用解码器当前隐藏状态 $\mathbf{s}_t$ 与编码器每个位置的隐藏状态 $\mathbf{h}_i$ 计算注意力分数（最简单的方式是点积）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{Step 1：解码器隐藏状态（绿色）与编码器各位置的隐藏状态（红色）做点积，得到注意力分数（蓝色圆点）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{继续计算：对编码器的每个位置都计算一个注意力分数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+\subsubsection{Step 2: 通过 Softmax 获得注意力分布}
+
+将注意力分数通过 softmax 转换为概率分布，表示解码器在当前时间步应该``关注''源句哪些位置。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-013.jpg}
+\caption{Step 2：注意力分数通过 softmax 变为注意力分布（概率分布）。在翻译第一个词时，模型主要聚焦于编码器第一个隐藏状态（对应``il''即``he''）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第14页。}
+
+\subsubsection{Step 3: 计算注意力输出}
+
+用注意力分布对编码器隐藏状态做\textbf{加权求和}，得到注意力输出（attention output），也称为上下文向量（context vector）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{Step 3：用注意力分布对编码器隐藏状态做加权求和，得到注意力输出。该输出主要包含获得高注意力权重的隐藏状态的信息\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+\subsubsection{Step 4: 拼接并生成输出词}
+
+将注意力输出与解码器隐藏状态\textbf{拼接}（concatenate），送入后续层生成下一个词。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{Step 4：将注意力输出与解码器隐藏状态拼接，计算 $\hat{y}_1$，通过 softmax 生成第一个翻译词 ``he''\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+\subsubsection{重复：逐步翻译}
+
+在后续的每个解码步骤中，重复上述过程。每一步解码器都会重新计算注意力，关注源句的不同部分。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-016.jpg}
+\caption{第二个时间步：解码器关注编码器的不同位置，注意力分布发生变化（此时主要关注 ``entart\'{e}''，即 ``pie'' 的动词形式），生成 ``hit''\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第17页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{第三个时间步：注意力分布转移到 ``m'''（法语的 ``me''），生成 ``me''\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{第六个时间步：翻译 ``pie'' 时，注意力仍然聚焦在 ``entart\'{e}''（法语的 pie/to pie 的动词形式）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\subsection{本章小结}
+
+注意力机制的工作流程可以总结为四步：
+\begin{enumerate}
+    \item \textbf{计算注意力分数}：解码器隐藏状态与编码器各位置隐藏状态的相似度
+    \item \textbf{Softmax}：将分数转换为概率分布
+    \item \textbf{加权求和}：用注意力分布对编码器隐藏状态求加权平均，得到上下文向量
+    \item \textbf{拼接与生成}：将上下文向量与解码器隐藏状态拼接，生成输出词
+\end{enumerate}
+
+%% ========== Part 3: 注意力的数学形式化 ==========
+
+\section{注意力的数学形式化}
+
+\subsection{Dot-Product Attention 的数学表示}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{注意力机制的数学形式化：四个方程完整描述了注意力计算过程\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+设编码器隐藏状态为 $\mathbf{h}_1, \ldots, \mathbf{h}_N \in \mathbb{R}^h$，解码器在时间步 $t$ 的隐藏状态为 $\mathbf{s}_t \in \mathbb{R}^h$。注意力计算的完整公式如下：
+
+\textbf{第一步：计算注意力分数}
+
+$$\mathbf{e}^t = [\mathbf{s}_t^T \mathbf{h}_1, \ldots, \mathbf{s}_t^T \mathbf{h}_N] \in \mathbb{R}^N$$
+
+\begin{itemize}
+    \item $\mathbf{e}^t$：时间步 $t$ 的注意力分数向量
+    \item $\mathbf{s}_t^T \mathbf{h}_i$：解码器状态与编码器第 $i$ 个位置状态的点积
+\end{itemize}
+
+\textbf{第二步：通过 Softmax 得到注意力分布}
+
+$$\boldsymbol{\alpha}^t = \mathrm{softmax}(\mathbf{e}^t) \in \mathbb{R}^N$$
+
+\begin{itemize}
+    \item $\boldsymbol{\alpha}^t$ 是一个概率分布，所有元素非负且和为1
+\end{itemize}
+
+\textbf{第三步：计算注意力输出（上下文向量）}
+
+$$\mathbf{a}_t = \sum_{i=1}^{N} \alpha_i^t \mathbf{h}_i \in \mathbb{R}^h$$
+
+\begin{itemize}
+    \item $\mathbf{a}_t$：编码器隐藏状态的加权平均，权重由注意力分布决定
+\end{itemize}
+
+\textbf{第四步：拼接并生成}
+
+$$[\mathbf{a}_t; \mathbf{s}_t] \in \mathbb{R}^{2h}$$
+
+将注意力输出与解码器隐藏状态拼接，得到双倍长度的向量，通过线性变换和 softmax 生成输出词的概率分布。
+
+\begin{importantbox}{注意力机制的本质}
+注意力机制本质上是一种\textbf{软性信息检索}：给定一个查询（query，即解码器状态），在一组值（values，即编码器状态）中寻找最相关的信息，并通过加权平均的方式提取出来。这种``查询-键值''的思想后来在 Transformer 中被进一步发展为 Query-Key-Value 框架。
+\end{importantbox}
+
+\subsection{注意力变体}
+
+注意力机制的通用框架包含一组值（values）$\mathbf{h}_1, \ldots, \mathbf{h}_N \in \mathbb{R}^{d_1}$ 和一个查询（query）$\mathbf{s} \in \mathbb{R}^{d_2}$。不同的注意力变体在``如何计算注意力分数''这一步有所不同。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-023.jpg}
+\caption{注意力的通用框架：三个核心步骤不变（计算分数、softmax、加权求和），变化的是如何计算注意力分数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+\subsubsection{基本点积注意力（Basic Dot-Product Attention）}
+
+$$e_i = \mathbf{s}^T \mathbf{h}_i \in \mathbb{R}$$
+
+\begin{itemize}
+    \item 最简单的形式，直接计算查询和值的点积
+    \item 要求 $d_1 = d_2$（查询和值的维度必须相同）
+    \item 优点：计算高效，无需额外参数
+    \item 缺点：隐藏状态必须同时存储多种信息（输出当前词、记录语法结构、规划未来），并非所有维度都与``回头查看''相关
+\end{itemize}
+
+\subsubsection{乘法注意力 / 双线性注意力（Multiplicative / Bilinear Attention）}
+
+$$e_i = \mathbf{s}^T \mathbf{W} \mathbf{h}_i \in \mathbb{R}$$
+
+其中 $\mathbf{W} \in \mathbb{R}^{d_2 \times d_1}$ 是可学习的权重矩阵。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{注意力变体：基本点积注意力（上）直接做点积；乘法注意力（下）在中间插入一个可学习的矩阵 $\mathbf{W}$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第25页。参考 Luong, Pham, and Manning 2015。}
+
+\begin{knowledgebox}{为什么乘法注意力更好}
+Manning 教授解释道：LSTM 的隐藏状态是它的``完整记忆''，需要存储多种不同类型的信息。编码器和解码器可能将相同类型的信息存储在不同的维度上。乘法注意力通过可学习的矩阵 $\mathbf{W}$，能够学习到``解码器的哪些维度应该与编码器的哪些维度匹配''，而不要求维度对维度的精确对应。这是 Luong, Pham 和 Manning 在2015年提出的方法。
+\end{knowledgebox}
+
+\subsubsection{降秩乘法注意力（Reduced-Rank Multiplicative Attention）}
+
+乘法注意力的一个问题是矩阵 $\mathbf{W}$ 的参数量为 $d_1 \times d_2$（如果隐藏状态维度为1000，则有100万个参数）。解决办法是将 $\mathbf{W}$ 分解为两个低秩矩阵：
+
+$$e_i = \mathbf{s}^T (\mathbf{U}^T \mathbf{V}) \mathbf{h}_i = (\mathbf{U}\mathbf{s})^T (\mathbf{V}\mathbf{h}_i)$$
+
+其中 $\mathbf{U} \in \mathbb{R}^{k \times d_2}$，$\mathbf{V} \in \mathbb{R}^{k \times d_1}$，$k \ll d_1, d_2$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{降秩乘法注意力（上）：将大矩阵分解为两个小矩阵的乘积，等价于分别对查询和值做低维投影后取点积。加法注意力（下）：使用小型神经网络计算注意力分数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+\begin{importantbox}{从降秩注意力到 Transformer}
+降秩乘法注意力的本质是：先将查询和值\textbf{投影到低维空间}，再在低维空间中做点积。这正是 \textbf{Transformer 中多头注意力的做法}！Transformer 取每个大向量，通过投影矩阵将其映射到低维空间，然后在低维空间中计算点积注意力。理解这一点是理解 Transformer 的关键。
+\end{importantbox}
+
+\subsubsection{加法注意力（Additive Attention）}
+
+$$e_i = \mathbf{v}^T \tanh(\mathbf{W}_1 \mathbf{h}_i + \mathbf{W}_2 \mathbf{s}) \in \mathbb{R}$$
+
+其中 $\mathbf{W}_1 \in \mathbb{R}^{d_3 \times d_1}$，$\mathbf{W}_2 \in \mathbb{R}^{d_3 \times d_2}$，$\mathbf{v} \in \mathbb{R}^{d_3}$，$d_3$ 是注意力维度（超参数）。
+
+\begin{knowledgebox}{加法注意力的历史地位}
+加法注意力是 Bahdanau, Cho, and Bengio（2014）提出的\textbf{最早的注意力形式}。它本质上是一个小型前馈神经网络，用于计算注意力分数。虽然后续研究表明，经过良好的超参数调优后加法注意力可能优于乘法注意力，但由于乘法注意力\textbf{更简单、更高效}，在实践中（特别是 Transformer 中）乘法注意力几乎完全胜出。
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{注意力类型} & \textbf{公式} & \textbf{额外参数} & \textbf{提出者} \\
+\midrule
+基本点积 & $\mathbf{s}^T \mathbf{h}_i$ & 无 & --- \\
+乘法/双线性 & $\mathbf{s}^T \mathbf{W} \mathbf{h}_i$ & $\mathbf{W}$ & Luong et al. 2015 \\
+降秩乘法 & $(\mathbf{U}\mathbf{s})^T(\mathbf{V}\mathbf{h}_i)$ & $\mathbf{U}, \mathbf{V}$ & (Transformer 使用) \\
+加法 & $\mathbf{v}^T \tanh(\mathbf{W}_1 \mathbf{h}_i + \mathbf{W}_2 \mathbf{s})$ & $\mathbf{W}_1, \mathbf{W}_2, \mathbf{v}$ & Bahdanau et al. 2014 \\
+\bottomrule
+\end{tabular}
+\caption{四种注意力变体对比}
+\end{table}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 注意力机制可以用四个步骤的数学公式完整描述
+    \item 核心差异在于如何计算注意力分数：点积、乘法、降秩乘法、加法
+    \item 降秩乘法注意力通过低维投影 + 点积实现，这正是 Transformer 的做法
+    \item 实践中，乘法/降秩注意力因高效而成为主流
+\end{itemize}
+
+%% ========== Part 4: 注意力的优势与通用性 ==========
+
+\section{注意力的优势与通用性}
+
+\subsection{注意力带来的四大优势}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{注意力机制的四大优势总结：提升 NMT 性能、更接近人类翻译过程、解决信息瓶颈、提供可解释性\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+\subsubsection{显著提升 NMT 性能}
+
+注意力机制的引入对神经机器翻译性能有\textbf{变革性}提升。Manning 教授讲述了一个重要历史：
+
+\begin{itemize}
+    \item \textbf{2014年}，Google（Sutskever 等）使用纯 LSTM（8层深，非常大的隐藏状态）进行机器翻译，需要巨大的计算资源
+    \item 同年，蒙特利尔大学的 Bahdanau, Cho, Bengio 引入注意力机制，以\textbf{远小}的计算预算获得了\textbf{更好}的结果
+    \item 此后，\textbf{所有}新的机器翻译系统都使用了注意力机制
+\end{itemize}
+
+\begin{importantbox}{注意力是 NMT 的秘密武器}
+Bahdanau 等人在蒙特利尔大学以远低于 Google 的计算预算，通过引入注意力机制获得了更好的翻译结果。注意力不仅是一种优化，更是一种根本性的架构改进，它使得网络能够更有效地利用已编码的信息。
+\end{importantbox}
+
+\subsubsection{更接近人类的翻译过程}
+
+人类翻译时不会先把整个句子``记住''再翻译，而是会在翻译每个词或短语时\textbf{回头查看}源句的对应部分。注意力机制模拟了这种行为：解码器在每个时间步都可以``回看''编码器的不同位置。
+
+\subsubsection{解决信息瓶颈}
+
+有了注意力，解码器不再需要仅依赖编码器最后一个隐藏状态。它可以直接访问编码器在每个位置的隐藏状态，从而利用\textbf{整个}编码表示空间。
+
+\subsubsection{缓解梯度消失问题}
+
+注意力机制在编码器隐藏状态和解码器之间建立了\textbf{直接的快捷连接}（shortcut connections）。这与残差连接的思想相同：通过跳过中间的长链依赖，梯度可以更容易地反向传播到编码器的早期位置。
+
+\subsection{注意力提供可解释性}
+
+注意力机制的一个额外好处是提供了一定程度的\textbf{可解释性}。通过查看注意力分布，我们可以观察到模型在翻译每个词时``关注''的是源句的哪个位置，从而获得一种\textbf{软对齐}（soft alignment）。
+
+\begin{knowledgebox}{免费获得的对齐信息}
+传统机器翻译中，词对齐（word alignment）是需要单独训练的组件。而注意力机制在翻译过程中\textbf{自动学会了对齐}，无需任何显式的对齐监督。Manning 教授称这是``cool''的——网络自己发现了源语言和目标语言词汇之间的对应关系。例如在法译英中，翻译 ``he'' 时关注 ``il''，翻译 ``me'' 时关注 ``m'''，翻译 ``pie'' 时关注 ``entart\'{e}''。
+\end{knowledgebox}
+
+\begin{warningbox}{注意力可解释性的局限}
+虽然注意力权重提供了有价值的直觉，但将其直接解读为``模型在关注什么''需要谨慎。后续研究表明：
+\begin{itemize}
+    \item 注意力权重并不总是与特征重要性一致
+    \item 不同的注意力分布有时会产生相似的输出
+    \item 多层 Transformer 中的注意力模式更加复杂，简单的可视化可能产生误导
+\end{itemize}
+因此，注意力权重只能作为一种\textbf{近似}的可解释性工具，而非确定性的因果解释。
+\end{warningbox}
+
+\subsection{注意力是通用技术}
+
+Manning 教授强调，注意力不仅仅适用于机器翻译。它是一种\textbf{通用技术}（general technique），可以应用于任何需要从一组值中选择性提取信息的场景：
+
+\begin{itemize}
+    \item 给定一组\textbf{值}（values）和一个\textbf{查询}（query）
+    \item 通过注意力计算值的加权平均
+    \item 从中提取与查询最相关的信息
+\end{itemize}
+
+\begin{importantbox}{注意力的通用公式}
+给定值 $\mathbf{h}_1, \ldots, \mathbf{h}_N \in \mathbb{R}^{d_1}$ 和查询 $\mathbf{s} \in \mathbb{R}^{d_2}$：
+\begin{enumerate}
+    \item 计算注意力分数：$\mathbf{e} \in \mathbb{R}^N$
+    \item 计算注意力分布：$\boldsymbol{\alpha} = \mathrm{softmax}(\mathbf{e}) \in \mathbb{R}^N$
+    \item 计算注意力输出：$\mathbf{a} = \sum_{i=1}^N \alpha_i \mathbf{h}_i \in \mathbb{R}^{d_1}$
+\end{enumerate}
+这个框架在各种神经网络架构中都被证明能\textbf{一致地提升}性能。而这一通用框架最重要的应用就是 Transformer 中的\textbf{自注意力}（self-attention），将在下一讲详细介绍。
+\end{importantbox}
+
+\subsection{关于 RNN 注意力中的位置信息}
+
+在课堂问答中，有同学问到 RNN 注意力是否需要位置编码。Manning 教授解释：
+
+\begin{knowledgebox}{为什么 RNN 注意力不需要位置编码}
+在基于 RNN 的注意力中，编码器的隐藏状态是通过递归计算得到的，每个位置的表示都依赖于前面所有位置。因此，位置信息已经\textbf{隐式编码}在隐藏状态中——第3个位置的隐藏状态``知道''它处于句子的第3个位置，因为它已经处理了前两个词。
+
+而 Transformer 必须使用\textbf{显式的位置编码}，正是因为它没有递归结构，所有位置是并行处理的，没有天然的顺序信息。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 注意力带来四大优势：提升性能、更人类化、解决瓶颈、缓解梯度消失
+    \item 注意力自动学会软对齐，提供可解释性（但需谨慎解读）
+    \item 注意力是通用技术，适用于任何``从值集合中按需提取信息''的场景
+    \item RNN 注意力不需要位置编码（信息已隐含在递归计算中），但 Transformer 需要
+    \item 注意力的下一个重大飞跃是\textbf{自注意力}——Transformer 的核心
+\end{itemize}
+
+%% ========== Part 5: 从注意力到 Transformer ==========
+
+\section{从注意力到 Transformer 与大语言模型}
+
+\subsection{注意力的历史演进}
+
+注意力机制从2014年的发明到成为现代 AI 的基石，经历了快速而深远的发展：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{年份} & \textbf{里程碑} & \textbf{关键人物} \\
+\midrule
+2014 & 加法注意力（NMT） & Bahdanau, Cho, Bengio \\
+2015 & 乘法/双线性注意力 & Luong, Pham, Manning \\
+2017 & Transformer（自注意力） & Vaswani et al. \\
+2018 & BERT（双向 Transformer） & Devlin et al. \\
+2018--今 & GPT 系列（大语言模型） & OpenAI \\
+\bottomrule
+\end{tabular}
+\caption{注意力机制的发展时间线}
+\end{table}
+
+\begin{importantbox}{注意力是深度学习新时代的开端}
+Manning 教授指出，此前神经网络的所有核心组件（前馈网络、RNN、LSTM、CNN）都是在2000年之前发明的，深度学习革命的前半段主要是``等待数据和算力赶上''。而注意力是2014年之后\textbf{真正的新发明}，它开启了 Transformer、BERT、GPT 等一系列变革性工作。
+\end{importantbox}
+
+\subsection{从编码器-解码器注意力到自注意力}
+
+在 Seq2Seq 中，注意力用于解码器``回头查看''编码器。而 Transformer 的核心创新是\textbf{自注意力}（Self-Attention）——让序列中的每个位置都可以关注同一序列中的所有其他位置。
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    every node/.style={draw, rounded corners, minimum width=4.5cm, minimum height=0.8cm, font=\small, align=center},
+    arrow/.style={-{Stealth[length=3mm]}, thick}
+]
+\node (enc-dec) {编码器-解码器注意力\\（Seq2Seq, 2014）};
+\node (self) [below=of enc-dec] {自注意力\\（Transformer, 2017）};
+\node (multi) [below=of self] {多头注意力\\（并行多组低维注意力）};
+\node (llm) [below=of multi] {大语言模型\\（GPT, BERT 等）};
+
+\draw[arrow] (enc-dec) -- (self);
+\draw[arrow] (self) -- (multi);
+\draw[arrow] (multi) -- (llm);
+
+\node[draw=none, right=0.5cm of enc-dec, text width=5cm, font=\scriptsize, align=left] {解码器查看编码器\\Query=解码器, Values=编码器};
+\node[draw=none, right=0.5cm of self, text width=5cm, font=\scriptsize, align=left] {每个位置查看所有位置\\Query=Key=Value=同一序列};
+\node[draw=none, right=0.5cm of multi, text width=5cm, font=\scriptsize, align=left] {降秩投影 + 并行多组\\= 降秩乘法注意力的推广};
+\node[draw=none, right=0.5cm of llm, text width=5cm, font=\scriptsize, align=left] {堆叠多层 Transformer\\预训练 + 微调/提示};
+\end{tikzpicture}
+\end{center}
+
+Manning 教授预告，下一讲（Lecture 8）将详细介绍 Transformer 架构，包括自注意力、多头注意力、位置编码等核心概念。
+
+\subsection{大语言模型简介}
+
+课程后半段还涉及了大语言模型（LLM）时代对 NLP 研究和实践的影响：
+
+\begin{itemize}
+    \item \textbf{BERT}：基于 Transformer 编码器的双向预训练模型，通过微调适应各种下游任务
+    \item \textbf{GPT 系列}：基于 Transformer 解码器的自回归语言模型，展现出强大的零样本和少样本学习能力
+    \item \textbf{上下文学习}（In-Context Learning）：大模型可以通过提示（prompt）中的少量示例学习新任务，无需更新参数
+\end{itemize}
+
+\begin{knowledgebox}{LLM 时代的研究范式转变}
+Manning 教授提到，LLM 的出现改变了研究方式：许多项目不再需要从头训练模型，而是通过 API 调用大语言模型、进行上下文学习或微调来完成任务。这使得更多研究精力可以投入到理解模型行为、评估能力边界、探索新的交互范式等方面。同时，较小的开源模型（如7B参数级别）也为预算有限的研究者提供了可能。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 注意力机制从2014年的 NMT 应用发展到2017年的 Transformer，再到当今的大语言模型
+    \item 自注意力是 Transformer 的核心，允许序列内部各位置相互交互
+    \item 降秩乘法注意力直接对应 Transformer 的多头注意力设计
+    \item 大语言模型建立在多层 Transformer 之上，通过预训练获得通用能力
+\end{itemize}
+
+%% ========== Part 6: NLP 实验实践建议 ==========
+
+\section{NLP 实验实践建议}
+
+课程的后半部分，Manning 教授给出了关于 NLP 研究和实验的实用建议。
+
+\subsection{研究项目的基本要素}
+
+\begin{importantbox}{好的 NLP 研究项目的关键要素}
+\begin{enumerate}
+    \item \textbf{明确的数据来源}：在项目开始前就确定使用什么数据
+    \item \textbf{清晰的评估方法}：定义如何衡量系统性能
+    \item \textbf{合适的基线}（Baseline）：必须有一个对比对象来证明你的方法有价值
+    \item \textbf{实质性的价值贡献}：不能只是下载一个好模型跑一下数据——需要有分析、理解、改进
+\end{enumerate}
+\end{importantbox}
+
+\subsection{基线的重要性}
+
+Manning 教授强调，任何研究都需要一个合适的基线：
+
+\begin{itemize}
+    \item 如果之前有人做过相同任务，使用他们的结果作为基线
+    \item 如果是全新任务，设计一个简单直觉的方法作为基线（例如：用词向量平均值的余弦相似度做文本相似度）
+    \item 你的复杂模型必须\textbf{显著优于}这个简单基线，否则不具说服力
+\end{itemize}
+
+\begin{warningbox}{没有基线的研究是不完整的}
+仅仅展示``我的模型达到了某个数字''是不够的。没有对比，读者无法判断这个数字是好还是坏。Manning 教授举例：如果你构建了一个复杂的神经网络来计算文本相似度，但它的表现还不如简单地将词向量取平均后做点积，那么这个系统就不是一个好系统。
+\end{warningbox}
+
+\subsection{计算资源的策略}
+
+在 GPU 资源日益紧张的今天（Manning 教授戏称``这都怪 OpenAI''），合理利用计算资源至关重要：
+
+\begin{itemize}
+    \item \textbf{云端 Notebook}：Google Colab、Kaggle Notebooks、AWS SageMaker Studio Lab 提供免费 GPU
+    \item \textbf{低成本 GPU 提供商}：Modal、Vast.ai 等
+    \item \textbf{API 访问}：对于 LLM 项目，API 调用（如 Together AI）可能比自己训练更高效
+    \item \textbf{选择合适的模型大小}：7B 参数模型的 API 成本远低于 70B 模型，在许多任务上已经够用
+\end{itemize}
+
+\begin{knowledgebox}{模型大小的权衡}
+Manning 教授建议：在做实验之前，先考虑你\textbf{真正需要}多大的模型。如果 7B 参数模型足以证明你的观点，就不必使用更大的模型。50美元的 API 额度在 7B 模型上可以处理海量 token，但在大模型上可能很快用完。研究的关键不在于使用最大的模型，而在于\textbf{证明有趣的结论}。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 好的研究需要明确的数据、评估方法和基线
+    \item 基线是不可或缺的——没有对比就没有说服力
+    \item 合理选择模型大小和计算策略，可以在有限预算下完成高质量研究
+    \item 批判性思维是研究的核心能力：理解方法的优缺点，而非简单复述
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+Chris Manning 在本讲中构建了从机器翻译评估到注意力机制的完整知识链：
+
+\begin{enumerate}
+    \item \textbf{评估是基础}：BLEU 虽不完美，但为自动化评估机器翻译提供了可能，是推动 NMT 发展的重要工具
+    \item \textbf{瓶颈催生创新}：Seq2Seq 的信息瓶颈直接促使了注意力机制的发明
+    \item \textbf{注意力是变革性创新}：2014年发明的注意力机制是自 LSTM 以来神经网络最重要的新概念
+    \item \textbf{理解变体为理解 Transformer 做准备}：特别是降秩乘法注意力直接对应 Transformer 的设计
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.9cm,
+    every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}
+]
+\node (eval) {MT 评估（BLEU）};
+\node (bottle) [below=of eval] {信息瓶颈问题};
+\node (attn) [below=of bottle] {注意力机制};
+\node (variant) [below=of attn] {注意力变体};
+\node (transformer) [below=of variant] {Transformer（下一讲）};
+
+\draw[->, thick] (eval) -- (bottle);
+\draw[->, thick] (bottle) -- (attn);
+\draw[->, thick] (attn) -- (variant);
+\draw[->, thick] (variant) -- (transformer);
+
+\node[draw=none, right=0.8cm of eval, text width=5cm, font=\scriptsize] {n-gram精确率、简短惩罚、NMT崛起};
+\node[draw=none, right=0.8cm of bottle, text width=5cm, font=\scriptsize] {单向量编码、长句退化、人类翻译的启示};
+\node[draw=none, right=0.8cm of attn, text width=5cm, font=\scriptsize] {分数计算→softmax→加权求和→拼接生成};
+\node[draw=none, right=0.8cm of variant, text width=5cm, font=\scriptsize] {点积、乘法、降秩乘法、加法};
+\node[draw=none, right=0.8cm of transformer, text width=5cm, font=\scriptsize] {自注意力、多头注意力、位置编码};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{信息瓶颈催生注意力}：将整个句子压缩为单一向量是有根本缺陷的，注意力通过直接连接解决了这一问题
+    \item \textbf{注意力 = 软性信息检索}：给定查询，在值集合中找到最相关的信息并通过加权平均提取
+    \item \textbf{降秩投影是关键}：将高维空间投影到低维再做点积，既减少参数又提高灵活性——这就是 Transformer 的做法
+    \item \textbf{注意力是通用技术}：不仅限于机器翻译，适用于任何需要选择性信息提取的场景
+    \item \textbf{注意力开启了新时代}：从2014年的发明到 Transformer 再到 GPT/BERT，注意力机制是过去十年 AI 领域最具影响力的技术创新
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Bahdanau, Cho, Bengio, ``Neural Machine Translation by Jointly Learning to Align and Translate'', 2014. \url{https://arxiv.org/abs/1409.0473} —— 注意力机制的开山之作
+    \item Luong, Pham, Manning, ``Effective Approaches to Attention-based Neural Machine Translation'', 2015. \url{https://arxiv.org/abs/1508.04025} —— 乘法注意力、多种注意力变体对比
+    \item Vaswani et al., ``Attention Is All You Need'', 2017. \url{https://arxiv.org/abs/1706.03762} —— Transformer 原始论文
+    \item Papineni et al., ``BLEU: a Method for Automatic Evaluation of Machine Translation'', 2002. \url{https://aclweb.org/anthology/P02-1040} —— BLEU 指标原始论文
+    \item Ruder, ``Deep Learning for NLP Best Practices'', 2017. \url{http://ruder.io/deep-learning-nlp-best-practices/index.html#attention} —— 深度学习 NLP 最佳实践
+    \item Britz et al., ``Massive Exploration of Neural Machine Translation Architectures'', 2017. \url{https://arxiv.org/abs/1703.03906} —— NMT 架构大规模实验
+    \item Sutskever, Vinyals, Le, ``Sequence to Sequence Learning with Neural Networks'', 2014. \url{https://arxiv.org/abs/1409.3215} —— Seq2Seq 原始论文
+\end{itemize}
+
+\end{document}

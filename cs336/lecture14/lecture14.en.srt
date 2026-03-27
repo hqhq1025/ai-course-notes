@@ -1,0 +1,6804 @@
+1
+00:00:05,279 --> 00:00:10,400
+So this is the second lecture on data.
+
+2
+00:00:08,559 --> 00:00:12,320
+In the last lecture we talked about
+
+3
+00:00:10,400 --> 00:00:14,400
+different data sets that were used to
+
+4
+00:00:12,320 --> 00:00:17,039
+train various language models. We sort
+
+5
+00:00:14,400 --> 00:00:19,039
+of did a historical overview from the
+
+6
+00:00:17,039 --> 00:00:22,800
+data sets that were used to train bird
+
+7
+00:00:19,039 --> 00:00:25,359
+all the way up to homo and everything in
+
+8
+00:00:22,800 --> 00:00:27,599
+between. And one of the things I wanted
+
+9
+00:00:25,359 --> 00:00:29,920
+to emphasize is that data doesn't just
+
+10
+00:00:27,599 --> 00:00:32,320
+fall from the sky. It exists often in
+
+11
+00:00:29,920 --> 00:00:34,640
+live services. They have to be
+
+12
+00:00:32,320 --> 00:00:36,079
+explicitly crawled or dumped and then
+
+13
+00:00:34,640 --> 00:00:38,399
+there's a bunch of processing that has
+
+14
+00:00:36,079 --> 00:00:41,440
+to happen and the processing involves
+
+15
+00:00:38,399 --> 00:00:43,200
+converting the raw HTML to text doing
+
+16
+00:00:41,440 --> 00:00:46,000
+all sorts of quality and language and
+
+17
+00:00:43,200 --> 00:00:48,800
+toxicity filtering, dduplication and so
+
+18
+00:00:46,000 --> 00:00:50,960
+on so forth. So in this lecture I would
+
+19
+00:00:48,800 --> 00:00:53,440
+like to take a deep dive into some of
+
+20
+00:00:50,960 --> 00:00:56,239
+the mechanics on how quality filtering
+
+21
+00:00:53,440 --> 00:00:57,520
+and dduplication work in particular. So
+
+22
+00:00:56,239 --> 00:01:00,640
+first we're going to look at different
+
+23
+00:00:57,520 --> 00:01:02,320
+algorithms for filtering which uh mostly
+
+24
+00:01:00,640 --> 00:01:04,000
+are model based. So you train a
+
+25
+00:01:02,320 --> 00:01:06,320
+classifier or train some sort of model
+
+26
+00:01:04,000 --> 00:01:08,479
+to filter. Then we're going to show that
+
+27
+00:01:06,320 --> 00:01:10,640
+this primitive can be used for all sorts
+
+28
+00:01:08,479 --> 00:01:11,840
+of different types of filtering. And
+
+29
+00:01:10,640 --> 00:01:15,200
+then finally we're going to look at some
+
+30
+00:01:11,840 --> 00:01:16,400
+algorithms for uh dduplication. Um so
+
+31
+00:01:15,200 --> 00:01:19,119
+this lecture will be a little bit
+
+32
+00:01:16,400 --> 00:01:21,600
+different in that it's going to focus a
+
+33
+00:01:19,119 --> 00:01:23,360
+lot on sort of classical big data
+
+34
+00:01:21,600 --> 00:01:25,759
+processing algorithms and there'll be
+
+35
+00:01:23,360 --> 00:01:27,600
+some fun math uh in there for some of
+
+36
+00:01:25,759 --> 00:01:29,840
+you.
+
+37
+00:01:27,600 --> 00:01:33,520
+Okay. So let's get started with
+
+38
+00:01:29,840 --> 00:01:36,240
+filtering algorithms. So the basic high
+
+39
+00:01:33,520 --> 00:01:39,360
+level picture here is that you're given
+
+40
+00:01:36,240 --> 00:01:42,079
+some target data
+
+41
+00:01:39,360 --> 00:01:44,079
+and which you don't have very much of
+
+42
+00:01:42,079 --> 00:01:46,960
+it. Suppose it's data that's high
+
+43
+00:01:44,079 --> 00:01:49,280
+quality and you have a lot of raw data.
+
+44
+00:01:46,960 --> 00:01:51,439
+So imagine this is common crawl and your
+
+45
+00:01:49,280 --> 00:01:54,079
+goal is you want to find a subset of
+
+46
+00:01:51,439 --> 00:01:57,280
+that raw data. It's called it t prime
+
+47
+00:01:54,079 --> 00:01:59,119
+which is similar to t. Okay. So this is
+
+48
+00:01:57,280 --> 00:02:00,799
+a pattern that you should kind of
+
+49
+00:01:59,119 --> 00:02:03,600
+recognize in basically any sort of
+
+50
+00:02:00,799 --> 00:02:05,920
+filtering uh pipeline.
+
+51
+00:02:03,600 --> 00:02:07,840
+Um and what do you want for this
+
+52
+00:02:05,920 --> 00:02:11,200
+filtering algorithm? You want it
+
+53
+00:02:07,840 --> 00:02:12,640
+obviously to generalize from t, right?
+
+54
+00:02:11,200 --> 00:02:14,720
+You don't want you already have t so
+
+55
+00:02:12,640 --> 00:02:16,720
+there's no point in getting exactly the
+
+56
+00:02:14,720 --> 00:02:18,400
+same data t. So there's has to be some
+
+57
+00:02:16,720 --> 00:02:20,959
+generalization
+
+58
+00:02:18,400 --> 00:02:23,280
+and also has to be extremely fast. So
+
+59
+00:02:20,959 --> 00:02:26,000
+you have to run it on all of the web for
+
+60
+00:02:23,280 --> 00:02:28,879
+example. So if this is running a huge
+
+61
+00:02:26,000 --> 00:02:30,720
+model that's going to be um might be as
+
+62
+00:02:28,879 --> 00:02:31,920
+expensive as training. So you don't
+
+63
+00:02:30,720 --> 00:02:35,120
+definitely don't want that otherwise you
+
+64
+00:02:31,920 --> 00:02:36,800
+might as well train.
+
+65
+00:02:35,120 --> 00:02:40,400
+So we're going to look at three
+
+66
+00:02:36,800 --> 00:02:43,680
+different ways that you can um implement
+
+67
+00:02:40,400 --> 00:02:46,480
+this highle abstract primitive.
+
+68
+00:02:43,680 --> 00:02:49,360
+Um so we'll start with training an
+
+69
+00:02:46,480 --> 00:02:51,360
+engram model. So this is something that
+
+70
+00:02:49,360 --> 00:02:54,000
+uh came up in the last lecture. So you
+
+71
+00:02:51,360 --> 00:02:56,239
+can train an engram model with canern
+
+72
+00:02:54,000 --> 00:02:58,879
+smoothing. Um you can use other forms of
+
+73
+00:02:56,239 --> 00:03:01,760
+smoothing but caner has sort of been
+
+74
+00:02:58,879 --> 00:03:04,239
+inherited from the you know you know
+
+75
+00:03:01,760 --> 00:03:07,680
+engram kind of modeling. um um
+
+76
+00:03:04,239 --> 00:03:09,519
+statistical language processing era um
+
+77
+00:03:07,680 --> 00:03:12,000
+and there's a particular implementation
+
+78
+00:03:09,519 --> 00:03:14,159
+that people tend to use in this uh space
+
+79
+00:03:12,000 --> 00:03:15,360
+called CANLM which is open source
+
+80
+00:03:14,159 --> 00:03:17,440
+originally developed for machine
+
+81
+00:03:15,360 --> 00:03:19,440
+translation um which implements can
+
+82
+00:03:17,440 --> 00:03:23,280
+conernnite smoothing. So you can go and
+
+83
+00:03:19,440 --> 00:03:25,200
+read about um it's it's it's pretty
+
+84
+00:03:23,280 --> 00:03:28,319
+interesting but um we're not going to
+
+85
+00:03:25,200 --> 00:03:30,560
+talk too much about the details here. Um
+
+86
+00:03:28,319 --> 00:03:32,879
+so this happens to be very popular in
+
+87
+00:03:30,560 --> 00:03:34,480
+data filtering. Uh there's no particular
+
+88
+00:03:32,879 --> 00:03:37,760
+reason has to be this one, but this is
+
+89
+00:03:34,480 --> 00:03:40,239
+just what people use. Um and the nice
+
+90
+00:03:37,760 --> 00:03:42,000
+thing about engram modeling is it's very
+
+91
+00:03:40,239 --> 00:03:44,799
+simple.
+
+92
+00:03:42,000 --> 00:03:46,879
+When I say fitting a model, you you
+
+93
+00:03:44,799 --> 00:03:48,640
+should think of this as just counting
+
+94
+00:03:46,879 --> 00:03:50,159
+the number of engrams and then
+
+95
+00:03:48,640 --> 00:03:52,400
+normalizing.
+
+96
+00:03:50,159 --> 00:03:55,360
+Okay, so just to go into a little bit of
+
+97
+00:03:52,400 --> 00:03:57,200
+depth here. So it's your starting point
+
+98
+00:03:55,360 --> 00:03:59,280
+is maximum likelihood estimation of
+
+99
+00:03:57,200 --> 00:04:00,959
+language models. So you have a corpus of
+
+100
+00:03:59,280 --> 00:04:03,599
+text and you want to estimate
+
+101
+00:04:00,959 --> 00:04:06,799
+conditional probabilities like p of in
+
+102
+00:04:03,599 --> 00:04:08,480
+given the last n minus one words the cat
+
+103
+00:04:06,799 --> 00:04:10,879
+and what you do is you count the number
+
+104
+00:04:08,480 --> 00:04:13,439
+of n grams
+
+105
+00:04:10,879 --> 00:04:16,239
+um and then divide it by the number of
+
+106
+00:04:13,439 --> 00:04:19,040
+you know the um n minus one grams of the
+
+107
+00:04:16,239 --> 00:04:23,199
+conditioning context. Okay so this is
+
+108
+00:04:19,040 --> 00:04:25,280
+you know very very easy um in principle.
+
+109
+00:04:23,199 --> 00:04:27,600
+Now implementing this efficiently is uh
+
+110
+00:04:25,280 --> 00:04:29,600
+takes a bit of work. Um but the main
+
+111
+00:04:27,600 --> 00:04:32,240
+problem is that there's sparse counts.
+
+112
+00:04:29,600 --> 00:04:34,479
+So many of the engrams are exactly show
+
+113
+00:04:32,240 --> 00:04:36,960
+up zero times even though they're very
+
+114
+00:04:34,479 --> 00:04:39,520
+reasonable especially when n grows. Um
+
+115
+00:04:36,960 --> 00:04:41,440
+and this was the whole point why engram
+
+116
+00:04:39,520 --> 00:04:43,360
+models couldn't really be scaled
+
+117
+00:04:41,440 --> 00:04:45,360
+appropriately because you hit the curse
+
+118
+00:04:43,360 --> 00:04:48,880
+of dimensionality.
+
+119
+00:04:45,360 --> 00:04:51,440
+So to mitigate this um you know some
+
+120
+00:04:48,880 --> 00:04:54,160
+people devised uh you know cannon
+
+121
+00:04:51,440 --> 00:04:56,639
+smoothing to handle unseen grams and
+
+122
+00:04:54,160 --> 00:05:00,000
+there's more details on this but roughly
+
+123
+00:04:56,639 --> 00:05:02,720
+this says well maybe if I don't have
+
+124
+00:05:00,000 --> 00:05:05,520
+enough data to support this count I can
+
+125
+00:05:02,720 --> 00:05:07,280
+sort of use a lower order engram. So you
+
+126
+00:05:05,520 --> 00:05:09,440
+know remove one word from the context
+
+127
+00:05:07,280 --> 00:05:12,080
+and count the number of times in uh
+
+128
+00:05:09,440 --> 00:05:14,320
+appears given cat um and then try to
+
+129
+00:05:12,080 --> 00:05:16,960
+either interpolate or back off um to
+
+130
+00:05:14,320 --> 00:05:20,080
+that. Um
+
+131
+00:05:16,960 --> 00:05:23,680
+okay so that's all I'll say about how
+
+132
+00:05:20,080 --> 00:05:25,440
+engram you know modeling works. Um I
+
+133
+00:05:23,680 --> 00:05:27,280
+think even in this era of neural
+
+134
+00:05:25,440 --> 00:05:31,199
+language model you know it's good to
+
+135
+00:05:27,280 --> 00:05:33,360
+know that how engram models work. So um
+
+136
+00:05:31,199 --> 00:05:35,840
+let's download
+
+137
+00:05:33,360 --> 00:05:38,160
+um the engram. So this is a a model
+
+138
+00:05:35,840 --> 00:05:43,039
+that's been trained on Wikipedia. I'm
+
+139
+00:05:38,160 --> 00:05:44,960
+just going to download it. Um and then
+
+140
+00:05:43,039 --> 00:05:46,960
+let's uh punch some sentences through.
+
+141
+00:05:44,960 --> 00:05:49,199
+So this sentence is Sanford University
+
+142
+00:05:46,960 --> 00:05:51,759
+was found in 1885.
+
+143
+00:05:49,199 --> 00:05:54,479
+Um this is actually a excerpt taken from
+
+144
+00:05:51,759 --> 00:06:00,000
+Wikipedia. So it should be you know
+
+145
+00:05:54,479 --> 00:06:02,320
+reasonable. Um and if you compute um the
+
+146
+00:06:00,000 --> 00:06:04,000
+the probability so you first compute the
+
+147
+00:06:02,320 --> 00:06:07,520
+log prop and then you compute the
+
+148
+00:06:04,000 --> 00:06:12,080
+perplexity by this uh normalization
+
+149
+00:06:07,520 --> 00:06:15,759
+um then you get you know 87 okay so you
+
+150
+00:06:12,080 --> 00:06:18,960
+know it's it's some number um and then
+
+151
+00:06:15,759 --> 00:06:22,639
+here's another example um you know this
+
+152
+00:06:18,960 --> 00:06:25,520
+is taken from the CS336 you know website
+
+153
+00:06:22,639 --> 00:06:27,440
+um so let's see how well it does So this
+
+154
+00:06:25,520 --> 00:06:29,759
+is a higher perplexity means that it's
+
+155
+00:06:27,440 --> 00:06:31,039
+less likely. Okay, kind of makes sense
+
+156
+00:06:29,759 --> 00:06:33,039
+because this stuff doesn't really
+
+157
+00:06:31,039 --> 00:06:34,880
+probably show up in Wikipedia. It's not
+
+158
+00:06:33,039 --> 00:06:36,960
+in, you know, it's not abnormally high
+
+159
+00:06:34,880 --> 00:06:39,199
+because it's still fairly good
+
+160
+00:06:36,960 --> 00:06:41,919
+well-formed English and many engrams
+
+161
+00:06:39,199 --> 00:06:45,039
+there, um, I think show up in Wikipedia
+
+162
+00:06:41,919 --> 00:06:47,600
+as well. Um, what about ESDF? This is
+
+163
+00:06:45,039 --> 00:06:50,080
+just gibberish. This gets assigned
+
+164
+00:06:47,600 --> 00:06:53,600
+higher perplexity.
+
+165
+00:06:50,080 --> 00:06:55,360
+Um and then there's the the the so this
+
+166
+00:06:53,600 --> 00:06:58,639
+should get assigned pretty high
+
+167
+00:06:55,360 --> 00:07:00,960
+perplexity but um for some reason this
+
+168
+00:06:58,639 --> 00:07:03,599
+particular engram assigns a a pretty low
+
+169
+00:07:00,960 --> 00:07:06,639
+perplexity. So you know it's an engram
+
+170
+00:07:03,599 --> 00:07:09,759
+model so it's not particularly clever or
+
+171
+00:07:06,639 --> 00:07:11,360
+good. Um but you know you don't need to
+
+172
+00:07:09,759 --> 00:07:12,960
+be the best model. You're just doing
+
+173
+00:07:11,360 --> 00:07:16,960
+data filtering to create a model. So
+
+174
+00:07:12,960 --> 00:07:22,160
+this can be very crude and and fast. So,
+
+175
+00:07:16,960 --> 00:07:25,840
+CCNET, which is um a paper out of um you
+
+176
+00:07:22,160 --> 00:07:29,360
+know, I guess it was Facebook back then.
+
+177
+00:07:25,840 --> 00:07:32,400
+Um uh they which we talked about last
+
+178
+00:07:29,360 --> 00:07:37,360
+time. Um
+
+179
+00:07:32,400 --> 00:07:39,039
+they um basically did uh this and
+
+180
+00:07:37,360 --> 00:07:42,479
+actually
+
+181
+00:07:39,039 --> 00:07:48,400
+okay that's fine. Um so they basically
+
+182
+00:07:42,479 --> 00:07:50,400
+looked at uh paragraphs of of text um uh
+
+183
+00:07:48,400 --> 00:07:52,000
+and those were the items they sorted the
+
+184
+00:07:50,400 --> 00:07:54,639
+paragraphs by increasing perplexity and
+
+185
+00:07:52,000 --> 00:07:57,039
+just kept the top 1/3 um and this is
+
+186
+00:07:54,639 --> 00:07:59,840
+what they used to create the first llama
+
+187
+00:07:57,039 --> 00:08:02,560
+um data set. Okay so this is you know
+
+188
+00:07:59,840 --> 00:08:04,319
+horistic but you know kind of you know
+
+189
+00:08:02,560 --> 00:08:06,560
+if you had to write down something
+
+190
+00:08:04,319 --> 00:08:09,599
+really quickly and this kind of makes
+
+191
+00:08:06,560 --> 00:08:14,639
+sense. Okay. So, NASA language modeling
+
+192
+00:08:09,599 --> 00:08:16,800
+is fast uh but um it's crude.
+
+193
+00:08:14,639 --> 00:08:20,080
+All right. Um
+
+194
+00:08:16,800 --> 00:08:22,319
+I feel like there was some
+
+195
+00:08:20,080 --> 00:08:23,840
+content that was I meant to go through
+
+196
+00:08:22,319 --> 00:08:28,160
+that's missing. Oh well, maybe it got
+
+197
+00:08:23,840 --> 00:08:31,520
+deleted. Um all right. So that's you can
+
+198
+00:08:28,160 --> 00:08:34,080
+fit an engram model um to your target
+
+199
+00:08:31,520 --> 00:08:36,959
+data and then you can use that to score
+
+200
+00:08:34,080 --> 00:08:39,680
+the raw data and choose the top uh
+
+201
+00:08:36,959 --> 00:08:42,320
+scoring documents. Another thing you can
+
+202
+00:08:39,680 --> 00:08:45,519
+do is fastex and this is in some ways
+
+203
+00:08:42,320 --> 00:08:47,839
+more uh you know popular um this is also
+
+204
+00:08:45,519 --> 00:08:50,800
+from you know uh Facebook they released
+
+205
+00:08:47,839 --> 00:08:53,920
+a lot of open source uh you know tools
+
+206
+00:08:50,800 --> 00:08:58,640
+um although klm I think was um yeah
+
+207
+00:08:53,920 --> 00:09:01,519
+created before before that um so here
+
+208
+00:08:58,640 --> 00:09:05,040
+they develop it for text classification
+
+209
+00:09:01,519 --> 00:09:06,959
+um and they this paper I mean this is
+
+210
+00:09:05,040 --> 00:09:08,480
+2016 so a lot of people were developing
+
+211
+00:09:06,959 --> 00:09:11,200
+all sorts of fancy neural models and
+
+212
+00:09:08,480 --> 00:09:13,760
+they said show that well this actually
+
+213
+00:09:11,200 --> 00:09:16,240
+almost linear classifier worked as well
+
+214
+00:09:13,760 --> 00:09:17,920
+and was much faster. Um so that's why
+
+215
+00:09:16,240 --> 00:09:21,360
+the software package actually became
+
+216
+00:09:17,920 --> 00:09:24,560
+very uh popular. So um the motivation
+
+217
+00:09:21,360 --> 00:09:27,360
+here um was that if you're doing let's
+
+218
+00:09:24,560 --> 00:09:30,560
+say bag of words classification. So you
+
+219
+00:09:27,360 --> 00:09:33,440
+have a a sentence of length L your vocab
+
+220
+00:09:30,560 --> 00:09:36,720
+size is V and you want to classify into
+
+221
+00:09:33,440 --> 00:09:41,839
+64 classes. Then immediately you have to
+
+222
+00:09:36,720 --> 00:09:44,320
+define this um V by K matrix um which if
+
+223
+00:09:41,839 --> 00:09:46,800
+V and K are both large then this gets uh
+
+224
+00:09:44,320 --> 00:09:50,240
+pretty big and you get into sparsity
+
+225
+00:09:46,800 --> 00:09:52,800
+issues um and the way it would work is
+
+226
+00:09:50,240 --> 00:09:55,040
+that you take your um your documents and
+
+227
+00:09:52,800 --> 00:09:57,040
+then you just do linear classification.
+
+228
+00:09:55,040 --> 00:09:58,800
+So that's that's fairly you know
+
+229
+00:09:57,040 --> 00:10:00,240
+straightforward. So the problem is that
+
+230
+00:09:58,800 --> 00:10:03,519
+the number of parameters is huge. So
+
+231
+00:10:00,240 --> 00:10:07,200
+fastex says, well, let me just do a a
+
+232
+00:10:03,519 --> 00:10:09,279
+linear um basically basically
+
+233
+00:10:07,200 --> 00:10:13,519
+dimensionality reduction. So instead,
+
+234
+00:10:09,279 --> 00:10:16,800
+I'm going to map my vocab space into a
+
+235
+00:10:13,519 --> 00:10:20,480
+hidden dimension which is smaller than k
+
+236
+00:10:16,800 --> 00:10:24,160
+um possibly smaller than k 16. And then
+
+237
+00:10:20,480 --> 00:10:26,399
+I'm going to classify from h. So notice
+
+238
+00:10:24,160 --> 00:10:29,120
+that there's when when you look at the
+
+239
+00:10:26,399 --> 00:10:30,880
+prediction the forward pass there's no
+
+240
+00:10:29,120 --> 00:10:32,560
+nonlinearity it's just a linear
+
+241
+00:10:30,880 --> 00:10:35,519
+classifier you can also think about as a
+
+242
+00:10:32,560 --> 00:10:37,440
+matrix factorization um if you want and
+
+243
+00:10:35,519 --> 00:10:39,839
+the number of parameters is greatly you
+
+244
+00:10:37,440 --> 00:10:42,880
+know reduced um so the implication I
+
+245
+00:10:39,839 --> 00:10:44,480
+think is uh you know reasonably um you
+
+246
+00:10:42,880 --> 00:10:47,279
+know optimized it's parallelized and
+
+247
+00:10:44,480 --> 00:10:53,680
+they use asynchronous SGD
+
+248
+00:10:47,279 --> 00:10:57,760
+um and um so here's um okay so The the
+
+249
+00:10:53,680 --> 00:10:59,360
+question is this is bag of words. Um and
+
+250
+00:10:57,760 --> 00:11:02,000
+you know we want to not just look at
+
+251
+00:10:59,360 --> 00:11:05,040
+words but we want to look at engrams. So
+
+252
+00:11:02,000 --> 00:11:08,399
+this uh paper also you know extends to
+
+253
+00:11:05,040 --> 00:11:10,959
+engrams in a fairly simple way. So you
+
+254
+00:11:08,399 --> 00:11:14,800
+take a sentence and you get some chop it
+
+255
+00:11:10,959 --> 00:11:16,560
+up into new engrams. Um and here the
+
+256
+00:11:14,800 --> 00:11:18,959
+problem is that the number of biograms
+
+257
+00:11:16,560 --> 00:11:21,519
+can get um you know quite large and
+
+258
+00:11:18,959 --> 00:11:23,440
+actually can be un unbounded. Right? So
+
+259
+00:11:21,519 --> 00:11:25,040
+remember when we talked about tokenizers
+
+260
+00:11:23,440 --> 00:11:26,800
+if you just chop up into words you're
+
+261
+00:11:25,040 --> 00:11:28,720
+going to get you know you don't know how
+
+262
+00:11:26,800 --> 00:11:31,200
+many words there are. So the simple
+
+263
+00:11:28,720 --> 00:11:33,519
+thing is that you just do hashing. So
+
+264
+00:11:31,200 --> 00:11:35,920
+you define some number of bins maybe 10
+
+265
+00:11:33,519 --> 00:11:40,000
+million but in this example eight and
+
+266
+00:11:35,920 --> 00:11:43,600
+then you just um you just hash every
+
+267
+00:11:40,000 --> 00:11:46,399
+biogram um into that. So you these the
+
+268
+00:11:43,600 --> 00:11:50,480
+cat maps to two and and cat in maps to
+
+269
+00:11:46,399 --> 00:11:52,800
+one and so on. Okay. So of course there
+
+270
+00:11:50,480 --> 00:11:56,480
+might be some
+
+271
+00:11:52,800 --> 00:11:58,720
+um collisions but you know you just live
+
+272
+00:11:56,480 --> 00:12:01,760
+with that.
+
+273
+00:11:58,720 --> 00:12:04,000
+Um I mean in some sense the the opt when
+
+274
+00:12:01,760 --> 00:12:06,079
+you minimize the loss collisions are
+
+275
+00:12:04,000 --> 00:12:08,880
+sort of accounted for. If there's like
+
+276
+00:12:06,079 --> 00:12:11,360
+two um words that have nothing to do
+
+277
+00:12:08,880 --> 00:12:13,120
+with each other then the weight is going
+
+278
+00:12:11,360 --> 00:12:16,399
+to somehow represent the maybe the
+
+279
+00:12:13,120 --> 00:12:19,120
+average of the two. And also note that
+
+280
+00:12:16,399 --> 00:12:21,600
+often we use fast
+
+281
+00:12:19,120 --> 00:12:23,920
+fast text classification with k equals2
+
+282
+00:12:21,600 --> 00:12:27,040
+classes. Is this document good or is it
+
+283
+00:12:23,920 --> 00:12:29,600
+bad? And in that case uh this is just
+
+284
+00:12:27,040 --> 00:12:33,279
+normal ba basically um binary
+
+285
+00:12:29,600 --> 00:12:35,600
+classification linear classification.
+
+286
+00:12:33,279 --> 00:12:37,519
+Okay. So of course it doesn't take too
+
+287
+00:12:35,600 --> 00:12:39,519
+much imagination to imagine well if you
+
+288
+00:12:37,519 --> 00:12:42,320
+can do linear classification you can use
+
+289
+00:12:39,519 --> 00:12:44,560
+fancier models such as bird or even
+
+290
+00:12:42,320 --> 00:12:47,440
+llama. The only thing is that it's going
+
+291
+00:12:44,560 --> 00:12:49,519
+to be slower and therefore you run into
+
+292
+00:12:47,440 --> 00:12:52,000
+this trade-off where if you use a giant
+
+293
+00:12:49,519 --> 00:12:53,519
+model to do classification, maybe you
+
+294
+00:12:52,000 --> 00:12:56,160
+should use those flops to actually just
+
+295
+00:12:53,519 --> 00:12:58,399
+train the model. So that's the only uh
+
+296
+00:12:56,160 --> 00:13:00,160
+concern because you know the web is very
+
+297
+00:12:58,399 --> 00:13:02,399
+large and remember you were filtering
+
+298
+00:13:00,160 --> 00:13:05,120
+the web down quite a bit. So you're
+
+299
+00:13:02,399 --> 00:13:06,880
+going to spend a lot of um compute on
+
+300
+00:13:05,120 --> 00:13:11,440
+let's say you're filtering like down to
+
+301
+00:13:06,880 --> 00:13:14,480
+1% of the web, right? So that means um
+
+302
+00:13:11,440 --> 00:13:16,639
+you know you have your classifier that
+
+303
+00:13:14,480 --> 00:13:20,160
+amount of compute you spend has to be a
+
+304
+00:13:16,639 --> 00:13:24,040
+hundth of you know taking a forward pass
+
+305
+00:13:20,160 --> 00:13:24,040
+through the data set.
+
+306
+00:13:24,880 --> 00:13:29,519
+Okay. So the final method I'm going to
+
+307
+00:13:27,040 --> 00:13:32,639
+talk about is this thing called data
+
+308
+00:13:29,519 --> 00:13:34,880
+selection for um language models using
+
+309
+00:13:32,639 --> 00:13:37,839
+importance resampling.
+
+310
+00:13:34,880 --> 00:13:39,680
+Um and here are the basic ideas that you
+
+311
+00:13:37,839 --> 00:13:43,360
+have your R it's a raw data set you have
+
+312
+00:13:39,680 --> 00:13:45,360
+your uh you know uh target data and then
+
+313
+00:13:43,360 --> 00:13:49,600
+I'm going to build an importance weight
+
+314
+00:13:45,360 --> 00:13:52,079
+estimator um which is um the analog of
+
+315
+00:13:49,600 --> 00:13:53,839
+um the language engram model or the fast
+
+316
+00:13:52,079 --> 00:13:57,519
+text classifier and then I'm going to
+
+317
+00:13:53,839 --> 00:14:00,399
+use that to um get a bunch of um
+
+318
+00:13:57,519 --> 00:14:03,360
+documents. Okay. So first just a kind of
+
+319
+00:14:00,399 --> 00:14:06,800
+a quick refresher of importance um
+
+320
+00:14:03,360 --> 00:14:08,880
+resampling I guess um so you have um
+
+321
+00:14:06,800 --> 00:14:11,920
+this shows up in many contexts like you
+
+322
+00:14:08,880 --> 00:14:15,360
+know particle filtering um um and you
+
+323
+00:14:11,920 --> 00:14:17,519
+know Monte Carlo methods um so you have
+
+324
+00:14:15,360 --> 00:14:19,920
+a target distribution so it's a
+
+325
+00:14:17,519 --> 00:14:22,399
+distribution not a data set where you
+
+326
+00:14:19,920 --> 00:14:24,320
+want to ideally draw samples from this
+
+327
+00:14:22,399 --> 00:14:26,079
+but you only have a proposal
+
+328
+00:14:24,320 --> 00:14:28,160
+distribution Q where you can draw
+
+329
+00:14:26,079 --> 00:14:32,800
+samples so for example if you have a
+
+330
+00:14:28,160 --> 00:14:35,440
+vocab of 0 1 2 3 2 3 um let's say this
+
+331
+00:14:32,800 --> 00:14:39,440
+is your target distribution and your
+
+332
+00:14:35,440 --> 00:14:45,839
+proposal distribution is uh is this.
+
+333
+00:14:39,440 --> 00:14:47,040
+Now what you do is uh you sample from Q
+
+334
+00:14:45,839 --> 00:14:49,040
+because that's the only thing you can
+
+335
+00:14:47,040 --> 00:14:50,880
+sample from. So let's say you get a
+
+336
+00:14:49,040 --> 00:14:54,720
+bunch of samples.
+
+337
+00:14:50,880 --> 00:14:56,880
+Okay. Um so notice that um Q has a lot
+
+338
+00:14:54,720 --> 00:14:59,760
+of more mass on zero. So you get a lot
+
+339
+00:14:56,880 --> 00:15:02,399
+of more zeros. Um and then what you're
+
+340
+00:14:59,760 --> 00:15:04,399
+going to do is you compute weights over
+
+341
+00:15:02,399 --> 00:15:08,639
+your samples by looking at this
+
+342
+00:15:04,399 --> 00:15:10,399
+importance um you know ratio P over Q.
+
+343
+00:15:08,639 --> 00:15:12,079
+So you're trying to make up for the fact
+
+344
+00:15:10,399 --> 00:15:15,519
+I sample from Q so I want to divide that
+
+345
+00:15:12,079 --> 00:15:17,440
+out or I really want P and um you
+
+346
+00:15:15,519 --> 00:15:20,480
+normalize
+
+347
+00:15:17,440 --> 00:15:23,519
+and get you you get a distribution
+
+348
+00:15:20,480 --> 00:15:25,199
+um over your your samples. And now you
+
+349
+00:15:23,519 --> 00:15:29,199
+resample
+
+350
+00:15:25,199 --> 00:15:31,120
+um and you uh that sort of balances out
+
+351
+00:15:29,199 --> 00:15:34,079
+the distribution. So now you see that
+
+352
+00:15:31,120 --> 00:15:36,560
+there's more threes because P had more
+
+353
+00:15:34,079 --> 00:15:38,240
+probability distribution on mass on
+
+354
+00:15:36,560 --> 00:15:41,839
+three.
+
+355
+00:15:38,240 --> 00:15:44,800
+Okay. So this is a fairly elementary um
+
+356
+00:15:41,839 --> 00:15:47,120
+but uh it's a building block. Now then
+
+357
+00:15:44,800 --> 00:15:49,920
+now we go to um how we do data
+
+358
+00:15:47,120 --> 00:15:51,440
+selection. So we have a target data set
+
+359
+00:15:49,920 --> 00:15:54,800
+not a distribution. And we have a data
+
+360
+00:15:51,440 --> 00:15:56,320
+set which is small and we also have this
+
+361
+00:15:54,800 --> 00:15:59,120
+um raw data set which we're going to
+
+362
+00:15:56,320 --> 00:16:02,000
+call the proposal data set dq which is
+
+363
+00:15:59,120 --> 00:16:03,759
+large. So
+
+364
+00:16:02,000 --> 00:16:07,120
+um you could let's just fit a
+
+365
+00:16:03,759 --> 00:16:09,920
+distribution p to dp fit a distribution
+
+366
+00:16:07,120 --> 00:16:12,959
+q to dq and door do the importance
+
+367
+00:16:09,920 --> 00:16:16,399
+resampling um that I we talked about
+
+368
+00:16:12,959 --> 00:16:20,720
+just uh you know two minutes ago.
+
+369
+00:16:16,399 --> 00:16:22,079
+Now the main problem is that um DP is
+
+370
+00:16:20,720 --> 00:16:24,000
+really small. Remember target
+
+371
+00:16:22,079 --> 00:16:25,600
+distributions is high quality data. You
+
+372
+00:16:24,000 --> 00:16:27,199
+don't have that much of it which is the
+
+373
+00:16:25,600 --> 00:16:29,199
+whole point. You're trying to get more
+
+374
+00:16:27,199 --> 00:16:31,120
+of it. So you don't have that much of it
+
+375
+00:16:29,199 --> 00:16:35,600
+and it's too small to estimate a good
+
+376
+00:16:31,120 --> 00:16:37,360
+model. So again this the the idea is you
+
+377
+00:16:35,600 --> 00:16:40,079
+just use hash engram. So this is
+
+378
+00:16:37,360 --> 00:16:44,000
+something that we already saw with fast
+
+379
+00:16:40,079 --> 00:16:46,959
+text as well. you uh you know take
+
+380
+00:16:44,000 --> 00:16:50,880
+whatever text you have and then you
+
+381
+00:16:46,959 --> 00:16:54,240
+essentially okay so you basically hash
+
+382
+00:16:50,880 --> 00:17:00,240
+all the um we're doing unograms for now
+
+383
+00:16:54,240 --> 00:17:03,839
+so you hash each unogram so and you um
+
+384
+00:17:00,240 --> 00:17:06,720
+um you basically count the number
+
+385
+00:17:03,839 --> 00:17:12,240
+estimate the probability of every um
+
+386
+00:17:06,720 --> 00:17:14,559
+hashed engram okay so in this case um
+
+387
+00:17:12,240 --> 00:17:16,079
+this the cat and the hat hashes to this.
+
+388
+00:17:14,559 --> 00:17:18,240
+Notice that there's some hash collisions
+
+389
+00:17:16,079 --> 00:17:20,000
+the and the hat hatch into the same
+
+390
+00:17:18,240 --> 00:17:22,559
+value but you know whatever this is all
+
+391
+00:17:20,000 --> 00:17:25,360
+crude um and then you just estimate the
+
+392
+00:17:22,559 --> 00:17:27,360
+probability of each of these um the
+
+393
+00:17:25,360 --> 00:17:29,679
+probabilities.
+
+394
+00:17:27,360 --> 00:17:35,440
+Okay. So then to evaluate the
+
+395
+00:17:29,679 --> 00:17:37,440
+probability of a new text um you
+
+396
+00:17:35,440 --> 00:17:39,679
+um you hash
+
+397
+00:17:37,440 --> 00:17:41,440
+um the new text and you multiply the
+
+398
+00:17:39,679 --> 00:17:43,360
+probabilities together. Okay, so I got a
+
+399
+00:17:41,440 --> 00:17:45,679
+little bit unlucky and the probability
+
+400
+00:17:43,360 --> 00:17:48,080
+is gets zeroed out. You can do some
+
+401
+00:17:45,679 --> 00:17:50,080
+smoothing if you want. So it turns out
+
+402
+00:17:48,080 --> 00:17:51,520
+in Python hash is non deterministic. So
+
+403
+00:17:50,080 --> 00:17:54,080
+every time I run this I'm going to get
+
+404
+00:17:51,520 --> 00:17:58,000
+something something else.
+
+405
+00:17:54,080 --> 00:18:00,640
+Um and the paper shows that this indeed
+
+406
+00:17:58,000 --> 00:18:03,520
+uh helps a bit. The gains are not you
+
+407
+00:18:00,640 --> 00:18:07,760
+know super massive but you know compared
+
+408
+00:18:03,520 --> 00:18:10,400
+to doing fast text which is the heristic
+
+409
+00:18:07,760 --> 00:18:12,880
+classification um the gains on the glue
+
+410
+00:18:10,400 --> 00:18:17,280
+benchmark using bird style models um
+
+411
+00:18:12,880 --> 00:18:20,160
+there is some um lift and the the
+
+412
+00:18:17,280 --> 00:18:21,679
+comparison with fastex. So the main idea
+
+413
+00:18:20,160 --> 00:18:24,400
+here is that modeling a whole
+
+414
+00:18:21,679 --> 00:18:25,919
+distribution is in some sense a more
+
+415
+00:18:24,400 --> 00:18:29,919
+principled approach right because you
+
+416
+00:18:25,919 --> 00:18:31,679
+want to sample data from um your
+
+417
+00:18:29,919 --> 00:18:33,840
+distribution and you have a different
+
+418
+00:18:31,679 --> 00:18:37,919
+distribution Q and now you're trying to
+
+419
+00:18:33,840 --> 00:18:40,160
+essentially compensate um and so this
+
+420
+00:18:37,919 --> 00:18:41,200
+could be better for you know diversity
+
+421
+00:18:40,160 --> 00:18:44,320
+because you're trying to match the
+
+422
+00:18:41,200 --> 00:18:46,960
+distribution whereas fast text you're
+
+423
+00:18:44,320 --> 00:18:50,240
+essentially trying to classify whether
+
+424
+00:18:46,960 --> 00:18:53,280
+something is is in the distribution or
+
+425
+00:18:50,240 --> 00:18:57,200
+not and it doesn't have any guarantees
+
+426
+00:18:53,280 --> 00:18:59,440
+about matching the distribution. Um
+
+427
+00:18:57,200 --> 00:19:02,559
+okay but it's it's also fast like fast
+
+428
+00:18:59,440 --> 00:19:05,760
+text and um both can be improved by
+
+429
+00:19:02,559 --> 00:19:08,320
+having better um models. So instead of
+
+430
+00:19:05,760 --> 00:19:11,679
+using linear models based on engrams you
+
+431
+00:19:08,320 --> 00:19:15,520
+can increase n you can um use uh neural
+
+432
+00:19:11,679 --> 00:19:20,160
+approaches as well.
+
+433
+00:19:15,520 --> 00:19:22,880
+Okay, so just to wrap up this uh part um
+
+434
+00:19:20,160 --> 00:19:25,440
+so we look at engram models, linear
+
+435
+00:19:22,880 --> 00:19:28,960
+classifiers and importance resampling.
+
+436
+00:19:25,440 --> 00:19:31,840
+Um but the general framework I think is
+
+437
+00:19:28,960 --> 00:19:34,559
+uh is something that maybe worth taking
+
+438
+00:19:31,840 --> 00:19:37,360
+away which is that the setup given a
+
+439
+00:19:34,559 --> 00:19:40,559
+target data set and a raw data set find
+
+440
+00:19:37,360 --> 00:19:43,760
+a subset that's similar to the target
+
+441
+00:19:40,559 --> 00:19:45,919
+and all these methods have the basic
+
+442
+00:19:43,760 --> 00:19:48,320
+recipe which is estimate some sort of
+
+443
+00:19:45,919 --> 00:19:50,160
+model based on the raw data and the
+
+444
+00:19:48,320 --> 00:19:52,559
+target data set which gives you a
+
+445
+00:19:50,160 --> 00:19:54,480
+scoring function and then keep examples
+
+446
+00:19:52,559 --> 00:19:56,559
+in the raw data set based on that
+
+447
+00:19:54,480 --> 00:19:59,360
+scoring function. usually high scores
+
+448
+00:19:56,559 --> 00:20:03,760
+are kept. So just to walk through this
+
+449
+00:19:59,360 --> 00:20:06,000
+in the KLM case um you know the score is
+
+450
+00:20:03,760 --> 00:20:09,440
+simply the probability
+
+451
+00:20:06,000 --> 00:20:11,679
+um of or I guess you know maybe the
+
+452
+00:20:09,440 --> 00:20:15,120
+perplexity um if you want normalized by
+
+453
+00:20:11,679 --> 00:20:17,840
+the number of tokens under the target.
+
+454
+00:20:15,120 --> 00:20:20,000
+Okay so R is not used here and then you
+
+455
+00:20:17,840 --> 00:20:22,000
+keep examples with score greater than
+
+456
+00:20:20,000 --> 00:20:24,559
+threshold.
+
+457
+00:20:22,000 --> 00:20:26,000
+Um and you can you can um you know
+
+458
+00:20:24,559 --> 00:20:29,919
+randomize a little bit around the
+
+459
+00:20:26,000 --> 00:20:32,159
+threshold if you if you want. So you can
+
+460
+00:20:29,919 --> 00:20:34,559
+also use a discriminative classifier
+
+461
+00:20:32,159 --> 00:20:36,960
+where the score is what's the
+
+462
+00:20:34,559 --> 00:20:39,840
+probability that this example came from
+
+463
+00:20:36,960 --> 00:20:42,960
+the target as opposed to the raw data
+
+464
+00:20:39,840 --> 00:20:46,559
+set and then you keep examples where the
+
+465
+00:20:42,960 --> 00:20:48,640
+score is of greater than some threshold.
+
+466
+00:20:46,559 --> 00:20:52,720
+And then importance resampling says the
+
+467
+00:20:48,640 --> 00:20:54,480
+score is the ratio of you know two
+
+468
+00:20:52,720 --> 00:20:59,440
+generative models which could be engram
+
+469
+00:20:54,480 --> 00:21:01,600
+models in this in this case. Um p of uh
+
+470
+00:20:59,440 --> 00:21:05,440
+you know the target distribution over
+
+471
+00:21:01,600 --> 00:21:07,440
+the raw distribution and to use a score
+
+472
+00:21:05,440 --> 00:21:09,039
+um this is really the importance weights
+
+473
+00:21:07,440 --> 00:21:11,520
+you resample with probability
+
+474
+00:21:09,039 --> 00:21:13,760
+proportional to that.
+
+475
+00:21:11,520 --> 00:21:17,039
+Okay, so at a high level all of them are
+
+476
+00:21:13,760 --> 00:21:18,960
+doing essentially the same thing. You
+
+477
+00:21:17,039 --> 00:21:21,760
+have you fit some sort of distribution
+
+478
+00:21:18,960 --> 00:21:24,640
+that tells you what looks like target as
+
+479
+00:21:21,760 --> 00:21:28,760
+opposed to raw and then you apply that
+
+480
+00:21:24,640 --> 00:21:28,760
+to the raw data set.
+
+481
+00:21:30,240 --> 00:21:36,600
+Okay. Uh maybe I'll pause here in case
+
+482
+00:21:33,039 --> 00:21:36,600
+there's any questions.
+
+483
+00:21:37,120 --> 00:21:41,600
+Yeah. So um on sort of like a high level
+
+484
+00:21:40,000 --> 00:21:45,600
+philosophical
+
+485
+00:21:41,600 --> 00:21:48,960
+thing we have an idea of what good data
+
+486
+00:21:45,600 --> 00:21:51,840
+is but we've kind of not talked about
+
+487
+00:21:48,960 --> 00:21:54,799
+what that's actually like
+
+488
+00:21:51,840 --> 00:21:56,960
+what what like a good document looks
+
+489
+00:21:54,799 --> 00:21:59,440
+like. So what this is doing is like
+
+490
+00:21:56,960 --> 00:22:01,360
+making sure that the words fit next to
+
+491
+00:21:59,440 --> 00:22:04,000
+each other when you have like another
+
+492
+00:22:01,360 --> 00:22:08,240
+like that you know one comes after the
+
+493
+00:22:04,000 --> 00:22:11,520
+other but it doesn't ensure that they it
+
+494
+00:22:08,240 --> 00:22:13,360
+makes any sense on like a larger level
+
+495
+00:22:11,520 --> 00:22:16,240
+or if you want that you just increase
+
+496
+00:22:13,360 --> 00:22:19,200
+the N and the engram. Yeah. Yeah. So the
+
+497
+00:22:16,240 --> 00:22:21,760
+question seems I think is that if you're
+
+498
+00:22:19,200 --> 00:22:24,799
+using an engram model, it's only looking
+
+499
+00:22:21,760 --> 00:22:26,880
+at local contexts and maybe that's not
+
+500
+00:22:24,799 --> 00:22:28,799
+great for assessing quality because if
+
+501
+00:22:26,880 --> 00:22:30,880
+you shuffle everything around, it still
+
+502
+00:22:28,799 --> 00:22:35,039
+looks good to the engram model. So
+
+503
+00:22:30,880 --> 00:22:37,840
+there's definitely um that danger that
+
+504
+00:22:35,039 --> 00:22:39,200
+it's very easy to adversarily game,
+
+505
+00:22:37,840 --> 00:22:41,919
+right? If you can construct you can
+
+506
+00:22:39,200 --> 00:22:43,840
+definitely construct um examples that
+
+507
+00:22:41,919 --> 00:22:46,240
+the engram model thinks is high. I mean
+
+508
+00:22:43,840 --> 00:22:49,200
+I showed you one the the happens to be
+
+509
+00:22:46,240 --> 00:22:53,520
+you know pretty high. Um but somehow on
+
+510
+00:22:49,200 --> 00:22:56,960
+average um you know you're doing okay
+
+511
+00:22:53,520 --> 00:22:59,520
+and in some sense maybe if a document
+
+512
+00:22:56,960 --> 00:23:01,280
+looks like grammatical English and it
+
+513
+00:22:59,520 --> 00:23:04,240
+looks like news or you know some
+
+514
+00:23:01,280 --> 00:23:06,080
+scientific paper um all you want to make
+
+515
+00:23:04,240 --> 00:23:08,720
+sure is that that model assigns high
+
+516
+00:23:06,080 --> 00:23:12,480
+probability to that. If you get some,
+
+517
+00:23:08,720 --> 00:23:16,240
+you know, bad examples, it's not the the
+
+518
+00:23:12,480 --> 00:23:17,840
+end of the the world. Yeah. So, we
+
+519
+00:23:16,240 --> 00:23:20,240
+should think about these as just like
+
+520
+00:23:17,840 --> 00:23:22,400
+filtering out like true nonsense web
+
+521
+00:23:20,240 --> 00:23:25,679
+pages that you show. Yeah, I would say
+
+522
+00:23:22,400 --> 00:23:29,600
+this is uh filtering out true nonsense
+
+523
+00:23:25,679 --> 00:23:31,520
+is I think a good way to to look at it.
+
+524
+00:23:29,600 --> 00:23:35,840
+As I go through some examples, I think
+
+525
+00:23:31,520 --> 00:23:38,080
+maybe it'll become a bit clearer that um
+
+526
+00:23:35,840 --> 00:23:40,159
+this is these classifiers are not just
+
+527
+00:23:38,080 --> 00:23:42,640
+used for quality and for some of the
+
+528
+00:23:40,159 --> 00:23:45,520
+other use cases. I think it's much more
+
+529
+00:23:42,640 --> 00:23:49,440
+maybe compelling why it should work.
+
+530
+00:23:45,520 --> 00:23:51,760
+Okay. So, um
+
+531
+00:23:49,440 --> 00:23:54,159
+so the same data filtering machinery can
+
+532
+00:23:51,760 --> 00:23:55,200
+be used on different tasks. So, I'm
+
+533
+00:23:54,159 --> 00:23:57,039
+going to talk about language
+
+534
+00:23:55,200 --> 00:23:59,520
+identification, quality filtering, and
+
+535
+00:23:57,039 --> 00:24:02,159
+toxicity filtering. So, language
+
+536
+00:23:59,520 --> 00:24:03,679
+identification. Um, the idea is that you
+
+537
+00:24:02,159 --> 00:24:05,200
+want to find text of a specific
+
+538
+00:24:03,679 --> 00:24:09,120
+language. Maybe it's English, maybe it's
+
+539
+00:24:05,200 --> 00:24:11,440
+Japanese. Um, and you could ask, well,
+
+540
+00:24:09,120 --> 00:24:12,880
+you know, um, you could just train on
+
+541
+00:24:11,440 --> 00:24:16,960
+all the languages. Why don't you do
+
+542
+00:24:12,880 --> 00:24:20,880
+that? Um, the problem is that it's, um,
+
+543
+00:24:16,960 --> 00:24:23,039
+can often be difficult to, um, you know,
+
+544
+00:24:20,880 --> 00:24:26,159
+do the curation and processing of high
+
+545
+00:24:23,039 --> 00:24:29,679
+quality data in a given language. And
+
+546
+00:24:26,159 --> 00:24:32,159
+and there's also, you know, the the
+
+547
+00:24:29,679 --> 00:24:34,640
+problem that if you train, let's say you
+
+548
+00:24:32,159 --> 00:24:36,480
+only care about, you know, one language.
+
+549
+00:24:34,640 --> 00:24:38,080
+Now, if you have data from all the other
+
+550
+00:24:36,480 --> 00:24:41,919
+languages, you're going to be spending
+
+551
+00:24:38,080 --> 00:24:45,840
+less compute and tokens on any given
+
+552
+00:24:41,919 --> 00:24:47,600
+languages on the given language. Um, so
+
+553
+00:24:45,840 --> 00:24:48,720
+this was a and that could hurt your
+
+554
+00:24:47,600 --> 00:24:50,880
+performance in that language. For
+
+555
+00:24:48,720 --> 00:24:55,840
+example, you know, Bloom, which was
+
+556
+00:24:50,880 --> 00:24:59,760
+trained in about 20 uh 22, I believe, um
+
+557
+00:24:55,840 --> 00:25:01,360
+was only trained on 30% English. Um and
+
+558
+00:24:59,760 --> 00:25:03,600
+as a result, the English performance
+
+559
+00:25:01,360 --> 00:25:05,919
+maybe was not as good as it could have
+
+560
+00:25:03,600 --> 00:25:08,720
+been. It was strong on other languages.
+
+561
+00:25:05,919 --> 00:25:12,640
+So there in a compute limited, you know,
+
+562
+00:25:08,720 --> 00:25:16,480
+regime, you're definitely at risk of um
+
+563
+00:25:12,640 --> 00:25:18,720
+compromising the quality of the of of
+
+564
+00:25:16,480 --> 00:25:21,360
+the language you care about. Now that
+
+565
+00:25:18,720 --> 00:25:23,760
+said, if you have enough capacity and
+
+566
+00:25:21,360 --> 00:25:25,440
+you're training huge models, then you
+
+567
+00:25:23,760 --> 00:25:26,960
+can definitely train multilingual models
+
+568
+00:25:25,440 --> 00:25:29,279
+and there's could be even positive
+
+569
+00:25:26,960 --> 00:25:31,600
+transfer between languages. So all the
+
+570
+00:25:29,279 --> 00:25:35,200
+kind of frontier models are are trained
+
+571
+00:25:31,600 --> 00:25:37,760
+on um uh heavily multilingual sometimes
+
+572
+00:25:35,200 --> 00:25:39,679
+even hundreds of lang like 100 plus
+
+573
+00:25:37,760 --> 00:25:41,919
+languages.
+
+574
+00:25:39,679 --> 00:25:44,400
+Um so
+
+575
+00:25:41,919 --> 00:25:48,400
+you know one simple way to do this is
+
+576
+00:25:44,400 --> 00:25:50,320
+fast text is um a toolkit for training
+
+577
+00:25:48,400 --> 00:25:53,039
+simple classifiers. It also comes with
+
+578
+00:25:50,320 --> 00:25:54,640
+some off-the-shelf um models and one of
+
+579
+00:25:53,039 --> 00:25:57,279
+the ones that typically gets used is
+
+580
+00:25:54,640 --> 00:26:02,080
+they have a language identification
+
+581
+00:25:57,279 --> 00:26:04,400
+um um model and this is just
+
+582
+00:26:02,080 --> 00:26:07,440
+off-the-shelf classifier. It supports a
+
+583
+00:26:04,400 --> 00:26:10,799
+lot of different languages and and it
+
+584
+00:26:07,440 --> 00:26:13,039
+was trained on um basically multilingual
+
+585
+00:26:10,799 --> 00:26:14,720
+sites including Wikipedia which has a
+
+586
+00:26:13,039 --> 00:26:17,840
+lot of different languages as
+
+587
+00:26:14,720 --> 00:26:21,679
+translation sites um and you know for
+
+588
+00:26:17,840 --> 00:26:26,240
+some reason Southeast European news. Um
+
+589
+00:26:21,679 --> 00:26:28,480
+so DOMA uses this um they basically run
+
+590
+00:26:26,240 --> 00:26:30,799
+the fast text classifier and keep pages
+
+591
+00:26:28,480 --> 00:26:32,480
+with English uh probability greater than
+
+592
+00:26:30,799 --> 00:26:34,880
+0.5.
+
+593
+00:26:32,480 --> 00:26:37,279
+you know. Um so let's try it out. So
+
+594
+00:26:34,880 --> 00:26:40,320
+there's this model um language ID that
+
+595
+00:26:37,279 --> 00:26:43,520
+you can just and download. Um and then
+
+596
+00:26:40,320 --> 00:26:47,760
+let's see how well it does. Um so the
+
+597
+00:26:43,520 --> 00:26:53,000
+quick fox jumps over the uh lazy dog.
+
+598
+00:26:47,760 --> 00:26:53,000
+Let's see where are the predictions. Um
+
+599
+00:26:56,559 --> 00:27:02,640
+okay. I don't know why. Okay, there we
+
+600
+00:26:58,400 --> 00:27:05,600
+go. So um
+
+601
+00:27:02,640 --> 00:27:07,360
+okay so this says English this is the
+
+602
+00:27:05,600 --> 00:27:11,440
+label English and the probability of
+
+603
+00:27:07,360 --> 00:27:12,559
+English is 71. Okay so I mean you would
+
+604
+00:27:11,440 --> 00:27:16,080
+have guessed it would be higher. It
+
+605
+00:27:12,559 --> 00:27:17,919
+looks pretty English to me. Um if you
+
+606
+00:27:16,080 --> 00:27:19,520
+duplicate the the sentence the
+
+607
+00:27:17,919 --> 00:27:22,000
+probability isn't you know changing
+
+608
+00:27:19,520 --> 00:27:24,000
+which is good. Um it you know saying the
+
+609
+00:27:22,000 --> 00:27:28,080
+same thing doesn't make it more English.
+
+610
+00:27:24,000 --> 00:27:30,559
+Um um there's some informal English. Um
+
+611
+00:27:28,080 --> 00:27:32,880
+which this is kind of weird. This is I
+
+612
+00:27:30,559 --> 00:27:36,320
+guess more English than the quick round
+
+613
+00:27:32,880 --> 00:27:39,679
+fox. Um German um actually gets
+
+614
+00:27:36,320 --> 00:27:41,919
+classified fairly uh oh sorry this is uh
+
+615
+00:27:39,679 --> 00:27:45,200
+German now. The label is German. Okay.
+
+616
+00:27:41,919 --> 00:27:49,279
+That is German. Um math gets classified
+
+617
+00:27:45,200 --> 00:27:54,399
+pretty weakly as as English. Um code um
+
+618
+00:27:49,279 --> 00:27:57,520
+does is um highest is like Russian. Um,
+
+619
+00:27:54,399 --> 00:28:00,720
+this is hello is apparently, you know,
+
+620
+00:27:57,520 --> 00:28:03,600
+Italian. This is French. Bonjour. Um,
+
+621
+00:28:00,720 --> 00:28:06,080
+that's that's good. Um, and this is, I
+
+622
+00:28:03,600 --> 00:28:07,919
+guess, a tricky one where I put in some
+
+623
+00:28:06,080 --> 00:28:09,919
+Spanish and also some English. And I
+
+624
+00:28:07,919 --> 00:28:12,960
+guess I favor the the Spanish in this
+
+625
+00:28:09,919 --> 00:28:14,080
+case. Okay. So, this gives you a sense.
+
+626
+00:28:12,960 --> 00:28:16,080
+I mean, it's always good to play with
+
+627
+00:28:14,080 --> 00:28:17,440
+these classifiers, right? Because just
+
+628
+00:28:16,080 --> 00:28:19,360
+because it's a classifier you can
+
+629
+00:28:17,440 --> 00:28:22,799
+download and everyone uses doesn't mean
+
+630
+00:28:19,360 --> 00:28:25,440
+it like works all the time. Um, so I
+
+631
+00:28:22,799 --> 00:28:27,120
+think obviously for short sentences, um,
+
+632
+00:28:25,440 --> 00:28:29,279
+it's less reliable because there's just
+
+633
+00:28:27,120 --> 00:28:31,840
+less information about what's happening.
+
+634
+00:28:29,279 --> 00:28:33,919
+Low resource languages is tough. Um,
+
+635
+00:28:31,840 --> 00:28:37,440
+there's a worry that for things that
+
+636
+00:28:33,919 --> 00:28:39,600
+don't really or dialects of English, um,
+
+637
+00:28:37,440 --> 00:28:42,320
+this could, um, be viewed as not
+
+638
+00:28:39,600 --> 00:28:44,159
+English. Um, I think if you want to
+
+639
+00:28:42,320 --> 00:28:47,279
+distinguish between similar languages,
+
+640
+00:28:44,159 --> 00:28:48,880
+that's also can be easily confused. and
+
+641
+00:28:47,279 --> 00:28:51,120
+code switching. I don't even know what
+
+642
+00:28:48,880 --> 00:28:54,559
+ground truth is, but it'll do hopefully
+
+643
+00:28:51,120 --> 00:28:57,279
+one of the uh languages.
+
+644
+00:28:54,559 --> 00:29:00,640
+Um so just talk through one case study
+
+645
+00:28:57,279 --> 00:29:03,919
+open web math was this uh this paper um
+
+646
+00:29:00,640 --> 00:29:05,919
+from two years ago. Um and the goal here
+
+647
+00:29:03,919 --> 00:29:08,880
+is to curate a large corpus of
+
+648
+00:29:05,919 --> 00:29:10,880
+mathematical text where here I'm saying
+
+649
+00:29:08,880 --> 00:29:14,080
+that you know let's assume that math is
+
+650
+00:29:10,880 --> 00:29:16,399
+a as a language. Um so first they use
+
+651
+00:29:14,080 --> 00:29:20,399
+some rules to filter then they train
+
+652
+00:29:16,399 --> 00:29:22,720
+canlam on this uh large data set of
+
+653
+00:29:20,399 --> 00:29:25,120
+proofs called proof pile and kept it if
+
+654
+00:29:22,720 --> 00:29:26,799
+the perplexity was below some threshold
+
+655
+00:29:25,120 --> 00:29:29,919
+and they they trained this fastest
+
+656
+00:29:26,799 --> 00:29:32,320
+classifier which we talked about to
+
+657
+00:29:29,919 --> 00:29:36,159
+predict mathematical writing. Um this is
+
+658
+00:29:32,320 --> 00:29:39,520
+a kind of hacky but um the they set the
+
+659
+00:29:36,159 --> 00:29:41,520
+threshold of a classifier if it's um
+
+660
+00:29:39,520 --> 00:29:42,880
+identified as math based on rules to be
+
+661
+00:29:41,520 --> 00:29:44,960
+relatively low and if it's not
+
+662
+00:29:42,880 --> 00:29:49,039
+identified as math according to rules
+
+663
+00:29:44,960 --> 00:29:51,919
+it's um it's uh needs to be higher. Um
+
+664
+00:29:49,039 --> 00:29:54,000
+and as a result they produced 15 billion
+
+665
+00:29:51,919 --> 00:29:55,520
+tokens and they trained some models that
+
+666
+00:29:54,000 --> 00:29:57,600
+do better that models that were trained
+
+667
+00:29:55,520 --> 00:29:59,200
+on 20 times more data that weren't
+
+668
+00:29:57,600 --> 00:30:04,000
+really specialized. So this is kind of
+
+669
+00:29:59,200 --> 00:30:05,760
+one of um nice examples of the the
+
+670
+00:30:04,000 --> 00:30:07,600
+utility of data filtering, right? You
+
+671
+00:30:05,760 --> 00:30:09,520
+could train on all this data, but if you
+
+672
+00:30:07,600 --> 00:30:11,679
+care about let's say a particular domain
+
+673
+00:30:09,520 --> 00:30:14,240
+like math, you can just go out and get
+
+674
+00:30:11,679 --> 00:30:15,840
+more of it and target that data set. And
+
+675
+00:30:14,240 --> 00:30:19,559
+if you train on that, you can be much
+
+676
+00:30:15,840 --> 00:30:19,559
+more data efficient.
+
+677
+00:30:20,480 --> 00:30:23,600
+Okay, so let's talk about quality
+
+678
+00:30:22,240 --> 00:30:26,480
+filtering. So quality filtering
+
+679
+00:30:23,600 --> 00:30:28,320
+obviously is something that is um
+
+680
+00:30:26,480 --> 00:30:30,399
+doesn't really I mean it's a catch-all
+
+681
+00:30:28,320 --> 00:30:35,840
+for um a bunch of things and what is
+
+682
+00:30:30,399 --> 00:30:38,159
+quality um so remember that some papers
+
+683
+00:30:35,840 --> 00:30:40,640
+uh explicitly don't use modelbased
+
+684
+00:30:38,159 --> 00:30:43,520
+quality filtering um but more recent
+
+685
+00:30:40,640 --> 00:30:46,080
+papers have just kind of given in and
+
+686
+00:30:43,520 --> 00:30:50,720
+say well um I mean it just works a lot
+
+687
+00:30:46,080 --> 00:30:52,720
+better um um so GBD3 um we talked a
+
+688
+00:30:50,720 --> 00:30:55,279
+little bit about this last time trained
+
+689
+00:30:52,720 --> 00:30:57,440
+a quality classifier by taking positive
+
+690
+00:30:55,279 --> 00:31:00,799
+samples from the highquality sources
+
+691
+00:30:57,440 --> 00:31:03,440
+that they had or rather the non-common
+
+692
+00:31:00,799 --> 00:31:05,520
+crawl sources they had and negatives are
+
+693
+00:31:03,440 --> 00:31:07,120
+just common crawl. They train a linear
+
+694
+00:31:05,520 --> 00:31:10,320
+classifier
+
+695
+00:31:07,120 --> 00:31:12,399
+um and keep documents stochcastically
+
+696
+00:31:10,320 --> 00:31:15,360
+based on this this score which is
+
+697
+00:31:12,399 --> 00:31:17,760
+something that just turns numbers um
+
+698
+00:31:15,360 --> 00:31:23,039
+basically sort of sharpens the you know
+
+699
+00:31:17,760 --> 00:31:27,039
+the the threshold um and uh the llama
+
+700
+00:31:23,039 --> 00:31:28,960
+first llama paper um they use pages
+
+701
+00:31:27,039 --> 00:31:31,200
+referenced by Wikipedia so not Wikipedia
+
+702
+00:31:28,960 --> 00:31:33,360
+as positives negatives are just sampled
+
+703
+00:31:31,200 --> 00:31:35,360
+from common crawl and then they keep
+
+704
+00:31:33,360 --> 00:31:36,960
+documents that are classified positive.
+
+705
+00:31:35,360 --> 00:31:39,440
+I don't think there was actually
+
+706
+00:31:36,960 --> 00:31:43,519
+sampling in that which is interesting.
+
+707
+00:31:39,440 --> 00:31:45,360
+Um 51 was another paper that um their
+
+708
+00:31:43,519 --> 00:31:47,919
+philosophy was kind of you know
+
+709
+00:31:45,360 --> 00:31:50,159
+interesting. Um they really wanted high
+
+710
+00:31:47,919 --> 00:31:51,760
+quality data that looked like textbooks
+
+711
+00:31:50,159 --> 00:31:55,760
+and they wanted to train a very small
+
+712
+00:31:51,760 --> 00:31:57,519
+model. Um so they trained on synthetic
+
+713
+00:31:55,760 --> 00:31:59,919
+data but also filter data. So for the
+
+714
+00:31:57,519 --> 00:32:02,000
+filter data what they did is they took
+
+715
+00:31:59,919 --> 00:32:04,640
+the Python subset of the stack. Remember
+
+716
+00:32:02,000 --> 00:32:08,559
+the stack is this pre-processed data set
+
+717
+00:32:04,640 --> 00:32:12,240
+coming from GitHub of code and then they
+
+718
+00:32:08,559 --> 00:32:15,360
+defined a prompt which effectively asked
+
+719
+00:32:12,240 --> 00:32:16,880
+um GP4 to determine the educational
+
+720
+00:32:15,360 --> 00:32:19,360
+value for a student whose goal is to
+
+721
+00:32:16,880 --> 00:32:24,399
+learn basic coding concepts and then
+
+722
+00:32:19,360 --> 00:32:27,840
+they prompted GP4 and classified 100k
+
+723
+00:32:24,399 --> 00:32:29,919
+um documents from this Python subset and
+
+724
+00:32:27,840 --> 00:32:32,559
+that became the positive examples. They
+
+725
+00:32:29,919 --> 00:32:36,240
+train a random forest classifier on
+
+726
+00:32:32,559 --> 00:32:37,919
+these examples where the embeddings fed
+
+727
+00:32:36,240 --> 00:32:40,320
+into a random classifier were from some
+
+728
+00:32:37,919 --> 00:32:45,279
+pre-trained cogen model and then they
+
+729
+00:32:40,320 --> 00:32:47,679
+selected data from R that is classified
+
+730
+00:32:45,279 --> 00:32:49,600
+by the um you know classifier. So they
+
+731
+00:32:47,679 --> 00:32:52,320
+run the classifier then over all of our
+
+732
+00:32:49,600 --> 00:32:54,480
+and then get um that data. So this is
+
+733
+00:32:52,320 --> 00:32:58,559
+kind of interesting because there is a
+
+734
+00:32:54,480 --> 00:33:01,679
+random force classifier and in this case
+
+735
+00:32:58,559 --> 00:33:05,519
+where does t come from? Well t doesn't
+
+736
+00:33:01,679 --> 00:33:08,240
+exist ap t comes from prompting gpd4
+
+737
+00:33:05,519 --> 00:33:09,919
+with some prompt. Okay, so this is
+
+738
+00:33:08,240 --> 00:33:12,720
+something that you'll see more
+
+739
+00:33:09,919 --> 00:33:15,120
+increasingly as the models get better is
+
+740
+00:33:12,720 --> 00:33:18,080
+that instead of you know looking at
+
+741
+00:33:15,120 --> 00:33:20,720
+sources like well maybe books one is
+
+742
+00:33:18,080 --> 00:33:23,279
+great or maybe web Wikipedia is great.
+
+743
+00:33:20,720 --> 00:33:26,399
+Um now if you have a good model you can
+
+744
+00:33:23,279 --> 00:33:28,480
+just ask the model to um for the type of
+
+745
+00:33:26,399 --> 00:33:30,320
+data you want. maybe I want more
+
+746
+00:33:28,480 --> 00:33:33,120
+chemistry data or I want more
+
+747
+00:33:30,320 --> 00:33:35,679
+mathematical data that you know does a
+
+748
+00:33:33,120 --> 00:33:37,679
+lot of proofs or elementary math or
+
+749
+00:33:35,679 --> 00:33:41,679
+something and you just let the language
+
+750
+00:33:37,679 --> 00:33:44,240
+model um uh a fairly sophisticated
+
+751
+00:33:41,679 --> 00:33:46,559
+language model give you t and now once
+
+752
+00:33:44,240 --> 00:33:50,080
+you have t you turn the recipe that
+
+753
+00:33:46,559 --> 00:33:53,760
+we've been talking about so far
+
+754
+00:33:50,080 --> 00:33:55,360
+so the f1 results um again looks uh good
+
+755
+00:33:53,760 --> 00:33:57,519
+so they had a baseline where they just
+
+756
+00:33:55,360 --> 00:34:00,559
+took the python subset of a stack which
+
+757
+00:33:57,519 --> 00:34:02,559
+was this R and the performance on human
+
+758
+00:34:00,559 --> 00:34:06,720
+eval which is a coding data set was only
+
+759
+00:34:02,559 --> 00:34:08,159
+12% after 96k steps of training and then
+
+760
+00:34:06,720 --> 00:34:11,440
+they trained the exact same model
+
+761
+00:34:08,159 --> 00:34:16,000
+architecture on this new fancy data set
+
+762
+00:34:11,440 --> 00:34:18,720
+and it was already at 17 after 36 um so
+
+763
+00:34:16,000 --> 00:34:21,839
+they declared success.
+
+764
+00:34:18,720 --> 00:34:25,520
+Okay, so these are some examples of of
+
+765
+00:34:21,839 --> 00:34:28,960
+uh quality filtering. Um any questions
+
+766
+00:34:25,520 --> 00:34:31,960
+about quality filtering?
+
+767
+00:34:28,960 --> 00:34:31,960
+Yeah.
+
+768
+00:34:35,520 --> 00:34:41,919
+LM and not using like
+
+769
+00:34:38,240 --> 00:34:45,119
+Yeah. So the the the point is that you
+
+770
+00:34:41,919 --> 00:34:50,079
+can why can you get away with um using
+
+771
+00:34:45,119 --> 00:34:53,599
+GP4 here because you're using it only on
+
+772
+00:34:50,079 --> 00:34:55,280
+um to create a thousand 100k
+
+773
+00:34:53,599 --> 00:34:58,320
+examples
+
+774
+00:34:55,280 --> 00:35:00,079
+um and to create and then using that to
+
+775
+00:34:58,320 --> 00:35:02,960
+distill a classifier which is much
+
+776
+00:35:00,079 --> 00:35:05,280
+faster and the 100k is much less than
+
+777
+00:35:02,960 --> 00:35:07,200
+the size of R which is you know hundreds
+
+778
+00:35:05,280 --> 00:35:10,200
+of tens or hundreds of millions Don't
+
+779
+00:35:07,200 --> 00:35:10,200
+worry.
+
+780
+00:35:14,320 --> 00:35:20,400
+Okay. So, let's talk a bit about
+
+781
+00:35:16,480 --> 00:35:23,680
+toxicity filtering. Um,
+
+782
+00:35:20,400 --> 00:35:27,680
+so I'm going to talk about how the DOMA
+
+783
+00:35:23,680 --> 00:35:29,599
+paper um does toxicity filtering. So,
+
+784
+00:35:27,680 --> 00:35:33,599
+there's this data set called Jigsaw
+
+785
+00:35:29,599 --> 00:35:35,359
+toxic comments. Um and this came out of
+
+786
+00:35:33,599 --> 00:35:37,680
+a project where they were trying to help
+
+787
+00:35:35,359 --> 00:35:39,040
+people have better discussions online.
+
+788
+00:35:37,680 --> 00:35:42,000
+So they buil wanted to build a
+
+789
+00:35:39,040 --> 00:35:44,240
+classifier that could um identify when
+
+790
+00:35:42,000 --> 00:35:46,880
+there was problematic content. So they
+
+791
+00:35:44,240 --> 00:35:50,000
+took the data uh comments on the
+
+792
+00:35:46,880 --> 00:35:52,560
+Wikipedia talk pages and had annotators
+
+793
+00:35:50,000 --> 00:35:56,320
+annotate them with you know toxic severe
+
+794
+00:35:52,560 --> 00:35:58,960
+toxic obscene threat insult ID hate. Um
+
+795
+00:35:56,320 --> 00:36:02,320
+and so the Dolma folks trained two
+
+796
+00:35:58,960 --> 00:36:06,560
+fastex classifiers. one um which is
+
+797
+00:36:02,320 --> 00:36:08,400
+basically um uh you know correspond to
+
+798
+00:36:06,560 --> 00:36:10,560
+hate and the other one is correspond to
+
+799
+00:36:08,400 --> 00:36:13,440
+NSFW
+
+800
+00:36:10,560 --> 00:36:17,200
+um and so here's some examples of the
+
+801
+00:36:13,440 --> 00:36:20,160
+you know of the you know data set um so
+
+802
+00:36:17,200 --> 00:36:23,520
+let's download the model um and try it
+
+803
+00:36:20,160 --> 00:36:25,680
+out. So the first example
+
+804
+00:36:23,520 --> 00:36:28,560
+um you know are you threatening me for
+
+805
+00:36:25,680 --> 00:36:33,119
+dispute neutrality? This gets classified
+
+806
+00:36:28,560 --> 00:36:35,839
+as um safe for work um because I mean it
+
+807
+00:36:33,119 --> 00:36:38,880
+seems fine. Um and the second one is
+
+808
+00:36:35,839 --> 00:36:41,280
+flagged as NSFW
+
+809
+00:36:38,880 --> 00:36:44,000
+um
+
+810
+00:36:41,280 --> 00:36:47,520
+you know and these sentences are both uh
+
+811
+00:36:44,000 --> 00:36:48,640
+fine. Okay. So, just give you a a sense,
+
+812
+00:36:47,520 --> 00:36:50,640
+you know, I don't want to show too many
+
+813
+00:36:48,640 --> 00:36:53,200
+of these examples, but um you get the
+
+814
+00:36:50,640 --> 00:36:55,839
+idea. You can play it on with your own
+
+815
+00:36:53,200 --> 00:36:59,359
+time.
+
+816
+00:36:55,839 --> 00:37:01,520
+Um okay, so that's all I'll say about uh
+
+817
+00:36:59,359 --> 00:37:05,119
+filtering.
+
+818
+00:37:01,520 --> 00:37:08,640
+So, now let's talk about dduplication.
+
+819
+00:37:05,119 --> 00:37:12,480
+So, there's two types of duplicates.
+
+820
+00:37:08,640 --> 00:37:14,400
+Exact uh duplicates. And the thing to
+
+821
+00:37:12,480 --> 00:37:16,800
+realize is that the web actually just
+
+822
+00:37:14,400 --> 00:37:19,599
+inherently has a lot of exact duplicates
+
+823
+00:37:16,800 --> 00:37:23,280
+based on u mirroring. So if you just
+
+824
+00:37:19,599 --> 00:37:25,520
+look at project Gutenberg um
+
+825
+00:37:23,280 --> 00:37:28,160
+you know you'll see that you know the
+
+826
+00:37:25,520 --> 00:37:29,680
+same exact site gets mirrored on a bunch
+
+827
+00:37:28,160 --> 00:37:32,320
+of different URLs. So if you're just
+
+828
+00:37:29,680 --> 00:37:34,240
+crawling as common crawl does um it has
+
+829
+00:37:32,320 --> 00:37:38,079
+no way knowing that these are mirrors.
+
+830
+00:37:34,240 --> 00:37:41,040
+It just get you the exact same content.
+
+831
+00:37:38,079 --> 00:37:43,200
+Um and then there's neoduplicates which
+
+832
+00:37:41,040 --> 00:37:46,640
+is basically the same text that differ
+
+833
+00:37:43,200 --> 00:37:48,640
+by a few tokens. And we're going to show
+
+834
+00:37:46,640 --> 00:37:51,359
+you algorithms that deal with um you
+
+835
+00:37:48,640 --> 00:37:54,000
+know both. So neoduplicates
+
+836
+00:37:51,359 --> 00:37:56,720
+um when does this happen? Well, you have
+
+837
+00:37:54,000 --> 00:37:59,520
+terms of service and licenses like the
+
+838
+00:37:56,720 --> 00:38:01,040
+MIT license. This thing shows up I don't
+
+839
+00:37:59,520 --> 00:38:02,960
+know how many times on the web. It's
+
+840
+00:38:01,040 --> 00:38:05,040
+just copy and pasted everywhere. Uh
+
+841
+00:38:02,960 --> 00:38:06,560
+maybe there's even I don't know maybe
+
+842
+00:38:05,040 --> 00:38:08,880
+people take it and actually change some
+
+843
+00:38:06,560 --> 00:38:11,680
+things or they mess up copy and pasting
+
+844
+00:38:08,880 --> 00:38:14,800
+and um remove a comma or something. Um
+
+845
+00:38:11,680 --> 00:38:17,440
+that's all possible. Um and then there's
+
+846
+00:38:14,800 --> 00:38:22,079
+uh cases if you look at these these data
+
+847
+00:38:17,440 --> 00:38:23,920
+sets um you know near duplicates are it
+
+848
+00:38:22,079 --> 00:38:26,079
+just gives you an idea of what new
+
+849
+00:38:23,920 --> 00:38:28,560
+duplicates might look like. Um,
+
+850
+00:38:26,079 --> 00:38:30,640
+sometimes you have this article where
+
+851
+00:38:28,560 --> 00:38:33,040
+like someone's just seemed to have
+
+852
+00:38:30,640 --> 00:38:35,040
+paraphrased best actor in a negative
+
+853
+00:38:33,040 --> 00:38:37,680
+role for most impactful character, but
+
+854
+00:38:35,040 --> 00:38:42,400
+everything else seems the same. Um, this
+
+855
+00:38:37,680 --> 00:38:45,040
+is just like missing a a comma here. Not
+
+856
+00:38:42,400 --> 00:38:48,000
+really sure how where that comma went
+
+857
+00:38:45,040 --> 00:38:50,160
+off to, but um, you know, there could be
+
+858
+00:38:48,000 --> 00:38:52,720
+like just annotator or processing
+
+859
+00:38:50,160 --> 00:38:54,960
+errors. Um, and then this one's kind of
+
+860
+00:38:52,720 --> 00:39:00,320
+interesting. I mean there's clearly this
+
+861
+00:38:54,960 --> 00:39:04,079
+very uh kind of ad um like a text which
+
+862
+00:39:00,320 --> 00:39:06,240
+um they just replace Canada with USA um
+
+863
+00:39:04,079 --> 00:39:08,000
+and some other flight. So this probably
+
+864
+00:39:06,240 --> 00:39:11,440
+is generated from some sort of template
+
+865
+00:39:08,000 --> 00:39:14,720
+system where they slotted in entities.
+
+866
+00:39:11,440 --> 00:39:17,680
+Um so you know these narrow duplicates
+
+867
+00:39:14,720 --> 00:39:21,599
+are obviously different but obviously if
+
+868
+00:39:17,680 --> 00:39:23,520
+you train on tons of um you know this
+
+869
+00:39:21,599 --> 00:39:25,040
+once you have this document this one
+
+870
+00:39:23,520 --> 00:39:28,960
+doesn't give you that much value. Let's
+
+871
+00:39:25,040 --> 00:39:31,920
+just put it that way. Um so in extreme
+
+872
+00:39:28,960 --> 00:39:33,680
+case so if you look at C4 uh remember C4
+
+873
+00:39:31,920 --> 00:39:35,920
+was filtered based on the set of rules
+
+874
+00:39:33,680 --> 00:39:40,160
+that looked for sentences that looked
+
+875
+00:39:35,920 --> 00:39:42,720
+like English. um you'll see this um
+
+876
+00:39:40,160 --> 00:39:47,760
+sentence which is indeed English that
+
+877
+00:39:42,720 --> 00:39:49,760
+shows up an astonishing 61,000 times and
+
+878
+00:39:47,760 --> 00:39:53,440
+for whatever reason if you actually
+
+879
+00:39:49,760 --> 00:39:57,920
+trace down where this comes from um not
+
+880
+00:39:53,440 --> 00:40:00,160
+the MIT license oh I have to what okay
+
+881
+00:39:57,920 --> 00:40:03,680
+do I should I accept these cookies okay
+
+882
+00:40:00,160 --> 00:40:06,079
+fine um there's this like random product
+
+883
+00:40:03,680 --> 00:40:08,960
+from Amazon that has graffiti mass
+
+884
+00:40:06,079 --> 00:40:11,440
+drawings And um you know there's this
+
+885
+00:40:08,960 --> 00:40:13,760
+text and apparently this is for whatever
+
+886
+00:40:11,440 --> 00:40:17,680
+reason I you know I don't even know how
+
+887
+00:40:13,760 --> 00:40:21,680
+there's 61,000 copies of this but that's
+
+888
+00:40:17,680 --> 00:40:24,400
+that's what it is. And and so the idea
+
+889
+00:40:21,680 --> 00:40:27,200
+is that this text isn't necessarily bad
+
+890
+00:40:24,400 --> 00:40:30,240
+right? It's perfectly good English but
+
+891
+00:40:27,200 --> 00:40:32,960
+you don't want to like take 61,000
+
+892
+00:40:30,240 --> 00:40:34,560
+epochs over this. I mean it's just you
+
+893
+00:40:32,960 --> 00:40:36,720
+know kind of pointless. So dduplication
+
+894
+00:40:34,560 --> 00:40:38,960
+is sort of complementaryary to quality
+
+895
+00:40:36,720 --> 00:40:41,200
+filtering. Quality filtering says this
+
+896
+00:40:38,960 --> 00:40:45,119
+piece of data I don't want to ever train
+
+897
+00:40:41,200 --> 00:40:48,400
+on it. Dduplication says well this is
+
+898
+00:40:45,119 --> 00:40:51,280
+might be fine but I only want a small
+
+899
+00:40:48,400 --> 00:40:52,960
+number of these rather than 61,000 uh
+
+900
+00:40:51,280 --> 00:40:56,079
+copies.
+
+901
+00:40:52,960 --> 00:40:58,480
+So there's been work uh showing that
+
+902
+00:40:56,079 --> 00:41:00,960
+dduplication makes language models
+
+903
+00:40:58,480 --> 00:41:02,880
+better. Um the first most obvious thing
+
+904
+00:41:00,960 --> 00:41:04,480
+is that you can train more efficiently,
+
+905
+00:41:02,880 --> 00:41:06,079
+right? Right? Duplication reduces the
+
+906
+00:41:04,480 --> 00:41:10,079
+number of tokens and if you haven't
+
+907
+00:41:06,079 --> 00:41:13,040
+thrown away information then you um can
+
+908
+00:41:10,079 --> 00:41:16,000
+save a lot of uh effort and then the
+
+909
+00:41:13,040 --> 00:41:17,680
+second is that um you can also avoid
+
+910
+00:41:16,000 --> 00:41:19,440
+memorization. So we haven't really
+
+911
+00:41:17,680 --> 00:41:21,359
+talked about this but language models
+
+912
+00:41:19,440 --> 00:41:24,319
+trained on data can memorize that data
+
+913
+00:41:21,359 --> 00:41:25,839
+which is bad for um you know copyright
+
+914
+00:41:24,319 --> 00:41:29,119
+or privacy reasons because it can
+
+915
+00:41:25,839 --> 00:41:31,040
+regurgitate the training set and
+
+916
+00:41:29,119 --> 00:41:33,839
+dduplication is one tool. It's not
+
+917
+00:41:31,040 --> 00:41:38,920
+definitely not perfect, but it can help
+
+918
+00:41:33,839 --> 00:41:38,920
+mitigate uh some of these um risks.
+
+919
+00:41:38,960 --> 00:41:44,880
+Um okay, so here's how to think about
+
+920
+00:41:42,400 --> 00:41:47,520
+dduplication in terms of design space.
+
+921
+00:41:44,880 --> 00:41:49,680
+So first you have to think about what is
+
+922
+00:41:47,520 --> 00:41:51,359
+the unit that you're dduplicating? What
+
+923
+00:41:49,680 --> 00:41:53,839
+is an item? Is it a sentence? Is it a
+
+924
+00:41:51,359 --> 00:41:56,480
+paragraph? Is it a document? The second
+
+925
+00:41:53,839 --> 00:41:58,160
+question is how do you match? Do you
+
+926
+00:41:56,480 --> 00:42:02,079
+what is considered a duplicate? Is it
+
+927
+00:41:58,160 --> 00:42:05,599
+exact match? Is it a fraction of common
+
+928
+00:42:02,079 --> 00:42:09,440
+sub items? Um and then the final thing
+
+929
+00:42:05,599 --> 00:42:12,319
+is what action uh do you take? Do you
+
+930
+00:42:09,440 --> 00:42:15,200
+remove all the instances or do you
+
+931
+00:42:12,319 --> 00:42:18,880
+remove all but one?
+
+932
+00:42:15,200 --> 00:42:21,200
+Okay. So, so the key challenge and this
+
+933
+00:42:18,880 --> 00:42:23,680
+is a um algorithmic challenge is that
+
+934
+00:42:21,200 --> 00:42:26,960
+fundamentally dduplication is about
+
+935
+00:42:23,680 --> 00:42:28,319
+comparing items to other items. Right?
+
+936
+00:42:26,960 --> 00:42:29,599
+Quality classification. You can take an
+
+937
+00:42:28,319 --> 00:42:31,440
+item, you can classify it as high
+
+938
+00:42:29,599 --> 00:42:34,400
+quality or not. Dduplication is
+
+939
+00:42:31,440 --> 00:42:36,480
+fundamentally a parise thing. And
+
+940
+00:42:34,400 --> 00:42:37,839
+remember, these data sets are large. So
+
+941
+00:42:36,480 --> 00:42:39,680
+you can't if you're trying to do
+
+942
+00:42:37,839 --> 00:42:42,160
+something quadratic, that's kind of a
+
+943
+00:42:39,680 --> 00:42:45,440
+no-go. So you need some sort of linear
+
+944
+00:42:42,160 --> 00:42:48,240
+time algorithm to scale um but still do
+
+945
+00:42:45,440 --> 00:42:52,560
+something that's pair-wise.
+
+946
+00:42:48,240 --> 00:42:55,359
+Um so the building block of all this is
+
+947
+00:42:52,560 --> 00:42:58,160
+hash functions. So hash functions just
+
+948
+00:42:55,359 --> 00:42:59,839
+as a review is a function that maps an
+
+949
+00:42:58,160 --> 00:43:02,319
+item which could be a sentence could be
+
+950
+00:42:59,839 --> 00:43:05,280
+a document to a hash value which is an
+
+951
+00:43:02,319 --> 00:43:08,720
+integer or string and the value is much
+
+952
+00:43:05,280 --> 00:43:10,240
+smaller than item and the thing that's
+
+953
+00:43:08,720 --> 00:43:11,920
+relevant about hash functions is that
+
+954
+00:43:10,240 --> 00:43:14,240
+you could potentially get hash
+
+955
+00:43:11,920 --> 00:43:16,079
+collisions. So which means that you have
+
+956
+00:43:14,240 --> 00:43:19,119
+two distinct items that map to the same
+
+957
+00:43:16,079 --> 00:43:20,800
+hash value. So in general if you've I'm
+
+958
+00:43:19,119 --> 00:43:22,880
+sure you've all I guess all of you have
+
+959
+00:43:20,800 --> 00:43:25,280
+used dictionaries or hashts hash
+
+960
+00:43:22,880 --> 00:43:27,520
+collisions are generally bad but later
+
+961
+00:43:25,280 --> 00:43:30,800
+we'll see that they're actually can be
+
+962
+00:43:27,520 --> 00:43:33,359
+good in some limited doses.
+
+963
+00:43:30,800 --> 00:43:35,599
+U there's many types of hash functions
+
+964
+00:43:33,359 --> 00:43:37,839
+um which tradeoff between efficiency and
+
+965
+00:43:35,599 --> 00:43:39,920
+collision resistance which means uh
+
+966
+00:43:37,839 --> 00:43:42,880
+don't collide. There's cryptographic
+
+967
+00:43:39,920 --> 00:43:44,720
+hash functions which are used for
+
+968
+00:43:42,880 --> 00:43:46,560
+security sensitive applications like in
+
+969
+00:43:44,720 --> 00:43:48,319
+in Bitcoin. You really don't want
+
+970
+00:43:46,560 --> 00:43:50,720
+collisions because otherwise that means
+
+971
+00:43:48,319 --> 00:43:53,920
+someone might steal your um your money
+
+972
+00:43:50,720 --> 00:43:57,200
+or it could compromise um things. And
+
+973
+00:43:53,920 --> 00:43:59,680
+then there's things where um but these
+
+974
+00:43:57,200 --> 00:44:01,440
+are slow um but then there's hash
+
+975
+00:43:59,680 --> 00:44:05,200
+functions which are generally used for
+
+976
+00:44:01,440 --> 00:44:08,079
+hash tables that are not collision
+
+977
+00:44:05,200 --> 00:44:09,599
+resistant but you know fast. And so
+
+978
+00:44:08,079 --> 00:44:11,680
+we're generally going to go with the
+
+979
+00:44:09,599 --> 00:44:14,640
+latter category um because we want
+
+980
+00:44:11,680 --> 00:44:17,119
+things to be fast and um this the we're
+
+981
+00:44:14,640 --> 00:44:18,240
+not doing cryptography here.
+
+982
+00:44:17,119 --> 00:44:20,400
+Okay. So we're going to use this thing
+
+983
+00:44:18,240 --> 00:44:23,280
+called murmur hash which takes strings
+
+984
+00:44:20,400 --> 00:44:28,319
+and returns you know values but you can
+
+985
+00:44:23,280 --> 00:44:30,240
+use a bunch of other hashes as well. Um
+
+986
+00:44:28,319 --> 00:44:32,800
+okay so let's start with exact
+
+987
+00:44:30,240 --> 00:44:35,200
+dduplication. So here's a simple
+
+988
+00:44:32,800 --> 00:44:37,599
+example. the item is just a string and I
+
+989
+00:44:35,200 --> 00:44:41,200
+want exact match and I want to remove
+
+990
+00:44:37,599 --> 00:44:45,839
+all but one. So here's a bunch of items.
+
+991
+00:44:41,200 --> 00:44:49,359
+Um and what I'm going to first do is uh
+
+992
+00:44:45,839 --> 00:44:54,720
+compute um a mapping from hash value to
+
+993
+00:44:49,359 --> 00:44:57,599
+the list of items with that hash. Um so
+
+994
+00:44:54,720 --> 00:45:01,119
+and then once I have that I keep one
+
+995
+00:44:57,599 --> 00:45:03,760
+item from each uh group. So each group
+
+996
+00:45:01,119 --> 00:45:08,240
+correspond to a hash value. Um and in
+
+997
+00:45:03,760 --> 00:45:10,480
+the case of exact dup um exact match um
+
+998
+00:45:08,240 --> 00:45:14,000
+assuming there's no hash collisions then
+
+999
+00:45:10,480 --> 00:45:15,760
+um you basically do a exact ddup. So
+
+1000
+00:45:14,000 --> 00:45:18,400
+hello shows up twice here and then now
+
+1001
+00:45:15,760 --> 00:45:21,119
+it shows up once and of course hello
+
+1002
+00:45:18,400 --> 00:45:22,640
+uppercase exclamation point is just a
+
+1003
+00:45:21,119 --> 00:45:25,040
+completely distinct item because we're
+
+1004
+00:45:22,640 --> 00:45:27,359
+doing exact.
+
+1005
+00:45:25,040 --> 00:45:30,240
+So this the nice thing is that this is
+
+1006
+00:45:27,359 --> 00:45:32,240
+very you know simple. It's clear what
+
+1007
+00:45:30,240 --> 00:45:33,920
+you're doing. It's high precision, so
+
+1008
+00:45:32,240 --> 00:45:38,000
+you're never gonna throw away anything
+
+1009
+00:45:33,920 --> 00:45:40,880
+that you didn't um uh that you didn't
+
+1010
+00:45:38,000 --> 00:45:42,880
+need or you needed. Um but the con is
+
+1011
+00:45:40,880 --> 00:45:44,800
+that you it doesn't work for near
+
+1012
+00:45:42,880 --> 00:45:47,119
+duplicates.
+
+1013
+00:45:44,800 --> 00:45:48,720
+Um and the other thing is that's nice is
+
+1014
+00:45:47,119 --> 00:45:50,240
+that you know this is very simple to
+
+1015
+00:45:48,720 --> 00:45:52,319
+implement. We kind of wrote this in a
+
+1016
+00:45:50,240 --> 00:45:55,200
+map reduce way and you can scale it and
+
+1017
+00:45:52,319 --> 00:45:57,760
+paralyze it fairly easily.
+
+1018
+00:45:55,200 --> 00:46:00,079
+And this is something that uh C4 uses
+
+1019
+00:45:57,760 --> 00:46:02,960
+actually to prepare their data set. So
+
+1020
+00:46:00,079 --> 00:46:05,520
+their unit is of dduplication is three
+
+1021
+00:46:02,960 --> 00:46:10,400
+sentence spans. They use exact match and
+
+1022
+00:46:05,520 --> 00:46:13,440
+they remove all all but one. Um so one
+
+1023
+00:46:10,400 --> 00:46:16,000
+thing that is always kind of bothered me
+
+1024
+00:46:13,440 --> 00:46:19,359
+but I know no one else seems to care is
+
+1025
+00:46:16,000 --> 00:46:21,119
+uh that um when you you're looking at
+
+1026
+00:46:19,359 --> 00:46:23,200
+three sentence spans, right? So you have
+
+1027
+00:46:21,119 --> 00:46:26,240
+this document and then you have this
+
+1028
+00:46:23,200 --> 00:46:27,680
+three sentence span um and if it's
+
+1029
+00:46:26,240 --> 00:46:31,200
+marked as a duplicate you're just going
+
+1030
+00:46:27,680 --> 00:46:33,680
+to you know you know do surgery and take
+
+1031
+00:46:31,200 --> 00:46:35,839
+that those sentences out and so the
+
+1032
+00:46:33,680 --> 00:46:38,400
+resulting document might not even be
+
+1033
+00:46:35,839 --> 00:46:41,119
+coherent but then people say you know
+
+1034
+00:46:38,400 --> 00:46:46,319
+who cares and move on.
+
+1035
+00:46:41,119 --> 00:46:48,880
+Um okay so there's another um way to do
+
+1036
+00:46:46,319 --> 00:46:51,440
+uh dduplication that is less map
+
+1037
+00:46:48,880 --> 00:46:53,440
+reduceuced but more kind of like hasht I
+
+1038
+00:46:51,440 --> 00:46:55,040
+think the you know bloom filters are you
+
+1039
+00:46:53,440 --> 00:46:56,720
+know some of you might have seen but
+
+1040
+00:46:55,040 --> 00:47:01,040
+just uh just to go through it because I
+
+1041
+00:46:56,720 --> 00:47:05,920
+think it's kind of a cool method um so
+
+1042
+00:47:01,040 --> 00:47:08,240
+this is you know efficient and um it's
+
+1043
+00:47:05,920 --> 00:47:10,960
+approximate so you get it's more
+
+1044
+00:47:08,240 --> 00:47:13,599
+efficient but it's um you know obviously
+
+1045
+00:47:10,960 --> 00:47:17,839
+It's not always doing the exact thing
+
+1046
+00:47:13,599 --> 00:47:21,040
+but you know we're we're very have not
+
+1047
+00:47:17,839 --> 00:47:23,599
+we we are not you know being too picky
+
+1048
+00:47:21,040 --> 00:47:26,079
+here. Okay. So it's uh the nice thing is
+
+1049
+00:47:23,599 --> 00:47:29,520
+a very memory efficient. Um you can
+
+1050
+00:47:26,079 --> 00:47:31,200
+update it but you can't delete. Um and
+
+1051
+00:47:29,520 --> 00:47:33,200
+it's it's basically a representation of
+
+1052
+00:47:31,200 --> 00:47:35,040
+set where if you ask for set membership
+
+1053
+00:47:33,200 --> 00:47:38,400
+and it returns no then it's definitely a
+
+1054
+00:47:35,040 --> 00:47:40,240
+no. But if it's returns yes then you
+
+1055
+00:47:38,400 --> 00:47:42,640
+know most likely if you set your
+
+1056
+00:47:40,240 --> 00:47:44,400
+hyperparameters right it's yes but you
+
+1057
+00:47:42,640 --> 00:47:46,160
+know there's a small probability that
+
+1058
+00:47:44,400 --> 00:47:49,680
+you have
+
+1059
+00:47:46,160 --> 00:47:53,119
+of of no like you have a false positive
+
+1060
+00:47:49,680 --> 00:47:54,880
+um and then you can you know set your uh
+
+1061
+00:47:53,119 --> 00:47:57,839
+your parameters to drive down the false
+
+1062
+00:47:54,880 --> 00:48:01,520
+positive rate if you like. Okay so just
+
+1063
+00:47:57,839 --> 00:48:04,079
+to uh walk through what this looks like.
+
+1064
+00:48:01,520 --> 00:48:07,920
+So suppose you have five items, the cat
+
+1065
+00:48:04,079 --> 00:48:10,400
+and the hat. And um later we'll test out
+
+1066
+00:48:07,920 --> 00:48:14,000
+with is some items that don't show up in
+
+1067
+00:48:10,400 --> 00:48:15,599
+the the set. Um the first thing is
+
+1068
+00:48:14,000 --> 00:48:18,400
+you're going to define a hash function
+
+1069
+00:48:15,599 --> 00:48:21,760
+that maps to m bins. m is going to be
+
+1070
+00:48:18,400 --> 00:48:25,040
+eight here. Um so to build the bloom
+
+1071
+00:48:21,760 --> 00:48:29,920
+filter um we're going to do you know
+
+1072
+00:48:25,040 --> 00:48:33,119
+something fairly simple. you just um
+
+1073
+00:48:29,920 --> 00:48:34,559
+you make uh you know a bit array um with
+
+1074
+00:48:33,119 --> 00:48:38,000
+a number of bins and then go through
+
+1075
+00:48:34,559 --> 00:48:40,960
+every item hash it the hashes to two so
+
+1076
+00:48:38,000 --> 00:48:45,040
+I update the second item um cat hashes
+
+1077
+00:48:40,960 --> 00:48:48,480
+to seven update the seventh item in the
+
+1078
+00:48:45,040 --> 00:48:50,720
+hat okay so I just um you know populate
+
+1079
+00:48:48,480 --> 00:48:52,240
+this bit array and the bit array I don't
+
+1080
+00:48:50,720 --> 00:48:56,319
+keep track of the item so I have no idea
+
+1081
+00:48:52,240 --> 00:49:00,079
+if I have a false positive or not um
+
+1082
+00:48:56,319 --> 00:49:02,559
+Okay, so let's just sanity check that um
+
+1083
+00:49:00,079 --> 00:49:05,760
+every item that I put in is actually in
+
+1084
+00:49:02,559 --> 00:49:10,400
+the item. So to query it, you just uh
+
+1085
+00:49:05,760 --> 00:49:13,920
+compute whether that item um hashed is
+
+1086
+00:49:10,400 --> 00:49:18,480
+in the table. Um and indeed everything
+
+1087
+00:49:13,920 --> 00:49:21,920
+should pass. Um and now
+
+1088
+00:49:18,480 --> 00:49:26,559
+um let's look at the nonite items and
+
+1089
+00:49:21,920 --> 00:49:29,599
+see um how they fare. And you'll see
+
+1090
+00:49:26,559 --> 00:49:32,400
+that you know some of the non items you
+
+1091
+00:49:29,599 --> 00:49:34,079
+get a zero which is what you want. Um
+
+1092
+00:49:32,400 --> 00:49:36,240
+but some of the non items the bloom
+
+1093
+00:49:34,079 --> 00:49:39,359
+feather says oh actually it's in the in
+
+1094
+00:49:36,240 --> 00:49:42,800
+the set. So the number of mistakes here
+
+1095
+00:49:39,359 --> 00:49:45,200
+is is four. And if you compute the false
+
+1096
+00:49:42,800 --> 00:49:47,920
+positive rate which is the number of
+
+1097
+00:49:45,200 --> 00:49:51,520
+mistakes over the total number of times
+
+1098
+00:49:47,920 --> 00:49:54,480
+um the procedure produced um you know a
+
+1099
+00:49:51,520 --> 00:49:57,520
+a positive then the false positive rate
+
+1100
+00:49:54,480 --> 00:50:00,559
+is in this case you know 444 which is
+
+1101
+00:49:57,520 --> 00:50:04,559
+pretty bad. Um now of course this is a
+
+1102
+00:50:00,559 --> 00:50:06,559
+bin 8 and if the bin were to grow then
+
+1103
+00:50:04,559 --> 00:50:08,319
+this would get better. In fact it grows
+
+1104
+00:50:06,559 --> 00:50:12,240
+the error probability is one over the
+
+1105
+00:50:08,319 --> 00:50:14,559
+number of bins. Okay. So, but you look
+
+1106
+00:50:12,240 --> 00:50:16,480
+at this and say, well, that's not really
+
+1107
+00:50:14,559 --> 00:50:20,000
+good because if I want the error
+
+1108
+00:50:16,480 --> 00:50:24,720
+probability to be, you know, um 10 to
+
+1109
+00:50:20,000 --> 00:50:27,119
+the minus 10, then I need a lot of bins
+
+1110
+00:50:24,720 --> 00:50:29,359
+and that's not going to hurt on memory.
+
+1111
+00:50:27,119 --> 00:50:33,599
+So, there's a more clever solution here,
+
+1112
+00:50:29,359 --> 00:50:35,599
+which is to use more hash functions.
+
+1113
+00:50:33,599 --> 00:50:40,720
+Okay, so let's say I use two hash
+
+1114
+00:50:35,599 --> 00:50:42,800
+functions and I'm going to essentially I
+
+1115
+00:50:40,720 --> 00:50:46,160
+still have the same, you know, bit
+
+1116
+00:50:42,800 --> 00:50:47,680
+array, but for every item now I'm going
+
+1117
+00:50:46,160 --> 00:50:52,079
+to
+
+1118
+00:50:47,680 --> 00:50:54,160
+use hash it twice. So the under seed
+
+1119
+00:50:52,079 --> 00:50:57,680
+zero gets hashed to two. I'm going to
+
+1120
+00:50:54,160 --> 00:50:59,920
+pop it in. And then um the with seed one
+
+1121
+00:50:57,680 --> 00:51:02,319
+is going to hash to five. So I'm going
+
+1122
+00:50:59,920 --> 00:51:05,280
+to pop it in there. So every item gets
+
+1123
+00:51:02,319 --> 00:51:08,480
+hashed into K not necessarily distinct
+
+1124
+00:51:05,280 --> 00:51:11,440
+but hey K slots. So then I go through
+
+1125
+00:51:08,480 --> 00:51:14,599
+the cat and then I fill up this um you
+
+1126
+00:51:11,440 --> 00:51:14,599
+know table.
+
+1127
+00:51:15,119 --> 00:51:23,520
+Okay. So now I um when I do the querying
+
+1128
+00:51:20,400 --> 00:51:26,800
+I take an element and I going to return
+
+1129
+00:51:23,520 --> 00:51:30,079
+one if the table set was set to one for
+
+1130
+00:51:26,800 --> 00:51:32,079
+all K hash functions.
+
+1131
+00:51:30,079 --> 00:51:34,960
+Okay. because if I put it in, I have to
+
+1132
+00:51:32,079 --> 00:51:37,520
+set K bits. And so if I'm testing, I
+
+1133
+00:51:34,960 --> 00:51:40,160
+need to check the K locations and um
+
+1134
+00:51:37,520 --> 00:51:42,400
+check that they were all set.
+
+1135
+00:51:40,160 --> 00:51:44,960
+Um
+
+1136
+00:51:42,400 --> 00:51:48,400
+so indeed all of those pass. And now
+
+1137
+00:51:44,960 --> 00:51:50,559
+let's look at the
+
+1138
+00:51:48,400 --> 00:51:53,680
+um
+
+1139
+00:51:50,559 --> 00:51:56,720
+so the number of um you know mistakes
+
+1140
+00:51:53,680 --> 00:52:00,079
+now is three um and the false positive
+
+1141
+00:51:56,720 --> 00:52:02,559
+rate um decreased. So, you know, that's
+
+1142
+00:52:00,079 --> 00:52:04,400
+great. So, of course, this is a toy
+
+1143
+00:52:02,559 --> 00:52:07,520
+example, but you know, you can really
+
+1144
+00:52:04,400 --> 00:52:13,359
+drive down the false positive rate with
+
+1145
+00:52:07,520 --> 00:52:16,160
+um modest memory um you know, uh spend.
+
+1146
+00:52:13,359 --> 00:52:19,280
+Okay, maybe I'll uh pause there before I
+
+1147
+00:52:16,160 --> 00:52:22,440
+go to um analyzing this a bit more, you
+
+1148
+00:52:19,280 --> 00:52:22,440
+know, formally.
+
+1149
+00:52:28,240 --> 00:52:34,480
+Okay, so let's let's think about what
+
+1150
+00:52:30,800 --> 00:52:37,920
+happens more generally. Um,
+
+1151
+00:52:34,480 --> 00:52:39,920
+so let's say we have a thousand bins.
+
+1152
+00:52:37,920 --> 00:52:42,240
+Um, we have 10 cache functions and we're
+
+1153
+00:52:39,920 --> 00:52:44,720
+going to hash um 100 items. The question
+
+1154
+00:52:42,240 --> 00:52:47,520
+is, you know, what is the false positive
+
+1155
+00:52:44,720 --> 00:52:49,440
+rate? And the way to think about this is
+
+1156
+00:52:47,520 --> 00:52:53,200
+that I'm going to consider a test input
+
+1157
+00:52:49,440 --> 00:52:55,440
+that's not in the set um that would is
+
+1158
+00:52:53,200 --> 00:52:58,720
+going to hash into a particular location
+
+1159
+00:52:55,440 --> 00:53:01,520
+like I. Okay. And then I'm going to so
+
+1160
+00:52:58,720 --> 00:53:04,319
+um I'm going to now consider putting
+
+1161
+00:53:01,520 --> 00:53:06,480
+items the n items into the boom filter
+
+1162
+00:53:04,319 --> 00:53:11,680
+and see what is the probability that it
+
+1163
+00:53:06,480 --> 00:53:15,200
+hits I. If anything hits I then that um
+
+1164
+00:53:11,680 --> 00:53:19,280
+is is a is a bad sign. Okay. So let's
+
+1165
+00:53:15,200 --> 00:53:22,000
+warm up here. So let's say I'm just n is
+
+1166
+00:53:19,280 --> 00:53:24,240
+one. I'm just inserting one element and
+
+1167
+00:53:22,000 --> 00:53:26,880
+k is also one. So I'm only using one
+
+1168
+00:53:24,240 --> 00:53:28,720
+hash function. So now the question is
+
+1169
+00:53:26,880 --> 00:53:32,000
+what is a chance that there's a hash
+
+1170
+00:53:28,720 --> 00:53:34,400
+collision um between i and whatever
+
+1171
+00:53:32,000 --> 00:53:36,079
+element I'm putting in. And the answer
+
+1172
+00:53:34,400 --> 00:53:38,400
+to that is just one over the number of
+
+1173
+00:53:36,079 --> 00:53:41,839
+bins. Right? Assuming everything's kind
+
+1174
+00:53:38,400 --> 00:53:48,040
+of independent. um
+
+1175
+00:53:41,839 --> 00:53:48,040
+um that's uh going to be you know 0.001.
+
+1176
+00:53:48,160 --> 00:53:55,680
+Okay. So now um I'm still n is still one
+
+1177
+00:53:52,000 --> 00:53:58,960
+um but I'm get to use k hash functions.
+
+1178
+00:53:55,680 --> 00:54:02,559
+So then I essentially
+
+1179
+00:53:58,960 --> 00:54:05,599
+if um I'm going to
+
+1180
+00:54:02,559 --> 00:54:08,960
+uh then the the criteria is I have to
+
+1181
+00:54:05,599 --> 00:54:11,599
+miss not just one time you know but you
+
+1182
+00:54:08,960 --> 00:54:14,319
+know k times.
+
+1183
+00:54:11,599 --> 00:54:16,160
+Okay. So this is a probability I miss
+
+1184
+00:54:14,319 --> 00:54:21,280
+once. So one minus that is the
+
+1185
+00:54:16,160 --> 00:54:24,480
+probability I I hit and um and then that
+
+1186
+00:54:21,280 --> 00:54:30,000
+raised to k times is the probability I I
+
+1187
+00:54:24,480 --> 00:54:32,960
+um have hit you know um on k and then y
+
+1188
+00:54:30,000 --> 00:54:38,240
+minus that is the probability I um you
+
+1189
+00:54:32,960 --> 00:54:41,839
+know uh have to miss k times.
+
+1190
+00:54:38,240 --> 00:54:45,520
+So now the probability here uh goes down
+
+1191
+00:54:41,839 --> 00:54:50,559
+you know uh a little bit.
+
+1192
+00:54:45,520 --> 00:54:52,079
+Um okay so now um if I'm inserting n
+
+1193
+00:54:50,559 --> 00:54:54,960
+items
+
+1194
+00:54:52,079 --> 00:54:57,040
+so I'm asking the probability that the
+
+1195
+00:54:54,960 --> 00:55:01,119
+test bin
+
+1196
+00:54:57,040 --> 00:55:04,800
+um is is one after n. So now instead of
+
+1197
+00:55:01,119 --> 00:55:07,359
+missing k times I have to miss k times n
+
+1198
+00:55:04,800 --> 00:55:11,680
+times. So then basically it's this
+
+1199
+00:55:07,359 --> 00:55:13,359
+expression but just k * n. Um and
+
+1200
+00:55:11,680 --> 00:55:16,240
+finally
+
+1201
+00:55:13,359 --> 00:55:20,640
+um because the test item is something
+
+1202
+00:55:16,240 --> 00:55:23,440
+that um I am
+
+1203
+00:55:20,640 --> 00:55:27,359
+you know also hashing. So I get sort of
+
+1204
+00:55:23,440 --> 00:55:29,359
+k chances you know to miss. So the false
+
+1205
+00:55:27,359 --> 00:55:32,319
+positive rate actually this is what kind
+
+1206
+00:55:29,359 --> 00:55:34,960
+of helps the K really helps is that I
+
+1207
+00:55:32,319 --> 00:55:38,640
+can um you know drive down the false
+
+1208
+00:55:34,960 --> 00:55:43,760
+positive rate with with with K. So that
+
+1209
+00:55:38,640 --> 00:55:46,760
+becomes um you know f goes from 63 to
+
+1210
+00:55:43,760 --> 00:55:46,760
+01.
+
+1211
+00:55:47,200 --> 00:55:54,240
+Um the you can actually look at the
+
+1212
+00:55:51,200 --> 00:55:58,319
+expression f here and compute the
+
+1213
+00:55:54,240 --> 00:56:01,520
+optimal value of k um given a fixed you
+
+1214
+00:55:58,319 --> 00:56:03,920
+know ratio um as this is a sort of
+
+1215
+00:56:01,520 --> 00:56:09,760
+asmtoic calculation and then you find
+
+1216
+00:56:03,920 --> 00:56:12,079
+that um this results in k is scaling as
+
+1217
+00:56:09,760 --> 00:56:16,240
+order m over n. So the number of hash
+
+1218
+00:56:12,079 --> 00:56:19,520
+functions you should use is on order of
+
+1219
+00:56:16,240 --> 00:56:22,480
+number of bins over um the number of
+
+1220
+00:56:19,520 --> 00:56:27,680
+items you're hashing. And if you do that
+
+1221
+00:56:22,480 --> 00:56:31,440
+then f uh um turns out to be um you know
+
+1222
+00:56:27,680 --> 00:56:35,359
+0.5 and the false positive rate is 0.5
+
+1223
+00:56:31,440 --> 00:56:38,880
+to the to the k. So you see that in this
+
+1224
+00:56:35,359 --> 00:56:41,599
+particular case I wasn't optimal um
+
+1225
+00:56:38,880 --> 00:56:45,599
+because the optimal value is actually k=
+
+1226
+00:56:41,599 --> 00:56:49,440
+6 and the false positive rate is 0.08
+
+1227
+00:56:45,599 --> 00:56:54,720
+as opposed to um 0.0
+
+1228
+00:56:49,440 --> 00:56:56,559
+sorry 0.008 rather than 0.01.
+
+1229
+00:56:54,720 --> 00:56:58,559
+Okay. So you can read more about this.
+
+1230
+00:56:56,559 --> 00:57:01,520
+There's some lecture notes that allow
+
+1231
+00:56:58,559 --> 00:57:06,079
+you to trade off the compute um the
+
+1232
+00:57:01,520 --> 00:57:08,079
+memory and the false positive rate.
+
+1233
+00:57:06,079 --> 00:57:09,760
+Okay, so the bloom filter has some
+
+1234
+00:57:08,079 --> 00:57:15,200
+hyperparameters that allow you to
+
+1235
+00:57:09,760 --> 00:57:17,520
+control um whether the um you know what
+
+1236
+00:57:15,200 --> 00:57:19,760
+your desired false positive rate is, how
+
+1237
+00:57:17,520 --> 00:57:22,640
+much memory you have, how much compute
+
+1238
+00:57:19,760 --> 00:57:25,640
+you're willing to put in and so on.
+
+1239
+00:57:22,640 --> 00:57:25,640
+Yeah.
+
+1240
+00:57:26,400 --> 00:57:29,640
+went down.
+
+1241
+00:57:31,119 --> 00:57:37,520
+So you're saying that the optimal K, you
+
+1242
+00:57:34,240 --> 00:57:41,760
+know, went down. Um,
+
+1243
+00:57:37,520 --> 00:57:45,680
+and so why does the F go down?
+
+1244
+00:57:41,760 --> 00:57:47,520
+Um, so the,
+
+1245
+00:57:45,680 --> 00:57:52,079
+um,
+
+1246
+00:57:47,520 --> 00:57:54,960
+let's see. So if a K goes down, um I
+
+1247
+00:57:52,079 --> 00:57:58,799
+think it's not monotonic,
+
+1248
+00:57:54,960 --> 00:58:00,960
+right? So if you use a very um I think
+
+1249
+00:57:58,799 --> 00:58:03,520
+if you use a very large value of K,
+
+1250
+00:58:00,960 --> 00:58:05,599
+that's actually pretty bad because then
+
+1251
+00:58:03,520 --> 00:58:08,000
+you just fill up the you know the bloom
+
+1252
+00:58:05,599 --> 00:58:11,200
+filter. Um and if you use too small,
+
+1253
+00:58:08,000 --> 00:58:13,119
+that's also not very good either. So I
+
+1254
+00:58:11,200 --> 00:58:14,640
+think there's a sort of optimum and
+
+1255
+00:58:13,119 --> 00:58:18,760
+whether it goes down or up depends on
+
+1256
+00:58:14,640 --> 00:58:18,760
+which side you're on.
+
+1257
+00:58:20,640 --> 00:58:27,599
+Okay, so in DOMA um they set the false
+
+1258
+00:58:23,119 --> 00:58:29,359
+positive rate to um 10 um to the minus5
+
+1259
+00:58:27,599 --> 00:58:32,400
+and they use a bloom filter to do their
+
+1260
+00:58:29,359 --> 00:58:34,319
+exact uh dduplication
+
+1261
+00:58:32,400 --> 00:58:36,319
+um
+
+1262
+00:58:34,319 --> 00:58:38,799
+and they did it at the paragraph uh
+
+1263
+00:58:36,319 --> 00:58:42,960
+level.
+
+1264
+00:58:38,799 --> 00:58:45,200
+Okay, so that was exact dduplication
+
+1265
+00:58:42,960 --> 00:58:47,680
+and the problem with exact dduplication
+
+1266
+00:58:45,200 --> 00:58:49,839
+is that it doesn't capture some of these
+
+1267
+00:58:47,680 --> 00:58:52,799
+near misses where morally it's a
+
+1268
+00:58:49,839 --> 00:58:55,760
+duplicate but um we are not able to
+
+1269
+00:58:52,799 --> 00:59:00,079
+detect it. So now how do you do
+
+1270
+00:58:55,760 --> 00:59:02,319
+approximate set membership? Um and to
+
+1271
+00:59:00,079 --> 00:59:04,240
+talk about approximate set membership
+
+1272
+00:59:02,319 --> 00:59:06,880
+you need a notion of a similarity
+
+1273
+00:59:04,240 --> 00:59:09,599
+measure. So one common one that's used
+
+1274
+00:59:06,880 --> 00:59:12,240
+is jakard similarity. So the jakard of
+
+1275
+00:59:09,599 --> 00:59:15,200
+two sets A and B is the ratio of their
+
+1276
+00:59:12,240 --> 00:59:19,200
+intersection over the union. So as an
+
+1277
+00:59:15,200 --> 00:59:23,440
+example if I have 1 2 3 4 and 1 2 3 5.
+
+1278
+00:59:19,200 --> 00:59:25,920
+Um if you compute the jakard um the the
+
+1279
+00:59:23,440 --> 00:59:28,559
+intersection has size three the union
+
+1280
+00:59:25,920 --> 00:59:32,240
+has size five and therefore the jakard
+
+1281
+00:59:28,559 --> 00:59:33,760
+is 6.
+
+1282
+00:59:32,240 --> 00:59:35,920
+Okay. So we're going to say that two
+
+1283
+00:59:33,760 --> 00:59:38,559
+documents are near duplicates if their
+
+1284
+00:59:35,920 --> 00:59:40,640
+jakard similarity exceeds some some
+
+1285
+00:59:38,559 --> 00:59:44,400
+threshold. And generally the threshold
+
+1286
+00:59:40,640 --> 00:59:47,839
+will be you know fairly high like n9 um
+
+1287
+00:59:44,400 --> 00:59:49,200
+if you want to only you know match if
+
+1288
+00:59:47,839 --> 00:59:51,040
+you're like missing a comma or
+
+1289
+00:59:49,200 --> 00:59:52,480
+something. Now notice that there's
+
+1290
+00:59:51,040 --> 00:59:56,079
+nothing semantic about this. you could
+
+1291
+00:59:52,480 --> 00:59:57,520
+be um you know missing a word like not
+
+1292
+00:59:56,079 --> 01:00:00,319
+and of course that changes the meaning
+
+1293
+00:59:57,520 --> 01:00:02,400
+completely or some content word but um
+
+1294
+01:00:00,319 --> 01:00:04,880
+this is just trying to get documents
+
+1295
+01:00:02,400 --> 01:00:07,119
+that look fairly superficially um
+
+1296
+01:00:04,880 --> 01:00:09,200
+similar.
+
+1297
+01:00:07,119 --> 01:00:10,799
+Now the the algorithmic challenge is how
+
+1298
+01:00:09,200 --> 01:00:14,240
+do you find near duplicates in linear
+
+1299
+01:00:10,799 --> 01:00:17,520
+time. Okay. So to work up to that we're
+
+1300
+01:00:14,240 --> 01:00:19,760
+going to try to rewrite the jakard
+
+1301
+01:00:17,520 --> 01:00:21,520
+similarity which again is a pair-wise.
+
+1302
+01:00:19,760 --> 01:00:23,280
+You can't compute jakard of one element.
+
+1303
+01:00:21,520 --> 01:00:25,359
+You can only compute it if you have two
+
+1304
+01:00:23,280 --> 01:00:27,760
+elements. And I'm going to try to write
+
+1305
+01:00:25,359 --> 01:00:31,760
+it in terms of a hash function which you
+
+1306
+01:00:27,760 --> 01:00:33,520
+can compute in terms of one element.
+
+1307
+01:00:31,760 --> 01:00:35,599
+Okay. Okay, so there there's a cache
+
+1308
+01:00:33,520 --> 01:00:38,480
+function called minash
+
+1309
+01:00:35,599 --> 01:00:41,119
+um which has the nice property that the
+
+1310
+01:00:38,480 --> 01:00:45,200
+probability of a hash collision is
+
+1311
+01:00:41,119 --> 01:00:47,119
+exactly jakard ab right so normally
+
+1312
+01:00:45,200 --> 01:00:49,280
+remember you think of hash collisions as
+
+1313
+01:00:47,119 --> 01:00:51,920
+you know to be avoided at all you know
+
+1314
+01:00:49,280 --> 01:00:54,799
+costs you you really don't like them but
+
+1315
+01:00:51,920 --> 01:00:56,480
+here um it's not that you want more hash
+
+1316
+01:00:54,799 --> 01:00:59,440
+collisions it's just that hash
+
+1317
+01:00:56,480 --> 01:01:02,319
+collisions are something that you want
+
+1318
+01:00:59,440 --> 01:01:06,160
+to control for you want just the right
+
+1319
+01:01:02,319 --> 01:01:08,559
+level of hash collisions
+
+1320
+01:01:06,160 --> 01:01:10,319
+governed by the similarity. So the prob
+
+1321
+01:01:08,559 --> 01:01:14,000
+again to just state it probability the
+
+1322
+01:01:10,319 --> 01:01:17,280
+similarity is equal to the probability
+
+1323
+01:01:14,000 --> 01:01:19,040
+of um collision. So the more similar two
+
+1324
+01:01:17,280 --> 01:01:22,559
+things are the more they should collide.
+
+1325
+01:01:19,040 --> 01:01:28,000
+So that's the the intuition.
+
+1326
+01:01:22,559 --> 01:01:33,200
+Um okay so so minash is defined as
+
+1327
+01:01:28,000 --> 01:01:35,440
+follows. You take a set and you hash um
+
+1328
+01:01:33,200 --> 01:01:37,040
+all these elements. Remember these
+
+1329
+01:01:35,440 --> 01:01:39,119
+return numbers and you just take the
+
+1330
+01:01:37,040 --> 01:01:41,520
+minimum element.
+
+1331
+01:01:39,119 --> 01:01:43,359
+So you know it might at first glance if
+
+1332
+01:01:41,520 --> 01:01:46,160
+you haven't seen this it's like kind of
+
+1333
+01:01:43,359 --> 01:01:48,480
+not obvious why uh just taking the min
+
+1334
+01:01:46,160 --> 01:01:51,760
+actually gives you this property of
+
+1335
+01:01:48,480 --> 01:01:53,760
+expectation equal to the chard. Um but
+
+1336
+01:01:51,760 --> 01:01:57,359
+the argument is actually fairly you know
+
+1337
+01:01:53,760 --> 01:02:00,640
+simple. So the way to think about it is
+
+1338
+01:01:57,359 --> 01:02:03,359
+that you have your five items and you
+
+1339
+01:02:00,640 --> 01:02:05,680
+have two sets and I'm going to look at
+
+1340
+01:02:03,359 --> 01:02:10,160
+um this sort of carous matrix
+
+1341
+01:02:05,680 --> 01:02:12,559
+representation. Um so A has 1 2 3 4 B
+
+1342
+01:02:10,160 --> 01:02:18,240
+has 1 2 3 5
+
+1343
+01:02:12,559 --> 01:02:21,920
+um and now the random hash function
+
+1344
+01:02:18,240 --> 01:02:24,079
+um induces a permutation over the items.
+
+1345
+01:02:21,920 --> 01:02:26,960
+So permutation might be three, two, one,
+
+1346
+01:02:24,079 --> 01:02:30,079
+four, five for example. This hash
+
+1347
+01:02:26,960 --> 01:02:33,599
+function right there. And now let's look
+
+1348
+01:02:30,079 --> 01:02:37,440
+at which item is first in A.
+
+1349
+01:02:33,599 --> 01:02:41,040
+Um and which item is first in B.
+
+1350
+01:02:37,440 --> 01:02:43,200
+Okay. Um so that corresponds to the you
+
+1351
+01:02:41,040 --> 01:02:48,480
+know the item corresponding to the
+
+1352
+01:02:43,200 --> 01:02:52,480
+minimum hash and the item
+
+1353
+01:02:48,480 --> 01:02:55,440
+each item has the same probability as um
+
+1354
+01:02:52,480 --> 01:02:57,680
+you know being first because it's the
+
+1355
+01:02:55,440 --> 01:03:00,559
+hash function you're assuming has you
+
+1356
+01:02:57,680 --> 01:03:05,680
+know it's it's random.
+
+1357
+01:03:00,559 --> 01:03:08,319
+So if one, two or three are first then
+
+1358
+01:03:05,680 --> 01:03:11,920
+the the minash is actually going to be
+
+1359
+01:03:08,319 --> 01:03:14,880
+the same right because the minimum um if
+
+1360
+01:03:11,920 --> 01:03:18,640
+these are you know first um the minimum
+
+1361
+01:03:14,880 --> 01:03:23,280
+here is um equal to the minimum you know
+
+1362
+01:03:18,640 --> 01:03:26,480
+here right but if the minimum if the
+
+1363
+01:03:23,280 --> 01:03:29,359
+first uh the minimum hash is four or
+
+1364
+01:03:26,480 --> 01:03:32,720
+five then the first in a will not be the
+
+1365
+01:03:29,359 --> 01:03:35,280
+first in um B and the min hash will be
+
+1366
+01:03:32,720 --> 01:03:37,839
+different. Okay. And then now you can
+
+1367
+01:03:35,280 --> 01:03:41,280
+say see that the probability of the min
+
+1368
+01:03:37,839 --> 01:03:43,599
+hash being equal is exactly 1 2 or three
+
+1369
+01:03:41,280 --> 01:03:46,160
+which is identically exactly the
+
+1370
+01:03:43,599 --> 01:03:47,920
+intersection.
+
+1371
+01:03:46,160 --> 01:03:51,920
+Okay. So if you're in the intersection
+
+1372
+01:03:47,920 --> 01:03:55,440
+and that item is first then you're going
+
+1373
+01:03:51,920 --> 01:03:57,200
+to get a collision. And if you're not in
+
+1374
+01:03:55,440 --> 01:03:59,760
+the intersection,
+
+1375
+01:03:57,200 --> 01:04:01,760
+then that one being first, you'll not
+
+1376
+01:03:59,760 --> 01:04:03,839
+get a collision because you're going to
+
+1377
+01:04:01,760 --> 01:04:05,039
+get the min for one of them and you're
+
+1378
+01:04:03,839 --> 01:04:08,200
+going to get some other value for the
+
+1379
+01:04:05,039 --> 01:04:08,200
+other one.
+
+1380
+01:04:10,559 --> 01:04:15,359
+Okay.
+
+1381
+01:04:12,319 --> 01:04:18,160
+All right. So, um you can check this
+
+1382
+01:04:15,359 --> 01:04:21,599
+empirically if you don't believe me. Um
+
+1383
+01:04:18,160 --> 01:04:24,400
+so, generate a thousand. Um I guess
+
+1384
+01:04:21,599 --> 01:04:26,559
+we're running this on A and B. Um and
+
+1385
+01:04:24,400 --> 01:04:29,920
+checking what's the probability that the
+
+1386
+01:04:26,559 --> 01:04:32,640
+you get a collision and it turns out the
+
+1387
+01:04:29,920 --> 01:04:34,640
+estimated jakard is 6. It's not exactly
+
+1388
+01:04:32,640 --> 01:04:37,520
+6. I think there's some rounding but you
+
+1389
+01:04:34,640 --> 01:04:39,200
+know it's it's pretty close.
+
+1390
+01:04:37,520 --> 01:04:41,119
+Okay. So now we've taken this chicard
+
+1391
+01:04:39,200 --> 01:04:44,079
+similarity which is paraphase function
+
+1392
+01:04:41,119 --> 01:04:48,079
+and reduced it to some probabistic
+
+1393
+01:04:44,079 --> 01:04:51,599
+um you know uh unary function um just on
+
+1394
+01:04:48,079 --> 01:04:53,760
+on item. Um, but this is actually, you
+
+1395
+01:04:51,599 --> 01:04:56,079
+know, we're far from done because now we
+
+1396
+01:04:53,760 --> 01:04:58,319
+can hash our items, but a collision
+
+1397
+01:04:56,079 --> 01:04:59,839
+doesn't tell us that these two are
+
+1398
+01:04:58,319 --> 01:05:01,760
+similar,
+
+1399
+01:04:59,839 --> 01:05:03,920
+right? Just like more likely that more
+
+1400
+01:05:01,760 --> 01:05:05,839
+similar things will be hashed together,
+
+1401
+01:05:03,920 --> 01:05:07,440
+but we want something a bit stronger
+
+1402
+01:05:05,839 --> 01:05:09,599
+here.
+
+1403
+01:05:07,440 --> 01:05:14,240
+So, this is where locality sensitive
+
+1404
+01:05:09,599 --> 01:05:17,200
+hashing comes. Um and so right now so
+
+1405
+01:05:14,240 --> 01:05:21,839
+far we just have a hash function that um
+
+1406
+01:05:17,200 --> 01:05:24,319
+takes two um you know hashes sets and
+
+1407
+01:05:21,839 --> 01:05:26,559
+the sets will collide if with
+
+1408
+01:05:24,319 --> 01:05:29,599
+probability jakard.
+
+1409
+01:05:26,559 --> 01:05:34,400
+Um but we really want A and B to collide
+
+1410
+01:05:29,599 --> 01:05:37,520
+if and only if ideally if uh the jakard
+
+1411
+01:05:34,400 --> 01:05:39,440
+of A and B is exceeding some threshold.
+
+1412
+01:05:37,520 --> 01:05:41,680
+So somehow you have to sharpen the
+
+1413
+01:05:39,440 --> 01:05:43,280
+probabilities, right? You want to say
+
+1414
+01:05:41,680 --> 01:05:44,960
+that if the jakard is over the
+
+1415
+01:05:43,280 --> 01:05:46,480
+threshold, then with almost like
+
+1416
+01:05:44,960 --> 01:05:48,400
+probability one, they're going to be
+
+1417
+01:05:46,480 --> 01:05:50,480
+hashed together. And if it's below this
+
+1418
+01:05:48,400 --> 01:05:54,480
+threshold, then with basically
+
+1419
+01:05:50,480 --> 01:05:57,119
+probability zero or very small. Um so
+
+1420
+01:05:54,480 --> 01:05:59,039
+you know, how do we do this? Um it's
+
+1421
+01:05:57,119 --> 01:06:03,200
+sort of taking kind of the same trick,
+
+1422
+01:05:59,039 --> 01:06:05,599
+which is use more hash functions. Um,
+
+1423
+01:06:03,200 --> 01:06:08,000
+and here the construction is you're
+
+1424
+01:06:05,599 --> 01:06:11,440
+going to break up your N hash functions
+
+1425
+01:06:08,000 --> 01:06:12,960
+into B bands of R hash functions. So,
+
+1426
+01:06:11,440 --> 01:06:18,559
+for example, if you have 12 hash
+
+1427
+01:06:12,960 --> 01:06:20,240
+functions, um, and three bands and each
+
+1428
+01:06:18,559 --> 01:06:23,359
+band would have four hash functions. So,
+
+1429
+01:06:20,240 --> 01:06:26,079
+you have H1 through H4, H5 through H8,
+
+1430
+01:06:23,359 --> 01:06:27,839
+H9 through H12.
+
+1431
+01:06:26,079 --> 01:06:30,960
+Okay? And then we're just going to
+
+1432
+01:06:27,839 --> 01:06:35,359
+declare that A and B are going to
+
+1433
+01:06:30,960 --> 01:06:37,119
+collide if for some band all of hash
+
+1434
+01:06:35,359 --> 01:06:39,280
+functions returning the same value.
+
+1435
+01:06:37,119 --> 01:06:42,400
+Okay, so if I have A and B, I'm going to
+
+1436
+01:06:39,280 --> 01:06:46,960
+hash uh using all 12 hash functions for
+
+1437
+01:06:42,400 --> 01:06:49,920
+both A and B using the minash. And now
+
+1438
+01:06:46,960 --> 01:06:52,480
+I'm going to say if this band, for
+
+1439
+01:06:49,920 --> 01:06:55,280
+example, if the hash values for H1, H2,
+
+1440
+01:06:52,480 --> 01:06:59,520
+H3, H4 all agree, then they're going to
+
+1441
+01:06:55,280 --> 01:07:01,760
+collide. or this band or this band.
+
+1442
+01:06:59,520 --> 01:07:04,480
+Okay, so there's a sort of or and or
+
+1443
+01:07:01,760 --> 01:07:06,559
+structure which is the key to you know
+
+1444
+01:07:04,480 --> 01:07:09,440
+making sharpening the probabilities
+
+1445
+01:07:06,559 --> 01:07:13,119
+around the threshold.
+
+1446
+01:07:09,440 --> 01:07:15,760
+Okay, so um now we just have to you know
+
+1447
+01:07:13,119 --> 01:07:20,720
+do some analysis to calculate what is
+
+1448
+01:07:15,760 --> 01:07:23,839
+the probability that a and b uh collide.
+
+1449
+01:07:20,720 --> 01:07:25,839
+Okay, so similar I'm going to use sim to
+
+1450
+01:07:23,839 --> 01:07:27,359
+refer to the jakard.
+
+1451
+01:07:25,839 --> 01:07:30,559
+similarity.
+
+1452
+01:07:27,359 --> 01:07:34,480
+Um so
+
+1453
+01:07:30,559 --> 01:07:39,599
+um okay so I'm going to say let's say I
+
+1454
+01:07:34,480 --> 01:07:42,319
+have jakard similarity of uh 0.8 eight.
+
+1455
+01:07:39,599 --> 01:07:45,680
+In that case, I'm going to have five
+
+1456
+01:07:42,319 --> 01:07:47,520
+bands. Each band has um 10 hash
+
+1457
+01:07:45,680 --> 01:07:51,839
+functions. So, a total of 50 hash
+
+1458
+01:07:47,520 --> 01:07:55,359
+functions. Um so, what is the
+
+1459
+01:07:51,839 --> 01:07:56,960
+probability of a fixed band you know
+
+1460
+01:07:55,359 --> 01:07:58,640
+matching?
+
+1461
+01:07:56,960 --> 01:08:03,119
+So, probability of fixed band matching
+
+1462
+01:07:58,640 --> 01:08:04,960
+is simply you know 0.8 to the R,
+
+1463
+01:08:03,119 --> 01:08:07,359
+right? Um because the probability of
+
+1464
+01:08:04,960 --> 01:08:09,839
+hash a single hash function is just a
+
+1465
+01:08:07,359 --> 01:08:11,599
+jacard which is 0.8.
+
+1466
+01:08:09,839 --> 01:08:14,000
+And now what is the probability of that
+
+1467
+01:08:11,599 --> 01:08:18,400
+sum band matches? Well, it's a
+
+1468
+01:08:14,000 --> 01:08:21,679
+probability that um you know the that
+
+1469
+01:08:18,400 --> 01:08:25,520
+one fixed this is the probability that a
+
+1470
+01:08:21,679 --> 01:08:27,839
+fixed band um doesn't match and this is
+
+1471
+01:08:25,520 --> 01:08:30,719
+the probability that you know all of
+
+1472
+01:08:27,839 --> 01:08:32,799
+them don't match and then so this is the
+
+1473
+01:08:30,719 --> 01:08:35,199
+probability that at least one matches.
+
+1474
+01:08:32,799 --> 01:08:38,560
+Okay. So now you see the probability of
+
+1475
+01:08:35,199 --> 01:08:41,560
+collision is you know 04 um you know
+
+1476
+01:08:38,560 --> 01:08:41,560
+three.
+
+1477
+01:08:41,600 --> 01:08:46,480
+Okay. So it's kind of reshaping this
+
+1478
+01:08:43,440 --> 01:08:50,080
+probab umility. Before if you have one
+
+1479
+01:08:46,480 --> 01:08:53,120
+hash function if B and R is one then um
+
+1480
+01:08:50,080 --> 01:08:57,440
+the probability would be of collision
+
+1481
+01:08:53,120 --> 01:09:01,920
+would be 08 and now it's uh you know.3.
+
+1482
+01:08:57,440 --> 01:09:03,279
+Okay. So you know that's but let's um I
+
+1483
+01:09:01,920 --> 01:09:05,920
+guess here's a picture you should have
+
+1484
+01:09:03,279 --> 01:09:09,120
+in your head. So on the x-axis is
+
+1485
+01:09:05,920 --> 01:09:10,799
+similarity and what we want is the
+
+1486
+01:09:09,120 --> 01:09:12,880
+mapping from similarity to probability
+
+1487
+01:09:10,799 --> 01:09:15,199
+of collision to look something like
+
+1488
+01:09:12,880 --> 01:09:17,279
+that. If the threshold is the desired
+
+1489
+01:09:15,199 --> 01:09:19,440
+threshold is you know 0.5 then I want
+
+1490
+01:09:17,279 --> 01:09:21,040
+everything down here to be you know near
+
+1491
+01:09:19,440 --> 01:09:24,159
+zero and everything up here to be near
+
+1492
+01:09:21,040 --> 01:09:28,000
+one. So let's see uh what this looks
+
+1493
+01:09:24,159 --> 01:09:29,600
+like. I'm going to set um
+
+1494
+01:09:28,000 --> 01:09:32,239
+um
+
+1495
+01:09:29,600 --> 01:09:35,839
+for various similarity values. I'm going
+
+1496
+01:09:32,239 --> 01:09:37,679
+to set B equals 10, R equals 10. And
+
+1497
+01:09:35,839 --> 01:09:40,080
+notice that what this happens is that it
+
+1498
+01:09:37,679 --> 01:09:42,159
+squashes down some of these low
+
+1499
+01:09:40,080 --> 01:09:44,880
+probabilities and then it sharpens some
+
+1500
+01:09:42,159 --> 01:09:50,480
+of these high probabilities.
+
+1501
+01:09:44,880 --> 01:09:53,920
+Okay. Um but you know, maybe I want to
+
+1502
+01:09:50,480 --> 01:09:57,120
+make this a little bit sharper. Um, so
+
+1503
+01:09:53,920 --> 01:10:00,640
+what I'm going to do is to increase R
+
+1504
+01:09:57,120 --> 01:10:03,920
+from 10 to 20. And what that does is
+
+1505
+01:10:00,640 --> 01:10:05,360
+that moves the curve to the right um to
+
+1506
+01:10:03,920 --> 01:10:07,840
+make it harder to match and also
+
+1507
+01:10:05,360 --> 01:10:09,920
+sharpens the threshold. So if I do that
+
+1508
+01:10:07,840 --> 01:10:12,400
+then you'll see that now these
+
+1509
+01:10:09,920 --> 01:10:13,840
+probabilities go up and now um these
+
+1510
+01:10:12,400 --> 01:10:19,600
+probabilities are much smaller. Right?
+
+1511
+01:10:13,840 --> 01:10:23,199
+So in before um even a 7 probability uh
+
+1512
+01:10:19,600 --> 01:10:25,600
+some 7 similarity had um you know a
+
+1513
+01:10:23,199 --> 01:10:27,760
+probability of 0.24 which is you know
+
+1514
+01:10:25,600 --> 01:10:30,719
+kind of high. I really don't want this.
+
+1515
+01:10:27,760 --> 01:10:34,239
+So I want to squash this. So in
+
+1516
+01:10:30,719 --> 01:10:36,800
+squashing that I can now get it down to
+
+1517
+01:10:34,239 --> 01:10:40,640
+you know 07 which is you know pretty
+
+1518
+01:10:36,800 --> 01:10:43,600
+good I guess. Um, but now I've also
+
+1519
+01:10:40,640 --> 01:10:46,880
+squashed uh some of these probabilities
+
+1520
+01:10:43,600 --> 01:10:48,159
+and I the goal isn't to shift everything
+
+1521
+01:10:46,880 --> 01:10:51,040
+to the right otherwise I might as well
+
+1522
+01:10:48,159 --> 01:10:53,600
+do exact do duplication.
+
+1523
+01:10:51,040 --> 01:10:55,920
+So now there's another trick. If I
+
+1524
+01:10:53,600 --> 01:10:58,960
+increase B which is the number of
+
+1525
+01:10:55,920 --> 01:11:02,239
+buckets or bins
+
+1526
+01:10:58,960 --> 01:11:05,840
+um then I can
+
+1527
+01:11:02,239 --> 01:11:09,520
+um essentially get these probabilities
+
+1528
+01:11:05,840 --> 01:11:11,120
+like 0.9 to be in the 90s uh now and
+
+1529
+01:11:09,520 --> 01:11:13,840
+these probabilities are still fairly
+
+1530
+01:11:11,120 --> 01:11:17,280
+low. Okay. So this picture shows that as
+
+1531
+01:11:13,840 --> 01:11:20,719
+you increase B I get to shift this curve
+
+1532
+01:11:17,280 --> 01:11:22,480
+to the left. So increasing R will
+
+1533
+01:11:20,719 --> 01:11:25,360
+sharpen the curve and move things to the
+
+1534
+01:11:22,480 --> 01:11:27,600
+right and then increasing B will um
+
+1535
+01:11:25,360 --> 01:11:30,480
+shift the curve to the left so that you
+
+1536
+01:11:27,600 --> 01:11:32,640
+can with appropriate setting of B and R
+
+1537
+01:11:30,480 --> 01:11:35,640
+you can get your like really sharp
+
+1538
+01:11:32,640 --> 01:11:35,640
+sigmoid.
+
+1539
+01:11:36,239 --> 01:11:40,320
+Okay. So just an example of what this
+
+1540
+01:11:38,000 --> 01:11:43,840
+looks like in practice. So there's this
+
+1541
+01:11:40,320 --> 01:11:46,960
+um paper that we saw last time that uh
+
+1542
+01:11:43,840 --> 01:11:48,560
+uses a near duplicate uh near
+
+1543
+01:11:46,960 --> 01:11:54,080
+dduplication
+
+1544
+01:11:48,560 --> 01:11:58,640
+um using minash LSH um and uh their
+
+1545
+01:11:54,080 --> 01:12:00,400
+values um b= 20 and r equals uh 450. So
+
+1546
+01:11:58,640 --> 01:12:04,400
+so this r is large which means that they
+
+1547
+01:12:00,400 --> 01:12:07,120
+want a really um sharp threshold. So um
+
+1548
+01:12:04,400 --> 01:12:11,440
+there's a formula which you can um
+
+1549
+01:12:07,120 --> 01:12:13,120
+compute which um says the threshold is
+
+1550
+01:12:11,440 --> 01:12:17,120
+um.99.
+
+1551
+01:12:13,120 --> 01:12:20,239
+Okay. So that means um for every 100
+
+1552
+01:12:17,120 --> 01:12:22,320
+words you can only allow basically one
+
+1553
+01:12:20,239 --> 01:12:26,719
+word to be you know different. So this
+
+1554
+01:12:22,320 --> 01:12:30,719
+is fairly you know strict dduplication
+
+1555
+01:12:26,719 --> 01:12:35,440
+and uh the probability that a
+
+1556
+01:12:30,719 --> 01:12:41,360
+um you know fixed band matches is um you
+
+1557
+01:12:35,440 --> 01:12:44,560
+know this to the r which is point um 05
+
+1558
+01:12:41,360 --> 01:12:47,679
+and then the probability of collision is
+
+1559
+01:12:44,560 --> 01:12:49,920
+um 0.64.
+
+1560
+01:12:47,679 --> 01:12:53,199
+So one thing that's kind of interesting
+
+1561
+01:12:49,920 --> 01:12:55,679
+is that um I'm computing the probability
+
+1562
+01:12:53,199 --> 01:12:57,600
+of collision at the threshold. So in
+
+1563
+01:12:55,679 --> 01:12:59,760
+some sense you know that should be
+
+1564
+01:12:57,600 --> 01:13:01,760
+somewhere in between 0 and one. And it
+
+1565
+01:12:59,760 --> 01:13:04,640
+turns out that it converges to 1 - 1
+
+1566
+01:13:01,760 --> 01:13:06,239
+over e which is you know around you know
+
+1567
+01:13:04,640 --> 01:13:08,640
+6ish.
+
+1568
+01:13:06,239 --> 01:13:10,719
+Okay. So around the threshold, you know,
+
+1569
+01:13:08,640 --> 01:13:13,040
+you could go either way, but as soon as
+
+1570
+01:13:10,719 --> 01:13:15,360
+you go above the threshold, you have
+
+1571
+01:13:13,040 --> 01:13:17,760
+very high probability of being in a
+
+1572
+01:13:15,360 --> 01:13:20,800
+collision and below the threshold, you
+
+1573
+01:13:17,760 --> 01:13:23,960
+have very low probability of being uh in
+
+1574
+01:13:20,800 --> 01:13:23,960
+a collision.
+
+1575
+01:13:25,360 --> 01:13:32,640
+Okay. So um so with that, I'm going to
+
+1576
+01:13:29,840 --> 01:13:35,120
+you know summarize. Um
+
+1577
+01:13:32,640 --> 01:13:37,679
+actually maybe I'll ask uh if there's
+
+1578
+01:13:35,120 --> 01:13:41,600
+any questions about dduplication.
+
+1579
+01:13:37,679 --> 01:13:43,920
+Um so dduplication makes you run faster,
+
+1580
+01:13:41,600 --> 01:13:45,760
+avoids memorization. You can do exact
+
+1581
+01:13:43,920 --> 01:13:48,159
+dduplication
+
+1582
+01:13:45,760 --> 01:13:51,360
+um with bloom filters or you can use
+
+1583
+01:13:48,159 --> 01:13:54,360
+minash LSH to do approximate
+
+1584
+01:13:51,360 --> 01:13:54,360
+dduplication.
+
+1585
+01:13:54,880 --> 01:14:00,640
+Yeah. Um so I have a question like are
+
+1586
+01:13:58,000 --> 01:14:03,600
+most of the duplicates functions are
+
+1587
+01:14:00,640 --> 01:14:06,159
+like based on exactly like duplicate but
+
+1588
+01:14:03,600 --> 01:14:07,679
+if I like rewrote the text like other
+
+1589
+01:14:06,159 --> 01:14:09,040
+since like synthetic data is like
+
+1590
+01:14:07,679 --> 01:14:12,320
+authorized I was wondering how do we
+
+1591
+01:14:09,040 --> 01:14:13,760
+dduplicate for that use case? Yeah. So
+
+1592
+01:14:12,320 --> 01:14:17,199
+given that synthetic data is on the
+
+1593
+01:14:13,760 --> 01:14:19,520
+rise, how did you duplicate using um
+
+1594
+01:14:17,199 --> 01:14:22,400
+something that's like uh you know
+
+1595
+01:14:19,520 --> 01:14:25,440
+paraphrase um sensitive? So there are
+
+1596
+01:14:22,400 --> 01:14:28,560
+some papers uh for example 70 duplicate
+
+1597
+01:14:25,440 --> 01:14:32,719
+didn't mention that look at essentially
+
+1598
+01:14:28,560 --> 01:14:35,840
+embedding. So um that uh can allow you
+
+1599
+01:14:32,719 --> 01:14:39,199
+to get a more semantic notion of um
+
+1600
+01:14:35,840 --> 01:14:40,640
+similarity or did you um and and this
+
+1601
+01:14:39,199 --> 01:14:42,480
+all fits into the same you know
+
+1602
+01:14:40,640 --> 01:14:45,440
+framework because you know in some sense
+
+1603
+01:14:42,480 --> 01:14:47,760
+LH LSH was devised to find approximate
+
+1604
+01:14:45,440 --> 01:14:50,880
+nearest neighbors and so all you have to
+
+1605
+01:14:47,760 --> 01:14:52,480
+do is have a embedding and that can you
+
+1606
+01:14:50,880 --> 01:14:55,280
+embed all the documents and you can find
+
+1607
+01:14:52,480 --> 01:14:57,120
+nearest neighbors in that space. Um
+
+1608
+01:14:55,280 --> 01:14:59,920
+obviously there's a higher cost if
+
+1609
+01:14:57,120 --> 01:15:04,640
+you're going to run an embedding to um
+
+1610
+01:14:59,920 --> 01:15:06,640
+to embed your documents and also
+
+1611
+01:15:04,640 --> 01:15:09,840
+you know we are sort of working in a
+
+1612
+01:15:06,640 --> 01:15:11,920
+regime where documents are you know the
+
+1613
+01:15:09,840 --> 01:15:15,199
+the near duplicates are like really near
+
+1614
+01:15:11,920 --> 01:15:16,880
+duplicates. Um I think you have to be
+
+1615
+01:15:15,199 --> 01:15:19,360
+very careful if you're doing some sort
+
+1616
+01:15:16,880 --> 01:15:24,159
+of more fuzzy duplication. you can throw
+
+1617
+01:15:19,360 --> 01:15:26,400
+out a lot of your data um if you are too
+
+1618
+01:15:24,159 --> 01:15:29,440
+permissive.
+
+1619
+01:15:26,400 --> 01:15:30,640
+Uh another question. So we know that all
+
+1620
+01:15:29,440 --> 01:15:32,080
+the better. I wonder if there's any
+
+1621
+01:15:30,640 --> 01:15:34,400
+situation where you actually have to
+
+1622
+01:15:32,080 --> 01:15:36,719
+duplicate data since it's like so high
+
+1623
+01:15:34,400 --> 01:15:39,679
+quality or you want to be repeated.
+
+1624
+01:15:36,719 --> 01:15:41,440
+Yeah. So the question is uh well if the
+
+1625
+01:15:39,679 --> 01:15:44,880
+data is high quality maybe you do want
+
+1626
+01:15:41,440 --> 01:15:47,760
+duplicates and that's actually right. Um
+
+1627
+01:15:44,880 --> 01:15:50,320
+so in a lot of language modeling papers
+
+1628
+01:15:47,760 --> 01:15:52,239
+there's sort of the mid-training regime
+
+1629
+01:15:50,320 --> 01:15:54,080
+where you have a bunch of high quality
+
+1630
+01:15:52,239 --> 01:15:57,440
+sources. You actually want to take
+
+1631
+01:15:54,080 --> 01:16:00,640
+multiple epochs over high quality data.
+
+1632
+01:15:57,440 --> 01:16:03,120
+Um so the dduplication is more I would
+
+1633
+01:16:00,640 --> 01:16:04,480
+say for kind of the pre-training where
+
+1634
+01:16:03,120 --> 01:16:07,679
+you have all this stuff and you have
+
+1635
+01:16:04,480 --> 01:16:11,520
+60,000 copies of some random thing you
+
+1636
+01:16:07,679 --> 01:16:15,840
+just want to like clean that up. But um
+
+1637
+01:16:11,520 --> 01:16:17,360
+I think the optimal thing to do is well
+
+1638
+01:16:15,840 --> 01:16:20,560
+clearly not I don't know what the
+
+1639
+01:16:17,360 --> 01:16:23,280
+optimal thing to do is but um it's
+
+1640
+01:16:20,560 --> 01:16:25,120
+probably if you have documents that
+
+1641
+01:16:23,280 --> 01:16:27,280
+occur a lot of times you could also
+
+1642
+01:16:25,120 --> 01:16:29,600
+signal that there's more importance to
+
+1643
+01:16:27,280 --> 01:16:32,080
+it and maybe the right thing to do is
+
+1644
+01:16:29,600 --> 01:16:33,600
+like taking the number of the count and
+
+1645
+01:16:32,080 --> 01:16:36,960
+I don't know taking the square root or
+
+1646
+01:16:33,600 --> 01:16:39,040
+log or something so that it shows up um
+
+1647
+01:16:36,960 --> 01:16:40,880
+doesn't proportionally show up in your
+
+1648
+01:16:39,040 --> 01:16:44,159
+training data. But it's you acknowledge
+
+1649
+01:16:40,880 --> 01:16:48,199
+that it's um important enough to go take
+
+1650
+01:16:44,159 --> 01:16:48,199
+more epochs over it.
+
+1651
+01:16:49,520 --> 01:16:54,239
+Okay. So let's summarize. Um so this
+
+1652
+01:16:52,640 --> 01:16:56,480
+lecture was mostly about giving you
+
+1653
+01:16:54,239 --> 01:16:59,920
+algorithmic tools. So we look at engram
+
+1654
+01:16:56,480 --> 01:17:02,960
+models uh linear classifiers and
+
+1655
+01:16:59,920 --> 01:17:06,880
+importance resampling as ways to do
+
+1656
+01:17:02,960 --> 01:17:08,640
+filtering. And with filtering um you can
+
+1657
+01:17:06,880 --> 01:17:12,239
+do language identification, quality
+
+1658
+01:17:08,640 --> 01:17:15,920
+filtering, toxicity filtering, anything
+
+1659
+01:17:12,239 --> 01:17:18,080
+I guess where you have a targets
+
+1660
+01:17:15,920 --> 01:17:20,159
+data set and you want to get more of
+
+1661
+01:17:18,080 --> 01:17:22,400
+that data set, then you can apply these
+
+1662
+01:17:20,159 --> 01:17:25,280
+tools. Or if you don't have a target
+
+1663
+01:17:22,400 --> 01:17:27,280
+data set and you have a strong language
+
+1664
+01:17:25,280 --> 01:17:31,440
+models, you can prompt that language
+
+1665
+01:17:27,280 --> 01:17:34,320
+model to synthesize a or synthesize or
+
+1666
+01:17:31,440 --> 01:17:37,040
+um filter down a you know a lower
+
+1667
+01:17:34,320 --> 01:17:39,760
+quality data set to get to t and then
+
+1668
+01:17:37,040 --> 01:17:42,159
+you get a fast classifier that uh you're
+
+1669
+01:17:39,760 --> 01:17:44,880
+and you're off to the races. And the
+
+1670
+01:17:42,159 --> 01:17:49,600
+second we looked at dduplication
+
+1671
+01:17:44,880 --> 01:17:51,840
+which um is important um
+
+1672
+01:17:49,600 --> 01:17:53,760
+for reducing the amount of compute you
+
+1673
+01:17:51,840 --> 01:17:57,120
+you're spending on you know kind of
+
+1674
+01:17:53,760 --> 01:18:01,199
+you're wasting essentially um and the
+
+1675
+01:17:57,120 --> 01:18:02,719
+algorithmic tool here is is hashing u
+
+1676
+01:18:01,199 --> 01:18:05,280
+because hashing is what allows you to
+
+1677
+01:18:02,719 --> 01:18:07,199
+take these kind of pair-wise notions of
+
+1678
+01:18:05,280 --> 01:18:10,159
+similarity and collision and turn them
+
+1679
+01:18:07,199 --> 01:18:12,080
+into unary functions which allows you to
+
+1680
+01:18:10,159 --> 01:18:15,280
+have this linear time, you know,
+
+1681
+01:18:12,080 --> 01:18:17,920
+property. And, you know, we saw some
+
+1682
+01:18:15,280 --> 01:18:20,480
+sort of clever methods where, um,
+
+1683
+01:18:17,920 --> 01:18:22,080
+basically using multiple hash functions
+
+1684
+01:18:20,480 --> 01:18:24,320
+um, and using these kind of andor
+
+1685
+01:18:22,080 --> 01:18:27,840
+constructions allows you to kind of
+
+1686
+01:18:24,320 --> 01:18:31,600
+shape your your criteria in in ways like
+
+1687
+01:18:27,840 --> 01:18:35,760
+the LSH example. So now you have all the
+
+1688
+01:18:31,600 --> 01:18:38,000
+tools um, you know, now in some sense if
+
+1689
+01:18:35,760 --> 01:18:41,280
+you ask how how you teach data, this is
+
+1690
+01:18:38,000 --> 01:18:43,360
+kind of only the beginning. um the you
+
+1691
+01:18:41,280 --> 01:18:44,800
+really have to spend time with the data
+
+1692
+01:18:43,360 --> 01:18:47,600
+looking at it, filtering and training
+
+1693
+01:18:44,800 --> 01:18:50,080
+models and that's how you build um your
+
+1694
+01:18:47,600 --> 01:18:51,840
+intuitions over what works and what
+
+1695
+01:18:50,080 --> 01:18:55,760
+doesn't. So hopefully you'll be able to
+
+1696
+01:18:51,840 --> 01:18:58,560
+do that uh a bit in assignment uh 4.
+
+1697
+01:18:55,760 --> 01:19:00,719
+Okay, that's all for the data lecture
+
+1698
+01:18:58,560 --> 01:19:03,280
+and next week uh we're going to start
+
+1699
+01:19:00,719 --> 01:19:05,199
+doing um reinforcement learning and you
+
+1700
+01:19:03,280 --> 01:19:08,199
+know alignment which is will be our last
+
+1701
+01:19:05,199 --> 01:19:08,199
+unit.
+

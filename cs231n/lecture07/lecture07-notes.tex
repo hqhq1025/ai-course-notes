@@ -1,0 +1,805 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 7: Recurrent Neural Networks}
+\newcommand{\noteauthors}{基于 Zane Durante 授课内容整理}
+\newcommand{\notedate}{2025}
+\newcommand{\videochannel}{Stanford University}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:11:44}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=kG2lAPBF7zA}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== 引言 ==========
+
+\section{引言：从固定输入到序列建模}
+
+在之前的课程中，我们一直讨论的是标准的非循环（non-recurrent）神经网络：固定大小的输入映射到固定大小的输出。这种范式适合图像分类等任务，但真实世界中存在大量\textbf{变长序列}数据——语言、视频、音乐、时间序列等。本讲将引入循环神经网络（Recurrent Neural Networks, RNNs），这是一种专门为序列建模设计的神经网络架构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{序列建模的多种范式：从左到右分别为 one-to-one（固定输入输出）、one-to-many（如图像描述）、many-to-one（如视频分类）、many-to-many（输入输出长度可不同，如机器翻译），以及同步的 many-to-many（如逐帧视频分类）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{importantbox}{序列建模的五种范式}
+\begin{itemize}
+    \item \textbf{One-to-one}：固定输入 $\rightarrow$ 固定输出（如图像分类）
+    \item \textbf{One-to-many}：固定输入 $\rightarrow$ 变长输出（如图像描述生成）
+    \item \textbf{Many-to-one}：变长输入 $\rightarrow$ 固定输出（如视频分类、情感分析）
+    \item \textbf{Many-to-many}（异步）：变长输入 $\rightarrow$ 变长输出（如机器翻译）
+    \item \textbf{Many-to-many}（同步）：每个输入对应一个输出（如逐帧视频标注）
+\end{itemize}
+\end{importantbox}
+
+\subsection{课程前期回顾}
+
+讲者首先对上节课的内容进行了几点澄清：
+
+\begin{itemize}
+    \item \textbf{Dropout 的缩放}：超参数 $p$ 在不同实现中可能表示丢弃概率或保留概率。核心原则是测试时的期望输出应与训练时一致——若训练时丢弃 25\% 的激活值，测试时需乘以 0.75 进行缩放。
+    \item \textbf{Layer Normalization 与权重初始化}：Layer Norm 可以缓解不良初始化带来的问题，但无法完全替代良好的权重初始化。在某些需要精确空间信息的任务中，Layer Norm 可能反而损害性能。
+\end{itemize}
+
+\subsection{本章小结}
+
+神经网络不再局限于固定大小的输入输出。通过引入序列建模，我们能够处理语言、视频、对话等变长数据。RNN 正是为这类任务设计的核心架构。
+
+%% ========== RNN 基础 ==========
+
+\section{循环神经网络基础}
+
+\subsection{RNN 的核心思想}
+
+RNN 的核心特征是引入了一个\textbf{隐藏状态}（hidden state），该状态在处理序列时不断更新。每接收一个新输入，RNN 都会基于当前输入和上一步的隐藏状态，计算新的隐藏状态。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{RNN 的两种表示：左侧为折叠图（带自环箭头），右侧为展开图（explicitly showing 时间步之间的依赖关系）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+\begin{importantbox}{RNN 的数学公式}
+RNN 在每个时间步 $t$ 执行以下计算：
+
+\textbf{隐藏状态更新}：
+$$h_t = f_W(h_{t-1}, x_t)$$
+
+\textbf{输出计算}：
+$$y_t = f_Y(h_t)$$
+
+其中：
+\begin{itemize}
+    \item $h_t$：时间步 $t$ 的隐藏状态向量
+    \item $x_t$：时间步 $t$ 的输入向量
+    \item $f_W$：带参数 $W$ 的状态转移函数（每个时间步共享相同的参数）
+    \item $f_Y$：将隐藏状态映射到输出的函数
+\end{itemize}
+\end{importantbox}
+
+\subsection{Vanilla RNN 的具体形式}
+
+最常见的 RNN 形式（称为 Vanilla RNN）使用 $\tanh$ 作为激活函数：
+
+$$h_t = \tanh(W_{hh} h_{t-1} + W_{xh} x_t + b)$$
+$$y_t = W_{hy} h_t$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{Vanilla RNN 的数学公式：隐藏状态通过 $\tanh$ 激活函数更新，输出通过线性变换从隐藏状态计算得到\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+\begin{knowledgebox}{为什么使用 $\tanh$ 激活函数}
+$\tanh$ 的输出范围为 $[-1, 1]$，具有以下优势：
+\begin{itemize}
+    \item \textbf{有界性}：反复应用不会导致隐藏状态爆炸
+    \item \textbf{零中心}：能表示正负值，比 sigmoid 更适合作为隐藏状态的激活函数
+    \item \textbf{非线性}：提供必要的表达能力
+\end{itemize}
+但 $\tanh$ 的导数最大值为 1（在 $x=0$ 处），这意味着梯度在反向传播时几乎总是在衰减——这是导致梯度消失的重要原因之一。
+\end{knowledgebox}
+
+\subsection{三组权重矩阵}
+
+RNN 中有三组关键的权重矩阵：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{权重矩阵} & \textbf{作用} & \textbf{维度} \\
+\midrule
+$W_{xh}$ & 将输入 $x_t$ 变换到隐藏状态维度 & $d_h \times d_x$ \\
+$W_{hh}$ & 将上一步隐藏状态变换为当前步的贡献 & $d_h \times d_h$ \\
+$W_{hy}$ & 将隐藏状态映射到输出 & $d_y \times d_h$ \\
+\bottomrule
+\end{tabular}
+\caption{Vanilla RNN 的三组权重矩阵}
+\end{table}
+
+\begin{warningbox}{所有时间步共享同一组权重}
+RNN 在每个时间步使用\textbf{完全相同}的权重矩阵 $W_{hh}$、$W_{xh}$、$W_{hy}$。这意味着：
+\begin{enumerate}
+    \item 模型大小不随序列长度增长
+    \item 梯度计算时需要将各时间步的梯度累加
+    \item 模型对序列中不同位置施加相同的变换规则
+\end{enumerate}
+\end{warningbox}
+
+\subsection{本章小结}
+
+RNN 通过引入隐藏状态和参数共享的循环结构，实现了对变长序列的建模。其核心计算包含两个矩阵乘法（输入到隐藏、隐藏到隐藏）加一个非线性激活函数，以及一个从隐藏状态到输出的线性映射。
+
+%% ========== 手工构造 RNN ==========
+
+\section{手工构造 RNN：一个玩具示例}
+
+为了深入理解 RNN 的前向传播过程，讲者通过一个手工设计的玩具示例，展示了如何构造权重矩阵来实现特定功能。
+
+\subsection{任务定义}
+
+\textbf{目标}：给定一个 0 和 1 的序列，当连续出现两个 1 时输出 1，否则输出 0。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{玩具示例任务：检测连续的两个 1。输入序列 $[0,1,0,1,1,1,0,1]$，对应输出 $[0,0,0,0,1,1,0,0]$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第12页。}
+
+\subsection{隐藏状态设计}
+
+为了完成这个任务，隐藏状态需要记录两条信息：\textbf{当前输入值}和\textbf{上一步的输入值}。讲者将隐藏状态设计为三维向量 $h_t = [\text{current}, \text{previous}, 1]^T$，其中第三个维度固定为 1（用于输出阶段的偏置计算）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{隐藏状态设计：三维向量分别记录当前值、前一步的值和常数 1\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+\subsection{权重矩阵构造}
+
+\textbf{输入权重 $W_{xh}$}：
+
+$$W_{xh} = \begin{bmatrix} 1 \\ 0 \\ 0 \end{bmatrix}$$
+
+当 $x_t = 1$ 时，$W_{xh} x_t = [1, 0, 0]^T$（记录当前值为 1）；当 $x_t = 0$ 时，结果为零向量。
+
+\textbf{隐藏状态权重 $W_{hh}$}：
+
+$$W_{hh} = \begin{bmatrix} 0 & 0 & 0 \\ 1 & 0 & 0 \\ 0 & 0 & 1 \end{bmatrix}$$
+
+\begin{itemize}
+    \item 第一行全零：当前值完全由 $W_{xh} x_t$ 决定
+    \item 第二行 $[1,0,0]$：将上一步的``当前值''复制为这一步的``前一步值''
+    \item 第三行 $[0,0,1]$：保持常数 1 不变
+\end{itemize}
+
+\textbf{输出权重 $W_{hy}$}：
+
+$$W_{hy} = \begin{bmatrix} 1 & 1 & -1 \end{bmatrix}$$
+
+输出 $y_t = \text{ReLU}(W_{hy} h_t) = \text{ReLU}(\text{current} + \text{previous} - 1)$。只有当 current $= 1$ 且 previous $= 1$ 时，$y_t = 1$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{手工构造的完整 RNN 前向传播过程：通过精心设计的权重矩阵，RNN 能够正确检测连续的两个 1\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+\begin{knowledgebox}{从手工构造到梯度学习}
+这个玩具示例的目的是帮助理解 RNN 的计算过程。在实际应用中：
+\begin{itemize}
+    \item 我们\textbf{不需要}手工设计权重矩阵——通过梯度下降自动学习
+    \item 隐藏状态的维度通常远大于 3（可以是数百到数千维）
+    \item 隐藏状态中学到的``特征''往往是高度抽象且不易解释的
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+通过手工构造 RNN 的权重矩阵，我们直观地看到了 RNN 如何通过隐藏状态在时间步之间传递信息。两组权重矩阵分别负责``处理当前输入''和``继承历史信息''，它们的加和经过激活函数后形成新的隐藏状态。
+
+%% ========== RNN 训练 ==========
+
+\section{RNN 的训练：时间反向传播}
+
+\subsection{计算图与损失函数}
+
+在 many-to-many 设置中，RNN 在每个时间步都产生输出并计算损失。总损失为各时间步损失之和：
+
+$$L = \sum_{t=1}^{T} L_t$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{RNN 的计算图：展示了输入、隐藏状态、输出和损失之间的依赖关系。注意所有时间步共享相同的权重 $W$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+\begin{importantbox}{时间反向传播（BPTT）}
+由于所有时间步共享相同的权重矩阵 $W$，计算 $\frac{\partial L}{\partial W}$ 时需要：
+\begin{enumerate}
+    \item 分别计算每个时间步对 $W$ 的梯度贡献
+    \item 将所有时间步的梯度\textbf{累加}
+\end{enumerate}
+这个过程称为\textbf{Backpropagation Through Time (BPTT)}。可以将其理解为：在概念上将 $W$ 视为每个时间步使用了不同的``副本''，分别计算各副本的梯度，最后因为它们实际上是同一个 $W$ 而将梯度求和。
+\end{importantbox}
+
+\subsection{BPTT 的内存问题}
+
+对于长序列，BPTT 需要在内存中保存所有时间步的激活值和梯度。这会导致 GPU 内存迅速耗尽。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{标准 BPTT 需要将整个序列的计算图保存在内存中\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\subsection{截断 BPTT}
+
+\textbf{解决方案}：将长序列分割为固定长度的``块''（chunk），在每个块内独立执行前向传播和反向传播。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{截断 BPTT（Truncated BPTT）：将序列分块处理。每个块的初始隐藏状态来自上一块的最终隐藏状态，但梯度不再跨块传播\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+具体流程：
+\begin{enumerate}
+    \item 处理第一个块：从 $h_0$ 开始，计算隐藏状态和损失，执行反向传播，更新权重
+    \item 处理第二个块：用第一个块的最终隐藏状态作为起始 $h_0$，但\textbf{不传播梯度}
+    \item 重复直到序列结束
+\end{enumerate}
+
+\begin{warningbox}{截断 BPTT 的信息损失}
+截断 BPTT 是一种近似方法：
+\begin{itemize}
+    \item \textbf{前向传播}：隐藏状态在块之间传递，信息得以保留
+    \item \textbf{反向传播}：梯度在块边界被截断，长距离依赖的梯度信号会丢失
+\end{itemize}
+在 many-to-many 设置中，信息损失更为明显，因为每个块只看到局部的损失。理想情况下当然是将整个序列放入内存一次性计算，但这对长序列不可行。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RNN 的训练通过 BPTT 实现，本质上是在展开的计算图上执行标准反向传播。截断 BPTT 通过将序列分块来控制内存消耗，但代价是丢失了跨块的梯度信息。
+
+%% ========== 字符级语言模型 ==========
+
+\section{字符级语言模型}
+
+\subsection{自回归生成}
+
+RNN 可以训练为\textbf{字符级语言模型}：给定前面的字符，预测下一个字符。这本质上是一个逐时间步的分类问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{字符级语言模型：输入字符的 one-hot 编码，隐藏层更新状态，输出层产生下一个字符的概率分布\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+\begin{importantbox}{语言模型的训练与推理}
+\textbf{训练时}：
+\begin{itemize}
+    \item 输入真实序列，目标是下一个字符
+    \item 每个时间步计算交叉熵损失
+    \item 无需人工标注——文本本身就是监督信号（\textbf{自监督学习}）
+\end{itemize}
+
+\textbf{推理时（生成）}：
+\begin{itemize}
+    \item 给定一个起始字符（或起始 token）
+    \item 从输出概率分布中\textbf{采样}一个字符
+    \item 将采样结果作为下一步的输入
+    \item 重复直到生成结束 token 或达到最大长度
+\end{itemize}
+\end{importantbox}
+
+\subsection{Embedding 层}
+
+在实际实现中，通常不直接使用 one-hot 编码作为输入，而是使用\textbf{Embedding 层}：一个可学习的查找表，将每个离散 token 映射为一个稠密向量。
+
+\begin{knowledgebox}{One-hot vs Embedding}
+\begin{itemize}
+    \item \textbf{One-hot}：稀疏、高维（维度 = 词表大小），不包含语义信息
+    \item \textbf{Embedding}：稠密、低维（通常 64--512 维），通过训练自动学习语义关系
+    \item 数学上，用 one-hot 向量做矩阵乘法等价于从 Embedding 矩阵中取出对应行
+    \item Embedding 在优化上更高效，且能学到有意义的表示
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{采样策略}
+
+\begin{warningbox}{贪心解码的问题}
+如果每次都选择概率最大的字符（贪心解码），模型会反复生成相同的序列。实际做法是：
+\begin{itemize}
+    \item \textbf{随机采样}：按概率分布采样
+    \item \textbf{温度调节}：$p_i = \frac{e^{z_i / T}}{\sum_j e^{z_j / T}}$，温度 $T$ 控制分布的``尖锐度''
+    \item \textbf{Beam Search}：同时维护多个候选序列，选择整体概率最高的
+    \item \textbf{Top-k / Top-p 采样}：只从概率最高的 $k$ 个（或累积概率达到 $p$ 的）token 中采样
+\end{itemize}
+\end{warningbox}
+
+\subsection{生成效果展示}
+
+用仅 112 行 Python 代码实现的字符级 RNN，训练在莎士比亚十四行诗上，可以生成风格相似的文本。随着训练的进行，生成质量逐步提升：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{训练不同阶段的生成结果：从随机乱码逐步变为有结构的、类似莎士比亚风格的文本\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{在 Linux 源代码上训练的字符级 RNN 生成的 C 代码：看起来结构合理，虽然无法编译，但已经学会了代码的基本格式\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+这正是当今大语言模型的雏形——从字符级预测发展到 token 级预测，从 RNN 发展到 Transformer，但\textbf{自回归预测下一个 token 的核心思想始终未变}。
+
+\subsection{本章小结}
+
+字符级语言模型展示了 RNN 在文本生成方面的潜力。其核心思想——自回归地预测下一个 token——直接启发了现代大语言模型的设计。从 Karpathy 2015 年的``The Unreasonable Effectiveness of Recurrent Neural Networks''到 GPT 系列，这一范式延续至今。
+
+%% ========== 隐藏状态可视化 ==========
+
+\section{RNN 隐藏状态的可解释性}
+
+RNN 的一个有趣特性是，我们可以直接观察隐藏状态中各个神经元的激活值，并发现其中一些具有高度可解释的语义。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-028.jpg}
+\caption{RNN 隐藏状态可视化：使用 $\tanh$ 激活函数，值域为 $[-1, 1]$，红色表示接近 $-1$，蓝色表示接近 $+1$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+讲者展示了在代码和文本数据上训练的 RNN 中发现的几种可解释的隐藏单元：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{引号检测器：该神经元在引号开始时激活，引号结束时关闭，准确追踪引号的开闭状态\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第30页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{行长度追踪器：该神经元的激活值随行的进展逐渐变化，在接近换行符时达到极值\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{if 语句检测器：在代码中，该神经元在进入 if 语句块时激活\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第32页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-033.jpg}
+\caption{代码缩进深度追踪器：随着代码嵌套层次加深，该神经元的激活值逐步增大\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第34页。}
+
+\begin{knowledgebox}{RNN 的自发特征学习}
+这些可解释的隐藏单元\textbf{从未被明确设计或监督}——它们完全是模型在训练过程中自发学会的。这与我们手工构造的玩具 RNN 形成了有趣的对比：
+\begin{itemize}
+    \item 玩具示例中，我们手动指定隐藏状态追踪``当前值''和``前一步值''
+    \item 训练好的 RNN 自动学会追踪引号状态、代码深度等更复杂的概念
+    \item 但并非所有隐藏单元都可解释——大部分单元的激活模式看起来是随机的
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+RNN 隐藏状态中的某些神经元能够自发地学习到有意义的特征，如引号追踪、行长度计数、代码嵌套深度等。这种可解释性是 RNN 架构的一个独特优势。
+
+%% ========== RNN 优缺点 ==========
+
+\section{RNN 的优势与局限}
+
+\subsection{优势}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-034.jpg}
+\caption{RNN 的核心优势\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第35页。}
+
+\begin{enumerate}
+    \item \textbf{可处理任意长度的输入}：没有上下文长度限制（与 Transformer 形成对比）
+    \item \textbf{理论上可利用任意远的历史信息}：如果隐藏状态有效地编码了历史，计算可以依赖很久以前的输入
+    \item \textbf{模型大小不随输入长度增长}：参数数量固定，只由隐藏状态维度决定
+    \item \textbf{每个时间步应用相同的变换}：对称性和概念简洁性
+\end{enumerate}
+
+\subsection{局限}
+
+\begin{enumerate}
+    \item \textbf{训练时难以并行化}：计算 $h_t$ 必须先计算 $h_{t-1}$，这是一个严格的顺序依赖
+    \item \textbf{实际上难以访问远距离信息}：固定大小的隐藏状态无法无损地编码任意长的历史
+    \item \textbf{梯度消失/爆炸}：长序列的反向传播中，梯度会指数级衰减或增长
+\end{enumerate}
+
+\begin{warningbox}{训练的不可并行性是 RNN 的致命弱点}
+现代深度学习的成功很大程度上依赖于 GPU 的大规模并行计算能力。RNN 的顺序依赖结构使得它无法充分利用 GPU 的并行性——这正是 Transformer 最终取代 RNN 的核心原因之一。在训练时，Transformer 可以同时处理序列中的所有位置，而 RNN 必须逐步计算。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RNN 在理论上具有处理无限长序列的能力，但在实践中受到训练效率（不可并行）和梯度流动（消失/爆炸）的严重限制。这些局限性推动了 LSTM、GRU 以及最终 Transformer 的诞生。
+
+%% ========== 计算机视觉应用 ==========
+
+\section{RNN 在计算机视觉中的应用}
+
+\subsection{图像描述生成（Image Captioning）}
+
+最经典的 CNN + RNN 应用是\textbf{图像描述生成}：用 CNN 提取图像特征，用 RNN 生成自然语言描述。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{CNN + RNN 图像描述模型：CNN（如 ImageNet 预训练的 ResNet）提取图像特征作为 RNN 的初始输入，RNN 逐步生成描述文字\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-038.jpg}
+\caption{更具体的 CNN+RNN 架构：使用 CNN 倒数第二层的特征向量作为 RNN 隐藏状态的附加输入\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第39页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{图像描述的成功案例和失败案例\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+\begin{warningbox}{共现偏置与幻觉}
+早期的图像描述模型存在严重的\textbf{共现偏置}问题：
+\begin{itemize}
+    \item 看到海滩就假设有冲浪板
+    \item 看到手持物体就猜测是常见搭配
+    \item 看到棒球运动就默认是``投球''而非``接球''
+\end{itemize}
+这种\textbf{幻觉}（hallucination）问题在今天的视觉语言模型中依然普遍存在。其根源在于模型学习了训练数据中的统计关联，而非真正理解场景内容。
+\end{warningbox}
+
+\subsection{视觉问答（Visual Question Answering）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-042.jpg}
+\caption{视觉问答（VQA）：给定图像和问题，模型输出答案。可以通过序列生成或多选分类来实现\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第43页。}
+
+\subsection{其他应用}
+
+RNN 在计算机视觉中的其他应用包括：
+\begin{itemize}
+    \item \textbf{视觉对话}（Visual Dialogue）：围绕图像进行多轮对话
+    \item \textbf{视觉导航}（Visual Navigation）：根据视觉输入生成移动指令序列
+\end{itemize}
+
+\subsection{本章小结}
+
+RNN 与 CNN 的结合开创了视觉-语言多模态模型的先河。尽管这些方法已被 Transformer 基础的模型所取代，但 CNN+RNN 的架构思想——将视觉编码器与序列生成器组合——在今天的视觉语言模型（如 LLaVA、GPT-4V）中以不同形式延续。
+
+%% ========== 多层 RNN ==========
+
+\section{多层 RNN}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{多层 RNN 结构：每一层有自己的权重矩阵，层内时间步共享权重，层间通过输出传递信息\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+多层 RNN 的组织方式如下：
+\begin{itemize}
+    \item \textbf{层内}：同一层的所有时间步共享权重，隐藏状态沿时间维度传递
+    \item \textbf{层间}：第 $l$ 层的输出作为第 $l+1$ 层的输入
+    \item 每一层有\textbf{独立}的权重矩阵
+\end{itemize}
+
+这形成了一个二维的计算网格（时间 $\times$ 深度），进一步加剧了训练时的计算瓶颈。
+
+\subsection{本章小结}
+
+多层 RNN 通过堆叠 RNN 层来增加模型的表达能力，但也使得计算图更加复杂，训练更加困难。
+
+%% ========== 梯度问题与 LSTM ==========
+
+\section{梯度消失/爆炸与 LSTM}
+
+\subsection{梯度消失问题的根源}
+
+反向传播中，隐藏状态之间的梯度为：
+
+$$\frac{\partial h_t}{\partial h_{t-1}} = \text{diag}(\tanh'(\cdot)) \cdot W_{hh}$$
+
+这个乘积在时间步之间\textbf{反复累乘}，导致：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{梯度消失与爆炸的两个来源：$\tanh$ 导数的最大值为 1（几乎总是小于 1），以及 $W_{hh}$ 矩阵的最大奇异值可能大于或小于 1\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。}
+
+\begin{importantbox}{梯度消失/爆炸的数学分析}
+\begin{enumerate}
+    \item \textbf{$\tanh$ 导数}：$\tanh'(x) \in [0, 1]$，只有在 $x = 0$ 时取最大值 1。多次乘以小于 1 的值 $\rightarrow$ 指数衰减（梯度消失）。
+    \item \textbf{$W_{hh}$ 的奇异值}：
+    \begin{itemize}
+        \item 最大奇异值 $\sigma_{\max} > 1$：梯度爆炸
+        \item 最大奇异值 $\sigma_{\max} < 1$：梯度消失
+    \end{itemize}
+\end{enumerate}
+梯度爆炸可以通过\textbf{梯度裁剪}（gradient clipping）解决：当梯度范数超过阈值时进行缩放。但梯度消失更加棘手——这正是 LSTM 要解决的问题。
+\end{importantbox}
+
+\subsection{LSTM 的核心思想}
+
+LSTM（Long Short-Term Memory）通过引入\textbf{门控机制}和\textbf{细胞状态}（cell state）来缓解梯度消失问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-049.jpg}
+\caption{LSTM 结构图：四个门（input gate, forget gate, output gate, gate gate）控制信息的写入、遗忘和读出。顶部的细胞状态通道（cell state highway）提供了无激活函数干扰的信息传递路径\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第50页。}
+
+LSTM 的四个门：
+\begin{enumerate}
+    \item \textbf{Gate Gate（候选值）}：计算要写入的候选信息 $\tilde{c}_t = \tanh(W_g [h_{t-1}, x_t])$
+    \item \textbf{Input Gate}：决定是否写入 $i_t = \sigma(W_i [h_{t-1}, x_t])$
+    \item \textbf{Forget Gate}：决定遗忘多少历史信息 $f_t = \sigma(W_f [h_{t-1}, x_t])$
+    \item \textbf{Output Gate}：决定输出多少 $o_t = \sigma(W_o [h_{t-1}, x_t])$
+\end{enumerate}
+
+细胞状态更新：$c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t$
+
+隐藏状态输出：$h_t = o_t \odot \tanh(c_t)$
+
+\begin{importantbox}{LSTM 解决梯度消失的关键：Cell State Highway}
+细胞状态 $c_t$ 的更新路径（图中顶部通道）\textbf{不经过 $\tanh$ 激活函数}，只涉及逐元素乘法（forget gate）和加法（input gate）。这意味着：
+\begin{itemize}
+    \item 只要 forget gate 不为零，梯度就能相对无损地沿时间反向传播
+    \item 类似于 ResNet 中的跳跃连接——提供了梯度的``高速公路''
+    \item LSTM 并不保证解决梯度消失，但使得模型\textbf{更容易}学习长距离依赖
+\end{itemize}
+\end{importantbox}
+
+\subsection{LSTM 与 ResNet 的联系}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{LSTM 的 cell state highway 与 ResNet 的跳跃连接在概念上高度相似：都通过``绕过''非线性层来改善梯度流动\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+\begin{knowledgebox}{跳跃连接的普适原理}
+ResNet 和 LSTM 解决的问题在本质上是相同的：
+\begin{itemize}
+    \item \textbf{ResNet}：随着网络\textbf{深度}增加，梯度消失使得深层难以训练 $\rightarrow$ 引入跳跃连接
+    \item \textbf{LSTM}：随着序列\textbf{长度}增加，梯度消失使得远距离信息难以利用 $\rightarrow$ 引入 cell state highway
+\end{itemize}
+核心思想是一致的：提供一条不经过非线性变换的``直达路径''，让信息和梯度能够更自由地流动。
+\end{knowledgebox}
+
+\subsection{GRU 简介}
+
+GRU（Gated Recurrent Unit）是 LSTM 的一个简化变体，将 forget gate 和 input gate 合并为一个 update gate，减少了参数量，同时保持了类似的性能。
+
+\subsection{本章小结}
+
+梯度消失是 Vanilla RNN 难以处理长序列的根本原因。LSTM 通过引入门控机制和无激活函数的 cell state 通道来缓解这一问题。这与 ResNet 中的跳跃连接异曲同工——都通过提供梯度``高速公路''来改善深层/长距离的训练。
+
+%% ========== 状态空间模型 ==========
+
+\section{现代回归：状态空间模型}
+
+\subsection{RNN 思想的复兴}
+
+尽管 Transformer 在过去几年统治了深度学习，但 RNN 的核心思想正在以\textbf{状态空间模型}（State Space Models, SSMs）的形式回归。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-052.jpg}
+\caption{状态空间模型的代表：RWKV 和 Mamba 等模型结合了 RNN 的线性复杂度和 Transformer 的并行训练能力\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第53页。}
+
+状态空间模型相比 Transformer 的关键优势：
+
+\begin{enumerate}
+    \item \textbf{无限上下文长度}：像 RNN 一样，没有固定的上下文窗口限制
+    \item \textbf{线性时间推理}：计算量与序列长度成线性关系，而非 Transformer 的二次方
+    \item \textbf{固定内存占用}：推理时只需维护固定大小的状态，不需要 KV cache 的线性增长
+\end{enumerate}
+
+\begin{importantbox}{RNN vs Transformer 的核心权衡}
+\begin{itemize}
+    \item \textbf{Transformer}：训练可并行（快），推理时 KV cache 随序列增长（慢），$O(n^2)$ 注意力开销
+    \item \textbf{RNN/SSM}：训练难以并行（慢），推理时固定状态（快），$O(n)$ 线性开销
+    \item 当前研究热点：如何\textbf{兼得两者优势}——训练时的并行性 + 推理时的效率
+\end{itemize}
+\end{importantbox}
+
+\subsection{本章小结}
+
+以 Mamba 和 RWKV 为代表的状态空间模型正在挑战 Transformer 的统治地位，特别是在长上下文场景中。RNN 的核心概念——循环状态更新、线性时间推理——正以更现代的形式焕发新生。
+
+%% ========== 拓展阅读 ==========
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Andrej Karpathy: \textit{The Unreasonable Effectiveness of Recurrent Neural Networks}, 2015 \url{http://karpathy.github.io/2015/05/21/rnn-effectiveness/}
+    \item Hochreiter \& Schmidhuber: \textit{Long Short-Term Memory}, Neural Computation, 1997
+    \item Gu \& Dao: \textit{Mamba: Linear-Time Sequence Modeling with Selective State Spaces}, 2023 \url{https://arxiv.org/abs/2312.00752}
+    \item Peng et al.: \textit{RWKV: Reinventing RNNs for the Transformer Era}, 2023 \url{https://arxiv.org/abs/2305.13048}
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+Zane Durante 在课程结尾总结了三个要点：
+\begin{enumerate}
+    \item Vanilla RNN 概念简洁但性能有限
+    \item LSTM 等变体通过门控机制选择性传递信息，缓解了梯度消失问题
+    \item RNN 的核心思想（循环状态、线性复杂度）正在通过状态空间模型回归研究前沿
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (seq) {序列建模问题};
+\node (rnn) [below=of seq] {Vanilla RNN};
+\node (bptt) [below=of rnn] {BPTT 与截断 BPTT};
+\node (grad) [below=of bptt] {梯度消失/爆炸};
+\node (lstm) [below=of grad] {LSTM / GRU};
+\node (ssm) [below=of lstm] {状态空间模型};
+\draw[->, thick] (seq) -- (rnn);
+\draw[->, thick] (rnn) -- (bptt);
+\draw[->, thick] (bptt) -- (grad);
+\draw[->, thick] (grad) -- (lstm);
+\draw[->, thick] (lstm) -- (ssm);
+\node[draw=none, right=0.8cm of seq, text width=5cm, font=\scriptsize] {one-to-one/many, many-to-one/many};
+\node[draw=none, right=0.8cm of rnn, text width=5cm, font=\scriptsize] {$h_t = \tanh(W_{hh}h_{t-1} + W_{xh}x_t)$};
+\node[draw=none, right=0.8cm of bptt, text width=5cm, font=\scriptsize] {共享权重、梯度累加、分块训练};
+\node[draw=none, right=0.8cm of grad, text width=5cm, font=\scriptsize] {$\tanh'$ 衰减 + $W_{hh}$ 奇异值问题};
+\node[draw=none, right=0.8cm of lstm, text width=5cm, font=\scriptsize] {Cell State Highway, 门控机制};
+\node[draw=none, right=0.8cm of ssm, text width=5cm, font=\scriptsize] {Mamba, RWKV: 线性复杂度};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{隐藏状态是 RNN 的灵魂}：它在时间步之间传递信息，编码序列的``记忆''
+    \item \textbf{参数共享使模型泛化}：所有时间步共享权重，使 RNN 能处理任意长度的输入
+    \item \textbf{梯度消失是长序列的天敌}：$\tanh$ 和权重矩阵的反复累乘导致远距离梯度信号衰减
+    \item \textbf{LSTM 的 cell state 是解药}：无激活函数的直通路径，类似 ResNet 的跳跃连接
+    \item \textbf{RNN 并未过时}：状态空间模型正在以线性复杂度挑战 Transformer 的二次方开销
+\end{enumerate}
+\end{importantbox}
+
+\end{document}

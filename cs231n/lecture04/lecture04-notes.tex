@@ -1,0 +1,737 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 4: Neural Networks and Backpropagation}
+\newcommand{\noteauthors}{基于 Ehsan Adeli 授课内容整理}
+\newcommand{\notedate}{2025年4月10日}
+\newcommand{\videochannel}{Stanford CS231N}
+\newcommand{\videopublishdate}{2025-04-10}
+\newcommand{\videoduration}{1:10:00}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=25zD5qJHYsk}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== 回顾 ==========
+
+\section{回顾：从线性分类器到优化}
+
+讲者 Ehsan Adeli 首先回顾了前三节课的核心内容，为本节课的神经网络和反向传播奠定基础。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{课程回顾：从评分函数到损失函数再到优化的完整流程\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{评分函数与损失函数}
+
+我们已经建立了完整的学习框架：
+
+\begin{enumerate}
+    \item \textbf{评分函数}：线性模型 $f(\mathbf{x}, W) = W\mathbf{x}$，将输入映射到类别分数
+    \item \textbf{损失函数}：衡量预测的好坏，包括数据损失和正则化项
+    \item \textbf{优化}：通过梯度下降找到最优权重 $W$
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{学习流程图：输入 $\mathbf{x}$ 经过评分函数得到分数 $s$，与标签 $y$ 一起计算损失 $L$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\begin{knowledgebox}{Hinge Loss vs Softmax Loss}
+除了上一节课详细讨论的 Softmax（交叉熵）损失外，另一种常见的分类损失是 \textbf{Hinge Loss}（SVM 损失）：
+$$L_i = \sum_{j \neq y_i} \max(0, s_j - s_{y_i} + 1)$$
+它鼓励正确类别的分数比所有错误类别的分数至少高出一个 margin（此处为 1）。与 Softmax 不同，Hinge Loss 不将分数转换为概率。
+\end{knowledgebox}
+
+\subsection{优化回顾}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-007.jpg}
+\caption{梯度下降：在损失景观中沿负梯度方向逐步移动到最优点\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页。}
+
+梯度下降的更新规则为 $W \leftarrow W - \alpha \nabla_W L$。为了降低计算成本，我们使用 \textbf{SGD}（随机梯度下降），每次只用一个 mini-batch（如 32、64、128 或 256 个样本）来估计梯度。我们还讨论了 SGD+Momentum、RMSProp 和 Adam 等高级优化器。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{SGD 及其改进：Momentum、RMSProp 和 Adam 优化器的对比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第12页。}
+
+\subsection{本章小结}
+
+前几节课建立了``评分函数 $\rightarrow$ 损失函数 $\rightarrow$ 梯度下降''的完整框架，但仅限于线性分类器。本节课将扩展到非线性的神经网络，并介绍如何高效计算复杂网络中的梯度——这就是反向传播算法。
+
+%% ========== 神经网络 ==========
+
+\section{从线性分类器到神经网络}
+
+\subsection{线性分类器的局限性}
+
+线性分类器 $f = W\mathbf{x}$ 只能学习一条直线（或超平面）作为决策边界。对于线性不可分的数据（如环形分布），线性分类器完全无法处理。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-023.jpg}
+\caption{线性不可分问题：左侧的环形数据无法用一条直线分开\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+\begin{importantbox}{非线性变换的力量}
+解决方案是将数据从原始空间\textbf{非线性变换}到新空间。例如，将笛卡尔坐标 $(x, y)$ 转换为极坐标 $(r, \theta)$ 后，原本线性不可分的环形数据变得线性可分。神经网络的核心能力就是\textbf{自动学习}这种非线性变换。
+\end{importantbox}
+
+\subsection{构建两层神经网络}
+
+最简单的神经网络——两层全连接网络的公式为：
+
+$$f = W_2 \cdot \max(0, W_1 \mathbf{x})$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{从一层到两层：引入隐藏层和非线性激活函数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+关键维度分析：
+\begin{itemize}
+    \item $\mathbf{x} \in \mathbb{R}^D$：输入向量（$D$ 个特征）
+    \item $W_1 \in \mathbb{R}^{H \times D}$：第一层权重（$H$ 个隐藏神经元）
+    \item $W_2 \in \mathbb{R}^{C \times H}$：第二层权重（$C$ 个输出类别）
+    \item $\max(0, \cdot)$：ReLU 激活函数（非线性）
+\end{itemize}
+
+\begin{warningbox}{没有非线性等于没有多层}
+如果去掉 $\max(0, \cdot)$，两层网络变成 $f = W_2 \cdot W_1 \mathbf{x}$，而 $W_2 W_1$ 可以合并为一个矩阵 $W_3$，回到单层线性分类器！非线性激活函数是神经网络能够解决非线性问题的\textbf{根本原因}。
+\end{warningbox}
+
+\subsection{更深的网络}
+
+可以继续堆叠更多层来构建更深的网络：
+
+$$f = W_3 \cdot \max(0, W_2 \cdot \max(0, W_1 \mathbf{x}))$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{三层神经网络：每层之间插入非线性激活函数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+这些只使用全连接层（矩阵乘法）和激活函数的网络被称为\textbf{全连接网络}（Fully Connected Network）或\textbf{多层感知机}（MLP, Multi-Layer Perceptron）。
+
+\subsection{模板学习的视角}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{模板视角：线性分类器每类学一个模板，神经网络可以学多个部分模板\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+从模板的角度理解网络能力的提升：
+
+\begin{itemize}
+    \item \textbf{线性分类器}：每个类别只有 1 个模板（即 $W$ 的对应行），很受限
+    \item \textbf{神经网络}：隐藏层有 $H$ 个神经元，可以学到 $H$ 个``部分模板''。例如，鸟、猫、鹿、狗都有眼睛，某个隐藏神经元可能专门检测``眼睛''特征，被多个类别共享
+\end{itemize}
+
+\begin{importantbox}{神经网络的表示能力}
+增加隐藏层神经元的数量相当于增加网络的``模板库''。更多神经元 = 更多部分模板 = 更强的函数逼近能力 = 更复杂的决策边界。但过多的容量也会导致过拟合——这时需要正则化来控制。
+\end{importantbox}
+
+\subsection{本章小结}
+
+神经网络通过交替使用线性变换（矩阵乘法）和非线性激活函数来突破线性分类器的局限。两层网络 $f = W_2 \cdot \sigma(W_1 \mathbf{x})$ 已经可以理论上逼近任意连续函数。隐藏层的宽度决定了网络的表示能力。
+
+%% ========== 激活函数 ==========
+
+\section{激活函数}
+
+\subsection{ReLU 及其变体}
+
+\textbf{ReLU}（Rectified Linear Unit）是最广泛使用的激活函数：
+
+$$\text{ReLU}(x) = \max(0, x)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-028.jpg}
+\caption{ReLU 激活函数：$x > 0$ 时输出 $x$，$x \leq 0$ 时输出 0\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+ReLU 的\textbf{问题}：当输入为负时，输出恒为 0，梯度也为 0，导致所谓的``死神经元''——一旦某个神经元的输入持续为负，它将永远无法恢复。
+
+为此，出现了多种改进变体：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{ReLU 的变体：Leaky ReLU、ELU、GELU、SiLU/Swish\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第30页。}
+
+\begin{itemize}
+    \item \textbf{Leaky ReLU}：$f(x) = \max(0.01x, x)$，负半轴给一个小斜率，避免死神经元
+    \item \textbf{ELU}（Exponential Linear Unit）：负半轴使用指数函数，具有更好的零中心性
+    \item \textbf{GELU}（Gaussian Error Linear Unit）：在 Transformer 架构中广泛使用
+    \item \textbf{SiLU/Swish}：$f(x) = x \cdot \sigma(x)$，Google 在 EfficientNet 等模型中采用
+\end{itemize}
+
+\subsection{Sigmoid 和 Tanh}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{Sigmoid 和 Tanh 激活函数：将输出压缩到有限范围内\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\textbf{Sigmoid}：$\sigma(x) = \frac{1}{1 + e^{-x}}$，输出范围 $(0, 1)$
+
+\textbf{Tanh}：$\tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}}$，输出范围 $(-1, 1)$
+
+\begin{warningbox}{Sigmoid 和 Tanh 的梯度消失问题}
+这两个函数将值压缩到很窄的范围内。当输入值的绝对值很大时，函数曲线几乎是平的，导数接近零。在深层网络中，这些接近零的梯度经过链式法则逐层相乘，最终变得极其微小——这就是\textbf{梯度消失}（Vanishing Gradient）问题。因此，Sigmoid 和 Tanh 通常\textbf{不用在网络的中间层}，而只用在输出层（如二分类的 Sigmoid 输出）。
+\end{warningbox}
+
+\subsection{激活函数的选择}
+
+\begin{knowledgebox}{激活函数选择指南}
+\begin{itemize}
+    \item \textbf{默认选择}：ReLU，简单高效，在大多数场景下表现良好
+    \item \textbf{CNN 架构}：ReLU 或 SiLU/Swish
+    \item \textbf{Transformer 架构}：GELU 是标准选择
+    \item \textbf{输出层}：Sigmoid（二分类）、Softmax（多分类）、无激活（回归）
+    \item 所有激活函数的共同要求：\textbf{非线性}且\textbf{可微}
+\end{itemize}
+选择激活函数更多是经验性的——通常沿用同类型架构已验证有效的选择。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+激活函数是神经网络的核心组件，为网络提供非线性能力。ReLU 是最常用的默认选择，但存在死神经元问题。GELU 和 SiLU 是更现代的替代方案。Sigmoid 和 Tanh 因梯度消失问题通常不用于中间层。
+
+%% ========== 网络实现 ==========
+
+\section{神经网络的实现}
+
+\subsection{用 Python 实现两层网络}
+
+一个完整的两层神经网络可以用不到 20 行 Python 代码实现：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-033.jpg}
+\caption{两层神经网络的 Python 实现：前向传播、损失计算、梯度计算和参数更新\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第34页。}
+
+\begin{lstlisting}[caption={两层神经网络的核心代码}]
+# 定义网络维度
+N, D_in, H, D_out = 64, 1000, 100, 10
+X = np.random.randn(N, D_in)
+Y = np.random.randn(N, D_out)
+W1 = np.random.randn(D_in, H)
+W2 = np.random.randn(H, D_out)
+
+for t in range(2000):
+    # 前向传播
+    h = X.dot(W1)             # 第一层线性变换
+    h_relu = np.maximum(h, 0) # ReLU 激活
+    y_pred = h_relu.dot(W2)   # 第二层线性变换
+
+    # 计算损失
+    loss = np.square(y_pred - Y).sum()
+
+    # 反向传播（手动计算梯度）
+    grad_y_pred = 2.0 * (y_pred - Y)
+    grad_W2 = h_relu.T.dot(grad_y_pred)
+    grad_h_relu = grad_y_pred.dot(W2.T)
+    grad_h = grad_h_relu.copy()
+    grad_h[h < 0] = 0
+    grad_W1 = X.T.dot(grad_h)
+
+    # 参数更新
+    W1 -= learning_rate * grad_W1
+    W2 -= learning_rate * grad_W2
+\end{lstlisting}
+
+代码中最关键的部分是\textbf{反向传播}：计算损失对 $W_1$ 和 $W_2$ 的解析梯度。这正是本节课的重点。
+
+\subsection{网络容量与正则化}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{不同隐藏层大小的分类结果：更多神经元 = 更复杂的决策边界 = 更强的拟合能力\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+增加隐藏层神经元的数量可以学到更复杂的决策边界。但过大的网络容量会导致过拟合。
+
+\begin{importantbox}{不要用网络大小作为正则化手段}
+正确的做法是：选择一个\textbf{略大于需要}的网络，然后通过调节正则化强度 $\lambda$ 来控制过拟合。原因：
+\begin{enumerate}
+    \item 训练大型网络成本高，如果发现网络太小还要重新训练
+    \item 正则化参数 $\lambda$ 可以快速调整
+    \item 先让网络有足够容量``记住''数据，再用正则化让它``忘记''不重要的细节
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{正则化强度对决策边界的影响：$\lambda$ 增大使边界更平滑，但过大会导致欠拟合\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+\subsection{本章小结}
+
+实现一个两层神经网络只需要矩阵乘法、ReLU 和损失计算。关键挑战是梯度的计算。网络大小应略大于需要，通过正则化控制过拟合而非限制网络容量。
+
+%% ========== 生物学启发 ==========
+
+\section{神经网络的生物学启发}
+
+\subsection{生物神经元 vs 人工神经元}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{生物神经元结构：树突（dendrites）接收信号，细胞体（cell body）汇聚处理，轴突（axon）传递信号\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+人工神经网络与生物神经元有松散的类比关系：
+
+\begin{itemize}
+    \item \textbf{树突}（dendrites）$\leftrightarrow$ 输入连接：接收来自其他神经元的信号
+    \item \textbf{细胞体}（cell body）$\leftrightarrow$ 激活函数：汇聚输入信号并进行非线性变换
+    \item \textbf{轴突}（axon）$\leftrightarrow$ 输出连接：将处理后的信号传递给下一层神经元
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-041.jpg}
+\caption{人工神经元模型：输入加权求和后经过激活函数产生输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第42页。}
+
+\begin{warningbox}{脑科学类比需谨慎}
+人工神经网络与生物神经系统的相似性非常\textbf{松散}。生物神经元远比人工神经元复杂：它们有不同类型的突触、时间动态、化学信号、稀疏连接等。人工神经网络为了计算效率使用规则的层状结构，而大脑的连接模式复杂得多。不应过度解读这种类比。
+\end{warningbox}
+
+\subsection{本章小结}
+
+人工神经网络受到生物神经系统的启发，但已经发展出独立的理论和实践体系。现代深度学习的成功更多依赖于数学和工程优化，而非神经科学。
+
+%% ========== 计算图 ==========
+
+\section{计算图与反向传播}
+
+这是本节课最核心的内容。反向传播是现代深度学习的\textbf{基石}——所有神经网络的训练都依赖于它。
+
+\subsection{为什么需要反向传播}
+
+要训练神经网络，我们需要计算损失函数 $L$ 对所有权重 $W_1, W_2, \ldots$ 的偏导数。直接对整个网络写出解析导数公式面临三个问题：
+
+\begin{enumerate}
+    \item \textbf{繁琐}：涉及大量矩阵运算的链式求导
+    \item \textbf{不灵活}：改变损失函数或网络结构后需要重新推导
+    \item \textbf{不可行}：对于上百层的网络，手动推导不现实
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{手动求导的问题：繁琐、不灵活、对复杂函数不可行\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。}
+
+\subsection{计算图}
+
+解决方案是将复杂函数分解为一系列\textbf{简单操作}（加法、乘法、指数等）的组合，用\textbf{计算图}表示。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-049.jpg}
+\caption{计算图：将复杂函数分解为简单操作的有向图\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第50页。}
+
+对于任意神经网络，计算图从输入数据和参数出发，经过一系列操作节点，最终得到损失值 $L$。
+
+\begin{importantbox}{计算图的通用性}
+计算图可以表示任意可微函数。无论网络多复杂——从简单的两层 MLP 到 Neural Turing Machine——都可以画成计算图。这使得反向传播成为一种\textbf{完全通用}的梯度计算方法。
+\end{importantbox}
+
+\subsection{反向传播的核心思想}
+
+\textbf{前向传播}：从输入到输出，逐步计算每个节点的值。
+
+\textbf{反向传播}：从输出到输入，逐步计算损失对每个节点的梯度。核心工具是\textbf{链式法则}。
+
+\subsubsection{简单示例：$f(x, y, z) = (x + y) \cdot z$}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{反向传播示例：$f = (x+y) \cdot z$，从右向左逐步计算梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+设 $x = -2, y = 5, z = -4$。
+
+\textbf{前向传播}：
+\begin{enumerate}
+    \item $q = x + y = -2 + 5 = 3$
+    \item $f = q \cdot z = 3 \times (-4) = -12$
+\end{enumerate}
+
+\textbf{反向传播}（从后向前）：
+
+\begin{enumerate}
+    \item $\frac{\partial f}{\partial f} = 1$（起始点）
+    \item $\frac{\partial f}{\partial z} = q = 3$（乘法节点：对 $z$ 的局部梯度是 $q$）
+    \item $\frac{\partial f}{\partial q} = z = -4$（乘法节点：对 $q$ 的局部梯度是 $z$）
+    \item $\frac{\partial f}{\partial y} = \frac{\partial f}{\partial q} \cdot \frac{\partial q}{\partial y} = (-4) \times 1 = -4$（链式法则）
+    \item $\frac{\partial f}{\partial x} = \frac{\partial f}{\partial q} \cdot \frac{\partial q}{\partial x} = (-4) \times 1 = -4$（链式法则）
+\end{enumerate}
+
+\begin{importantbox}{反向传播的两个关键概念}
+\begin{itemize}
+    \item \textbf{上游梯度}（Upstream Gradient）：从网络末端传回到当前节点的梯度，即 $\frac{\partial L}{\partial \text{output}}$
+    \item \textbf{局部梯度}（Local Gradient）：当前节点输出对输入的导数，即 $\frac{\partial \text{output}}{\partial \text{input}}$
+\end{itemize}
+\textbf{反向传播规则}：\textbf{下游梯度 = 上游梯度 $\times$ 局部梯度}。每个节点只需要知道自己的局部梯度和收到的上游梯度，就可以计算出传给前一层的下游梯度。
+\end{importantbox}
+
+\subsection{Sigmoid 函数的反向传播}
+
+考虑一个更复杂的例子：Sigmoid 函数 $\sigma(x) = \frac{1}{1 + e^{-x}}$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-054.jpg}
+\caption{Sigmoid 计算图：分解为乘法、加法、取反、指数、取倒数五个基本操作\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第55页。}
+
+将 $\sigma(x)$ 分解为基本操作的链：
+$$w_0 x_0 + w_1 x_1 + w_2 \xrightarrow{\text{取反}} -(\cdot) \xrightarrow{\exp} e^{(\cdot)} \xrightarrow{+1} (\cdot)+1 \xrightarrow{1/x} \frac{1}{(\cdot)}$$
+
+每一步的局部梯度都很简单：
+\begin{itemize}
+    \item $1/x$ 的导数：$-1/x^2$
+    \item $+c$ 的导数：$1$
+    \item $e^x$ 的导数：$e^x$
+    \item $-x$ 的导数：$-1$
+    \item $cx$ 的导数：$c$
+\end{itemize}
+
+反向传播从末端的 $\frac{\partial L}{\partial L} = 1$ 开始，逐节点乘以局部梯度，最终得到 $\frac{\partial L}{\partial w_0}, \frac{\partial L}{\partial w_1}, \frac{\partial L}{\partial x_0}, \frac{\partial L}{\partial x_1}$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{Sigmoid 反向传播的完整计算过程：从右向左逐步传递梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+\begin{knowledgebox}{Sigmoid 导数的优雅形式}
+Sigmoid 函数有一个美妙的性质：$\sigma'(x) = \sigma(x)(1 - \sigma(x))$。这意味着在实现中，如果前向传播已经计算了 $\sigma(x)$ 的值，反向传播时不需要重新计算，直接用前向值即可。这也是为什么在很多实现中会将 Sigmoid 作为一个\textbf{整体节点}而非拆分为基本操作。
+\end{knowledgebox}
+
+\subsection{常见操作的梯度模式}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-056.jpg}
+\caption{基本操作的梯度模式：加法分发梯度，乘法交换梯度，max 路由梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第57页。}
+
+\begin{importantbox}{三种基本操作的梯度行为}
+\begin{itemize}
+    \item \textbf{加法门}（Add Gate）：\textbf{分发器}——上游梯度原样传递给两个输入。$\frac{\partial(x+y)}{\partial x} = 1$，$\frac{\partial(x+y)}{\partial y} = 1$
+    \item \textbf{乘法门}（Multiply Gate）：\textbf{交换器}——每个输入收到的梯度是上游梯度乘以\textbf{另一个}输入的值。$\frac{\partial(xy)}{\partial x} = y$，$\frac{\partial(xy)}{\partial y} = x$
+    \item \textbf{Max 门}（Max Gate）：\textbf{路由器}——梯度全部传给值较大的输入，另一个输入的梯度为零
+\end{itemize}
+\end{importantbox}
+
+\subsection{多分支节点的梯度}
+
+当计算图中一个变量被多个后续节点使用时（即一个节点有多条出边），反向传播时需要将各分支的梯度\textbf{相加}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-060.jpg}
+\caption{多分支梯度：当一个变量参与多个后续计算时，各分支的梯度需要相加\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第61页。}
+
+这源自多元链式法则：如果 $z$ 通过 $f$ 和 $g$ 影响 $L$，则：
+$$\frac{\partial L}{\partial z} = \frac{\partial L}{\partial f} \cdot \frac{\partial f}{\partial z} + \frac{\partial L}{\partial g} \cdot \frac{\partial g}{\partial z}$$
+
+\begin{warningbox}{梯度相加，不是取平均}
+当一个变量有多个使用者时，它对最终损失的影响是所有路径影响的\textbf{总和}。这是多元链式法则的直接结果。在实现自动微分系统时，一个常见 bug 是漏掉某条分支的梯度贡献。
+\end{warningbox}
+
+\subsection{向量化的反向传播}
+
+前面的例子都是标量运算。在实际神经网络中，操作的对象是\textbf{向量和矩阵}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-062.jpg}
+\caption{向量化反向传播：输入和输出都是向量时，局部梯度变成 Jacobian 矩阵\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第63页。}
+
+对于向量函数 $\mathbf{y} = f(\mathbf{x})$，局部梯度变成 \textbf{Jacobian 矩阵}：
+
+$$J = \frac{\partial \mathbf{y}}{\partial \mathbf{x}} = \begin{bmatrix} \frac{\partial y_1}{\partial x_1} & \cdots & \frac{\partial y_1}{\partial x_n} \\ \vdots & \ddots & \vdots \\ \frac{\partial y_m}{\partial x_1} & \cdots & \frac{\partial y_m}{\partial x_n} \end{bmatrix}$$
+
+反向传播规则变为：$\frac{\partial L}{\partial \mathbf{x}} = \frac{\partial L}{\partial \mathbf{y}} \cdot J$（上游梯度乘以 Jacobian）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-064.jpg}
+\caption{ReLU 的向量化 Jacobian：对角矩阵，每个元素指示对应输入是否激活\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第65页。}
+
+\begin{knowledgebox}{逐元素操作的 Jacobian 是对角矩阵}
+对于逐元素操作（如 ReLU、Sigmoid），输出的第 $i$ 个元素只依赖于输入的第 $i$ 个元素。因此 Jacobian 矩阵是\textbf{对角矩阵}——大量元素为零。在实现中，不需要显式构造完整的 Jacobian，只需对上游梯度做逐元素操作即可。
+\end{knowledgebox}
+
+\subsection{矩阵运算的反向传播}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-067.jpg}
+\caption{矩阵乘法 $Y = XW$ 的反向传播：$\frac{\partial L}{\partial X} = \frac{\partial L}{\partial Y} W^T$，$\frac{\partial L}{\partial W} = X^T \frac{\partial L}{\partial Y}$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第68页。}
+
+对于全连接层的核心操作 $Y = XW$（$X \in \mathbb{R}^{N \times D}$，$W \in \mathbb{R}^{D \times M}$），反向传播公式为：
+
+$$\frac{\partial L}{\partial X} = \frac{\partial L}{\partial Y} \cdot W^T \qquad \frac{\partial L}{\partial W} = X^T \cdot \frac{\partial L}{\partial Y}$$
+
+\begin{importantbox}{矩阵反向传播的维度检查技巧}
+利用\textbf{维度匹配}来验证公式的正确性：
+\begin{itemize}
+    \item $\frac{\partial L}{\partial X}$ 的形状必须与 $X$ 相同：$(N \times D)$
+    \item $\frac{\partial L}{\partial Y}$ 的形状为 $(N \times M)$，$W^T$ 的形状为 $(M \times D)$
+    \item $(N \times M) \cdot (M \times D) = (N \times D)$ \checkmark
+\end{itemize}
+同理可验证 $\frac{\partial L}{\partial W}$ 的维度正确性。这个技巧在调试反向传播实现时非常有用。
+\end{importantbox}
+
+\subsection{本章小结}
+
+反向传播通过链式法则在计算图上从后向前逐节点传播梯度。每个节点只需知道自己的局部梯度和收到的上游梯度。关键模式：加法分发、乘法交换、max 路由、多分支相加。向量化时局部梯度变为 Jacobian 矩阵。
+
+%% ========== 自动微分 ==========
+
+\section{自动微分与深度学习框架}
+
+\subsection{前向传播与反向传播的模块化}
+
+反向传播的美妙之处在于其\textbf{模块化}：每个操作只需要实现两个接口：
+
+\begin{enumerate}
+    \item \textbf{forward}：给定输入，计算输出（并保存中间值供反向使用）
+    \item \textbf{backward}：给定上游梯度，计算对每个输入的下游梯度
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-069.jpg}
+\caption{模块化反向传播：每个操作是一个独立模块，实现 forward 和 backward 接口\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第70页。}
+
+\begin{importantbox}{前向传播保存的值在反向传播中使用}
+前向传播时，每个节点不仅需要计算输出，还需要\textbf{缓存}计算中间值。例如：
+\begin{itemize}
+    \item 乘法 $z = xy$：反向时需要 $x$ 和 $y$ 的值来计算 $\frac{\partial z}{\partial x} = y$ 和 $\frac{\partial z}{\partial y} = x$
+    \item ReLU $y = \max(0, x)$：反向时需要知道 $x$ 是否大于 0
+    \item Sigmoid $y = \sigma(x)$：反向时可以用 $y$ 来计算 $y(1-y)$
+\end{itemize}
+这就是为什么训练神经网络比推理需要更多内存——需要保存所有中间激活值。
+\end{importantbox}
+
+\subsection{现代深度学习框架}
+
+PyTorch、TensorFlow 等框架的核心能力就是\textbf{自动微分}（Automatic Differentiation）：用户只需定义前向计算，框架自动构建计算图并执行反向传播。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-072.jpg}
+\caption{自动微分：框架自动追踪前向计算并生成反向传播代码\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第73页。}
+
+\begin{knowledgebox}{静态图 vs 动态图}
+\begin{itemize}
+    \item \textbf{静态图}（如早期 TensorFlow）：先定义整个计算图，然后执行。优点是可以做全局优化
+    \item \textbf{动态图}（如 PyTorch）：逐行执行代码时动态构建计算图。优点是更灵活，更容易调试
+\end{itemize}
+现代框架（包括 TensorFlow 2.x）已经普遍支持动态图模式，PyTorch 是目前学术研究中最流行的框架。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+反向传播的模块化设计使得自动微分成为可能。现代深度学习框架让用户只需关注前向计算，梯度计算完全自动化。这极大降低了构建和实验新神经网络架构的门槛。
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{全课知识图谱}
+
+本课建立了从神经网络到反向传播的完整认知链：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (linear) {线性分类器};
+\node (nn) [below=of linear] {神经网络};
+\node (act) [below=of nn] {激活函数};
+\node (cg) [below=of act] {计算图};
+\node (bp) [below=of cg] {反向传播};
+\node (ad) [below=of bp] {自动微分框架};
+\draw[->, thick] (linear) -- (nn);
+\draw[->, thick] (nn) -- (act);
+\draw[->, thick] (act) -- (cg);
+\draw[->, thick] (cg) -- (bp);
+\draw[->, thick] (bp) -- (ad);
+\node[draw=none, right=1cm of linear, text width=5cm, font=\scriptsize] {$f = W\mathbf{x}$，线性不可分};
+\node[draw=none, right=1cm of nn, text width=5cm, font=\scriptsize] {$f = W_2 \sigma(W_1 \mathbf{x})$，非线性决策边界};
+\node[draw=none, right=1cm of act, text width=5cm, font=\scriptsize] {ReLU, GELU, SiLU, Sigmoid};
+\node[draw=none, right=1cm of cg, text width=5cm, font=\scriptsize] {前向传播，每个操作是一个节点};
+\node[draw=none, right=1cm of bp, text width=5cm, font=\scriptsize] {链式法则，上游$\times$局部梯度};
+\node[draw=none, right=1cm of ad, text width=5cm, font=\scriptsize] {PyTorch, TensorFlow};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{六条核心原则}
+\begin{enumerate}
+    \item \textbf{非线性是神经网络的灵魂}：没有激活函数，多层网络等价于单层线性模型
+    \item \textbf{反向传播 = 链式法则的系统化应用}：将复杂函数分解为简单操作，逐个求导
+    \item \textbf{每个节点只需关心局部}：计算局部梯度，乘以上游梯度，传给下游
+    \item \textbf{加法分发、乘法交换、max 路由}：三种基本操作的梯度模式是所有复杂网络的构建块
+    \item \textbf{维度匹配是最好的调试工具}：梯度矩阵的形状必须与对应参数矩阵相同
+    \item \textbf{自动微分解放了研究者}：理解反向传播原理后，实践中由框架自动完成
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Rumelhart, Hinton \& Williams, Learning Representations by Back-propagating Errors (1986): \url{https://www.nature.com/articles/323533a0} —— 反向传播的经典论文
+    \item Goodfellow, Bengio \& Courville, Deep Learning, Chapter 6: \url{https://www.deeplearningbook.org/} —— 深度前馈网络详解
+    \item Stanford CS231N 作业 1: \url{http://cs231n.stanford.edu/} —— 手动实现反向传播的练习
+    \item PyTorch Autograd 文档: \url{https://pytorch.org/docs/stable/autograd.html} —— 自动微分机制详解
+    \item Andrej Karpathy, micrograd: \url{https://github.com/karpathy/micrograd} —— 一个极简自动微分引擎，适合理解反向传播
+\end{itemize}
+
+\end{document}

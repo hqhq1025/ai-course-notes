@@ -1,0 +1,683 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 3: Regularization and Optimization}
+\newcommand{\noteauthors}{基于 Zane Durante 授课内容整理}
+\newcommand{\notedate}{2025年4月8日}
+\newcommand{\videochannel}{Stanford CS231N}
+\newcommand{\videopublishdate}{2025-04-08}
+\newcommand{\videoduration}{1:12:00}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=dyNGd06MWn4}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== 回顾 ==========
+
+\section{回顾：图像分类与线性分类器}
+
+本节课开始之前，讲者首先回顾了前一节课的核心内容。图像分类是计算机视觉中的基础任务：给定一张图片，将其映射到一组预定义标签中的某一个。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{图像分类回顾：将图像映射到标签集合中的正确类别\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{图像分类的核心挑战}
+
+图像分类面临多个困难：
+
+\begin{itemize}
+    \item \textbf{语义鸿沟}（Semantic Gap）：人类看到的是``猫''，计算机看到的是一个三维像素数组（$32 \times 32 \times 3 = 3072$ 个数值）
+    \item \textbf{光照变化}（Illumination）：不同光照条件下像素强度差异巨大
+    \item \textbf{形变}（Deformation）：猫等柔性物体可以扭曲弯折成各种形状
+    \item \textbf{遮挡}（Occlusion）：物体可能被部分遮挡
+    \item \textbf{背景混淆}（Background Clutter）：物体可能与背景融为一体
+    \item \textbf{类内差异}（Intra-class Variation）：同一类别的不同实例外观差异很大
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{图像分类面临的挑战：语义鸿沟、光照、形变、遮挡、背景混淆和类内差异\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。}
+
+\subsection{数据驱动方法与线性分类器}
+
+由于无法用简单的 if-else 规则处理所有情况，我们转向数据驱动方法。线性分类器的核心思想是：将图像展平为向量 $\mathbf{x} \in \mathbb{R}^{3072}$，通过权重矩阵 $W \in \mathbb{R}^{10 \times 3072}$ 进行矩阵乘法得到各类别的分数：
+
+$$f(\mathbf{x}, W) = W\mathbf{x} + \mathbf{b}$$
+
+\begin{itemize}
+    \item $W$：权重矩阵，每一行代表一个类别的``模板''
+    \item $\mathbf{b}$：偏置向量，每个类别一个偏置值
+    \item 输出：10 个类别的分数向量
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{线性分类器的三种理解方式：代数视角、模板视角和几何视角\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+\begin{knowledgebox}{线性分类器的三种视角}
+\begin{itemize}
+    \item \textbf{代数视角}：矩阵乘法 $W\mathbf{x} + \mathbf{b}$，每行独立计算一个类别的分数
+    \item \textbf{模板视角}：将每行权重还原为图像形状，可视化每个类别学到的``模板''
+    \item \textbf{几何视角}：每行权重定义一条决策边界（$W_i \cdot \mathbf{x} + b_i = 0$），将输入空间划分为不同区域
+\end{itemize}
+几何视角的优势在于可以直观判断线性模型的能力边界——如果数据无法被一条直线分开，线性模型就无能为力。
+\end{knowledgebox}
+
+\subsection{损失函数}
+
+有了模型和分数，如何衡量模型的好坏？这就需要损失函数。给定数据集 $\{(x_i, y_i)\}_{i=1}^N$，总损失定义为：
+
+$$L(W) = \frac{1}{N}\sum_{i=1}^{N} L_i(f(x_i, W), y_i)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{损失函数：Data Loss 衡量模型预测与训练数据的匹配程度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第14页。}
+
+\textbf{Softmax 损失}（交叉熵损失）是最常用的分类损失函数：
+
+$$L_i = -\log\left(\frac{e^{s_{y_i}}}{\sum_j e^{s_j}}\right)$$
+
+\begin{itemize}
+    \item 先对分数做指数变换使其全为正
+    \item 再除以总和得到概率分布（所有值之和为 1）
+    \item 取正确类别概率的负对数作为损失
+\end{itemize}
+
+\begin{importantbox}{Softmax 的作用}
+Softmax 将任意一组浮点数转换为概率分布：所有输出值之和为 1，且每个值表示对应类别的概率。分数越高的类别获得越大的概率值。当正确类别的概率接近 1 时损失接近 0；当正确类别的概率很低时损失很大。
+\end{importantbox}
+
+\subsection{本章小结}
+
+图像分类是计算机视觉的核心任务，面临语义鸿沟、光照变化等多重挑战。线性分类器通过 $f = W\mathbf{x} + \mathbf{b}$ 将图像映射到类别分数，Softmax 损失函数衡量预测质量。接下来的问题是：如何在损失函数中加入正则化以防止过拟合，以及如何找到最优的 $W$。
+
+%% ========== 正则化 ==========
+
+\section{正则化}
+
+\subsection{为什么需要正则化}
+
+损失函数由两部分组成：
+
+$$L(W) = \underbrace{\frac{1}{N}\sum_{i=1}^{N} L_i(f(x_i, W), y_i)}_{\text{Data Loss}} + \underbrace{\lambda R(W)}_{\text{Regularization}}$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{总损失 = 数据损失 + 正则化项，$\lambda$ 控制正则化强度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+\textbf{Data Loss} 衡量模型对训练数据的拟合程度——越低越好。\textbf{正则化项} $R(W)$ 的目的则相反：它故意让模型在训练数据上表现稍差，以换取在未见数据上更好的泛化能力。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{过拟合 vs 泛化：$f_1$ 完美拟合训练数据但过拟合，$f_2$ 拟合不那么紧密但泛化更好\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+\begin{knowledgebox}{奥卡姆剃刀与正则化}
+正则化的直觉与奥卡姆剃刀（Occam's Razor）一致：当多个假设都能解释数据时，优先选择最简单的那个。复杂模型（如 $f_1$）虽然完美拟合训练数据，但在新数据上表现不佳；而简单模型（如 $f_2$）虽然训练误差略高，但泛化能力更强。
+\end{knowledgebox}
+
+\subsection{L2 正则化与 L1 正则化}
+
+\textbf{L2 正则化}（权重衰减）：
+
+$$R(W) = \sum_{k} \sum_{l} W_{k,l}^2$$
+
+对权重矩阵中每个元素取平方后求和。L2 正则化倾向于让权重值分散且均匀较小。
+
+\textbf{L1 正则化}：
+
+$$R(W) = \sum_{k} \sum_{l} |W_{k,l}|$$
+
+对权重矩阵中每个元素取绝对值后求和。L1 正则化倾向于产生稀疏权重（很多值为零）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-013.jpg}
+\caption{L2 和 L1 正则化的公式及其对权重分布的不同偏好\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第17页。}
+
+\begin{importantbox}{L2 vs L1 正则化的直觉}
+考虑两组权重 $\mathbf{w}_1 = [1, 0, 0, 0]$ 和 $\mathbf{w}_2 = [0.25, 0.25, 0.25, 0.25]$，输入为 $\mathbf{x} = [1, 1, 1, 1]$，两者的点积相同（都等于 1），数据损失一样。但：
+\begin{itemize}
+    \item L2 偏好 $\mathbf{w}_2$：$0.25^2 \times 4 = 0.25$ vs $1^2 = 1$（$\mathbf{w}_2$ 的 L2 罚项低 4 倍）
+    \item L1 对两者无差异：$0.25 \times 4 = 1$ vs $1 = 1$（L1 罚项相同）
+\end{itemize}
+因此 L2 促进权重分散，L1 促进权重稀疏。
+\end{importantbox}
+
+\begin{warningbox}{L1 等价性陷阱}
+当被问``L1 正则化偏好 $\mathbf{w}_1$ 还是 $\mathbf{w}_2$？''时，很多人直觉回答 $\mathbf{w}_1$（因为 L1 促进稀疏性）。但实际上在这个例子中，两者的 L1 惩罚值完全相等！L1 在实际优化过程中会产生稀疏解，但这并不意味着任意两组权重的 L1 值不同。
+\end{warningbox}
+
+\subsection{正则化的作用总结}
+
+为什么要正则化模型？主要有三个原因：
+
+\begin{enumerate}
+    \item \textbf{表达权重偏好}：根据问题特性选择 L1（稀疏）或 L2（分散）
+    \item \textbf{简化模型}：防止过拟合，提升测试性能
+    \item \textbf{改善优化}：L2 正则化可以使损失函数更凸（$y = x^2$ 是凸函数），有利于优化
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{正则化的三个作用：表达偏好、简化模型、改善优化\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第19页。}
+
+$\lambda$ 是一个超参数，控制正则化的强度：$\lambda = 0$ 表示无正则化，$\lambda$ 越大正则化越强。通常通过验证集来选择最优的 $\lambda$。
+
+\subsection{本章小结}
+
+正则化通过在损失函数中添加权重惩罚项来防止过拟合。L2 正则化偏好分散的小权重，L1 正则化偏好稀疏权重。超参数 $\lambda$ 控制正则化与数据拟合之间的权衡。在后续课程中还会学到更高级的正则化技术（如 Dropout）。
+
+%% ========== 优化基础 ==========
+
+\section{优化基础}
+
+既然我们知道了如何衡量一组权重 $W$ 的好坏（通过损失函数），下一个问题是：如何找到最优的 $W$？
+
+\subsection{损失景观与优化直觉}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{损失景观：纵轴为损失值，水平面为参数空间。目标是找到景观中的最低点\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+可以将优化想象为一个人在损失景观中行走，试图找到最低的山谷。关键的类比是：这个人是\textbf{蒙着眼的}——他看不到远处的地形，只能感受脚下地面的坡度，然后决定向哪个方向走。
+
+\subsection{策略一：随机搜索}
+
+最简单的方法是随机尝试大量不同的 $W$，选择损失最小的那个：
+
+\begin{lstlisting}[caption={随机搜索：尝试 1000 个随机权重}]
+best_loss = float('inf')
+for i in range(1000):
+    W = np.random.randn(10, 3072) * 0.0001
+    loss = L(X_train, Y_train, W)
+    if loss < best_loss:
+        best_loss = loss
+        best_W = W
+\end{lstlisting}
+
+这种方法在 CIFAR-10 上只能达到约 15.5\% 的准确率（随机猜测为 10\%），而现代深度学习方法可以达到 99.7\%。显然不够好，但胜于随机猜测。
+
+\subsection{策略二：跟随坡度——梯度}
+
+更好的策略是``感受地面的坡度，朝下坡方向走''。数学上，这就是计算\textbf{梯度}。
+
+\textbf{一维导数}的定义（极限形式）：
+
+$$\frac{df}{dx} = \lim_{h \to 0} \frac{f(x + h) - f(x)}{h}$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{一维导数与多维梯度：导数给出函数在当前点的变化率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第28页。}
+
+在多维情况下，使用\textbf{梯度}——对每个维度分别计算偏导数，得到一个向量：
+
+$$\nabla_W L = \left[\frac{\partial L}{\partial W_1}, \frac{\partial L}{\partial W_2}, \ldots\right]$$
+
+梯度指向函数增长最快的方向，因此\textbf{负梯度方向}是下降最快的方向。
+
+\subsection{数值梯度 vs 解析梯度}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{数值梯度的计算：对每个参数加一个很小的 $h$，计算损失变化\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+\textbf{数值梯度}：用有限差分近似导数（$h$ 取一个很小的值如 $10^{-5}$）
+\begin{itemize}
+    \item 优点：实现简单
+    \item 缺点：速度慢（需要遍历每个参数）、近似值（不精确）
+\end{itemize}
+
+\textbf{解析梯度}：通过微积分推导损失函数对 $W$ 的导数公式
+\begin{itemize}
+    \item 优点：精确、快速
+    \item 缺点：推导可能出错
+\end{itemize}
+
+\begin{importantbox}{梯度检查（Gradient Check）}
+实践中的标准做法是：用解析梯度进行训练（快速且精确），但用数值梯度进行\textbf{验证}——确保两者结果一致。如果解析梯度的实现有 bug，梯度检查可以立即发现。这是作业中常见的调试手段。
+\end{importantbox}
+
+\subsection{本章小结}
+
+优化的目标是在损失景观中找到最低点。梯度给出了损失函数在当前点的下降方向。实践中使用解析梯度计算，并通过数值梯度进行验证。接下来将介绍具体的优化算法。
+
+%% ========== 梯度下降及其变体 ==========
+
+\section{梯度下降与高级优化器}
+
+\subsection{梯度下降算法}
+
+梯度下降是训练所有深度学习模型的基础算法：
+
+$$W \leftarrow W - \alpha \cdot \nabla_W L$$
+
+\begin{itemize}
+    \item $\alpha$：学习率（步长），控制每一步走多远
+    \item $\nabla_W L$：损失函数对权重的梯度
+    \item 负号：沿梯度反方向走（下坡）
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-027.jpg}
+\caption{梯度下降可视化：从初始点出发，沿负梯度方向逐步逼近最小值\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\begin{knowledgebox}{何时停止训练？}
+梯度下降的迭代过程何时结束？通常有两种策略：（1）设定固定的迭代次数；（2）设定停止准则，当损失的减少量低于某个阈值（如 $10^{-5}$）时停止。实践中更常用固定迭代次数。
+\end{knowledgebox}
+
+\subsection{随机梯度下降（SGD）}
+
+标准梯度下降需要在整个训练集上计算损失和梯度，当数据量很大时计算代价极高。\textbf{随机梯度下降}（Stochastic Gradient Descent, SGD）通过在每步只使用一个小批量（mini-batch）来近似完整梯度：
+
+\begin{lstlisting}[caption={SGD 的基本实现}]
+for t in range(num_iterations):
+    mini_batch = sample_data(X_train, batch_size=256)
+    dW = compute_gradient(mini_batch, W)
+    W = W - learning_rate * dW
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{随机梯度下降：每次只使用数据子集计算梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+\begin{importantbox}{Epoch 的概念}
+实践中不是完全随机采样，而是将数据集打乱顺序后依次遍历。遍历完整个数据集一次称为一个 \textbf{epoch}。多个 epoch 的训练可以让模型反复学习所有数据。
+\end{importantbox}
+
+\subsection{SGD 的问题}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{SGD 在窄谷（高条件数）中的震荡问题：垂直方向梯度大导致来回震荡，水平方向进展缓慢\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第35页。}
+
+SGD 存在四个主要问题：
+
+\begin{enumerate}
+    \item \textbf{高条件数/窄谷}：梯度在陡峭方向很大、平坦方向很小，导致来回震荡而非直接走向最优点
+    \item \textbf{局部极小值}：可能陷入局部最优，无法继续下降
+    \item \textbf{鞍点}：在高维空间中更常见——梯度为零但不是极值点
+    \item \textbf{梯度噪声}：因为只用了数据子集，每步梯度是有噪声的
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{局部最小值和鞍点：SGD 可能在这些点停滞，因为梯度为零或接近零\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\begin{warningbox}{鞍点在高维空间中比局部极小值更常见}
+研究表明，随着模型参数维度增加，鞍点出现的频率远高于局部极小值。在鞍点处，某些方向是``谷底''而另一些方向是``山顶''，梯度在所有方向上为零，导致优化停滞。这是大型神经网络训练中的一个严重实际问题。
+\end{warningbox}
+
+\subsection{SGD + Momentum}
+
+动量方法借鉴了物理学中滚球的概念：球在下坡时会积累速度，即使遇到平坦区域也能凭借惯性继续前进。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{动量如何解决 SGD 的三个问题：越过局部极小值、穿越鞍点、减少窄谷中的震荡\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第39页。}
+
+数学形式如下：
+
+$$\mathbf{v}_t = \rho \cdot \mathbf{v}_{t-1} + \nabla_W L$$
+$$W = W - \alpha \cdot \mathbf{v}_t$$
+
+\begin{itemize}
+    \item $\mathbf{v}_t$：速度向量（过去梯度的加权平均）
+    \item $\rho$：动量系数（通常取 0.9），控制历史梯度的权重
+    \item 更新方向不再是当前梯度，而是速度向量
+\end{itemize}
+
+\begin{importantbox}{动量解决 SGD 三大问题}
+\begin{enumerate}
+    \item \textbf{局部极小值}：积累的速度使球能``滚出''浅的局部极小值
+    \item \textbf{鞍点}：历史动量推动模型继续穿越平坦区域
+    \item \textbf{窄谷震荡}：垂直方向的来回震荡在速度累加中相互抵消，而水平方向的一致运动不断累积
+    \item \textbf{噪声}：多步梯度的平均效果减少了单步噪声的影响
+\end{enumerate}
+\end{importantbox}
+
+\subsection{RMSProp}
+
+RMSProp 由 Hinton 在 2012 年提出，核心思想是\textbf{逐元素缩放梯度}——在梯度大的方向走小步，在梯度小的方向走大步。
+
+$$\mathbf{s}_t = \beta \cdot \mathbf{s}_{t-1} + (1-\beta) \cdot (\nabla_W L)^2$$
+$$W = W - \frac{\alpha}{\sqrt{\mathbf{s}_t} + \epsilon} \cdot \nabla_W L$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-042.jpg}
+\caption{RMSProp 的代码实现：通过梯度平方的运行平均来缩放学习率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+\begin{itemize}
+    \item $\mathbf{s}_t$：梯度平方的指数移动平均
+    \item 陡峭方向：$\mathbf{s}_t$ 大，除以大数 $\rightarrow$ 步长变小
+    \item 平坦方向：$\mathbf{s}_t$ 小，除以小数 $\rightarrow$ 步长变大
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{SGD、SGD+Momentum、RMSProp 的优化轨迹对比：RMSProp 能快速转向平坦方向\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+\subsection{Adam 优化器}
+
+\textbf{Adam}（Adaptive Moment Estimation）是现代深度学习中\textbf{最常用}的优化器，它结合了 Momentum 和 RMSProp 的优点：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-044.jpg}
+\caption{Adam 优化器：结合一阶矩（动量）和二阶矩（自适应学习率），并加入偏差修正\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+$$\mathbf{m}_t = \beta_1 \cdot \mathbf{m}_{t-1} + (1-\beta_1) \cdot \nabla_W L \qquad \text{（一阶矩/动量）}$$
+$$\mathbf{v}_t = \beta_2 \cdot \mathbf{v}_{t-1} + (1-\beta_2) \cdot (\nabla_W L)^2 \qquad \text{（二阶矩/自适应缩放）}$$
+$$W = W - \frac{\alpha \cdot \hat{\mathbf{m}}_t}{\sqrt{\hat{\mathbf{v}}_t} + \epsilon}$$
+
+\begin{warningbox}{Adam 的初始步长问题}
+Adam 的 $\beta_1, \beta_2$ 通常初始化为接近 1 的值（如 0.9, 0.999），而 $\mathbf{m}_0 = \mathbf{v}_0 = 0$。这意味着在第一步中，$\mathbf{v}_1$ 会非常接近零，导致除以极小数，产生一个不合理的大步长。为此 Adam 引入了\textbf{偏差修正}（bias correction），通过 $\hat{\mathbf{m}}_t = \mathbf{m}_t / (1 - \beta_1^t)$ 和 $\hat{\mathbf{v}}_t = \mathbf{v}_t / (1 - \beta_2^t)$ 来补偿初始时刻的估计偏差。
+\end{warningbox}
+
+常用默认参数：$\beta_1 = 0.9$，$\beta_2 = 0.999$，$\epsilon = 10^{-8}$，$\alpha = 10^{-3}$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{四种优化器的收敛轨迹对比：Adam 结合了 Momentum 的加速性和 RMSProp 的方向修正能力\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。}
+
+\subsection{AdamW：解耦权重衰减}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{Adam vs AdamW：AdamW 将 L2 正则化与动量计算分离\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+标准 Adam 在计算梯度时包含 L2 正则化项，这意味着正则化会影响动量和自适应学习率的计算。\textbf{AdamW} 则将权重衰减从梯度计算中分离出来——动量和二阶矩只基于数据损失的梯度计算，L2 正则化在最终更新时才加入。
+
+\begin{knowledgebox}{为什么 AdamW 更受欢迎？}
+在 Adam 中，L2 正则化的梯度会影响动量和自适应学习率的估计，这可能并非我们期望的行为。AdamW 让优化器专注于损失景观的导航，而正则化仅作为一个独立的权重缩减步骤。Meta 的 LLaMA 系列模型都使用 AdamW 优化器。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item \textbf{SGD}：最基础的优化器，存在窄谷震荡、局部极小值和鞍点问题
+    \item \textbf{SGD + Momentum}：通过速度累积解决上述问题
+    \item \textbf{RMSProp}：通过逐元素缩放梯度，在平坦方向走大步、陡峭方向走小步
+    \item \textbf{Adam}：结合 Momentum 和 RMSProp，加偏差修正，是最常用的优化器
+    \item \textbf{AdamW}：解耦权重衰减，在许多实际任务中表现更好
+\end{itemize}
+
+%% ========== 学习率调度 ==========
+
+\section{学习率调度}
+
+\subsection{学习率的重要性}
+
+学习率是训练中最重要的超参数之一。选择不当会导致灾难性后果：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{不同学习率的效果：过高导致发散，过低导致收敛极慢，适中的学习率能快速稳定收敛\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第54页。}
+
+\begin{itemize}
+    \item \textbf{过高}：损失不降反升，模型``跳出''损失景观
+    \item \textbf{偏高}：损失无法继续下降，在最优点附近震荡
+    \item \textbf{过低}：收敛极其缓慢，浪费计算资源
+    \item \textbf{适中}：快速下降后持续改进
+\end{itemize}
+
+\subsection{学习率衰减策略}
+
+训练过程中\textbf{动态调整}学习率是现代深度学习的标准做法。几种常见策略：
+
+\textbf{1. 阶梯式衰减}（Step Decay）：每经过固定迭代次数，将学习率乘以一个因子（如 0.1）。训练 ResNet 时常用此策略。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-052.jpg}
+\caption{阶梯式学习率衰减：在固定时间点将学习率降为 1/10\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+\textbf{2. 余弦退火}（Cosine Annealing）：学习率按半个余弦周期从最大值平滑降到零：
+
+$$\alpha_t = \frac{\alpha_0}{2}\left(1 + \cos\left(\frac{t \cdot \pi}{T}\right)\right)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{余弦退火学习率调度：从最大值平滑降至零\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第57页。}
+
+\textbf{3. 线性衰减}和\textbf{逆平方根衰减}等其他方案。
+
+\textbf{4. 线性预热}（Linear Warmup）：训练初期先从很小的学习率线性增长到目标值，然后再按照某种策略衰减。这可以避免初始时不稳定的大步长。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{线性预热 + 余弦退火：先线性增长到最大学习率，然后按余弦曲线衰减\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第59页。}
+
+\begin{importantbox}{线性缩放规则}
+经验法则：如果将 batch size 增大 $n$ 倍，学习率也应相应增大 $n$ 倍。直觉是：更大的 batch 提供更准确的梯度估计，因此可以``迈更大的步''。这一规则在许多实际场景中被证明有效。
+\end{importantbox}
+
+\subsection{本章小结}
+
+学习率是最关键的超参数。实践中几乎所有现代模型都使用学习率调度：先预热后衰减。余弦退火 + 线性预热是最流行的组合之一。batch size 增大时应按比例增大学习率。
+
+%% ========== 二阶优化 ==========
+
+\section{补充：二阶优化方法}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-058.jpg}
+\caption{二阶优化：利用 Hessian 矩阵直接跳到极值点\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第62页。}
+
+前面介绍的所有方法都是\textbf{一阶优化}——只用到梯度（一阶导数）信息。\textbf{二阶优化}方法（如 Newton 方法）利用 Hessian 矩阵（二阶导数矩阵）直接估计极值点位置：
+
+$$W^* = W - H^{-1} \nabla_W L$$
+
+\begin{warningbox}{二阶方法在深度学习中不实用}
+对于有 $N$ 个参数的模型，Hessian 矩阵大小为 $N \times N$。现代大模型有数十亿参数，存储和求逆 Hessian 是完全不可行的。因此深度学习几乎全部使用一阶方法（SGD、Adam 等）。二阶方法在小规模凸优化问题中仍然有用。
+\end{warningbox}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{全课知识图谱}
+
+本课建立了从损失函数到实用训练方法的完整链条：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (loss) {损失函数};
+\node (reg) [below=of loss] {正则化};
+\node (grad) [below=of reg] {梯度与优化};
+\node (opt) [below=of grad] {高级优化器};
+\node (lr) [below=of opt] {学习率调度};
+\draw[->, thick] (loss) -- (reg);
+\draw[->, thick] (reg) -- (grad);
+\draw[->, thick] (grad) -- (opt);
+\draw[->, thick] (opt) -- (lr);
+\node[draw=none, right=1cm of loss, text width=5cm, font=\scriptsize] {Softmax / 交叉熵损失};
+\node[draw=none, right=1cm of reg, text width=5cm, font=\scriptsize] {L1, L2, $\lambda$ 超参数};
+\node[draw=none, right=1cm of grad, text width=5cm, font=\scriptsize] {数值/解析梯度, 梯度下降, SGD};
+\node[draw=none, right=1cm of opt, text width=5cm, font=\scriptsize] {Momentum, RMSProp, Adam, AdamW};
+\node[draw=none, right=1cm of lr, text width=5cm, font=\scriptsize] {Step Decay, Cosine, Warmup};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{正则化是必需的}：仅最小化数据损失必然导致过拟合，正则化通过牺牲训练精度换取泛化能力
+    \item \textbf{梯度是优化的基石}：无论使用什么优化器，本质都是在用梯度信息指导参数更新
+    \item \textbf{Adam 是默认选择}：除非有特殊原因，否则从 Adam/AdamW 开始
+    \item \textbf{学习率需要调度}：固定学习率几乎不是最优选择，预热 + 衰减是标准做法
+    \item \textbf{实践胜于理论}：优化器的选择最终是经验性的——尝试几种方案，选效果最好的
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Kingma \& Ba, Adam: A Method for Stochastic Optimization (2015): \url{https://arxiv.org/abs/1412.6980}
+    \item Loshchilov \& Hutter, Decoupled Weight Decay Regularization (AdamW, 2019): \url{https://arxiv.org/abs/1711.05101}
+    \item Goyal et al., Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour (2017): \url{https://arxiv.org/abs/1706.02677}
+    \item CS231N 课程主页: \url{http://cs231n.stanford.edu/}
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,782 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 8: Attention and Transformers}
+\newcommand{\noteauthors}{基于 Justin Johnson 授课内容整理}
+\newcommand{\notedate}{2025}
+\newcommand{\videochannel}{Stanford University}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:06:28}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=RQowiOF_FvQ}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== 引言 ==========
+
+\section{引言：从 RNN 到 Transformer}
+
+本讲将介绍深度学习中最重要的两个概念：\textbf{注意力机制}（Attention）和\textbf{Transformer 架构}。Attention 是一种全新的神经网络计算原语，本质上操作于\textbf{向量集合}之上；Transformer 则是以 self-attention 为核心的神经网络架构。
+
+\begin{importantbox}{Transformer 的统治地位}
+今天几乎所有大规模的深度学习应用——图像分类、图像生成、文本生成、文本分类、音频处理——都在使用 Transformer 架构。它自 2017 年提出以来，已经跨越了多个数量级的规模增长（从 2 亿参数到数万亿参数），且架构本身变化甚微。
+\end{importantbox}
+
+尽管 Transformer 是现代深度学习的基石，但注意力机制的思想\textbf{源于 RNN}。我们将沿着历史脉络，从 RNN 的瓶颈问题出发，逐步推导出注意力机制和 Transformer 架构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{课程路线图：从 RNN 的瓶颈问题出发，引入注意力机制，最终构建 Transformer 架构\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{本章小结}
+
+注意力机制和 Transformer 是当代深度学习的核心。理解它们不仅需要掌握数学公式，更要理解其设计动机——如何克服 RNN 的固有局限。
+
+%% ========== Seq2Seq 与瓶颈 ==========
+
+\section{序列到序列模型与瓶颈问题}
+
+\subsection{Encoder-Decoder RNN 回顾}
+
+序列到序列（Seq2Seq）问题的经典架构是 \textbf{Encoder-Decoder RNN}：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{Encoder-Decoder RNN 架构：编码器 RNN 将输入序列压缩为上下文向量 $c$，解码器 RNN 基于 $c$ 生成输出序列\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\begin{enumerate}
+    \item \textbf{编码器}（Encoder）：一个 RNN，逐词处理输入序列（如英文句子``we see the sky''），将整个输入压缩为最终隐藏状态
+    \item \textbf{上下文向量}（Context Vector）$c$：编码器的最终隐藏状态，被视为整个输入序列的``摘要''
+    \item \textbf{解码器}（Decoder）：另一个 RNN，以上下文向量 $c$ 为初始输入，逐词生成输出序列（如意大利语翻译）
+\end{enumerate}
+
+\subsection{固定长度瓶颈}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{信息瓶颈问题：整个输入序列的信息必须压缩到一个固定长度的向量 $c$ 中\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{warningbox}{固定长度向量的信息瓶颈}
+问题的核心在于：输入序列和输出序列之间的\textbf{唯一通信通道}是上下文向量 $c$——一个固定维度的向量（如 128 或 1024 个浮点数）。
+
+\begin{itemize}
+    \item 对于短句子（``we see the sky''），1024 维可能足够
+    \item 对于长段落、整本书或海量语料，将所有信息压缩到 1024 个浮点数中显然不切实际
+    \item 随着输入长度增加，信息损失会越来越严重
+\end{itemize}
+\end{warningbox}
+
+\textbf{解决方案的直觉}：不再强制网络将整个输入序列压缩为一个向量。取而代之，让解码器在生成每个输出 token 时，都有机会\textbf{回头查看}整个输入序列的不同部分——这就是注意力机制的核心思想。
+
+\subsection{本章小结}
+
+Encoder-Decoder RNN 中的固定长度上下文向量是一个严重的信息瓶颈。注意力机制的诞生正是为了消除这个瓶颈，让解码器能够在每个时间步动态地访问编码器的所有隐藏状态。
+
+%% ========== RNN 中的注意力 ==========
+
+\section{注意力机制：从 RNN 瓶颈到通用操作}
+
+\subsection{注意力机制的基本流程}
+
+注意力机制对 Encoder-Decoder 架构的改进如下：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{引入注意力机制的 Seq2Seq 模型：编码器 RNN 保持不变，但解码器在每个时间步都可以``回头看''编码器的所有隐藏状态\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+以解码器生成第一个输出词为例，完整流程：
+
+\textbf{Step 1：计算对齐分数}（Alignment Scores）
+
+对于解码器的隐藏状态 $s_0$ 和编码器的每个隐藏状态 $h_i$，计算它们的``匹配程度''：
+
+$$e_{i} = f_{\text{att}}(s_0, h_i)$$
+
+其中 $f_{\text{att}}$ 是一个可学习的函数（最初使用的是一个线性层：将 $[s_0; h_i]$ 拼接后通过线性变换映射为标量）。
+
+\textbf{Step 2：Softmax 归一化}
+
+$$a_i = \frac{\exp(e_i)}{\sum_j \exp(e_j)}$$
+
+得到一个在所有输入 token 上的\textbf{概率分布}——这就是\textbf{注意力权重}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{注意力权重计算：对齐分数经过 softmax 后成为概率分布，每个值表示解码器在当前时间步对输入序列各位置的``关注度''\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\textbf{Step 3：加权求和}
+
+$$c_1 = \sum_i a_i \cdot h_i$$
+
+注意力权重加权的编码器隐藏状态的线性组合，产生\textbf{上下文向量} $c_1$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{上下文向量 $c_1$ 是编码器隐藏状态的加权线性组合，权重由注意力分数决定\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+\textbf{Step 4：生成输出}
+
+将上下文向量 $c_1$ 与解码器的其他输入一起送入解码器 RNN，生成下一个隐藏状态和输出 token。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{每个解码器时间步都执行一次完整的注意力计算：计算新的对齐分数 $\rightarrow$ softmax $\rightarrow$ 加权求和 $\rightarrow$ 生成上下文向量 $\rightarrow$ 输入解码器\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+\begin{importantbox}{注意力机制的核心思想}
+\begin{enumerate}
+    \item 不再通过单一向量传递所有信息
+    \item 解码器在\textbf{每个时间步}都重新``审视''整个输入序列
+    \item 每次生成不同的上下文向量——动态聚焦于输入中\textbf{与当前输出最相关的部分}
+    \item 整个过程\textbf{完全可微}，注意力权重通过梯度下降端到端学习
+\end{enumerate}
+\end{importantbox}
+
+\subsection{注意力权重的可视化}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{英法翻译任务中的注意力权重矩阵：行对应输出序列（法语），列对应输入序列（英语）。对角线结构表示词对词的对应关系，反对角线表示词序的调整\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。来自 Bahdanau et al., 2015。}
+
+注意力矩阵的可视化揭示了网络学到的输入-输出对齐关系：
+\begin{itemize}
+    \item \textbf{对角线结构}：输入和输出中词序一致的部分（如``the agreement'' $\leftrightarrow$ ``L'accord''）
+    \item \textbf{反对角线}：词序发生变化的部分（如``European economic area'' 在法语中的不同语序）
+    \item \textbf{$2 \times 2$ 块}：一个输入词对应多个输出词或反之
+\end{itemize}
+
+\begin{knowledgebox}{注意力机制的历史地位}
+注意力机制首次出现在 Bahdanau et al. 2015 年的论文``Neural Machine Translation by Jointly Learning to Align and Translate''中。该论文获得了 ICLR 2025 的 runner-up Test of Time Award。这一工作虽然是在 RNN 框架内提出的，但其核心思想远超 RNN 本身——它开创了一种全新的计算范式。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+注意力机制通过让解码器在每个时间步动态地关注输入序列的不同部分，消除了固定长度上下文向量的瓶颈。这一机制完全可微，通过端到端训练自动学习输入-输出之间的对齐关系。
+
+%% ========== 通用注意力算子 ==========
+
+\section{从 RNN 注意力到通用注意力算子}
+
+\subsection{抽象出注意力的本质}
+
+注意力机制的核心操作可以从 RNN 中剥离出来，形成一个独立的计算原语。从抽象角度看，注意力机制做了以下事情：
+
+\begin{enumerate}
+    \item 存在一组\textbf{数据向量}（data vectors）——编码器的隐藏状态
+    \item 存在\textbf{查询向量}（query vectors）——解码器的隐藏状态
+    \item 对每个查询向量，计算它与所有数据向量的\textbf{相似度}
+    \item 使用相似度权重对数据向量进行\textbf{加权求和}，产生输出向量
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{注意力算子的抽象：query 向量与 data 向量的交互——计算相似度、softmax 归一化、加权求和得到输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+\subsection{第一步泛化：缩放点积相似度}
+
+最初的注意力使用一个可学习的线性层来计算相似度。但最简单的相似度度量是\textbf{点积}。然而，纯点积存在一个与维度相关的问题：
+
+\begin{warningbox}{点积与 softmax 的不良交互}
+假设查询向量和数据向量的维度为 $d$，且各分量独立同分布（均值 0，方差 1）。那么点积的期望方差为 $d$。当 $d$ 很大时：
+\begin{itemize}
+    \item 点积值的绝对值会很大
+    \item softmax 会变得非常``尖锐''——几乎所有权重集中在一个位置
+    \item 导致\textbf{梯度消失}，阻碍学习
+\end{itemize}
+\end{warningbox}
+
+\textbf{解决方案}：使用\textbf{缩放点积}（Scaled Dot Product）作为相似度函数：
+
+$$\text{similarity}(q, x) = \frac{q \cdot x}{\sqrt{d_q}}$$
+
+除以 $\sqrt{d_q}$ 使得无论维度如何变化，点积值的方差始终为 1，从而保证 softmax 的梯度行为稳定。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{缩放点积注意力：除以 $\sqrt{d_q}$ 防止高维度下 softmax 的梯度消失\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\subsection{第二步泛化：多查询并行}
+
+不再逐个处理查询向量，而是一次处理\textbf{所有查询向量}。将查询向量堆叠为矩阵 $Q$（$n_q \times d_q$），数据向量堆叠为矩阵 $X$（$n_x \times d_q$）。
+
+所有查询与所有数据向量的相似度可以通过一个\textbf{矩阵乘法}高效计算：
+
+$$E = \frac{Q X^T}{\sqrt{d_q}}$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{多查询注意力的矩阵形式：所有相似度通过一次矩阵乘法计算\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第23页。}
+
+注意力权重矩阵：$A = \text{softmax}(E, \text{dim}=\text{columns})$
+
+输出：$Y = A \cdot X$
+
+\begin{importantbox}{注意力 = 矩阵乘法}
+整个注意力操作可以表示为：
+$$\text{Attention}(Q, X) = \text{softmax}\left(\frac{QX^T}{\sqrt{d_q}}\right) X$$
+核心计算只有\textbf{两次矩阵乘法}（相似度计算 + 加权求和）加一次 softmax。矩阵乘法是 GPU 上最高效的操作——这正是注意力机制能够大规模扩展的关键。
+\end{importantbox}
+
+\subsection{第三步泛化：Key-Value 分离}
+
+在上述公式中，数据向量 $X$ 被使用了两次：
+\begin{enumerate}
+    \item 与查询向量计算相似度（``你与我有多匹配？''）
+    \item 作为加权求和的对象（``匹配后我能获得什么信息？''）
+\end{enumerate}
+
+这两种用途本质上不同。因此，我们引入两个可学习的线性投影，将数据向量分别投影为：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{Key-Value 分离：数据向量通过两个不同的线性投影分别生成 Key（用于匹配）和 Value（用于信息检索）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+\begin{itemize}
+    \item \textbf{Key 向量} $K = X W_K$：用于与 Query 计算相似度
+    \item \textbf{Value 向量} $V = X W_V$：用于在加权求和中提供信息
+\end{itemize}
+
+\begin{knowledgebox}{Key-Query-Value 的搜索引擎类比}
+Justin Johnson 用搜索引擎来类比 KQV：
+\begin{itemize}
+    \item \textbf{Query}（查询）：你在搜索框中输入的问题——``世界上最好的学校是哪个？''
+    \item \textbf{Key}（键）：后端数据库中每条记录的索引标签——用于匹配查询
+    \item \textbf{Value}（值）：匹配成功后返回的实际内容——``Stanford''
+\end{itemize}
+Query 需要与 Key 匹配来找到相关数据，但返回的信息（Value）与 Key 不同。这种分离让网络能够灵活地学习``如何查找''和``返回什么''。
+\end{knowledgebox}
+
+最终的注意力公式：
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_q}}\right) V$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-028.jpg}
+\caption{完整的 Key-Query-Value 注意力操作流程：Query 与 Key 计算相似度 $\rightarrow$ softmax $\rightarrow$ 对 Value 加权求和 $\rightarrow$ 输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+\subsection{本章小结}
+
+通过三步泛化——缩放点积、多查询并行、Key-Value 分离——我们将 RNN 中的注意力机制提升为一个独立的、通用的神经网络算子。整个操作本质上就是几次矩阵乘法加一次 softmax，高度适合 GPU 并行计算。
+
+%% ========== Cross Attention 与 Self Attention ==========
+
+\section{Cross Attention 与 Self Attention}
+
+\subsection{Cross Attention}
+
+当 Query 向量和 Data 向量来自\textbf{两个不同的来源}时，这种注意力称为 \textbf{Cross Attention}（交叉注意力）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{Cross Attention：Query 向量和 Data 向量来自不同的源。典型应用：机器翻译中解码器关注编码器、图像描述中文本生成器关注图像特征\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+Cross Attention 的典型应用场景：
+\begin{itemize}
+    \item \textbf{机器翻译}：解码器的状态（Query）关注编码器的隐藏状态（Key/Value）
+    \item \textbf{图像描述}：生成的文本 token（Query）关注图像的 patch 特征（Key/Value）
+    \item \textbf{多模态融合}：一种模态的表示（Query）从另一种模态中检索信息
+\end{itemize}
+
+\subsection{Self Attention}
+
+当 Query、Key、Value \textbf{全部来自同一组输入向量}时，这种注意力称为 \textbf{Self Attention}（自注意力）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{Self Attention：每个输入向量同时被投影为 Query、Key 和 Value。每个向量都能``看到''所有其他向量\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+\begin{importantbox}{Self Attention 的计算}
+给定 $n$ 个输入向量 $X \in \mathbb{R}^{n \times d_{\text{in}}}$，self attention 通过三个可学习的权重矩阵将每个输入投影为 Query、Key 和 Value：
+
+$$Q = X W_Q, \quad K = X W_K, \quad V = X W_V$$
+
+然后执行标准的注意力计算：
+$$Y = \text{softmax}\left(\frac{QK^T}{\sqrt{d_q}}\right) V$$
+
+输出 $Y \in \mathbb{R}^{n \times d_v}$，与输入具有\textbf{相同数量}的向量。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Cross Attention 处理两个不同源的交互（如翻译中的源语言和目标语言），Self Attention 处理同一组向量内部的交互（如一个句子中词与词之间的关系）。Self Attention 是 Transformer 的核心构件。
+
+%% ========== 置换等变性与位置编码 ==========
+
+\section{Self Attention 的重要性质}
+
+\subsection{置换等变性}
+
+Self Attention 有一个重要的数学性质：\textbf{置换等变性}（Permutation Equivariance）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-034.jpg}
+\caption{置换等变性：如果打乱输入向量的顺序，输出向量也会以相同方式打乱，但每个输出向量的值不变\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第35页。}
+
+\begin{importantbox}{Self Attention 操作于集合而非序列}
+因为 Self Attention 具有置换等变性，它实际上\textbf{不关心输入向量的顺序}——它将输入视为一个无序\textbf{集合}（set），而非有序\textbf{序列}（sequence）。
+
+这既是优势也是挑战：
+\begin{itemize}
+    \item \textbf{优势}：天然适合处理无序数据（如点云、图的节点集合）
+    \item \textbf{挑战}：对于语言等有序数据，需要额外机制来注入位置信息
+\end{itemize}
+\end{importantbox}
+
+\subsection{位置编码（Positional Encoding）}
+
+为了让 Self Attention 感知输入的顺序，我们在每个输入向量上\textbf{拼接}（或相加）一个\textbf{位置编码}（Positional Embedding），告诉模型每个向量在序列中的位置。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{位置编码：在每个输入向量上附加位置信息，使 Self Attention 能区分不同位置的相同内容\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\begin{knowledgebox}{位置编码的常见方法}
+\begin{itemize}
+    \item \textbf{正弦/余弦编码}（原始 Transformer）：使用不同频率的正弦函数，无需训练
+    \item \textbf{可学习位置编码}：每个位置对应一个可训练的向量
+    \item \textbf{旋转位置编码}（RoPE）：通过旋转矩阵将位置信息编码到 Query/Key 中，支持外推到更长序列
+    \item \textbf{相对位置编码}：编码向量之间的相对距离而非绝对位置
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Self Attention 天然具有置换等变性，本质上处理的是无序集合。位置编码是让注意力机制处理有序序列数据的关键补丁。
+
+%% ========== Masked Attention ==========
+
+\section{Masked Self Attention}
+
+\subsection{为什么需要 Masking}
+
+在语言建模等自回归任务中，生成第 $t$ 个 token 时\textbf{不应该看到}位置 $t+1, t+2, \ldots$ 的信息——否则就是``作弊''。但标准的 Self Attention 允许每个位置看到所有其他位置。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{Masked Self Attention：通过将未来位置的对齐分数设为 $-\infty$，在 softmax 后这些位置的注意力权重变为 0\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+\subsection{实现方式}
+
+在计算完对齐分数 $E = \frac{QK^T}{\sqrt{d_q}}$ 之后：
+
+\begin{enumerate}
+    \item 构造一个\textbf{因果掩码}（causal mask）矩阵 $M$，其中位置 $(i,j)$：
+    \begin{itemize}
+        \item 若 $j \leq i$（允许看到），$M_{ij} = 0$
+        \item 若 $j > i$（不允许看到），$M_{ij} = -\infty$
+    \end{itemize}
+    \item 将掩码加到对齐分数上：$E' = E + M$
+    \item 执行 softmax：因为 $e^{-\infty} = 0$，被掩码的位置注意力权重为 0
+\end{enumerate}
+
+\begin{importantbox}{Masked Self Attention 用于语言建模}
+所有现代的自回归语言模型（GPT 系列、LLaMA、Claude 等）都使用 Masked Self Attention（也称为 Causal Attention）。它确保模型在训练时只能依赖已经生成的 token，与推理时的自回归生成过程保持一致。
+
+这也是所谓``decoder-only transformer''（仅解码器 Transformer）的核心——不需要单独的编码器和解码器，只需一个带因果掩码的 Self Attention 层栈。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Masked Self Attention 通过在注意力分数中注入 $-\infty$ 来阻止信息的``前向泄露''，使得 Self Attention 可以用于自回归生成任务。这是现代语言模型的基础构件。
+
+%% ========== Multi-Head Attention ==========
+
+\section{多头注意力（Multi-Head Attention）}
+
+\subsection{动机与设计}
+
+单个 Self Attention 层使用一组 $W_Q, W_K, W_V$ 矩阵。为了增加模型的容量和表达能力，我们可以运行 $H$ 个\textbf{独立}的 Self Attention``头''（head）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{Multi-Head Attention：$H$ 个独立的 Self Attention 头并行处理相同的输入，各自有不同的权重矩阵，输出拼接后通过线性投影融合\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+\begin{importantbox}{Multi-Head Attention 的计算}
+\begin{enumerate}
+    \item 对输入 $X$，每个头 $h$ 独立计算 $Q^h, K^h, V^h$（使用各自的权重矩阵）
+    \item 每个头独立执行注意力：$Y^h = \text{Attention}(Q^h, K^h, V^h)$
+    \item 将所有头的输出拼接：$[Y^1; Y^2; \ldots; Y^H]$
+    \item 通过一个线性投影 $W_O$ 融合所有头的信息
+\end{enumerate}
+
+每个头可以学习关注输入的不同方面：
+\begin{itemize}
+    \item 某个头可能学会关注语法结构
+    \item 另一个头可能关注语义相似性
+    \item 还有的头可能关注局部上下文
+\end{itemize}
+\end{importantbox}
+
+\subsection{计算效率}
+
+尽管 Multi-Head Attention 看起来很复杂，但整个操作本质上只是\textbf{四次（批量）矩阵乘法}：
+
+\begin{enumerate}
+    \item \textbf{QKV 投影}：一次矩阵乘法，将输入投影为所有头的 Q、K、V
+    \item \textbf{Q-K 相似度}：一次批量矩阵乘法，计算所有头的注意力分数
+    \item \textbf{V 加权}：一次批量矩阵乘法，对 Value 进行加权求和
+    \item \textbf{输出投影}：一次矩阵乘法，融合所有头的输出
+\end{enumerate}
+
+\begin{knowledgebox}{实际实现中的高效技巧}
+在实际代码中，$H$ 个头的计算并不需要 for 循环，而是通过\textbf{张量重塑}（reshape）和\textbf{批量矩阵乘法}（batched matmul）来并行计算。三个投影矩阵 $W_Q, W_K, W_V$ 也通常拼接为一个大矩阵，用一次矩阵乘法完成所有投影。这使得 Multi-Head Attention 在 GPU 上非常高效。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Multi-Head Attention 通过运行多个独立的注意力头来增加模型容量。每个头学习不同的注意力模式，最终通过线性投影融合。整个操作高度适合 GPU 并行计算。
+
+%% ========== 三大序列处理原语对比 ==========
+
+\section{三大序列处理原语对比}
+
+在本课程中，我们已经学习了三种不同的神经网络原语来处理序列/结构化数据：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{RNN vs CNN vs Self Attention 的对比：各自擅长的数据类型、并行性和扩展性\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+ & \textbf{RNN} & \textbf{CNN} & \textbf{Self Attention} \\
+\midrule
+\textbf{操作对象} & 1D 有序序列 & 多维网格 & 无序向量集合 \\
+\textbf{信息交互范围} & 理论无限 & 局部（核大小） & 全局（一层即可） \\
+\textbf{序列方向并行性} & 不可 & 可以 & 可以 \\
+\textbf{计算复杂度} & $O(n)$ & $O(n)$ & $O(n^2)$ \\
+\textbf{长距离依赖} & 困难（梯度消失） & 需要多层 & 一层直达 \\
+\textbf{可扩展性} & 差 & 中 & 好 \\
+\bottomrule
+\end{tabular}
+\caption{三种序列处理原语的对比}
+\end{table}
+
+\begin{warningbox}{Self Attention 的 $O(n^2)$ 代价}
+Self Attention 的计算和内存复杂度都是 $O(n^2)$（$n$ 为序列长度）：
+\begin{itemize}
+    \item 需要计算所有 $n \times n$ 对的相似度
+    \item 需要存储 $n \times n$ 的注意力矩阵
+\end{itemize}
+当 $n = 100{,}000$ 甚至 $n = 1{,}000{,}000$ 时，这会变得非常昂贵。但 Justin Johnson 指出，\textbf{更多计算并不一定是坏事}——更多的计算意味着网络有更强的``思考''能力。解决方案是：买更多 GPU。
+\end{warningbox}
+
+\begin{importantbox}{Attention is All You Need}
+在三种原语中，Self Attention 凭借以下优势胜出：
+\begin{enumerate}
+    \item \textbf{全局信息交互}：一层 Self Attention 就能让所有位置互相``看到''
+    \item \textbf{高度并行}：核心计算是矩阵乘法，完美适配 GPU
+    \item \textbf{可扩展性}：通过增加硬件即可处理更大的模型和更长的序列
+\end{enumerate}
+这正是 2017 年那篇标志性论文的标题所传达的信息：``Attention is All You Need''。
+\end{importantbox}
+
+\subsection{本章小结}
+
+RNN 擅长序列但不可并行，CNN 擅长网格但感受野有限，Self Attention 擅长全局交互但代价是 $O(n^2)$ 复杂度。在现代深度学习的规模下，Self Attention 的可扩展性使其成为首选。
+
+%% ========== Transformer 架构 ==========
+
+\section{Transformer 架构}
+
+\subsection{Transformer Block}
+
+Transformer 的核心构件是\textbf{Transformer Block}，由以下组件按顺序组成：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{Transformer Block 的结构：Multi-Head Self Attention $\rightarrow$ 残差连接 $\rightarrow$ Layer Norm $\rightarrow$ MLP $\rightarrow$ 残差连接 $\rightarrow$ Layer Norm\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+\begin{importantbox}{Transformer Block 的四个核心组件}
+\begin{enumerate}
+    \item \textbf{Multi-Head Self Attention}：让所有向量互相交互——``集体讨论''
+    \item \textbf{MLP / FFN}：对每个向量独立进行非线性变换——``独立思考''
+    \item \textbf{残差连接}（Residual Connection）：围绕 Self Attention 和 MLP 各加一个跳跃连接——改善梯度流动（与 ResNet 相同的原理）
+    \item \textbf{Layer Normalization}：在残差连接之后进行归一化——稳定训练过程
+\end{enumerate}
+
+Self Attention 和 MLP \textbf{协同工作}：
+\begin{itemize}
+    \item Self Attention 负责\textbf{向量间}的信息交流
+    \item MLP 负责\textbf{向量内}的非线性处理
+\end{itemize}
+\end{importantbox}
+
+\subsection{完整 Transformer 模型}
+
+一个完整的 Transformer 就是将多个 Transformer Block \textbf{堆叠}在一起：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{完整 Transformer 模型：多个 Transformer Block 的堆叠。原始 Transformer（2017）约 12 个 Block、2 亿参数；现代模型可达数百个 Block、数万亿参数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+\begin{knowledgebox}{Transformer 的规模演变}
+\begin{itemize}
+    \item \textbf{2017}（原始 Transformer）：约 12 个 Block，$\sim$200M 参数
+    \item \textbf{2020}（GPT-3）：96 个 Block，175B 参数
+    \item \textbf{2023--2025}（现代大模型）：数百个 Block，数万亿参数
+    \item 架构本身变化极小——核心的 Self Attention + MLP + 残差 + LayerNorm 结构始终未变
+    \item 性能提升主要来自\textbf{更大的规模}和\textbf{更多的训练数据}
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{Transformer 用于语言建模}
+
+将 Transformer 用于自回归语言建模：
+
+\begin{enumerate}
+    \item 将文本序列分割为 token
+    \item 每个 token 通过 Embedding 层映射为向量
+    \item 添加位置编码
+    \item 通过多层 Transformer Block（带因果掩码的 Self Attention）
+    \item 最终层输出经过线性投影 + softmax，预测下一个 token 的概率分布
+\end{enumerate}
+
+\subsection{Vision Transformer (ViT)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{Vision Transformer (ViT)：将图像切分为 patch，每个 patch 投影为向量，送入标准 Transformer 处理\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。}
+
+Transformer 同样可以处理图像：
+
+\begin{enumerate}
+    \item 将图像划分为固定大小的\textbf{patch}（如 $16 \times 16$ 像素）
+    \item 每个 patch 通过线性投影映射为向量
+    \item 添加位置编码
+    \item 通过标准 Transformer Block 处理
+    \item 对输出向量进行池化，通过线性层预测类别
+\end{enumerate}
+
+\begin{importantbox}{一种架构，多种数据}
+Transformer 的强大之处在于其\textbf{通用性}：
+\begin{itemize}
+    \item \textbf{语言}：token $\rightarrow$ embedding $\rightarrow$ Transformer
+    \item \textbf{图像}：patch $\rightarrow$ linear projection $\rightarrow$ Transformer
+    \item \textbf{音频}：频谱帧 $\rightarrow$ linear projection $\rightarrow$ Transformer
+    \item \textbf{视频}：时空 patch $\rightarrow$ linear projection $\rightarrow$ Transformer
+\end{itemize}
+同一种架构，只需改变输入的``向量化''方式，就能应用于截然不同的数据模态。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Transformer 架构由 Self Attention + MLP + 残差连接 + Layer Norm 四个组件构成。它的设计简洁、高度可扩展，自 2017 年以来几乎统治了深度学习的所有领域。通过不同的输入编码方式，同一个 Transformer 架构可以处理语言、图像、音频等多种数据类型。
+
+%% ========== 拓展阅读 ==========
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Vaswani et al.: \textit{Attention Is All You Need}, NeurIPS 2017 \url{https://arxiv.org/abs/1706.03762}
+    \item Bahdanau et al.: \textit{Neural Machine Translation by Jointly Learning to Align and Translate}, ICLR 2015 \url{https://arxiv.org/abs/1409.0473}
+    \item Dosovitskiy et al.: \textit{An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale}, ICLR 2021 \url{https://arxiv.org/abs/2010.11929}
+    \item Jay Alammar: \textit{The Illustrated Transformer} \url{https://jalammar.github.io/illustrated-transformer/}
+    \item Lilian Weng: \textit{Attention? Attention!} \url{https://lilianweng.github.io/posts/2018-06-24-attention/}
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+Justin Johnson 在课程结尾强调了两个核心贡献：
+
+\begin{enumerate}
+    \item \textbf{Attention}：一种新的计算原语，本质上操作于向量集合之上。它高度可并行、可扩展，核心计算只有几次矩阵乘法。
+    \item \textbf{Transformer}：以 Self Attention 为核心的神经网络架构。自 2017 年以来统治了深度学习的几乎所有领域，从语言到视觉到多模态。
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (rnn) {RNN Encoder-Decoder};
+\node (bottle) [below=of rnn] {固定向量瓶颈};
+\node (att) [below=of bottle] {Attention 机制};
+\node (gen) [below=of att] {通用注意力算子};
+\node (self) [below=of gen] {Self Attention};
+\node (tf) [below=of self] {Transformer};
+\draw[->, thick] (rnn) -- (bottle);
+\draw[->, thick] (bottle) -- (att);
+\draw[->, thick] (att) -- (gen);
+\draw[->, thick] (gen) -- (self);
+\draw[->, thick] (self) -- (tf);
+\node[draw=none, right=0.8cm of rnn, text width=5cm, font=\scriptsize] {Seq2Seq 机器翻译};
+\node[draw=none, right=0.8cm of bottle, text width=5cm, font=\scriptsize] {Context Vector 信息丢失};
+\node[draw=none, right=0.8cm of att, text width=5cm, font=\scriptsize] {动态回看输入、可微对齐};
+\node[draw=none, right=0.8cm of gen, text width=5cm, font=\scriptsize] {缩放点积、KQV 分离、矩阵乘法};
+\node[draw=none, right=0.8cm of self, text width=5cm, font=\scriptsize] {置换等变、位置编码、Masking};
+\node[draw=none, right=0.8cm of tf, text width=5cm, font=\scriptsize] {MHA + MLP + 残差 + LayerNorm};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{六条核心原则}
+\begin{enumerate}
+    \item \textbf{注意力的本质是动态的信息检索}：给定查询，从数据中按相关性加权提取信息
+    \item \textbf{KQV 分离是关键设计}：让网络分别学习``如何匹配''（Key-Query）和``返回什么''（Value）
+    \item \textbf{Self Attention 操作于集合}：天然不感知顺序，需要位置编码来注入序列信息
+    \item \textbf{注意力本质上是矩阵乘法}：四次 matmul 就是整个 Multi-Head Self Attention
+    \item \textbf{Transformer = Attention + MLP + 残差 + 归一化}：简洁的组合，强大的效果
+    \item \textbf{并行性决定可扩展性}：Transformer 之所以胜出，是因为它能充分利用大规模并行硬件
+\end{enumerate}
+\end{importantbox}
+
+\end{document}

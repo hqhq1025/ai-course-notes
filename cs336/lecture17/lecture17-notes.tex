@@ -1,0 +1,461 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 17: Policy Gradient Mechanics and GRPO}
+\newcommand{\noteauthors}{基于课程字幕与讲义脚本整理}
+\newcommand{\notedate}{2025年3月26日}
+\newcommand{\videochannel}{CS336 / Stanford}
+\newcommand{\videopublishdate}{2025-03-26}
+\newcommand{\videoduration}{约 31 分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{引言：为什么要讲 policy gradient}
+
+这一讲是本课程的最后一讲，由于前一讲已经概览了 \emph{reinforcement learning from verifiable rewards} 和策略梯度类方法，这一讲不再引入全新框架，而是把 policy gradient 和 GRPO 的机制掰开揉碎，重点看三个问题：
+\begin{enumerate}
+    \item 在语言模型里，RL 的 \textbf{state}、\textbf{action}、\textbf{reward} 到底对应什么；
+    \item 为什么 naive policy gradient 会有高方差，baseline 和 advantage 为什么能缓解它；
+    \item GRPO 在代码里到底怎么跑，为什么要用 group 内平均奖励做比较。
+\end{enumerate}
+
+\begin{importantbox}{这一讲的核心}
+\begin{itemize}
+    \item \textbf{如果你能度量，就能优化}，但 RL 的难点在于度量很稀疏、很噪声。
+    \item \textbf{策略梯度本身不神秘}，本质上就是对 $\log \pi(a \mid s)$ 乘上一个奖励信号。
+    \item \textbf{baseline 的作用是降方差}，不是改变优化目标。
+\end{itemize}
+\end{importantbox}
+
+\section{语言模型里的 RL 设定}
+
+\subsection{state, action, reward}
+
+把整段 response 记作一个动作 $a$，语言模型 RL 的对应关系非常直接：
+\begin{itemize}
+    \item \textbf{State $s$}：prompt 加上已经生成的 response 前缀。
+    \item \textbf{Action $a$}：生成下一个 token，或者在 outcome reward 视角里，直接把整段 response 看成一个动作序列。
+    \item \textbf{Reward $R(s,a)$}：整段 response 的好坏，本文只讨论 \textbf{outcome reward} 和 \textbf{verifiable reward}。
+\end{itemize}
+
+字幕里强调了一点：在语言模型场景中，transition dynamics 基本就是拼接操作。你做出的下一状态就是
+\[
+s' = s + a
+\]
+也就是把 token 继续 append 到上下文里。这和机器人控制非常不同，后者的状态由物理世界决定，语言模型的状态则更像是“自己写出来的中间草稿”。
+
+\begin{knowledgebox}{语言模型里的 state 很“虚”}
+在 robotics 中，state 可能是关节角、速度、图像；在 LM 中，state 只是 token 序列。这个差别意味着：
+\begin{itemize}
+    \item LM 可以自由构造 scratchpad；
+    \item LM 可以在 test time 做 planning / search；
+    \item 但 reward 往往更稀疏，正确与错误的边界也更硬。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{目标函数}
+
+如果把 prompt 视作由环境给出的 $s$，response 视作 policy 采样出来的 $a$，那么目标就是最大化期望奖励：
+\[
+\max_\pi \; \mathbb{E}_{s \sim p(s),\, a \sim \pi(\cdot \mid s)}[R(s,a)].
+\]
+
+在 outcome reward 设定下，reward 只在整段输出结束后给出，因此 discounting、bootstrapping 这些经典 RL 概念在这里不那么核心。
+
+\section{Policy Gradient 的基本推导}
+
+\subsection{从期望奖励到 log-derivative trick}
+
+为了记号简洁，把整段 response 当作一个整体动作 $a$。那么
+\[
+\mathbb{E}[R] = \int p(s)\,\pi(a \mid s)\,R(s,a)\,ds\,da.
+\]
+
+对 policy 参数求梯度：
+\[
+\nabla \mathbb{E}[R]
+= \int p(s)\,\nabla \pi(a \mid s)\,R(s,a)\,ds\,da
+= \int p(s)\,\pi(a \mid s)\,\nabla \log \pi(a \mid s)\,R(s,a)\,ds\,da.
+\]
+
+于是得到熟悉的形式：
+\[
+\nabla \mathbb{E}[R] = \mathbb{E}\big[\nabla \log \pi(a \mid s)\,R(s,a)\big].
+\]
+
+\begin{importantbox}{policy gradient 的直觉}
+\begin{itemize}
+    \item 采到好样本，就提高它的概率；
+    \item 采到差样本，就降低它的概率；
+    \item 变化的幅度由 reward 决定。
+\end{itemize}
+\end{importantbox}
+
+\subsection{naive policy gradient}
+
+最朴素的做法就是：
+\begin{enumerate}
+    \item 采样一个 prompt $s$；
+    \item 从当前 policy 采样 response $a$；
+    \item 用 $\nabla \log \pi(a \mid s)\,R(s,a)$ 更新参数。
+\end{enumerate}
+
+这和 supervised fine-tuning 很像，只不过监督数据不是人工标注，而是模型自己采样出来后再按 reward 过滤和加权。
+
+\begin{warningbox}{稀疏奖励会把更新打空}
+如果 $R \in \{0,1\}$，多数样本 reward 都是 0，那么很多 batch 的梯度就是近似 0。模型如果一开始就很差，可能连“碰到正奖励样本”的机会都很少。
+\end{warningbox}
+
+\section{为什么要 baseline}
+
+\subsection{高方差问题}
+
+在语言模型 RL 中，reward 往往是稀疏的、延迟的、并且分布差异很大。字幕里的 toy 例子把这个问题讲得很直白：
+
+\begin{itemize}
+    \item state $s_1$ 的 reward 可能是 11 或 9；
+    \item state $s_2$ 的 reward 可能是 0 或 2；
+    \item 直接拿 reward 做更新，会出现“9 比 2 大，所以看起来更值得强化”的局部错觉。
+\end{itemize}
+
+但是从全局看，$s_2$ 明显更难、reward 更低，不能只看绝对值。这里真正要比较的是“\textbf{这个 action 比在当前 state 下的平均水平好多少}”。
+
+\subsection{baseline 不改变目标}
+
+引入 baseline $b(s)$ 后，我们优化的是
+\[
+\mathbb{E}[R - b(s)].
+\]
+只要 baseline 不依赖动作 $a$，这个变换不会改变原来的最优解，因为
+\[
+\mathbb{E}[b(s)] = \int p(s)\,b(s)\,ds
+\]
+与 policy 无关，因而只是加了一个常数项。
+
+\begin{knowledgebox}{baseline 的要求}
+baseline 可以依赖 state，不能依赖 action。直观上，它是“当前 state 下你本来就该得到多少”的参照线。
+\end{knowledgebox}
+
+\subsection{方差为什么会下降}
+
+在 toy 例子里，原始 reward 的方差大约是 5.3；如果对两个 state 分别取 baseline 10 和 1，方差会降到约 1.1。这个例子想说明的不是某个数值，而是一个原则：
+
+\begin{importantbox}{baseline 的作用}
+\begin{itemize}
+    \item 保留期望优化方向；
+    \item 压缩无用的绝对量级差异；
+    \item 让梯度更新更稳定、更快收敛。
+\end{itemize}
+\end{importantbox}
+
+\subsection{advantage function}
+
+经典 RL 里有：
+\[
+V(s) = \mathbb{E}[R \mid s], \qquad Q(s,a)=\mathbb{E}[R \mid s,a],
+\]
+以及 advantage：
+\[
+A(s,a)=Q(s,a)-V(s).
+\]
+
+在这一讲的 outcome reward 设定里，$Q$ 和 $R$ 基本可以视为同一个量，因此当 baseline 取成
+\[
+b(s) = \mathbb{E}[R \mid s]
+\]
+时，$R - b(s)$ 就是 advantage 的形式。
+
+\begin{warningbox}{难点不在公式，而在估计}
+理论上最优 baseline 可以写出 closed form，但实际里很难精确计算期待值，所以大家通常用样本平均、group mean，或者 value model 去近似它。
+\end{warningbox}
+
+\section{GRPO 的直觉}
+
+\subsection{为什么是 group relative}
+
+GRPO 的关键不在于名字，而在于它利用了语言模型的自然分组结构：
+\begin{itemize}
+    \item 同一个 prompt 可以采样出多条 response；
+    \item 这些 response 天然构成一个 group；
+    \item group 内平均 reward 就是一个很自然的 baseline。
+\end{itemize}
+
+这就是 “relative” 的来源。它比较的是“同一 prompt 下，谁比同组其他 response 更好”。
+
+\begin{knowledgebox}{为什么 GRPO 适合语言模型}
+对同一个 prompt 采样多条 response，本来就是 LM 训练里最自然的采样单位，因此 baseline 不必再从全局状态空间拟合，而可以在 group 内做相对比较。
+\end{knowledgebox}
+
+\subsection{和 PPO 的关系}
+
+课程里把 GRPO 描述成一种 \textbf{不需要 critic} 的 PPO 风格简化版。你仍然会看到：
+\begin{itemize}
+    \item policy ratio；
+    \item clipping；
+    \item 参考策略或旧策略；
+    \item KL regularization。
+\end{itemize}
+
+但 group 结构让 baseline 近似得更自然，所以实现上可以更轻。
+
+\section{一个可训练的 toy problem}
+
+\subsection{排序任务}
+
+为了能在本地跑通，讲义脚本构造了一个很小的 RL 任务：给定一组数字，模型要输出排序后的序列。
+
+\begin{itemize}
+    \item Prompt：一组数字；
+    \item Response：希望是排序后的数字；
+    \item Reward：衡量 response 和排序答案接近的程度。
+\end{itemize}
+
+这里故意不直接用 “完全正确 = 1，否则 0” 的极端奖励，而是设计了两个版本：
+\begin{enumerate}
+    \item \textbf{位置匹配奖励}：response 与 ground truth 在多少位置上一致；
+    \item \textbf{inclusion + ordering 奖励}：既看 token 是否出现，也看局部顺序是否合理。
+\end{enumerate}
+
+\begin{importantbox}{为什么要给 partial credit}
+如果只给 0/1 奖励，大量样本都没有学习信号。给 partial credit 可以让模型在“还没完全做对”时也能得到有用反馈。
+\end{importantbox}
+
+\subsection{模型结构}
+
+脚本里的 toy model 很小，但足够展示 policy gradient 的机制：
+\begin{itemize}
+    \item prompt 和 response 长度固定；
+    \item 每个位置有独立的 encode/decode 参数；
+    \item 最后通过 embedding weight 生成 logits。
+\end{itemize}
+
+这不是一个真实的 transformer，而是一个便于分析的最简模型。
+
+\subsection{采样和打分}
+
+训练流程大致如下：
+\begin{enumerate}
+    \item 输入 prompt；
+    \item 从当前模型采样多个 responses；
+    \item 用 reward function 对每条 response 打分；
+    \item 根据 delta 形式构造更新信号；
+    \item 用 policy gradient 更新模型。
+\end{enumerate}
+
+\section{delta 的几种选择}
+
+脚本里把用于更新的量统一记成 $\delta$，然后尝试了几种常见做法：
+
+\begin{itemize}
+    \item \textbf{rewards}：直接用 raw rewards；
+    \item \textbf{centered rewards}：减去 group mean；
+    \item \textbf{normalized rewards}：再除以标准差；
+    \item \textbf{max rewards}：只保留组内最大 reward。
+\end{itemize}
+
+\begin{knowledgebox}{最常见的是 centered rewards}
+在同一个 prompt 的多个 response 里，减掉 group mean 是最自然的 baseline 近似。它对应“相对同组平均表现的好坏”。
+\end{knowledgebox}
+
+\section{loss 的几种形式}
+
+\subsection{naive loss}
+
+最直接的 loss 是
+\[
+\mathcal{L}_{\text{naive}} = -\mathbb{E}[\log \pi(a \mid s)\,\delta].
+\]
+它就是把 log probability 和 reward 信号直接乘起来。
+
+\subsection{old policy ratio}
+
+如果引入旧策略 $\pi_{\text{old}}$，则会出现 ratio：
+\[
+\frac{\pi(a\mid s)}{\pi_{\text{old}}(a\mid s)}.
+\]
+脚本里把它写成 log prob 差：
+\[
+\exp(\log \pi - \log \pi_{\text{old}}).
+\]
+
+\begin{warningbox}{旧策略必须 freeze}
+`old policy` 只能当常量用，不能让梯度穿过去。否则 ratio 的意义会被破坏，整个优化会偏掉。
+\end{warningbox}
+
+\subsection{clipping}
+
+和 PPO 类似，ratio 太大或太小时都不稳定，所以会做 clipping：
+\[
+r = \frac{\pi}{\pi_{\text{old}}}, \qquad
+\tilde r = \mathrm{clip}(r, 1-\epsilon, 1+\epsilon).
+\]
+最后用 unclipped 和 clipped 的较小者构成保守更新。
+
+\subsection{KL penalty}
+
+如果担心 RL 把模型带偏太远，还可以加 reference model 的 KL penalty：
+\[
+\mathrm{KL}(p\|q) = \mathbb{E}_{x\sim p}\!\left[\log \frac{p(x)}{q(x)}\right].
+\]
+脚本里用了一个数值上可算的估计：
+\[
+\mathbb{E}_p\!\left[\frac{q}{p} - \log\frac{q}{p} - 1\right].
+\]
+
+\begin{importantbox}{KL penalty 的作用}
+它是“别忘了原来的模型能力”的安全带。你想让模型获得新能力，但又不想把旧能力完全冲掉。
+\end{importantbox}
+
+\section{训练流程}
+
+\subsection{GRPO 风格的循环}
+
+脚本中的训练循环可以概括为：
+\begin{enumerate}
+    \item 采样一批 prompts；
+    \item 对每个 prompt 采样多个 responses；
+    \item 计算 rewards 和 deltas；
+    \item 可选地计算 reference model 的 log probs；
+    \item 用当前 policy 的 log probs 算 loss；
+    \item 反向传播，更新参数。
+\end{enumerate}
+
+\subsection{实验现象}
+
+课程脚本尝试了三种设置：
+\begin{itemize}
+    \item raw rewards；
+    \item centered rewards；
+    \item normalized rewards。
+\end{itemize}
+
+结论是：
+\begin{itemize}
+    \item raw rewards 往往学得慢，容易卡住；
+    \item centered rewards 更稳定一些；
+    \item normalized rewards 不一定有明显增益，甚至可能引入不必要的偏差；
+    \item 这类 toy RL 任务本身就很容易卡在局部最优。
+\end{itemize}
+
+\begin{warningbox}{RL 不是“设个 reward 就会自动学会”}
+即便任务和 reward 都写得很清楚，policy gradient 仍然可能因为方差、初始化和超参问题而学不动。
+\end{warningbox}
+
+\section{总结}
+
+\subsection{这一讲的结论}
+
+\begin{importantbox}{四个核心 takeaway}
+\begin{enumerate}
+    \item 在 LM 里，RL 的 state/action/reward 定义很自然，但 reward 往往非常稀疏。
+    \item Naive policy gradient 的形式简单，但方差很大。
+    \item Baseline 和 advantage 的本质是降方差，不是改目标。
+    \item GRPO 利用了同一 prompt 下多个 response 的 group 结构，所以在 LM 场景里特别合适。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{最后的提醒}
+
+这一讲其实在传达一个很朴素但重要的判断：
+\begin{quote}
+如果你能度量某个东西，就可以把它塞进 optimization loop 里，但真正困难的是让这个度量足够稳定、足够密、足够有用。
+\end{quote}
+
+这也是为什么 policy gradient 在语言模型里既强大又麻烦：它给了你直接优化目标的入口，也把训练稳定性问题完整暴露了出来。
+
+\subsection{参考}
+
+\begin{itemize}
+    \item Schulman et al., Proximal Policy Optimization Algorithms
+    \item Deep RL textbook / CS224R policy gradient notes
+    \item GRPO / verifiable rewards 相关课程材料
+\end{itemize}
+
+\end{document}

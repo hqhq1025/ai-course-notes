@@ -1,0 +1,743 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 15: 3D Vision}
+\newcommand{\noteauthors}{基于 Jiajun Wu 授课内容整理}
+\newcommand{\notedate}{2024}
+\newcommand{\videochannel}{Stanford CS231N}
+\newcommand{\videopublishdate}{2024}
+\newcommand{\videoduration}{约80分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=7lxrKDKtykM}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 3D 表示 ==========
+
+\section{引言：从 2D 到 3D}
+
+本节课由斯坦福大学助理教授 Jiajun Wu（吴佳俊）主讲，聚焦\textbf{3D 视觉}（3D Vision）。与前面几周讲的卷积神经网络、Transformer、视觉语言模型和生成模型不同，3D 视觉涉及一套全新的表示方式和方法论。
+
+\begin{importantbox}{本课三大主题}
+\begin{enumerate}
+    \item \textbf{3D 表示}：如何在计算机中表示三维物体的几何形状？有哪些显式/隐式表示方式？
+    \item \textbf{3D 深度学习}：如何将深度学习应用于不同的 3D 数据表示？
+    \item \textbf{3D 生成与重建}：如何利用 NeRF、3D Gaussian Splatting 等方法从 2D 图像重建或生成 3D 场景？
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{课程标题页：CS231N Lecture 15 --- 3D Vision\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第1页。}
+
+在 2D 图像中，表示方式非常统一——像素矩阵。但 3D 世界中，物体种类繁多、尺度各异，从大型建筑到细微纹理，需要多种不同的表示方式来捕捉几何、纹理、材质等信息。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{3D 物体的多样性：从城市建筑到精细雕塑，3D 表示需要处理不同尺度和复杂度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{为什么 3D 表示很重要}
+
+选择一种 3D 表示方式时，需要考虑多个因素：
+
+\begin{itemize}
+    \item \textbf{存储}：像素易于存储为矩阵，但 3D 点云是不规则的，隐式函数如何存储？
+    \item \textbf{创建}：如何从图片或语言描述生成新的 3D 形状？
+    \item \textbf{编辑操作}：简化、细分、平滑、修复等操作是否方便？
+    \item \textbf{渲染}：如何将 3D 物体渲染成 2D 图像？
+    \item \textbf{动画}：是否支持人体、动物等的运动模拟？
+    \item \textbf{与深度学习的集成}：能否方便地输入神经网络进行训练和推理？
+\end{itemize}
+
+\begin{knowledgebox}{3D 视觉的核心问题}
+3D 视觉在某种意义上是\textbf{渲染的逆过程}：渲染是从 3D 模型生成 2D 图像，而 3D 视觉是从 2D 图像重建 3D 世界。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+3D 视觉与 2D 图像处理有着本质区别——不存在统一的``像素''式表示。不同的 3D 表示方式各有优劣，选择取决于具体应用场景和与深度学习方法的兼容性。
+
+%% ========== 显式表示 ==========
+
+\section{显式 3D 表示}
+
+3D 物体的几何表示可以分为两大类：\textbf{显式表示}（Explicit）和\textbf{隐式表示}（Implicit）。显式表示直接给出物体表面或内部的具体坐标信息。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{3D 表示的两大分类：显式（点云、网格、参数化曲面）与隐式（水平集、代数曲面、距离函数）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。}
+
+\subsection{点云（Point Cloud）}
+
+点云是最简单的 3D 表示，由一组 3D 点的坐标构成，存储为 $3 \times N$ 矩阵（$xyz$ 坐标 $\times$ 点数）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{点云表示：每个点有 $xyz$ 坐标，可选附加法向量信息（Surfels）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\textbf{点云的优势}：
+\begin{itemize}
+    \item 是 3D 传感器（深度相机、3D 扫描仪、iPhone AR Kit 等）的\textbf{原始输出格式}
+    \item 非常灵活，不受拓扑约束，可以表示任意形状
+    \item 适合处理大规模多样化数据集
+\end{itemize}
+
+\textbf{点云的局限}：
+\begin{itemize}
+    \item 采样可能不均匀（兔子头部点多，尾部点少）
+    \item 没有连接信息，无法直接进行细分或简化操作
+    \item \textbf{缺乏拓扑信息}——仅凭点无法区分圆环（torus）和球体
+    \item 不支持平滑渲染
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{点云的来源与应用：3D 传感器扫描得到点云，需后处理融合为完整模型\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{warningbox}{点云缺乏拓扑信息}
+给定一组点，无法判断物体是实心的还是有孔的。例如，圆环和球体的点云在某些采样下可能看起来相似。这是点云表示的根本局限。
+\end{warningbox}
+
+\subsection{多边形网格（Polygon Mesh）}
+
+为了补充点云缺乏的连接信息，自然引入了\textbf{多边形网格}——不仅存储顶点，还存储面（面通常是三角形或四边形）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{多边形网格：顶点 + 面（连接关系），是图形引擎和游戏中最广泛使用的表示\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+网格是图形引擎和游戏中\textbf{最广泛使用}的 3D 表示。复杂的网格可以达到数千万三角形（如 5600 万三角形的 David 雕塑），甚至 Google Earth 使用\textbf{万亿级}三角形来表示地球表面。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-007.jpg}
+\caption{高精度网格示例：David 雕塑（5600万三角形）和大规模城市模型\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+网格支持丰富的操作：
+\begin{itemize}
+    \item \textbf{细分（Subdivision）}：增加三角形数量以捕捉更多细节
+    \item \textbf{简化（Simplification）}：减少三角形数量以提高处理速度
+    \item \textbf{正则化（Regularization）}：使三角形大小均匀、形状规则
+\end{itemize}
+
+\begin{warningbox}{网格与深度学习的兼容性挑战}
+网格的不规则性（每个面可能有不同数量的顶点，分辨率可变）使其难以直接输入标准 CNN。这是 3D 深度学习起步较晚的重要原因之一——人们需要找到将不规则 3D 数据适配到神经网络的方法。
+\end{warningbox}
+
+\subsection{参数化表示（Parametric Representations）}
+
+对于具有规则结构的物体（如圆、球、工业零件），可以用\textbf{参数函数}来表示其形状。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{参数化表示：用函数将低维参数空间映射到 3D 空间。圆可用 $(\cos t, \sin t)$ 表示，球可用两个参数 $(u, v)$ 映射\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页。}
+
+$$\text{圆：} \quad \mathbf{p}(t) = (\cos t, \sin t), \quad t \in [0, 2\pi]$$
+$$\text{球：} \quad \mathbf{p}(u, v) = (\sin u \cos v, \sin u \sin v, \cos u)$$
+
+更复杂的参数化表示包括 \textbf{B\'{e}zier 曲线/曲面}和 \textbf{B-Spline}，通过少量控制点就能表示光滑的自由曲面。
+
+\begin{importantbox}{显式表示的核心特点}
+显式表示\textbf{易于采样}——给定参数值，直接计算得到物体表面上的点。但\textbf{难以判断}某个任意点是在物体内部还是外部。
+\end{importantbox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 点云：最简单，是传感器的原始格式，但缺乏拓扑信息
+    \item 网格：最广泛使用，支持丰富操作，但不规则性使其难以直接与深度学习集成
+    \item 参数化曲面：用函数紧凑地表示规则形状，支持细分操作
+    \item 显式表示共同的优势是\textbf{采样容易}，共同的劣势是\textbf{内外判断困难}
+\end{itemize}
+
+%% ========== 隐式表示 ==========
+
+\section{隐式 3D 表示}
+
+\subsection{隐式函数的基本思想}
+
+隐式表示通过一个函数 $f(x, y, z) = 0$ 来定义物体表面：满足等式的点在表面上，$f < 0$ 的点在内部，$f > 0$ 的点在外部。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{隐式表示：单位球面满足 $x^2 + y^2 + z^2 - 1 = 0$。查询点代入函数即可判断内外\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+$$\text{单位球：} \quad f(x, y, z) = x^2 + y^2 + z^2 - 1 = 0$$
+
+\begin{importantbox}{隐式表示与显式表示的互补关系}
+\begin{itemize}
+    \item \textbf{显式表示}：采样容易（直接得到表面点），内外判断困难
+    \item \textbf{隐式表示}：内外判断容易（代入函数看符号），采样困难（需要求解方程）
+\end{itemize}
+这一对偶关系贯穿整个 3D 视觉研究。
+\end{importantbox}
+
+\subsection{隐式表示的组合性}
+
+隐式表示的一大优势是\textbf{组合性}（Composability）——可以通过布尔运算组合简单形状来构建复杂形状。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{隐式函数的布尔运算：并集、交集、差集。通过对函数值做 min/max 运算实现\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+给定两个隐式函数 $f_1$ 和 $f_2$：
+\begin{itemize}
+    \item \textbf{并集}：$\min(f_1, f_2)$
+    \item \textbf{交集}：$\max(f_1, f_2)$
+    \item \textbf{差集}：$\max(f_1, -f_2)$
+\end{itemize}
+
+这种组合能力广泛应用于\textbf{CAD（计算机辅助设计）}和工业制造中。
+
+\begin{knowledgebox}{有符号距离函数（SDF）}
+如果隐式函数的值表示到表面的\textbf{有符号距离}（内部为负，外部为正），则称为\textbf{有符号距离函数}（Signed Distance Function, SDF）。SDF 不仅能判断内外，还能通过加法实现形状的\textbf{平滑混合}（Smooth Blending），产生自然的过渡效果。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-013.jpg}
+\caption{SDF 的混合操作：两个距离函数相加即可实现平滑插值。通过组合 SDF 可以构建非常复杂的场景\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+\subsection{水平集方法与体素}
+
+对于复杂形状，闭合形式的隐式函数可能不存在。一个实用的方法是：在 3D 网格上\textbf{预计算}隐式函数值，存储为 3D 矩阵——这就是\textbf{水平集方法}（Level Set Method）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{水平集方法：在规则网格上预计算距离函数值，相邻值符号变化处即为物体表面\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第14页。}
+
+进一步简化——如果只关心每个网格点是在物体内部还是外部（二值化），就得到了\textbf{体素}（Voxel）表示。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{体素表示：3D 网格的二值化版本（1=内部, 0=外部），可以看作 3D 版本的像素\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+\begin{importantbox}{体素 = 3D 像素}
+体素（Voxel）是 2D 像素在 3D 空间的直接推广。像素是 $n \times n$ 矩阵，体素是 $n \times n \times n$ 3D 矩阵。这种类比使得体素成为\textbf{最早被深度学习采用}的 3D 表示——只需将 2D 卷积替换为 3D 卷积即可。
+\end{importantbox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 隐式表示通过函数 $f(x,y,z)=0$ 定义物体表面
+    \item 优势：内外判断容易，支持布尔组合，SDF 允许平滑混合
+    \item 劣势：采样困难，复杂形状难以写出闭合函数
+    \item 水平集和体素将隐式函数离散化为 3D 矩阵，便于存储和计算
+    \item 体素是最早与深度学习集成的 3D 表示
+\end{itemize}
+
+%% ========== 3D 数据集 ==========
+
+\section{3D 数据集}
+
+\subsection{数据集的演进}
+
+在深度学习时代之前，3D 数据集很小。Princeton Shape Benchmark 仅有 1800 个模型、180 个类别（平均每类 10 个模型）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-018.jpg}
+\caption{3D 数据集演进：从 Princeton Shape Benchmark（1800模型）到 ShapeNet（5万模型）再到 Objaverse-XL（1000万模型）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+关键里程碑：
+\begin{itemize}
+    \item \textbf{ShapeNet}（斯坦福主导）：300 万模型总量，常用子集 ShapeNet Core 有 5 万模型、55 个类别
+    \item \textbf{Objaverse / Objaverse-XL}（AI2）：100 万至 1000 万模型，涵盖更多类别和更高质量纹理
+    \item \textbf{CO3D}（Meta + Oxford）：真实物体的 360 度视频，约 19000 个物体
+    \item \textbf{ScanNet}：真实室内场景扫描，约 1500--3000 个房间
+\end{itemize}
+
+\begin{warningbox}{3D 数据远少于 2D 数据}
+即使最大的 3D 数据集（$\sim$1000万模型）也远小于 2D 图像数据集（LAION-5B 有 50 亿图像）。这个巨大的数据量差距是 3D 视觉面临的核心挑战之一，也是为什么越来越多的方法试图利用 2D 基础模型的先验知识来辅助 3D 理解。
+\end{warningbox}
+
+\subsection{3D 视觉的核心任务}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{3D 视觉任务总览：生成建模、条件生成（语言/图像）、3D 重建、形状补全、判别任务（分类/分割）、2D-3D 联合建模\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\subsection{本章小结}
+
+3D 数据集从千级规模发展到千万级，但仍远小于 2D 数据。利用大规模 2D 基础模型的先验知识来弥补 3D 数据不足，正成为主流研究方向。
+
+%% ========== 3D 深度学习方法 ==========
+
+\section{深度学习在 3D 数据上的方法}
+
+\subsection{方法一：多视图 CNN（Multi-view CNN）}
+
+最早将深度学习应用到 3D 数据的方法非常直接：将 3D 物体从多个角度渲染成 2D 图像，然后用已有的 2D CNN（如在 ImageNet 上预训练的模型）进行分类。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{多视图方法：将 3D 物体从多角度渲染为 2D 图像，用 2D CNN 分别处理后融合\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\begin{knowledgebox}{多视图方法的回归}
+多视图方法最初因为``不够 3D native''而被研究者抛弃，但随着 2D 图像/视频基础模型（如 V3 等）变得越来越强大，这一趋势正在回归——因为 2D 模型训练所用数据量可能比 3D 数据多百万倍。
+\end{knowledgebox}
+
+\subsection{方法二：体素 CNN（Volumetric CNN）}
+
+最直接的 3D 原生方法：将 2D 卷积扩展为 3D 卷积，在体素数据上运行。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-022.jpg}
+\caption{3D CNN / 体素卷积网络：将 2D 卷积核扩展为 3D，直接在体素数据上运行\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+\begin{warningbox}{体素方法的计算瓶颈}
+体素分辨率为 $N^3$，将 2D 的 $N^2$ 复杂度提升了一个维度。当 $N=256$ 时，体素需要 $256^3 \approx 1700$ 万个元素，内存和计算量巨大。而且大量体素对应空白区域，造成严重浪费。为缓解这一问题，人们开发了\textbf{稀疏卷积}（Sparse Convolution）和\textbf{八叉树}（Octree）等技术。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{八叉树（Octree）：自适应分辨率的层级结构，仅在有物体的区域细分，大幅减少计算量\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+\subsection{方法三：PointNet --- 直接处理点云}
+
+\textbf{PointNet}（Stanford, Qi et al. 2017）是 3D 深度学习领域的里程碑工作，提出了直接在点云上运行的神经网络。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-027.jpg}
+\caption{PointNet 架构：对每个点独立计算特征嵌入，然后用对称函数（max/sum）聚合为全局特征\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+PointNet 需要解决两个关键问题：
+
+\begin{importantbox}{PointNet 的两大设计要求}
+\begin{enumerate}
+    \item \textbf{排列不变性}（Permutation Invariance）：点的编号顺序不影响输出
+    \item \textbf{采样不变性}（Sampling Invariance）：不同采样密度下输出应一致
+\end{enumerate}
+解决方案极其简洁：对每个点独立计算嵌入，然后用\textbf{对称函数}（如 max pooling 或 sum）聚合所有点的特征。
+\end{importantbox}
+
+PointNet 的工作流程：
+\begin{enumerate}
+    \item 输入 $N$ 个点，每个点有 $(x, y, z)$ 坐标
+    \item 对每个点独立地通过 MLP 计算高维嵌入
+    \item 用 max pooling 聚合所有点的特征为一个全局向量
+    \item 通过全连接层输出分类结果
+\end{enumerate}
+
+后续改进包括 PointNet++（引入局部特征）、图神经网络（将点作为图节点、邻近关系作为边）等。
+
+\subsection{点云的距离度量}
+
+对于点云生成任务，需要定义两个点云之间的``距离''。两种常用度量：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{Chamfer Distance 与 Earth Mover's Distance：两种点云间距离度量\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+\textbf{Chamfer Distance}：
+$$d_{CD}(S_1, S_2) = \sum_{x \in S_1} \min_{y \in S_2} \|x - y\|^2 + \sum_{y \in S_2} \min_{x \in S_1} \|x - y\|^2$$
+
+\textbf{Earth Mover's Distance (EMD)}：
+$$d_{EMD}(S_1, S_2) = \min_{\phi: S_1 \to S_2} \sum_{x \in S_1} \|x - \phi(x)\|$$
+
+\begin{knowledgebox}{两种距离的区别}
+Chamfer Distance 计算简单但对异常值敏感；EMD 需要求解最优传输问题，计算复杂但更鲁棒。实际应用中，Chamfer Distance 因计算效率更常被使用。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 多视图 CNN：利用强大的 2D 预训练模型，但丢失了 3D 原生信息
+    \item 体素 CNN：最直接的 3D 扩展，但面临 $O(N^3)$ 的计算瓶颈
+    \item PointNet：通过排列不变的对称函数，开创了直接处理点云的范式
+    \item 不同方法各有优劣，选择取决于数据格式和任务需求
+\end{itemize}
+
+%% ========== 神经隐式表示 ==========
+
+\section{神经隐式表示（Neural Implicit Representations）}
+
+\subsection{从传统到神经网络}
+
+2019 年前后，研究者意识到一个关键洞察：深度网络本质上就是在学习一个复杂的\textbf{隐式函数}——输入空间大（像素），输出空间小（类别）。那么，为何不直接用神经网络来\textbf{表示}一个 3D 物体的隐式函数？
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{深度隐式函数（Deep Implicit Functions）：神经网络学习将 $(x,y,z)$ 映射到占用概率或距离值\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第35页。}
+
+\begin{importantbox}{2019年的四篇里程碑论文}
+2019年几乎同时出现了四篇提出相同思想的论文：
+\begin{itemize}
+    \item \textbf{DeepSDF}（Park et al.）：学习有符号距离函数
+    \item \textbf{Occupancy Networks}（Mescheder et al.）：学习占用概率
+    \item \textbf{IM-NET}（Chen \& Zhang）：隐式场解码器
+    \item \textbf{DISN}（Xu et al.）：深度隐式表面网络
+\end{itemize}
+核心思想一致：用 MLP 接收 $(x,y,z)$ 坐标作为输入，输出该点是否在物体内部的概率或到表面的距离。
+\end{importantbox}
+
+网络结构非常简单：
+$$\text{MLP}: (x, y, z) \rightarrow \text{occupancy} \in [0, 1] \quad \text{或} \quad \text{SDF value} \in \mathbb{R}$$
+
+\subsection{从几何到外观：NeRF}
+
+如果隐式函数不仅输出几何（密度），还输出\textbf{颜色}，就可以实现从任意视角的渲染。这就是 2020 年 \textbf{NeRF}（Neural Radiance Fields）的核心思想。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{NeRF 管线：沿射线采样 3D 点，每个点查询 MLP 得到密度和颜色，通过体渲染合成像素颜色\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第39页。}
+
+$$\text{NeRF MLP}: (x, y, z, \theta, \phi) \rightarrow (\sigma, \mathbf{c})$$
+
+\begin{itemize}
+    \item $(x, y, z)$：3D 位置
+    \item $(\theta, \phi)$：观察方向
+    \item $\sigma$：体密度（density）
+    \item $\mathbf{c} = (r, g, b)$：颜色
+\end{itemize}
+
+\textbf{体渲染公式}：对于一条射线 $\mathbf{r}(t) = \mathbf{o} + t\mathbf{d}$：
+
+$$\hat{C}(\mathbf{r}) = \sum_{i=1}^{N} T_i \cdot \alpha_i \cdot \mathbf{c}_i, \quad T_i = \prod_{j=1}^{i-1}(1 - \alpha_j), \quad \alpha_i = 1 - e^{-\sigma_i \delta_i}$$
+
+\begin{itemize}
+    \item $T_i$：透射率（transmittance），表示光线到达第 $i$ 个采样点前未被遮挡的概率
+    \item $\alpha_i$：不透明度（opacity）
+    \item $\delta_i$：相邻采样点间距
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{NeRF 体渲染过程：沿每条射线采样、查询 MLP、加权求和得到像素颜色\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+\begin{importantbox}{NeRF 的训练与推理}
+\textbf{训练}：仅需多张已知相机位姿的照片。对每张照片的每个像素发射射线，通过体渲染合成颜色，与真实像素颜色计算 MSE 损失，反向传播更新 MLP 权重。\\
+\textbf{推理}：给定新的相机位姿，即可渲染出该视角的图像——实现\textbf{新视角合成}（Novel View Synthesis）。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-041.jpg}
+\caption{NeRF 的新视角合成效果：从一组输入图像学习 3D 场景，渲染任意新视角\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+\subsection{3D Gaussian Splatting}
+
+NeRF 虽然效果出色，但渲染速度慢——需要沿每条射线密集采样大量 3D 点并查询 MLP。很多采样点对应的是空白区域，造成计算浪费。
+
+\textbf{3D Gaussian Splatting}（3DGS，2023）提出了一种加速方案：用一组\textbf{3D 高斯椭球}（Gaussian Blobs）来显式表示场景。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{3D Gaussian Splatting：用 3D 高斯椭球显式表示场景，只在有物体的区域采样，大幅提速\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第43页。}
+
+\begin{importantbox}{NeRF vs 3D Gaussian Splatting}
+\begin{itemize}
+    \item \textbf{NeRF}：纯隐式（MLP），密集采样，渲染慢但表示紧凑
+    \item \textbf{3DGS}：半显式（高斯点云），稀疏采样，渲染快（可实时）但存储量大
+\end{itemize}
+3DGS 仍保留隐式查询的优势（每个高斯有密度和颜色属性），但因为知道``哪里有东西''，避免了对空白区域的无效采样。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-044.jpg}
+\caption{3DGS 重建效果与速度对比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 神经隐式表示用 MLP 作为 3D 物体的隐式函数，输入坐标、输出占用/距离/颜色
+    \item NeRF 将隐式表示扩展到辐射场，实现了从 2D 图像学习 3D 场景并渲染新视角
+    \item 3D Gaussian Splatting 结合显式点云和隐式属性，实现了接近实时的渲染速度
+    \item 这一系列方法打通了 2D 图像数据与 3D 场景理解之间的桥梁
+\end{itemize}
+
+%% ========== 3D 生成 ==========
+
+\section{3D 生成模型}
+
+\subsection{3D 形状生成的早期方法}
+
+早期的 3D 生成模型直接在 3D 数据上训练 GAN 或 VAE：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{3D GAN：在体素/隐式表示上训练生成对抗网络，生成新的 3D 形状\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+\begin{knowledgebox}{3D 生成的局限}
+早期方法受限于 3D 数据量少，生成效果有限且局限于特定类别（如椅子、汽车）。突破的关键在于利用 2D 图像/视频基础模型的先验知识来辅助 3D 生成。
+\end{knowledgebox}
+
+\subsection{利用 2D 先验的 3D 生成}
+
+通过可微渲染，可以将 3D 生成与 2D 判别器/损失函数连接起来，利用大规模 2D 数据训练的模型来指导 3D 生成。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-049.jpg}
+\caption{结合 NeRF 与 GAN 的 3D 生成：生成 NeRF 表示的场景，通过可微渲染得到 2D 图像，用 2D 判别器提供梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。}
+
+\subsection{基于扩散模型的 3D 生成}
+
+近年来，Score Distillation Sampling（SDS）等技术使得利用预训练的 2D 扩散模型（如 Stable Diffusion）来指导 3D 生成成为可能。代表性工作包括 DreamFusion、Magic3D 等。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{基于文本的 3D 生成：通过 SDS 损失将 2D 扩散模型的知识蒸馏到 3D NeRF 中\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第53页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-056.jpg}
+\caption{文本到 3D 的生成结果：输入文本描述，输出可从任意视角渲染的 3D 模型\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+\subsection{前沿方向：大规模 3D 生成}
+
+最新的研究方向包括：
+\begin{itemize}
+    \item \textbf{单图像到 3D}：从一张图片重建完整 3D 模型
+    \item \textbf{文本到 3D}：从文字描述直接生成 3D 物体
+    \item \textbf{视频到 4D}：从视频重建动态 3D 场景
+    \item \textbf{3D 基础模型}：训练能泛化到多类别的统一 3D 生成模型
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-058.jpg}
+\caption{3D 生成前沿：从单张图像生成 3D 模型\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第58页。}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 早期 3D 生成直接在 3D 数据上训练，受限于数据规模
+    \item 可微渲染打通了 3D 生成与 2D 监督之间的桥梁
+    \item 利用 2D 扩散模型先验（如 SDS）实现了高质量的文本到 3D 生成
+    \item 3D 生成正朝着大规模、多类别、基础模型的方向发展
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+Jiajun Wu 在课程最后回顾了 3D 视觉研究的发展轨迹：
+
+\begin{enumerate}
+    \item \textbf{表示方式决定了方法论}：从体素到点云到隐式函数，每种表示催生了不同的深度学习方法
+    \item \textbf{显式与隐式的互补}：采样容易 vs 查询容易，二者各有所长
+    \item \textbf{2D-3D 联合学习是趋势}：3D 数据稀缺，但 2D 数据丰富。通过可微渲染和隐式表示，可以有效利用 2D 先验
+    \item \textbf{NeRF 和 3DGS 改变了游戏规则}：从 2D 图像直接学习 3D 场景，不再需要显式的 3D 监督
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (repr) {3D 表示方式};
+\node (exp) [below left=1cm and 0.5cm of repr] {显式表示};
+\node (imp) [below right=1cm and 0.5cm of repr] {隐式表示};
+\node (dl) [below=2.5cm of repr] {3D 深度学习方法};
+\node (nerf) [below=of dl] {NeRF / 3DGS};
+\node (gen) [below=of nerf] {3D 生成模型};
+\draw[->, thick] (repr) -- (exp);
+\draw[->, thick] (repr) -- (imp);
+\draw[->, thick] (exp) -- (dl);
+\draw[->, thick] (imp) -- (dl);
+\draw[->, thick] (dl) -- (nerf);
+\draw[->, thick] (nerf) -- (gen);
+\node[draw=none, left=0.5cm of exp, text width=4cm, font=\scriptsize] {点云、网格、参数曲面\\采样容易，查询困难};
+\node[draw=none, right=0.5cm of imp, text width=4cm, font=\scriptsize] {SDF、占用函数、水平集、体素\\查询容易，采样困难};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{没有统一的 3D ``像素''}：不同表示各有优劣，选择取决于任务
+    \item \textbf{显式 vs 隐式是核心对偶}：采样容易与查询容易的权衡贯穿始终
+    \item \textbf{PointNet 的简洁之道}：排列不变 + 对称聚合，简单而强大
+    \item \textbf{NeRF 用 2D 图像学 3D}：通过可微体渲染，无需 3D 监督
+    \item \textbf{数据差距驱动方法创新}：3D 数据远少于 2D，利用 2D 先验是关键策略
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item PointNet: \url{https://arxiv.org/abs/1612.00593}
+    \item DeepSDF: \url{https://arxiv.org/abs/1901.05103}
+    \item Occupancy Networks: \url{https://arxiv.org/abs/1812.03828}
+    \item NeRF: \url{https://arxiv.org/abs/2003.08934}
+    \item 3D Gaussian Splatting: \url{https://arxiv.org/abs/2308.14737}
+    \item DreamFusion: \url{https://arxiv.org/abs/2209.14988}
+    \item ShapeNet: \url{https://shapenet.org/}
+    \item Objaverse: \url{https://objaverse.allenai.org/}
+\end{itemize}
+
+\end{document}

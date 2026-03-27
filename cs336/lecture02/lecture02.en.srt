@@ -1,0 +1,6536 @@
+1
+00:00:05,120 --> 00:00:10,559
+Okay, so last lecture I gave an overview
+
+2
+00:00:08,120 --> 00:00:12,080
+of language models and what it means to
+
+3
+00:00:10,559 --> 00:00:13,519
+build them from scratch and why we want
+
+4
+00:00:12,080 --> 00:00:15,440
+to do that. Also talked about
+
+5
+00:00:13,519 --> 00:00:18,240
+tokenization which is going to be the
+
+6
+00:00:15,440 --> 00:00:21,920
+first half of the first assignment. Um
+
+7
+00:00:18,240 --> 00:00:24,960
+today's lecture will be going through
+
+8
+00:00:21,920 --> 00:00:27,439
+actually building a model. Um we'll
+
+9
+00:00:24,960 --> 00:00:29,920
+discuss the primitives in PyTorch that
+
+10
+00:00:27,439 --> 00:00:32,480
+are needed. Um, we're going to start
+
+11
+00:00:29,920 --> 00:00:34,320
+with tensors, build models, optimizers,
+
+12
+00:00:32,480 --> 00:00:37,840
+and training loop. And we're going to
+
+13
+00:00:34,320 --> 00:00:39,760
+place close attention to efficiency, in
+
+14
+00:00:37,840 --> 00:00:42,520
+particular, how we're using resources,
+
+15
+00:00:39,760 --> 00:00:45,840
+both um memory and
+
+16
+00:00:42,520 --> 00:00:47,960
+compute. Okay. So, to motivate things a
+
+17
+00:00:45,840 --> 00:00:50,800
+bit, here's some here's some
+
+18
+00:00:47,960 --> 00:00:52,719
+questions. Okay. Um, these questions are
+
+19
+00:00:50,800 --> 00:00:55,760
+going to be answerable by napkin math.
+
+20
+00:00:52,719 --> 00:00:57,760
+So, get your napkins out. Um, so how
+
+21
+00:00:55,760 --> 00:01:00,239
+long would it take to train a 70 billion
+
+22
+00:00:57,760 --> 00:01:03,799
+parameter dense transformer model on 15
+
+23
+00:01:00,239 --> 00:01:06,799
+trillion tokens on 1,24
+
+24
+00:01:03,799 --> 00:01:08,880
+H100s? Okay, so you know, I'm just going
+
+25
+00:01:06,799 --> 00:01:10,560
+to sketch out the sort of the give you a
+
+26
+00:01:08,880 --> 00:01:12,479
+flavor of the type of things that we
+
+27
+00:01:10,560 --> 00:01:15,920
+want to do. Okay, so here's how you go
+
+28
+00:01:12,479 --> 00:01:19,560
+about reasoning it. Um, you count the no
+
+29
+00:01:15,920 --> 00:01:23,040
+total number of flops um needed
+
+30
+00:01:19,560 --> 00:01:25,280
+to um, you know, train. So that's six
+
+31
+00:01:23,040 --> 00:01:27,759
+times the number of parameters times the
+
+32
+00:01:25,280 --> 00:01:29,840
+number of tokens. Okay. And where does
+
+33
+00:01:27,759 --> 00:01:32,479
+that come from? That will be uh what
+
+34
+00:01:29,840 --> 00:01:35,200
+we'll talk about in this lecture. Um you
+
+35
+00:01:32,479 --> 00:01:37,320
+can look at the promised number of flops
+
+36
+00:01:35,200 --> 00:01:40,240
+per second that H100 gives
+
+37
+00:01:37,320 --> 00:01:42,280
+you. Um the MFU, which is something
+
+38
+00:01:40,240 --> 00:01:46,960
+we'll see later. Let's just set it to
+
+39
+00:01:42,280 --> 00:01:49,520
+0.5. Um and you can look at the number
+
+40
+00:01:46,960 --> 00:01:50,960
+of flops uh per day that your hardware
+
+41
+00:01:49,520 --> 00:01:55,240
+is going to give you at this particular
+
+42
+00:01:50,960 --> 00:02:00,719
+MFU. So 1,024 of them
+
+43
+00:01:55,240 --> 00:02:02,799
+um for um you know one day and then you
+
+44
+00:02:00,719 --> 00:02:04,000
+just divide the total number of flops
+
+45
+00:02:02,799 --> 00:02:06,560
+you need to train the model by the
+
+46
+00:02:04,000 --> 00:02:11,239
+number of flops that you're supposed to
+
+47
+00:02:06,560 --> 00:02:14,879
+get. Okay. And that gives you about
+
+48
+00:02:11,239 --> 00:02:17,360
+144. Okay. So this is very simple uh
+
+49
+00:02:14,879 --> 00:02:20,000
+calculations at the end of the day. Um
+
+50
+00:02:17,360 --> 00:02:22,480
+we're going to go through a bit more
+
+51
+00:02:20,000 --> 00:02:24,239
+where uh these numbers uh come from and
+
+52
+00:02:22,480 --> 00:02:27,440
+in particular where the six times number
+
+53
+00:02:24,239 --> 00:02:30,720
+of um parameters times number of tokens
+
+54
+00:02:27,440 --> 00:02:32,000
+comes from. Um okay so here's a
+
+55
+00:02:30,720 --> 00:02:35,120
+question. What is the largest model you
+
+56
+00:02:32,000 --> 00:02:37,160
+can train on H eight H100s using atom W
+
+57
+00:02:35,120 --> 00:02:42,080
+if you're not being uh too
+
+58
+00:02:37,160 --> 00:02:46,800
+clever. Okay so um H100 has 80 gigabytes
+
+59
+00:02:42,080 --> 00:02:49,360
+of HBM uh memory. Um the number of bytes
+
+60
+00:02:46,800 --> 00:02:51,440
+per parameter that you need for the
+
+61
+00:02:49,360 --> 00:02:54,560
+parameters the gradients optimizer state
+
+62
+00:02:51,440 --> 00:02:56,879
+is uh 16 and we'll talk more about where
+
+63
+00:02:54,560 --> 00:02:59,920
+that comes from. Um and the number of
+
+64
+00:02:56,879 --> 00:03:01,920
+parameters uh is basically total amount
+
+65
+00:02:59,920 --> 00:03:05,920
+of memory divide by number of bytes you
+
+66
+00:03:01,920 --> 00:03:10,000
+need per parameter and that gives you uh
+
+67
+00:03:05,920 --> 00:03:12,879
+about 40 uh billion parameters. Okay.
+
+68
+00:03:10,000 --> 00:03:15,440
+And this is very rough because it it
+
+69
+00:03:12,879 --> 00:03:16,959
+doesn't take you into activations which
+
+70
+00:03:15,440 --> 00:03:18,560
+depends on batch size and sequence
+
+71
+00:03:16,959 --> 00:03:20,480
+length which I'm not really going to
+
+72
+00:03:18,560 --> 00:03:21,560
+talk about but will be important for
+
+73
+00:03:20,480 --> 00:03:24,000
+assignment
+
+74
+00:03:21,560 --> 00:03:26,480
+one. Okay. So this is a rough back
+
+75
+00:03:24,000 --> 00:03:28,000
+envelope calculation. And this is
+
+76
+00:03:26,480 --> 00:03:29,760
+something that you're probably not used
+
+77
+00:03:28,000 --> 00:03:31,840
+to doing. You just implement a model,
+
+78
+00:03:29,760 --> 00:03:33,840
+you train it and what happens happens.
+
+79
+00:03:31,840 --> 00:03:35,599
+But remember that efficiency is the name
+
+80
+00:03:33,840 --> 00:03:37,120
+of the game. And to be efficient, you
+
+81
+00:03:35,599 --> 00:03:39,120
+have to know exactly how many flops
+
+82
+00:03:37,120 --> 00:03:41,200
+you're actually expending because when
+
+83
+00:03:39,120 --> 00:03:43,840
+these numbers get large, these directly
+
+84
+00:03:41,200 --> 00:03:46,720
+translate into dollars and uh you want
+
+85
+00:03:43,840 --> 00:03:49,040
+that to be as small as possible. Okay,
+
+86
+00:03:46,720 --> 00:03:52,920
+so we'll talk more about the the details
+
+87
+00:03:49,040 --> 00:03:56,080
+of how these numbers uh arise.
+
+88
+00:03:52,920 --> 00:03:57,920
+Um you know, uh we will not actually go
+
+89
+00:03:56,080 --> 00:04:01,920
+over the transformer. So Tatu is going
+
+90
+00:03:57,920 --> 00:04:04,560
+to talk at a um over the conceptual
+
+91
+00:04:01,920 --> 00:04:06,480
+overview of that next time. Um, and
+
+92
+00:04:04,560 --> 00:04:08,400
+there's uh many ways you can learn about
+
+93
+00:04:06,480 --> 00:04:10,000
+transformer if you haven't already uh
+
+94
+00:04:08,400 --> 00:04:11,280
+looked at it. There's assignment one. If
+
+95
+00:04:10,000 --> 00:04:13,599
+you do assignment one, you'll definitely
+
+96
+00:04:11,280 --> 00:04:15,280
+know what a transformer is. Um, and the
+
+97
+00:04:13,599 --> 00:04:16,560
+handout actually does a pretty good job
+
+98
+00:04:15,280 --> 00:04:18,239
+of walking through all the different
+
+99
+00:04:16,560 --> 00:04:19,680
+pieces. There's a mathematical
+
+100
+00:04:18,239 --> 00:04:21,600
+description. If you like pictures,
+
+101
+00:04:19,680 --> 00:04:25,360
+there's pictures. There's a lot of stuff
+
+102
+00:04:21,600 --> 00:04:26,960
+you can uh look on online. So, but
+
+103
+00:04:25,360 --> 00:04:29,199
+instead I'm going to work with simpler
+
+104
+00:04:26,960 --> 00:04:30,880
+models and really talk about the
+
+105
+00:04:29,199 --> 00:04:33,360
+primitives and the resource accounting
+
+106
+00:04:30,880 --> 00:04:34,960
+piece. Okay. So remember last time I
+
+107
+00:04:33,360 --> 00:04:38,720
+said what kinds of knowledge can you
+
+108
+00:04:34,960 --> 00:04:40,800
+learn? So mechanics um in this lecture
+
+109
+00:04:38,720 --> 00:04:43,600
+it's going to be just pietorch and
+
+110
+00:04:40,800 --> 00:04:45,840
+understanding how pietorch works at um a
+
+111
+00:04:43,600 --> 00:04:48,000
+fairly primitive uh level. So that's
+
+112
+00:04:45,840 --> 00:04:50,800
+will be pretty straightforward. Mindset
+
+113
+00:04:48,000 --> 00:04:52,479
+is about resource accounting and it's
+
+114
+00:04:50,800 --> 00:04:56,320
+not hard. It's just you just have to do
+
+115
+00:04:52,479 --> 00:04:58,160
+it. And intuitions um unfortunately this
+
+116
+00:04:56,320 --> 00:04:59,360
+is just going to be broad strokes uh you
+
+117
+00:04:58,160 --> 00:05:00,960
+know for now. Actually, there's not
+
+118
+00:04:59,360 --> 00:05:03,680
+really much intuition that I'm going to
+
+119
+00:05:00,960 --> 00:05:05,360
+talk about in terms of how um anything
+
+120
+00:05:03,680 --> 00:05:07,600
+we're doing translates to good models.
+
+121
+00:05:05,360 --> 00:05:09,080
+Um this is more about the M mechanics
+
+122
+00:05:07,600 --> 00:05:12,360
+and
+
+123
+00:05:09,080 --> 00:05:15,759
+mindset. Okay. So, let's start with
+
+124
+00:05:12,360 --> 00:05:17,919
+memory accounting. Um and then I'll talk
+
+125
+00:05:15,759 --> 00:05:22,320
+about compute accounting. Um and then
+
+126
+00:05:17,919 --> 00:05:24,240
+we'll build up bottom up. Okay. So, the
+
+127
+00:05:22,320 --> 00:05:26,560
+best place to start is a tensor. So
+
+128
+00:05:24,240 --> 00:05:28,479
+tensors are the building block of for
+
+129
+00:05:26,560 --> 00:05:30,800
+storing everything in deep learning.
+
+130
+00:05:28,479 --> 00:05:32,720
+Parameters, gradients, optimizer, state,
+
+131
+00:05:30,800 --> 00:05:35,440
+uh data, activations. There's sort of
+
+132
+00:05:32,720 --> 00:05:38,240
+these atoms. Um you can read lots of
+
+133
+00:05:35,440 --> 00:05:40,080
+documentation about them. Um you're
+
+134
+00:05:38,240 --> 00:05:42,320
+probably very familiar with how to
+
+135
+00:05:40,080 --> 00:05:45,680
+create tensors. There's creating tensors
+
+136
+00:05:42,320 --> 00:05:47,520
+different ways. Um you can also create a
+
+137
+00:05:45,680 --> 00:05:51,199
+tensor and not initialize it and use
+
+138
+00:05:47,520 --> 00:05:56,080
+some special uh initialization um for
+
+139
+00:05:51,199 --> 00:05:59,160
+the parameters um to um if you want. Um
+
+140
+00:05:56,080 --> 00:06:03,039
+okay so those are um you know
+
+141
+00:05:59,160 --> 00:06:06,479
+tensors. Um so let's talk about memory
+
+142
+00:06:03,039 --> 00:06:09,919
+and how much uh memory tensors take up.
+
+143
+00:06:06,479 --> 00:06:11,440
+So every tensor that we'll probably be
+
+144
+00:06:09,919 --> 00:06:14,240
+interested in is stored as a
+
+145
+00:06:11,440 --> 00:06:16,160
+floatingoint number. And so there's many
+
+146
+00:06:14,240 --> 00:06:21,039
+ways to represent floating point. So the
+
+147
+00:06:16,160 --> 00:06:24,479
+most default uh way um is float 32. And
+
+148
+00:06:21,039 --> 00:06:26,639
+float toy2 has 32 uh bits. They're
+
+149
+00:06:24,479 --> 00:06:29,600
+allocated one for sign, eight for
+
+150
+00:06:26,639 --> 00:06:31,600
+exponent, and 23 for the you know the
+
+151
+00:06:29,600 --> 00:06:34,160
+fraction. So exponent gives you dynamic
+
+152
+00:06:31,600 --> 00:06:36,160
+range and fraction gives you you know uh
+
+153
+00:06:34,160 --> 00:06:40,319
+different basically specifies different
+
+154
+00:06:36,160 --> 00:06:44,319
+values. Um so flow 32 is also known as
+
+155
+00:06:40,319 --> 00:06:47,520
+FP32 or single uh you know precision um
+
+156
+00:06:44,319 --> 00:06:50,000
+is sort of the gold uh standard um in
+
+157
+00:06:47,520 --> 00:06:52,720
+you know computing. Some people also
+
+158
+00:06:50,000 --> 00:06:54,319
+refer to flow 3 as full precision.
+
+159
+00:06:52,720 --> 00:06:56,319
+That's a little bit confusing because
+
+160
+00:06:54,319 --> 00:06:58,400
+full is really depending on who you're
+
+161
+00:06:56,319 --> 00:07:00,160
+talking to. Um, if you're talking to a
+
+162
+00:06:58,400 --> 00:07:01,759
+scientific computing person, they'll
+
+163
+00:07:00,160 --> 00:07:04,720
+kind of laugh at you when you say float
+
+164
+00:07:01,759 --> 00:07:07,840
+32 is uh is really full because they'll
+
+165
+00:07:04,720 --> 00:07:08,880
+use float 64 or even more. Um, but if
+
+166
+00:07:07,840 --> 00:07:11,440
+you're talking to a machine learning
+
+167
+00:07:08,880 --> 00:07:13,520
+person, float 32 is the max you'll ever
+
+168
+00:07:11,440 --> 00:07:16,599
+probably need to go because deep
+
+169
+00:07:13,520 --> 00:07:19,520
+learning is is kind of sloppy like
+
+170
+00:07:16,599 --> 00:07:21,840
+that. Okay. So, let's look at the
+
+171
+00:07:19,520 --> 00:07:23,360
+memory. So, the memory is it's very
+
+172
+00:07:21,840 --> 00:07:25,120
+simple. It's determined by the number of
+
+173
+00:07:23,360 --> 00:07:27,440
+values you have in your tensor and the
+
+174
+00:07:25,120 --> 00:07:31,599
+data type of each value. Okay, so if you
+
+175
+00:07:27,440 --> 00:07:34,240
+create a torch sensor of 4x8 matrix, um
+
+176
+00:07:31,599 --> 00:07:40,160
+the default it will give you a type of
+
+177
+00:07:34,240 --> 00:07:43,360
+uh flow 32 um the size is 4 by8 and the
+
+178
+00:07:40,160 --> 00:07:46,800
+number of elements is 32. Each element
+
+179
+00:07:43,360 --> 00:07:50,720
+size is four bytes. Um 32 bits is four
+
+180
+00:07:46,800 --> 00:07:52,639
+bytes. Um and the memory usage is simply
+
+181
+00:07:50,720 --> 00:07:55,440
+the number of elements times the number
+
+182
+00:07:52,639 --> 00:07:57,759
+of um uh size of each element and
+
+183
+00:07:55,440 --> 00:08:00,639
+that'll give you 128 bytes. Okay, so
+
+184
+00:07:57,759 --> 00:08:02,720
+this is should be pretty um easy and
+
+185
+00:08:00,639 --> 00:08:05,720
+just to give some intuition if you get
+
+186
+00:08:02,720 --> 00:08:08,960
+the one matrix in the F4 layer of uh
+
+187
+00:08:05,720 --> 00:08:12,080
+GPT3 is this number by this number and
+
+188
+00:08:08,960 --> 00:08:14,639
+that gives you 2.3 gigabytes. Okay, so
+
+189
+00:08:12,080 --> 00:08:18,720
+that's one matrix is you know can these
+
+190
+00:08:14,639 --> 00:08:18,720
+matrices can be pretty big.
+
+191
+00:08:18,800 --> 00:08:26,479
+Okay, so uh float 32 is the default. Um
+
+192
+00:08:22,720 --> 00:08:28,560
+but of course these matrices get big. So
+
+193
+00:08:26,479 --> 00:08:30,800
+um naturally you want to make them
+
+194
+00:08:28,560 --> 00:08:32,399
+smaller so you use less memory. And also
+
+195
+00:08:30,800 --> 00:08:36,240
+it turns out if you make them smaller
+
+196
+00:08:32,399 --> 00:08:41,519
+you also uh make it go faster too. Okay.
+
+197
+00:08:36,240 --> 00:08:44,320
+Um so another type of uh representation
+
+198
+00:08:41,519 --> 00:08:48,080
+is called float 16 and as the name
+
+199
+00:08:44,320 --> 00:08:50,240
+suggests it's uh 16 bits um where both
+
+200
+00:08:48,080 --> 00:08:56,880
+the exponent and the fraction are um
+
+201
+00:08:50,240 --> 00:08:58,959
+shrunk down from um 8 to 5 and 23 to 10.
+
+202
+00:08:56,880 --> 00:09:03,320
+Okay, so this is known as half precision
+
+203
+00:08:58,959 --> 00:09:06,800
+and it cuts down half the memory. Um,
+
+204
+00:09:03,320 --> 00:09:10,160
+and that's all great except for the
+
+205
+00:09:06,800 --> 00:09:11,839
+dynamic range uh for these float 16
+
+206
+00:09:10,160 --> 00:09:16,640
+isn't great. So, for example, if you try
+
+207
+00:09:11,839 --> 00:09:20,279
+to make a number um like uh 10 e 1 e
+
+208
+00:09:16,640 --> 00:09:24,000
+minus 8 in flow 16
+
+209
+00:09:20,279 --> 00:09:27,279
+um it uh basically rounds down to zero
+
+210
+00:09:24,000 --> 00:09:29,920
+and you get underflow. Okay. So uh the
+
+211
+00:09:27,279 --> 00:09:32,080
+flow 16 is not great for representing um
+
+212
+00:09:29,920 --> 00:09:34,800
+very small numbers or or very big
+
+213
+00:09:32,080 --> 00:09:38,480
+numbers as a matter of fact. Um so if
+
+214
+00:09:34,800 --> 00:09:40,720
+you use float 16 u for training for
+
+215
+00:09:38,480 --> 00:09:42,800
+small models it's probably going to be
+
+216
+00:09:40,720 --> 00:09:45,920
+okay but for large models when you're um
+
+217
+00:09:42,800 --> 00:09:48,480
+having lots of matrices and you can get
+
+218
+00:09:45,920 --> 00:09:54,080
+uh instability or underflow or overflow
+
+219
+00:09:48,480 --> 00:09:56,640
+and bad things happen. Um okay so um one
+
+220
+00:09:54,080 --> 00:09:59,120
+um thing that has happened which is nice
+
+221
+00:09:56,640 --> 00:10:02,080
+is there's been another representation
+
+222
+00:09:59,120 --> 00:10:05,279
+of B float 16 which stands for brain
+
+223
+00:10:02,080 --> 00:10:08,240
+float um this was developed in 2018 to
+
+224
+00:10:05,279 --> 00:10:11,200
+address the issue that for deep learning
+
+225
+00:10:08,240 --> 00:10:14,399
+um we actually care about dynamic range
+
+226
+00:10:11,200 --> 00:10:17,279
+more than uh we care about this
+
+227
+00:10:14,399 --> 00:10:19,399
+fraction. So basically BF16 allocates
+
+228
+00:10:17,279 --> 00:10:21,920
+more to the exponent and less to the
+
+229
+00:10:19,399 --> 00:10:25,040
+fraction. Okay. So it uses the same
+
+230
+00:10:21,920 --> 00:10:28,720
+memory as um floating point 16 but it
+
+231
+00:10:25,040 --> 00:10:31,279
+has a dynamic range of float 32. Okay.
+
+232
+00:10:28,720 --> 00:10:33,600
+So that sounds really good. Um and it
+
+233
+00:10:31,279 --> 00:10:35,040
+actually uh the catch is that this
+
+234
+00:10:33,600 --> 00:10:36,880
+resolution which is determined by the
+
+235
+00:10:35,040 --> 00:10:39,920
+fraction is worse. Uh but this doesn't
+
+236
+00:10:36,880 --> 00:10:43,120
+matter as much uh for deep learning. So
+
+237
+00:10:39,920 --> 00:10:47,120
+now if you try to create a a tensor with
+
+238
+00:10:43,120 --> 00:10:49,920
+one E minus 8 in BF16 then you get
+
+239
+00:10:47,120 --> 00:10:49,920
+something that's not
+
+240
+00:10:50,440 --> 00:10:55,200
+zero. Okay. So um you can dive into the
+
+241
+00:10:53,760 --> 00:10:57,440
+details. I'm not going to go into this
+
+242
+00:10:55,200 --> 00:10:59,200
+but you can stare at the actual full
+
+243
+00:10:57,440 --> 00:11:00,760
+specs of all the different floating
+
+244
+00:10:59,200 --> 00:11:03,279
+point you know
+
+245
+00:11:00,760 --> 00:11:06,560
+operations. Okay. Okay, so BF16 is
+
+246
+00:11:03,279 --> 00:11:09,120
+basically what uh you will typically use
+
+247
+00:11:06,560 --> 00:11:12,320
+to do computations because um it's it's
+
+248
+00:11:09,120 --> 00:11:15,200
+sort of you know good enough um for fear
+
+249
+00:11:12,320 --> 00:11:17,760
+computations. It turns out that um for
+
+250
+00:11:15,200 --> 00:11:21,920
+storing optimizer states and parameters
+
+251
+00:11:17,760 --> 00:11:25,399
+you still need float 32 um for otherwise
+
+252
+00:11:21,920 --> 00:11:30,959
+your training will go um haywire.
+
+253
+00:11:25,399 --> 00:11:33,680
+Um so if you're bold so now we have um
+
+254
+00:11:30,959 --> 00:11:36,240
+something called FP8 or uh 8bit and as
+
+255
+00:11:33,680 --> 00:11:41,040
+the name suggests um this was developed
+
+256
+00:11:36,240 --> 00:11:45,120
+in 2022 um um by you know Nvidia so now
+
+257
+00:11:41,040 --> 00:11:49,440
+they have um essentially if you look at
+
+258
+00:11:45,120 --> 00:11:51,440
+FP and BF16 it's like this and FP wow
+
+259
+00:11:49,440 --> 00:11:54,800
+you really don't have that many bits to
+
+260
+00:11:51,440 --> 00:11:56,720
+store stuff right so it's very crude Um
+
+261
+00:11:54,800 --> 00:11:58,560
+there's there's two sort of variants
+
+262
+00:11:56,720 --> 00:12:03,040
+depending on if you want to have more
+
+263
+00:11:58,560 --> 00:12:05,360
+resolution or more um dynamic range. Um
+
+264
+00:12:03,040 --> 00:12:07,279
+and um I'm not going to say too much
+
+265
+00:12:05,360 --> 00:12:10,160
+about this but FE8 is you know supported
+
+266
+00:12:07,279 --> 00:12:12,120
+by H100. It's not really available on
+
+267
+00:12:10,160 --> 00:12:15,519
+previous generation.
+
+268
+00:12:12,120 --> 00:12:17,600
+Um but but at a high level, you know,
+
+269
+00:12:15,519 --> 00:12:21,040
+training with float 32, which is I
+
+270
+00:12:17,600 --> 00:12:22,959
+think, you know, is is what you would do
+
+271
+00:12:21,040 --> 00:12:24,720
+if you're not trying to optimize, you
+
+272
+00:12:22,959 --> 00:12:28,399
+know, too much and it's it's sort of
+
+273
+00:12:24,720 --> 00:12:31,800
+safe. It requires more memory. Um you
+
+274
+00:12:28,399 --> 00:12:34,959
+can go down to FP8 or
+
+275
+00:12:31,800 --> 00:12:37,200
+BF16. Um and but you can get some
+
+276
+00:12:34,959 --> 00:12:39,440
+instability. Um, basically I don't think
+
+277
+00:12:37,200 --> 00:12:43,839
+you would probably want to use uh a
+
+278
+00:12:39,440 --> 00:12:43,839
+float 16 at this point for for deep
+
+279
+00:12:44,120 --> 00:12:51,680
+learning. And um you can become more
+
+280
+00:12:48,320 --> 00:12:54,959
+sophisticated by looking at particular
+
+281
+00:12:51,680 --> 00:12:57,519
+places in your pipeline either forward
+
+282
+00:12:54,959 --> 00:13:00,480
+pass or backward pass or optimizers or
+
+283
+00:12:57,519 --> 00:13:02,399
+gradient accumulation and really figure
+
+284
+00:13:00,480 --> 00:13:04,880
+out what the minimum precision you need
+
+285
+00:13:02,399 --> 00:13:06,959
+at this particular places. And that's
+
+286
+00:13:04,880 --> 00:13:09,279
+called gets into kind of mixed precision
+
+287
+00:13:06,959 --> 00:13:12,720
+training. So for example, some people
+
+288
+00:13:09,279 --> 00:13:14,959
+like to use flow 32 for the you know the
+
+289
+00:13:12,720 --> 00:13:17,200
+attention to make sure that doesn't kind
+
+290
+00:13:14,959 --> 00:13:20,000
+of uh you know get messed up of what
+
+291
+00:13:17,200 --> 00:13:23,079
+four simple F4 passes with Matt Mall's
+
+292
+00:13:20,000 --> 00:13:26,800
+BF-16 is is is
+
+293
+00:13:23,079 --> 00:13:29,760
+fine. Okay, pause a bit for for
+
+294
+00:13:26,800 --> 00:13:33,120
+questions. So we talked about tensors
+
+295
+00:13:29,760 --> 00:13:35,519
+and we looked at uh depending on how
+
+296
+00:13:33,120 --> 00:13:37,360
+what representation how much storage
+
+297
+00:13:35,519 --> 00:13:39,200
+they take.
+
+298
+00:13:37,360 --> 00:13:41,040
+Yeah. Can you just clarify about the mix
+
+299
+00:13:39,200 --> 00:13:43,920
+position like when you would use 32 in
+
+300
+00:13:41,040 --> 00:13:49,320
+the be? Yeah. So the question is when
+
+301
+00:13:43,920 --> 00:13:52,079
+would you use um uh flow 32 or BF16?
+
+302
+00:13:49,320 --> 00:13:54,000
+Um I don't have time to get into the you
+
+303
+00:13:52,079 --> 00:13:55,680
+know the exact uh details and it sort of
+
+304
+00:13:54,000 --> 00:13:59,519
+varies depending on the model size and
+
+305
+00:13:55,680 --> 00:14:01,199
+everything but um generally for the the
+
+306
+00:13:59,519 --> 00:14:03,440
+parameters and optimizer states you use
+
+307
+00:14:01,199 --> 00:14:06,000
+float 32. You can think about BF16 as
+
+308
+00:14:03,440 --> 00:14:08,000
+something that's more transitory like
+
+309
+00:14:06,000 --> 00:14:10,959
+you you basically take your parameters
+
+310
+00:14:08,000 --> 00:14:13,040
+you cast it to BF16 and you kind of run
+
+311
+00:14:10,959 --> 00:14:14,560
+ahead with that model but then the thing
+
+312
+00:14:13,040 --> 00:14:18,920
+that you're going to accumulate over
+
+313
+00:14:14,560 --> 00:14:18,920
+time you want to have higher precision.
+
+314
+00:14:20,279 --> 00:14:27,480
+Yeah. Okay. So now let's talk about uh
+
+315
+00:14:24,880 --> 00:14:30,199
+compute. So that was memory.
+
+316
+00:14:27,480 --> 00:14:33,440
+Um so
+
+317
+00:14:30,199 --> 00:14:36,000
+uh compute obviously depends on what the
+
+318
+00:14:33,440 --> 00:14:37,920
+hardware you know is by default tensors
+
+319
+00:14:36,000 --> 00:14:41,279
+are stored in CPU. So for example if you
+
+320
+00:14:37,920 --> 00:14:44,079
+just in PyTorch um say X equals torch.0
+
+321
+00:14:41,279 --> 00:14:48,000
+is 3232 then it'll put it on your CPU.
+
+322
+00:14:44,079 --> 00:14:50,480
+it'll be in um the CPU memory. Um now,
+
+323
+00:14:48,000 --> 00:14:52,000
+of course, that's no good because if
+
+324
+00:14:50,480 --> 00:14:53,680
+you're not using your GPU, then you're
+
+325
+00:14:52,000 --> 00:14:56,800
+going to be orders of magnitude too
+
+326
+00:14:53,680 --> 00:14:58,880
+slow. So, you need to explicitly say in
+
+327
+00:14:56,800 --> 00:15:03,199
+PyTorch that you need to move it to the
+
+328
+00:14:58,880 --> 00:15:05,760
+GPU and this is uh you it's actually
+
+329
+00:15:03,199 --> 00:15:08,959
+just to make it very clear in pictures,
+
+330
+00:15:05,760 --> 00:15:12,079
+there's a CPU, it has RAM, and that um
+
+331
+00:15:08,959 --> 00:15:15,279
+has to be moved over um to the the GPU.
+
+332
+00:15:12,079 --> 00:15:19,560
+there's a data transfer um which is is c
+
+333
+00:15:15,279 --> 00:15:23,040
+um which takes some work um takes some
+
+334
+00:15:19,560 --> 00:15:25,519
+time okay so whenever you have a tensor
+
+335
+00:15:23,040 --> 00:15:27,920
+in pietorch you should always keep in
+
+336
+00:15:25,519 --> 00:15:29,360
+your mind where is this residing because
+
+337
+00:15:27,920 --> 00:15:30,639
+just looking at the variable or just
+
+338
+00:15:29,360 --> 00:15:33,839
+looking at the code you can't always
+
+339
+00:15:30,639 --> 00:15:36,480
+tell and if you want to be careful about
+
+340
+00:15:33,839 --> 00:15:39,920
+computation and data movement you have
+
+341
+00:15:36,480 --> 00:15:42,000
+to really know where it is um you can
+
+342
+00:15:39,920 --> 00:15:44,399
+probably do things like assert
+
+343
+00:15:42,000 --> 00:15:47,720
+um where it is in various places of code
+
+344
+00:15:44,399 --> 00:15:50,920
+just to um document or be
+
+345
+00:15:47,720 --> 00:15:55,600
+sure. Okay. So
+
+346
+00:15:50,920 --> 00:15:58,320
+um so let's look at uh what hardware we
+
+347
+00:15:55,600 --> 00:16:01,920
+have. So we have um in this case we have
+
+348
+00:15:58,320 --> 00:16:04,720
+one GPU. Um this was run on the H100
+
+349
+00:16:01,920 --> 00:16:10,880
+clusters that you guys have access to.
+
+350
+00:16:04,720 --> 00:16:14,120
+And um this um GPU is a you know H100 80
+
+351
+00:16:10,880 --> 00:16:17,040
+GB of high bandwidth memory
+
+352
+00:16:14,120 --> 00:16:21,560
+um and there's a you know it gives you
+
+353
+00:16:17,040 --> 00:16:26,079
+the cache size and so on. Okay. So
+
+354
+00:16:21,560 --> 00:16:29,600
+um so if you have remember the x is on
+
+355
+00:16:26,079 --> 00:16:31,839
+uh CPU um you can move it uh just by
+
+356
+00:16:29,600 --> 00:16:34,560
+specifying you know two which is a kind
+
+357
+00:16:31,839 --> 00:16:36,240
+of a general pietorch function. Um you
+
+358
+00:16:34,560 --> 00:16:38,920
+can also create a tensor directly on a
+
+359
+00:16:36,240 --> 00:16:42,959
+GPU so you don't have to move it at all.
+
+360
+00:16:38,920 --> 00:16:44,720
+Um and if everything goes well, I'm
+
+361
+00:16:42,959 --> 00:16:48,240
+looking at the memory allocated before
+
+362
+00:16:44,720 --> 00:16:55,120
+and after. Uh the difference should be
+
+363
+00:16:48,240 --> 00:17:00,519
+exactly uh two 30 by 32x 32 um matrices
+
+364
+00:16:55,120 --> 00:17:02,480
+of four byte floats. Okay. So um it's
+
+365
+00:17:00,519 --> 00:17:06,240
+a192. Okay. Okay, so this is just a
+
+366
+00:17:02,480 --> 00:17:09,319
+sanity check that um the code is is uh
+
+367
+00:17:06,240 --> 00:17:12,240
+is doing what is
+
+368
+00:17:09,319 --> 00:17:15,919
+advertised. Okay, so now you have your
+
+369
+00:17:12,240 --> 00:17:18,400
+answers on the GPU. Um what do you uh
+
+370
+00:17:15,919 --> 00:17:20,720
+do? So there's many operations um that
+
+371
+00:17:18,400 --> 00:17:22,559
+you'll be needing for assignment one and
+
+372
+00:17:20,720 --> 00:17:25,280
+in general to do any deep learning
+
+373
+00:17:22,559 --> 00:17:27,760
+application. Um and most tensors you
+
+374
+00:17:25,280 --> 00:17:29,679
+just create by performing operations on
+
+375
+00:17:27,760 --> 00:17:32,480
+other tensors and each operations has
+
+376
+00:17:29,679 --> 00:17:35,600
+some memory and compute uh footprint. So
+
+377
+00:17:32,480 --> 00:17:39,919
+let's make sure we understand uh that.
+
+378
+00:17:35,600 --> 00:17:42,720
+Um so first of all um what is actually a
+
+379
+00:17:39,919 --> 00:17:46,080
+tensor in PyTorch right tensors are a
+
+380
+00:17:42,720 --> 00:17:49,360
+mathematical object in PyTorch they're
+
+381
+00:17:46,080 --> 00:17:53,160
+actually pointers into some allocated
+
+382
+00:17:49,360 --> 00:17:57,840
+memory. Okay. So if you have let's say
+
+383
+00:17:53,160 --> 00:18:00,840
+um a matrix 4x4 matrix um what it
+
+384
+00:17:57,840 --> 00:18:03,840
+actually looks like is a long
+
+385
+00:18:00,840 --> 00:18:06,480
+array and what the tensor has is
+
+386
+00:18:03,840 --> 00:18:08,480
+metadata that specifies how to get to
+
+387
+00:18:06,480 --> 00:18:11,200
+address into that array. And the
+
+388
+00:18:08,480 --> 00:18:14,400
+metadata is going to be um you know two
+
+389
+00:18:11,200 --> 00:18:16,880
+numbers a stride for each or actually
+
+390
+00:18:14,400 --> 00:18:19,520
+number of one number per dimension of
+
+391
+00:18:16,880 --> 00:18:22,160
+the of the tensor. in this case because
+
+392
+00:18:19,520 --> 00:18:25,360
+there's um you know two dimensions it's
+
+393
+00:18:22,160 --> 00:18:30,400
+uh you know stride zero and stride one
+
+394
+00:18:25,360 --> 00:18:35,440
+um stride zero uh specifies if you were
+
+395
+00:18:30,400 --> 00:18:37,520
+in dimension zero to get to the next row
+
+396
+00:18:35,440 --> 00:18:40,320
+to increment that index how many do you
+
+397
+00:18:37,520 --> 00:18:45,120
+have to skip and so going down the rows
+
+398
+00:18:40,320 --> 00:18:48,720
+you skip four so stride uh zero is four
+
+399
+00:18:45,120 --> 00:18:53,840
+and um to go to the next column um you
+
+400
+00:18:48,720 --> 00:18:56,080
+skip one. So stride one is one. Okay. So
+
+401
+00:18:53,840 --> 00:18:59,679
+with that to find an element let's say
+
+402
+00:18:56,080 --> 00:19:02,240
+one two one comma two um it's simply
+
+403
+00:18:59,679 --> 00:19:05,760
+just um multiply the indexes by the
+
+404
+00:19:02,240 --> 00:19:09,280
+stride and you get to your index which
+
+405
+00:19:05,760 --> 00:19:12,000
+is uh six here. So that would be here or
+
+406
+00:19:09,280 --> 00:19:15,039
+or here. Okay. So that's basically
+
+407
+00:19:12,000 --> 00:19:17,440
+what's going underneath the hood um for
+
+408
+00:19:15,039 --> 00:19:23,039
+for for tensors.
+
+409
+00:19:17,440 --> 00:19:25,120
+Okay, so this is um relevant because um
+
+410
+00:19:23,039 --> 00:19:27,039
+you can have multiple tensors that use
+
+411
+00:19:25,120 --> 00:19:28,400
+the same storage and this is useful
+
+412
+00:19:27,039 --> 00:19:30,320
+because you don't want to copy the
+
+413
+00:19:28,400 --> 00:19:33,600
+tensor all over the all over the place.
+
+414
+00:19:30,320 --> 00:19:37,360
+So imagine you have a 2x3 matrix here.
+
+415
+00:19:33,600 --> 00:19:38,880
+Um many operations um don't actually
+
+416
+00:19:37,360 --> 00:19:41,120
+create a new tensor. They just create a
+
+417
+00:19:38,880 --> 00:19:44,880
+different view and doesn't make a copy.
+
+418
+00:19:41,120 --> 00:19:47,520
+So you have to keep make sure that um um
+
+419
+00:19:44,880 --> 00:19:49,440
+your mutations uh if you start mutating
+
+420
+00:19:47,520 --> 00:19:50,280
+one tensor it's going to cause the other
+
+421
+00:19:49,440 --> 00:19:54,160
+one to
+
+422
+00:19:50,280 --> 00:19:57,320
+mutate. Okay. So um for example if you
+
+423
+00:19:54,160 --> 00:20:01,039
+just get um row
+
+424
+00:19:57,320 --> 00:20:05,440
+zero okay so remember y is uh this
+
+425
+00:20:01,039 --> 00:20:08,600
+tensor and sorry x is 1 2 3 4 5 6 and y
+
+426
+00:20:05,440 --> 00:20:11,840
+is x0 which is just the first
+
+427
+00:20:08,600 --> 00:20:13,520
+row. Okay. And um you can sort of double
+
+428
+00:20:11,840 --> 00:20:15,600
+check. There's this you know function I
+
+429
+00:20:13,520 --> 00:20:17,600
+wrote that says if you look at the
+
+430
+00:20:15,600 --> 00:20:19,679
+underlying storage whether these two
+
+431
+00:20:17,600 --> 00:20:22,640
+tensors have the same storage or not.
+
+432
+00:20:19,679 --> 00:20:26,320
+Okay. So this um definitely doesn't copy
+
+433
+00:20:22,640 --> 00:20:30,159
+the tensor. It just creates a view. Um
+
+434
+00:20:26,320 --> 00:20:33,679
+you can get column one. Um this also
+
+435
+00:20:30,159 --> 00:20:36,400
+doesn't uh copy the tensor. Um oops
+
+436
+00:20:33,679 --> 00:20:38,799
+don't need to do that. Um you can call a
+
+437
+00:20:36,400 --> 00:20:42,240
+view function which can take any tensor
+
+438
+00:20:38,799 --> 00:20:47,760
+and uh ch look at it in terms of the
+
+439
+00:20:42,240 --> 00:20:49,200
+different dimensions. Um 2x3 uh um
+
+440
+00:20:47,760 --> 00:20:52,799
+actually this should be maybe the other
+
+441
+00:20:49,200 --> 00:20:55,679
+way around. Uh as a 3x2 tensor
+
+442
+00:20:52,799 --> 00:20:58,960
+um so that's also doesn't you know
+
+443
+00:20:55,679 --> 00:21:03,520
+change uh do any copying. Um you can
+
+444
+00:20:58,960 --> 00:21:05,520
+transpose um that also doesn't copy. Um
+
+445
+00:21:03,520 --> 00:21:09,600
+and then you know like I said if you
+
+446
+00:21:05,520 --> 00:21:12,559
+start mutating X um then Y actually gets
+
+447
+00:21:09,600 --> 00:21:14,840
+mutated as well because X and Y are just
+
+448
+00:21:12,559 --> 00:21:19,360
+pointers into the same underlying
+
+449
+00:21:14,840 --> 00:21:21,200
+storage. Okay. So things are um one
+
+450
+00:21:19,360 --> 00:21:24,559
+thing that you have to be careful of is
+
+451
+00:21:21,200 --> 00:21:26,240
+that some views are contiguous which
+
+452
+00:21:24,559 --> 00:21:28,880
+means that if you run through the tensor
+
+453
+00:21:26,240 --> 00:21:32,880
+it's like just slide going through the
+
+454
+00:21:28,880 --> 00:21:35,440
+the uh array in your storage. um but
+
+455
+00:21:32,880 --> 00:21:38,480
+some are not. So in particular if you
+
+456
+00:21:35,440 --> 00:21:39,440
+transpose it now you're you know what
+
+457
+00:21:38,480 --> 00:21:41,200
+does it mean when you're you're
+
+458
+00:21:39,440 --> 00:21:43,760
+transposing it you're you're sort of
+
+459
+00:21:41,200 --> 00:21:45,600
+going down now so you're kind of if you
+
+460
+00:21:43,760 --> 00:21:48,159
+imagine going through the tensor you're
+
+461
+00:21:45,600 --> 00:21:51,280
+kind of skipping around and if you have
+
+462
+00:21:48,159 --> 00:21:53,679
+a non-ontiguous tensor um then if you
+
+463
+00:21:51,280 --> 00:21:56,200
+try to further view it in a different
+
+464
+00:21:53,679 --> 00:22:00,559
+way then this is not going to
+
+465
+00:21:56,200 --> 00:22:02,400
+work. Okay. So in some cases if you have
+
+466
+00:22:00,559 --> 00:22:04,960
+a non-ontiguous tensor you can make it
+
+467
+00:22:02,400 --> 00:22:06,960
+contiguous first and then uh you can
+
+468
+00:22:04,960 --> 00:22:10,960
+apply whatever oper viewing operation
+
+469
+00:22:06,960 --> 00:22:14,240
+you want to it and then in this case x
+
+470
+00:22:10,960 --> 00:22:17,360
+and y um do not have the same storage
+
+471
+00:22:14,240 --> 00:22:19,000
+because contiguous in this case uh makes
+
+472
+00:22:17,360 --> 00:22:23,120
+a
+
+473
+00:22:19,000 --> 00:22:27,679
+copy. Okay. So um this is just ways of
+
+474
+00:22:23,120 --> 00:22:30,559
+slicing and dicing a tensor. Um uh views
+
+475
+00:22:27,679 --> 00:22:33,200
+are free so feel free to use them define
+
+476
+00:22:30,559 --> 00:22:35,760
+different variables um to make your it
+
+477
+00:22:33,200 --> 00:22:37,919
+sort of easier to read your code um
+
+478
+00:22:35,760 --> 00:22:40,960
+because they're not allocating any
+
+479
+00:22:37,919 --> 00:22:43,520
+memory. Um but you know remember that
+
+480
+00:22:40,960 --> 00:22:47,760
+contiguous or reshape which is basically
+
+481
+00:22:43,520 --> 00:22:51,480
+contiguous view um uh can uh create a
+
+482
+00:22:47,760 --> 00:22:56,640
+copy and so just be careful what you're
+
+483
+00:22:51,480 --> 00:22:56,640
+doing. Okay, questions before moving
+
+484
+00:22:58,600 --> 00:23:04,720
+on. All right. So, um hopefully some a
+
+485
+00:23:02,799 --> 00:23:06,880
+lot of this will be review for those of
+
+486
+00:23:04,720 --> 00:23:09,520
+you have uh kind of done a lot of
+
+487
+00:23:06,880 --> 00:23:11,120
+PyTorch before, but it's uh helpful to
+
+488
+00:23:09,520 --> 00:23:13,520
+just do it systematically, make sure
+
+489
+00:23:11,120 --> 00:23:17,600
+we're on the same page. So, um here are
+
+490
+00:23:13,520 --> 00:23:20,320
+some operations that uh do create new
+
+491
+00:23:17,600 --> 00:23:22,559
+tensors and in particular elementwise
+
+492
+00:23:20,320 --> 00:23:24,159
+operations all create new tensors
+
+493
+00:23:22,559 --> 00:23:27,640
+obviously because you need a somewhere
+
+494
+00:23:24,159 --> 00:23:31,360
+else to store the new value. Um there's
+
+495
+00:23:27,640 --> 00:23:33,520
+a you know triangular U is also element
+
+496
+00:23:31,360 --> 00:23:36,000
+operation that uh comes in handy when
+
+497
+00:23:33,520 --> 00:23:38,480
+you want to create a causal attention
+
+498
+00:23:36,000 --> 00:23:40,960
+mask um which you'll need for your um
+
+499
+00:23:38,480 --> 00:23:46,400
+your assignment. Um but nothing is
+
+500
+00:23:40,960 --> 00:23:49,280
+interesting that interesting uh here um
+
+501
+00:23:46,400 --> 00:23:51,280
+um okay so let's talk about map malls.
+
+502
+00:23:49,280 --> 00:23:54,000
+So the bread and butter of deep learning
+
+503
+00:23:51,280 --> 00:23:55,200
+is matrix multiplications. And I'm sure
+
+504
+00:23:54,000 --> 00:23:57,039
+all of you have done a matrix
+
+505
+00:23:55,200 --> 00:24:00,320
+multiplication, but just in case this is
+
+506
+00:23:57,039 --> 00:24:02,720
+what it looks like. Um you take a 16x32
+
+507
+00:24:00,320 --> 00:24:04,120
+times a 32x2 matrix, you get a 16x2
+
+508
+00:24:02,720 --> 00:24:05,720
+matrix.
+
+509
+00:24:04,120 --> 00:24:07,880
+Um
+
+510
+00:24:05,720 --> 00:24:11,039
+and but in
+
+511
+00:24:07,880 --> 00:24:14,400
+general when we do you know our machine
+
+512
+00:24:11,039 --> 00:24:17,760
+learning application um all operations
+
+513
+00:24:14,400 --> 00:24:19,520
+are you want to do in a batch and in the
+
+514
+00:24:17,760 --> 00:24:21,760
+case of language models this usually
+
+515
+00:24:19,520 --> 00:24:23,840
+means um for every example in a batch
+
+516
+00:24:21,760 --> 00:24:26,720
+and for every sequence in a batch you
+
+517
+00:24:23,840 --> 00:24:28,559
+want to do something. Okay, so generally
+
+518
+00:24:26,720 --> 00:24:30,159
+what you're going to have in instead of
+
+519
+00:24:28,559 --> 00:24:31,919
+just a matrix is you're going to have a
+
+520
+00:24:30,159 --> 00:24:34,080
+tensor where the dimensions are
+
+521
+00:24:31,919 --> 00:24:36,080
+typically batch sequence and then
+
+522
+00:24:34,080 --> 00:24:37,760
+whatever thing you're you're trying to
+
+523
+00:24:36,080 --> 00:24:42,559
+do. In this case, it's a matrix for
+
+524
+00:24:37,760 --> 00:24:43,400
+every um token in your in your data set.
+
+525
+00:24:42,559 --> 00:24:46,080
+And
+
+526
+00:24:43,400 --> 00:24:48,400
+so you know PyTorch is nice enough to
+
+527
+00:24:46,080 --> 00:24:51,279
+make this uh work well for you. So when
+
+528
+00:24:48,400 --> 00:24:55,279
+you take this for
+
+529
+00:24:51,279 --> 00:24:57,200
+um the dimension tensor and this matrix
+
+530
+00:24:55,279 --> 00:25:00,240
+um what actually ends up happening is
+
+531
+00:24:57,200 --> 00:25:03,360
+that for every batch every example in
+
+532
+00:25:00,240 --> 00:25:06,480
+every token you're multiplying these two
+
+533
+00:25:03,360 --> 00:25:09,200
+um matrices. Okay. And then the result
+
+534
+00:25:06,480 --> 00:25:11,120
+is that you get your your resulting
+
+535
+00:25:09,200 --> 00:25:13,440
+matrix for each of the first two
+
+536
+00:25:11,120 --> 00:25:15,360
+elements. So this is just like a there's
+
+537
+00:25:13,440 --> 00:25:18,799
+nothing uh fancy going on but this is
+
+538
+00:25:15,360 --> 00:25:22,159
+just a pattern that um I think uh you is
+
+539
+00:25:18,799 --> 00:25:22,159
+helpful to you know think
+
+540
+00:25:23,159 --> 00:25:30,120
+about okay so I'm going to take a little
+
+541
+00:25:26,880 --> 00:25:34,039
+bit of a a digression and talk about um
+
+542
+00:25:30,120 --> 00:25:37,200
+inops um and so the motivation
+
+543
+00:25:34,039 --> 00:25:40,559
+fors is the following so normally you in
+
+544
+00:25:37,200 --> 00:25:43,200
+pietorch you define some um you know
+
+545
+00:25:40,559 --> 00:25:45,760
+tensors And then you see stuff like this
+
+546
+00:25:43,200 --> 00:25:49,120
+where you take x and multiply by y
+
+547
+00:25:45,760 --> 00:25:50,880
+transpose minus2 minus one and you're
+
+548
+00:25:49,120 --> 00:25:53,600
+you kind of look at this and you say
+
+549
+00:25:50,880 --> 00:25:56,640
+okay what is minus2 um well I think
+
+550
+00:25:53,600 --> 00:25:58,159
+that's uh this sequence and then minus1
+
+551
+00:25:56,640 --> 00:26:00,159
+is this hidden because you're indexing
+
+552
+00:25:58,159 --> 00:26:02,240
+backwards. Um, and it's really easy to
+
+553
+00:26:00,159 --> 00:26:05,039
+mess this up because if you look at your
+
+554
+00:26:02,240 --> 00:26:07,279
+code and you see minus one, minus two,
+
+555
+00:26:05,039 --> 00:26:09,360
+um, you're kind of if you're you're
+
+556
+00:26:07,279 --> 00:26:11,520
+good, you write a bunch of comments, but
+
+557
+00:26:09,360 --> 00:26:14,080
+then the comments are can get out of
+
+558
+00:26:11,520 --> 00:26:18,240
+date with the code and then, um, you you
+
+559
+00:26:14,080 --> 00:26:20,880
+have a bad time debugging. So the the
+
+560
+00:26:18,240 --> 00:26:23,159
+solution is to use inops here. So this
+
+561
+00:26:20,880 --> 00:26:26,159
+is inspired by Einstein's summation not
+
+562
+00:26:23,159 --> 00:26:28,440
+notation. Um, and the idea is that we're
+
+563
+00:26:26,159 --> 00:26:32,400
+just going to name all the dimensions.
+
+564
+00:26:28,440 --> 00:26:35,600
+um instead of you know relying on
+
+565
+00:26:32,400 --> 00:26:37,600
+indices essentially. Okay. So there's a
+
+566
+00:26:35,600 --> 00:26:43,679
+library called Jack typing which um is
+
+567
+00:26:37,600 --> 00:26:47,120
+is is helpful for um as a as a way to
+
+568
+00:26:43,679 --> 00:26:49,840
+specify the dimensions in the types. So
+
+569
+00:26:47,120 --> 00:26:51,760
+normally in PyTorch you would just
+
+570
+00:26:49,840 --> 00:26:53,360
+define write your code and then you
+
+571
+00:26:51,760 --> 00:26:55,200
+would comment oh here's what the
+
+572
+00:26:53,360 --> 00:26:57,919
+dimensions would be. So if you use jacks
+
+573
+00:26:55,200 --> 00:27:00,080
+typing then um you have this notation
+
+574
+00:26:57,919 --> 00:27:03,279
+where as a string you just write down
+
+575
+00:27:00,080 --> 00:27:05,080
+what the dimensions are. So this is a
+
+576
+00:27:03,279 --> 00:27:08,400
+slightly kind of more natural way of
+
+577
+00:27:05,080 --> 00:27:09,919
+documenting. Um now notice that there's
+
+578
+00:27:08,400 --> 00:27:12,320
+no enforcement here right because
+
+579
+00:27:09,919 --> 00:27:16,000
+PyTorch types are sort of a a little bit
+
+580
+00:27:12,320 --> 00:27:18,799
+of a lie in in in PyTorch. Uh so it can
+
+581
+00:27:16,000 --> 00:27:21,279
+be enforced. You you can use a checker,
+
+582
+00:27:18,799 --> 00:27:24,120
+right? Yeah, you can write a check but
+
+583
+00:27:21,279 --> 00:27:26,200
+um not by default.
+
+584
+00:27:24,120 --> 00:27:30,240
+Yeah.
+
+585
+00:27:26,200 --> 00:27:32,000
+Um okay. So let's look at uh the you
+
+586
+00:27:30,240 --> 00:27:35,440
+know Ein sum. So Ein sum is basically
+
+587
+00:27:32,000 --> 00:27:38,880
+matrix multiplication on steroids with
+
+588
+00:27:35,440 --> 00:27:41,440
+good bookkeeping. Um so here's our
+
+589
+00:27:38,880 --> 00:27:43,279
+example here. We have X which is let's
+
+590
+00:27:41,440 --> 00:27:44,720
+just think about this as uh you have a
+
+591
+00:27:43,279 --> 00:27:47,039
+batch dimension, you have a sequence
+
+592
+00:27:44,720 --> 00:27:51,600
+dimension and you have uh four um
+
+593
+00:27:47,039 --> 00:27:54,960
+hiddens and Y is the same size. um you
+
+594
+00:27:51,600 --> 00:27:59,039
+originally had to do this thing. Um and
+
+595
+00:27:54,960 --> 00:28:02,399
+now what you do instead is you basically
+
+596
+00:27:59,039 --> 00:28:05,200
+write down the the dimensions uh names
+
+597
+00:28:02,399 --> 00:28:07,440
+of the dimensions of the two uh tensors.
+
+598
+00:28:05,200 --> 00:28:10,320
+So batch sequence one hidden batch
+
+599
+00:28:07,440 --> 00:28:12,960
+sequence two hidden and you just write
+
+600
+00:28:10,320 --> 00:28:15,919
+what you dimension should appear in the
+
+601
+00:28:12,960 --> 00:28:19,279
+output. Okay. So I write batch here
+
+602
+00:28:15,919 --> 00:28:21,919
+because I just want to uh basically uh
+
+603
+00:28:19,279 --> 00:28:24,799
+you know carry that over and then I
+
+604
+00:28:21,919 --> 00:28:27,200
+write seek one and seek two and notice
+
+605
+00:28:24,799 --> 00:28:29,120
+that I don't write hidden and any
+
+606
+00:28:27,200 --> 00:28:31,360
+dimension that is not named in output is
+
+607
+00:28:29,120 --> 00:28:35,399
+just summed over and any dimension that
+
+608
+00:28:31,360 --> 00:28:39,279
+is um named is sort of just iterated
+
+609
+00:28:35,399 --> 00:28:40,799
+over. Okay. So
+
+610
+00:28:39,279 --> 00:28:43,279
+um once you get used to this, this is
+
+611
+00:28:40,799 --> 00:28:45,120
+actually very very uh you know helpful.
+
+612
+00:28:43,279 --> 00:28:46,559
+It may maybe looks if you're seeing this
+
+613
+00:28:45,120 --> 00:28:48,640
+for the first time it might seem a bit
+
+614
+00:28:46,559 --> 00:28:50,000
+you know strange and long but u trust me
+
+615
+00:28:48,640 --> 00:28:54,240
+once you get used to it'll be better
+
+616
+00:28:50,000 --> 00:28:56,559
+than um doing minus2 minus one. Um if
+
+617
+00:28:54,240 --> 00:28:59,840
+you're a little bit uh you know slicker
+
+618
+00:28:56,559 --> 00:29:01,279
+you can um use dot dot dot to represent
+
+619
+00:28:59,840 --> 00:29:04,880
+broadcasting over any number of
+
+620
+00:29:01,279 --> 00:29:06,480
+dimensions. So in this case um uh
+
+621
+00:29:04,880 --> 00:29:08,799
+instead of writing batch I can just
+
+622
+00:29:06,480 --> 00:29:11,440
+write dot dot dot and this would handle
+
+623
+00:29:08,799 --> 00:29:13,279
+the case where instead of maybe batch I
+
+624
+00:29:11,440 --> 00:29:17,840
+have batch one batch two or or some
+
+625
+00:29:13,279 --> 00:29:21,120
+other uh arbitrary long sequence.
+
+626
+00:29:17,840 --> 00:29:24,120
+Yeah question does for compile this like
+
+627
+00:29:21,120 --> 00:29:27,520
+is it guaranteed to compile to
+
+628
+00:29:24,120 --> 00:29:29,360
+like I guess so the question is is it
+
+629
+00:29:27,520 --> 00:29:33,360
+guaranteed to compile to something
+
+630
+00:29:29,360 --> 00:29:35,840
+efficient? Um this uh I think the short
+
+631
+00:29:33,360 --> 00:29:38,159
+answer is yes. Um I don't know if you
+
+632
+00:29:35,840 --> 00:29:39,760
+have any you know nuances. We will
+
+633
+00:29:38,159 --> 00:29:42,080
+figure out the best way to reduce the
+
+634
+00:29:39,760 --> 00:29:43,360
+best order of uh dimensions to reduce
+
+635
+00:29:42,080 --> 00:29:45,279
+and then use that. If you're using it
+
+636
+00:29:43,360 --> 00:29:46,799
+within portra compile only do that one
+
+637
+00:29:45,279 --> 00:29:49,039
+time and then you know reuse the same
+
+638
+00:29:46,799 --> 00:29:53,360
+implementation over and over again
+
+639
+00:29:49,039 --> 00:29:53,360
+better than anything designed by hand.
+
+640
+00:29:53,480 --> 00:30:00,720
+Yeah. Okay.
+
+641
+00:29:56,480 --> 00:30:03,840
+So um so let's look at reduce. So reduce
+
+642
+00:30:00,720 --> 00:30:06,320
+operates on one tensor and it basically
+
+643
+00:30:03,840 --> 00:30:08,559
+aggregates some dimension or dimensions
+
+644
+00:30:06,320 --> 00:30:11,039
+of the tensor. So you have this tensor
+
+645
+00:30:08,559 --> 00:30:14,640
+uh before you would write mean to sum
+
+646
+00:30:11,039 --> 00:30:17,840
+over the the the final dimension and now
+
+647
+00:30:14,640 --> 00:30:21,200
+you basically say um actually okay so
+
+648
+00:30:17,840 --> 00:30:25,679
+this replace this with sum. So reduce
+
+649
+00:30:21,200 --> 00:30:27,919
+and um again you say hidden and hidden
+
+650
+00:30:25,679 --> 00:30:31,000
+is disappear disappeared. So which means
+
+651
+00:30:27,919 --> 00:30:33,520
+that you are um aggregating over that
+
+652
+00:30:31,000 --> 00:30:38,000
+dimension. Okay. So you can check that
+
+653
+00:30:33,520 --> 00:30:38,000
+this indeed kind of works over
+
+654
+00:30:39,000 --> 00:30:47,679
+here. Okay. So, so maybe one final
+
+655
+00:30:42,480 --> 00:30:50,240
+example of uh this is um sometimes
+
+656
+00:30:47,679 --> 00:30:52,240
+um in a you know tensor one dimension
+
+657
+00:30:50,240 --> 00:30:54,559
+actually represents multiple dimensions
+
+658
+00:30:52,240 --> 00:30:57,760
+and you want to unpack that and operate
+
+659
+00:30:54,559 --> 00:31:00,399
+over one of them and pack it back. So um
+
+660
+00:30:57,760 --> 00:31:02,320
+in this case uh let's say you have batch
+
+661
+00:31:00,399 --> 00:31:05,360
+uh sequence and then this
+
+662
+00:31:02,320 --> 00:31:07,440
+eightdimensional vector is actually a
+
+663
+00:31:05,360 --> 00:31:09,880
+flattened representation of number of
+
+664
+00:31:07,440 --> 00:31:12,640
+heads times some you know hidden
+
+665
+00:31:09,880 --> 00:31:15,919
+dimension. Okay so and then you have a
+
+666
+00:31:12,640 --> 00:31:18,399
+way a vector that is um needs to operate
+
+667
+00:31:15,919 --> 00:31:22,720
+on that hidden dimension. So you can do
+
+668
+00:31:18,399 --> 00:31:27,360
+this very elegantly uh using um inops uh
+
+669
+00:31:22,720 --> 00:31:29,679
+by um re calling rearrange and this
+
+670
+00:31:27,360 --> 00:31:32,640
+basically you can think about it we saw
+
+671
+00:31:29,679 --> 00:31:34,799
+view uh before it's kind of like um kind
+
+672
+00:31:32,640 --> 00:31:37,600
+of a you know fancier version which
+
+673
+00:31:34,799 --> 00:31:41,519
+basically looks at the same data but uh
+
+674
+00:31:37,600 --> 00:31:43,679
+um you know differently. Um so here uh
+
+675
+00:31:41,519 --> 00:31:45,519
+it basically says this dimension is
+
+676
+00:31:43,679 --> 00:31:49,760
+actually heads in hidden one. I'm going
+
+677
+00:31:45,519 --> 00:31:53,600
+to explode that into two dimensions. Um,
+
+678
+00:31:49,760 --> 00:31:55,679
+and uh, you have to specify the the
+
+679
+00:31:53,600 --> 00:31:57,600
+number of heads here because there's
+
+680
+00:31:55,679 --> 00:32:00,960
+multiple ways to split a number into,
+
+681
+00:31:57,600 --> 00:32:03,279
+you know, two. Um, let's see. This might
+
+682
+00:32:00,960 --> 00:32:06,120
+be a little bit long. Um, okay, maybe
+
+683
+00:32:03,279 --> 00:32:10,840
+it's not worth looking at right now.
+
+684
+00:32:06,120 --> 00:32:14,760
+Um and given that x you can uh
+
+685
+00:32:10,840 --> 00:32:18,880
+perform your transformation using line
+
+686
+00:32:14,760 --> 00:32:20,799
+sum. So this is something hidden one
+
+687
+00:32:18,880 --> 00:32:23,440
+which corresponds to x and then hidden
+
+688
+00:32:20,799 --> 00:32:26,679
+one hidden two which corresponds to w
+
+689
+00:32:23,440 --> 00:32:28,760
+and that gives you um something hidden
+
+690
+00:32:26,679 --> 00:32:32,320
+too.
+
+691
+00:32:28,760 --> 00:32:35,279
+Okay. Um and then you can rearrange
+
+692
+00:32:32,320 --> 00:32:37,679
+back. So this is the just the inverse of
+
+693
+00:32:35,279 --> 00:32:40,159
+breaking up. So you have the your two
+
+694
+00:32:37,679 --> 00:32:41,919
+dimensions and you group it into one. So
+
+695
+00:32:40,159 --> 00:32:45,519
+that's just a flattening operation
+
+696
+00:32:41,919 --> 00:32:49,039
+that's uh um you know with uh everything
+
+697
+00:32:45,519 --> 00:32:49,039
+all the other dimensions kind of left
+
+698
+00:32:49,960 --> 00:32:56,559
+alone. Okay. So there is a tutorial um
+
+699
+00:32:53,679 --> 00:32:58,880
+for for this that I would recommend you
+
+700
+00:32:56,559 --> 00:33:01,760
+go through and it gives you a bit more.
+
+701
+00:32:58,880 --> 00:33:03,120
+So um on you don't have to use this um
+
+702
+00:33:01,760 --> 00:33:04,880
+because you're building it from scratch.
+
+703
+00:33:03,120 --> 00:33:07,440
+So you can kind of do anything you want
+
+704
+00:33:04,880 --> 00:33:09,679
+but um in assignment one we do give you
+
+705
+00:33:07,440 --> 00:33:12,320
+guidance and it's something probably to
+
+706
+00:33:09,679 --> 00:33:12,320
+invest
+
+707
+00:33:14,840 --> 00:33:18,120
+in.
+
+708
+00:33:16,519 --> 00:33:22,679
+Okay.
+
+709
+00:33:18,120 --> 00:33:26,799
+Um so now let's talk about
+
+710
+00:33:22,679 --> 00:33:29,120
+uh computation uh no cost of t tensor
+
+711
+00:33:26,799 --> 00:33:32,480
+operations. So we introduce a bunch of
+
+712
+00:33:29,120 --> 00:33:37,279
+operations um and you know how much do
+
+713
+00:33:32,480 --> 00:33:41,200
+they cost? So a floatingoint operation
+
+714
+00:33:37,279 --> 00:33:43,600
+is uh any operation floating point like
+
+715
+00:33:41,200 --> 00:33:47,039
+addition or multiplication. These are
+
+716
+00:33:43,600 --> 00:33:49,760
+them and um these are kind of the you
+
+717
+00:33:47,039 --> 00:33:52,799
+know main ones that are going to um I
+
+718
+00:33:49,760 --> 00:33:55,519
+think matter in terms of flop count. Um,
+
+719
+00:33:52,799 --> 00:33:57,200
+one thing that is uh is sort of a pet
+
+720
+00:33:55,519 --> 00:33:59,200
+peeve of mine is that when you say
+
+721
+00:33:57,200 --> 00:34:01,519
+flops, it's actually unclear what you
+
+722
+00:33:59,200 --> 00:34:05,360
+mean. So you could mean flops with a
+
+723
+00:34:01,519 --> 00:34:07,200
+lowercase s, which stands for number of
+
+724
+00:34:05,360 --> 00:34:09,599
+floating operations. This is measures
+
+725
+00:34:07,200 --> 00:34:13,040
+amount of computation that you've done
+
+726
+00:34:09,599 --> 00:34:14,960
+or you could mean flops um also written
+
+727
+00:34:13,040 --> 00:34:17,440
+with a uppercase s which means floating
+
+728
+00:34:14,960 --> 00:34:20,399
+points per second which is used to
+
+729
+00:34:17,440 --> 00:34:23,599
+measure the speed of hardware. So um
+
+730
+00:34:20,399 --> 00:34:25,599
+we're not going to in this class use
+
+731
+00:34:23,599 --> 00:34:29,040
+uppercase s because I find that very
+
+732
+00:34:25,599 --> 00:34:31,320
+confusing and just write slash s to
+
+733
+00:34:29,040 --> 00:34:33,560
+denote that this is floating point per
+
+734
+00:34:31,320 --> 00:34:36,320
+second.
+
+735
+00:34:33,560 --> 00:34:39,520
+Okay. Okay. So just to give you uh some
+
+736
+00:34:36,320 --> 00:34:44,240
+intuition about flops. Uh GBD3 took
+
+737
+00:34:39,520 --> 00:34:48,800
+about uh 323 flops. GPD4 was 2 E25
+
+738
+00:34:44,240 --> 00:34:50,480
+flops. um speculation and there was a US
+
+739
+00:34:48,800 --> 00:34:53,200
+executive order that any foundation
+
+740
+00:34:50,480 --> 00:34:56,240
+model with over 126 flops had to be
+
+741
+00:34:53,200 --> 00:34:59,920
+reported to government um which now u
+
+742
+00:34:56,240 --> 00:35:02,720
+has been revoked um but the EU has still
+
+743
+00:34:59,920 --> 00:35:05,200
+they're going u still has a something
+
+744
+00:35:02,720 --> 00:35:08,839
+that's hasn't the EU AI act which is
+
+745
+00:35:05,200 --> 00:35:13,640
+1e25 which hasn't been revoked
+
+746
+00:35:08,839 --> 00:35:17,160
+um so uh you know some intuitions uh
+
+747
+00:35:13,640 --> 00:35:20,119
+A100 has a peak performance of 312
+
+748
+00:35:17,160 --> 00:35:25,520
+teraflop per second.
+
+749
+00:35:20,119 --> 00:35:28,560
+Um and um H100 has a peak performance of
+
+750
+00:35:25,520 --> 00:35:32,079
+um 1979 teraflop per second with uh
+
+751
+00:35:28,560 --> 00:35:35,359
+sparsity and approximately 50% without
+
+752
+00:35:32,079 --> 00:35:38,800
+um and um if you look at uh you know the
+
+753
+00:35:35,359 --> 00:35:41,839
+Nvidia has these specification sheets um
+
+754
+00:35:38,800 --> 00:35:43,839
+so you can see that um the the flops
+
+755
+00:35:41,839 --> 00:35:48,800
+actually depends on what you're trying
+
+756
+00:35:43,839 --> 00:35:51,040
+to do. So if you're using BF or F FP32,
+
+757
+00:35:48,800 --> 00:35:55,040
+it's actually really really bad. Like
+
+758
+00:35:51,040 --> 00:35:58,320
+the if you run FP32 on H100, you're not
+
+759
+00:35:55,040 --> 00:36:02,960
+getting um it's it's orders of magnitude
+
+760
+00:35:58,320 --> 00:36:05,839
+worse than if you're doing um FP16 or um
+
+761
+00:36:02,960 --> 00:36:08,880
+and if you're willing to go down to FP8,
+
+762
+00:36:05,839 --> 00:36:10,240
+then it can be even faster. And you
+
+763
+00:36:08,880 --> 00:36:11,280
+know, for the for when I first read it,
+
+764
+00:36:10,240 --> 00:36:12,720
+I didn't realize, but there's an
+
+765
+00:36:11,280 --> 00:36:16,079
+asterisk here and this means with
+
+766
+00:36:12,720 --> 00:36:18,320
+sparsity. So uh usually you're in a lot
+
+767
+00:36:16,079 --> 00:36:19,760
+of the m matrices we have in this class
+
+768
+00:36:18,320 --> 00:36:22,320
+are dense. So you don't actually get
+
+769
+00:36:19,760 --> 00:36:24,560
+this. You get something like uh you know
+
+770
+00:36:22,320 --> 00:36:27,119
+it's exactly half that number. Exactly
+
+771
+00:36:24,560 --> 00:36:27,119
+half.
+
+772
+00:36:29,000 --> 00:36:32,640
+Okay. Okay.
+
+773
+00:36:33,240 --> 00:36:38,079
+So now you can do a bucket of envelope
+
+774
+00:36:35,599 --> 00:36:43,119
+of calculations. eight H100s for two
+
+775
+00:36:38,079 --> 00:36:44,800
+weeks is um just you know eight times
+
+776
+00:36:43,119 --> 00:36:47,760
+the number of flops per second times the
+
+777
+00:36:44,800 --> 00:36:50,240
+number of seconds in a in a in a week.
+
+778
+00:36:47,760 --> 00:36:52,720
+Um actually this is this might be one
+
+779
+00:36:50,240 --> 00:36:56,960
+week. Okay, so that's one week and
+
+780
+00:36:52,720 --> 00:37:00,720
+that's uh 4.7 * e to the 21
+
+781
+00:36:56,960 --> 00:37:03,040
+um which is you know some number and you
+
+782
+00:37:00,720 --> 00:37:07,280
+can kind of contextualize the the flop
+
+783
+00:37:03,040 --> 00:37:10,400
+counts with other um model counts.
+
+784
+00:37:07,280 --> 00:37:12,000
+Yeah. Sparity mean? So that means if so
+
+785
+00:37:10,400 --> 00:37:14,480
+what does sparsity mean? That means if
+
+786
+00:37:12,000 --> 00:37:16,400
+your matrices are uh sparse it's a
+
+787
+00:37:14,480 --> 00:37:18,800
+specific like structured sparity. It's
+
+788
+00:37:16,400 --> 00:37:21,680
+like two out of four elements in each
+
+789
+00:37:18,800 --> 00:37:22,880
+like group of four elements is zero.
+
+790
+00:37:21,680 --> 00:37:26,480
+That's the only case if you get that
+
+791
+00:37:22,880 --> 00:37:31,280
+that speed. No one uses it.
+
+792
+00:37:26,480 --> 00:37:31,280
+Yeah, it's a marketing department uses
+
+793
+00:37:31,800 --> 00:37:37,200
+it.
+
+794
+00:37:33,880 --> 00:37:38,800
+Okay. So, um let's go through a simple
+
+795
+00:37:37,200 --> 00:37:40,800
+example. So, remember we're not going to
+
+796
+00:37:38,800 --> 00:37:42,480
+touch the transformer, but I think even
+
+797
+00:37:40,800 --> 00:37:44,640
+a linear model gives us a lot of the
+
+798
+00:37:42,480 --> 00:37:48,040
+building blocks and intuitions. So
+
+799
+00:37:44,640 --> 00:37:50,480
+suppose we have end points each point is
+
+800
+00:37:48,040 --> 00:37:52,880
+d-dimensional and the linear model is
+
+801
+00:37:50,480 --> 00:37:55,680
+just going to match map each dimensional
+
+802
+00:37:52,880 --> 00:37:59,040
+vector to a k dimensional uh vector.
+
+803
+00:37:55,680 --> 00:38:02,640
+Okay. So let's set some number of points
+
+804
+00:37:59,040 --> 00:38:06,640
+um is B, dimension is D, K is the number
+
+805
+00:38:02,640 --> 00:38:13,440
+of outputs. Um and let's create our data
+
+806
+00:38:06,640 --> 00:38:16,400
+matrix X um our weight matrix uh uh W
+
+807
+00:38:13,440 --> 00:38:19,280
+and the linear model is just some map.
+
+808
+00:38:16,400 --> 00:38:22,920
+So nothing you know too too interesting
+
+809
+00:38:19,280 --> 00:38:26,640
+going on. And
+
+810
+00:38:22,920 --> 00:38:28,880
+um you know the question is how many
+
+811
+00:38:26,640 --> 00:38:31,599
+flops was that?
+
+812
+00:38:28,880 --> 00:38:36,000
+And uh the way you would you look at
+
+813
+00:38:31,599 --> 00:38:39,040
+this is you say well um when you do the
+
+814
+00:38:36,000 --> 00:38:44,240
+matrix multiplication you have basically
+
+815
+00:38:39,040 --> 00:38:45,560
+for every j k triple I have to multiply
+
+816
+00:38:44,240 --> 00:38:49,280
+two numbers
+
+817
+00:38:45,560 --> 00:38:53,440
+together and I also have to add that
+
+818
+00:38:49,280 --> 00:38:56,520
+number to the the the total. Okay. So
+
+819
+00:38:53,440 --> 00:38:59,680
+the answer is 2 times
+
+820
+00:38:56,520 --> 00:39:02,480
+um the basically the product of all the
+
+821
+00:38:59,680 --> 00:39:03,839
+dimensions involved. So the the left
+
+822
+00:39:02,480 --> 00:39:05,400
+dimension, the middle dimension and the
+
+823
+00:39:03,839 --> 00:39:08,320
+right
+
+824
+00:39:05,400 --> 00:39:10,720
+dimension. Okay, so this is something
+
+825
+00:39:08,320 --> 00:39:12,240
+that you should just kind of remember if
+
+826
+00:39:10,720 --> 00:39:15,680
+you're doing a matrix multiplication.
+
+827
+00:39:12,240 --> 00:39:19,480
+The number of flops is two times um the
+
+828
+00:39:15,680 --> 00:39:19,480
+product of the three dimensions.
+
+829
+00:39:21,040 --> 00:39:26,800
+Okay, so the flops of other operations
+
+830
+00:39:23,800 --> 00:39:31,680
+are usually kind of linear in the size
+
+831
+00:39:26,800 --> 00:39:33,200
+of um the the matrix or tensor. Um and
+
+832
+00:39:31,680 --> 00:39:35,359
+in general, no other operation you
+
+833
+00:39:33,200 --> 00:39:37,599
+encounter in deep learning is expensive
+
+834
+00:39:35,359 --> 00:39:40,960
+as matrix multiplication for large
+
+835
+00:39:37,599 --> 00:39:42,800
+enough uh matrices. So this is why I
+
+836
+00:39:40,960 --> 00:39:45,200
+think a lot of the napkin math is very
+
+837
+00:39:42,800 --> 00:39:48,160
+simple because we're only looking at the
+
+838
+00:39:45,200 --> 00:39:52,079
+matrix multiplications that are going
+
+839
+00:39:48,160 --> 00:39:53,440
+are performed by the model. Um now of
+
+840
+00:39:52,079 --> 00:39:56,480
+course there are regimes where if your
+
+841
+00:39:53,440 --> 00:39:58,079
+matrices are um small enough then the
+
+842
+00:39:56,480 --> 00:40:00,480
+cost of other things starts to dominate
+
+843
+00:39:58,079 --> 00:40:02,320
+but generally that's not a good regime
+
+844
+00:40:00,480 --> 00:40:05,040
+you want to be in because the hardware
+
+845
+00:40:02,320 --> 00:40:08,000
+is designed for big much multiplication.
+
+846
+00:40:05,040 --> 00:40:10,079
+So um sort of by it's a little bit
+
+847
+00:40:08,000 --> 00:40:12,880
+circular but by kind of we end up in
+
+848
+00:40:10,079 --> 00:40:14,960
+this regime where we only consider uh
+
+849
+00:40:12,880 --> 00:40:18,760
+models where the mammals are the
+
+850
+00:40:14,960 --> 00:40:22,480
+dominant um uh you know
+
+851
+00:40:18,760 --> 00:40:25,200
+cost. Okay any questions about this this
+
+852
+00:40:22,480 --> 00:40:27,359
+number two times the product of the
+
+853
+00:40:25,200 --> 00:40:29,520
+three dimensions. This is just a useful
+
+854
+00:40:27,359 --> 00:40:31,520
+thing. Would the algorithm of matrix
+
+855
+00:40:29,520 --> 00:40:33,400
+motivation always be the same? because
+
+856
+00:40:31,520 --> 00:40:39,280
+the chip might have optimized
+
+857
+00:40:33,400 --> 00:40:42,000
+that they always the same.
+
+858
+00:40:39,280 --> 00:40:44,240
+Yeah. So the question is like uh is the
+
+859
+00:40:42,000 --> 00:40:46,560
+does this essentially does this depend
+
+860
+00:40:44,240 --> 00:40:51,760
+on the the matrix multiplication you
+
+861
+00:40:46,560 --> 00:40:54,480
+know algorithm. Um in general I guess
+
+862
+00:40:51,760 --> 00:40:56,000
+we'll look at this the next week when we
+
+863
+00:40:54,480 --> 00:40:57,599
+or the week after when we look at
+
+864
+00:40:56,000 --> 00:41:00,000
+kernels. I mean actually there's a lot
+
+865
+00:40:57,599 --> 00:41:02,880
+of optimization that goes underneath
+
+866
+00:41:00,000 --> 00:41:05,520
+under the hood when it comes to matrix
+
+867
+00:41:02,880 --> 00:41:07,040
+uh multiplications. Um and there's a lot
+
+868
+00:41:05,520 --> 00:41:10,480
+of specialization depending on the
+
+869
+00:41:07,040 --> 00:41:13,280
+shape. Um so this is I would say this is
+
+870
+00:41:10,480 --> 00:41:17,760
+just a kind of a crude you know estimate
+
+871
+00:41:13,280 --> 00:41:20,160
+um that is ba basically like the right
+
+872
+00:41:17,760 --> 00:41:20,160
+order of
+
+873
+00:41:21,960 --> 00:41:27,359
+magnitude. Okay. So um yeah uh additions
+
+874
+00:41:26,079 --> 00:41:29,440
+and multiplications are considered
+
+875
+00:41:27,359 --> 00:41:31,119
+equivalent. Yeah, additions and
+
+876
+00:41:29,440 --> 00:41:33,920
+multiplications are considered are
+
+877
+00:41:31,119 --> 00:41:37,280
+equivalent.
+
+878
+00:41:33,920 --> 00:41:38,800
+So um one way I find helpful to
+
+879
+00:41:37,280 --> 00:41:40,880
+interpret this so at the end of the day
+
+880
+00:41:38,800 --> 00:41:42,560
+this is just a matrix multiplication but
+
+881
+00:41:40,880 --> 00:41:46,079
+I'm going to try to give a little bit of
+
+882
+00:41:42,560 --> 00:41:47,760
+meaning um to this um which is why I've
+
+883
+00:41:46,079 --> 00:41:51,520
+set up this as kind of a little toy
+
+884
+00:41:47,760 --> 00:41:54,400
+machine learning problem. So B is really
+
+885
+00:41:51,520 --> 00:41:57,839
+stands for the number of data points and
+
+886
+00:41:54,400 --> 00:41:59,440
+DK is the number of parameters. So for
+
+887
+00:41:57,839 --> 00:42:01,520
+this particular model the number of
+
+888
+00:41:59,440 --> 00:42:03,839
+flops that's required for forward pass
+
+889
+00:42:01,520 --> 00:42:05,200
+is two times the number of tokens or
+
+890
+00:42:03,839 --> 00:42:06,040
+number of data points times the number
+
+891
+00:42:05,200 --> 00:42:09,520
+of
+
+892
+00:42:06,040 --> 00:42:11,520
+parameters. Okay. So this turns out to
+
+893
+00:42:09,520 --> 00:42:15,319
+actually generalize to transformers.
+
+894
+00:42:11,520 --> 00:42:17,920
+There's an asterisk there because uh
+
+895
+00:42:15,319 --> 00:42:20,960
+um there there's you know the sequence
+
+896
+00:42:17,920 --> 00:42:23,280
+length and other stuff but this is
+
+897
+00:42:20,960 --> 00:42:24,920
+roughly right for uh if your sequent
+
+898
+00:42:23,280 --> 00:42:26,920
+length isn't isn't too
+
+899
+00:42:24,920 --> 00:42:29,640
+large.
+
+900
+00:42:26,920 --> 00:42:32,920
+Um
+
+901
+00:42:29,640 --> 00:42:35,119
+so okay so
+
+902
+00:42:32,920 --> 00:42:39,040
+now this is just a number of
+
+903
+00:42:35,119 --> 00:42:41,119
+floatingoint operations right um so how
+
+904
+00:42:39,040 --> 00:42:43,280
+does this actually translate to a walk
+
+905
+00:42:41,119 --> 00:42:45,119
+like time which is presumably the thing
+
+906
+00:42:43,280 --> 00:42:49,040
+you actually care about how long do you
+
+907
+00:42:45,119 --> 00:42:53,040
+have to wait for your run um so let's
+
+908
+00:42:49,040 --> 00:42:55,960
+time this so I have this function that
+
+909
+00:42:53,040 --> 00:42:58,200
+is just going to
+
+910
+00:42:55,960 --> 00:43:01,359
+um
+
+911
+00:42:58,200 --> 00:43:04,480
+um do it five times and I'm going to
+
+912
+00:43:01,359 --> 00:43:06,560
+perform the matrix multiply operation.
+
+913
+00:43:04,480 --> 00:43:10,160
+Um we'll talk a little bit later about
+
+914
+00:43:06,560 --> 00:43:14,000
+this um um two weeks from now why the
+
+915
+00:43:10,160 --> 00:43:17,280
+other code is here. Um but um for now we
+
+916
+00:43:14,000 --> 00:43:20,800
+get an actual time. So that matrix uh
+
+917
+00:43:17,280 --> 00:43:24,720
+took you know 0.16 seconds
+
+918
+00:43:20,800 --> 00:43:27,200
+um and the actual flops per second which
+
+919
+00:43:24,720 --> 00:43:30,920
+is how many flops did it do per second
+
+920
+00:43:27,200 --> 00:43:35,079
+is uh 5.4
+
+921
+00:43:30,920 --> 00:43:37,680
+E13. Okay. So now you can compare this
+
+922
+00:43:35,079 --> 00:43:41,880
+with you know the marketing materials
+
+923
+00:43:37,680 --> 00:43:45,280
+and um for the A100 and H100
+
+924
+00:43:41,880 --> 00:43:48,240
+um and you know as we look at the spec
+
+925
+00:43:45,280 --> 00:43:52,480
+sheet the the flops depends on the data
+
+926
+00:43:48,240 --> 00:43:56,680
+type and we see that the the promise
+
+927
+00:43:52,480 --> 00:44:02,640
+flops per second which um you know for
+
+928
+00:43:56,680 --> 00:44:06,400
+H100 for I guess this is for float 32 is
+
+929
+00:44:02,640 --> 00:44:07,880
+you know 67 you know teraflops as we
+
+930
+00:44:06,400 --> 00:44:10,880
+looked
+
+931
+00:44:07,880 --> 00:44:16,880
+and so that is the number of promise
+
+932
+00:44:10,880 --> 00:44:20,880
+flops per second we we had um and now if
+
+933
+00:44:16,880 --> 00:44:23,800
+you look at the uh there's a helpful
+
+934
+00:44:20,880 --> 00:44:26,480
+notion called model flops utilization or
+
+935
+00:44:23,800 --> 00:44:30,160
+MFU which is the actual number of flops
+
+936
+00:44:26,480 --> 00:44:31,839
+divided by the promise flops okay so you
+
+937
+00:44:30,160 --> 00:44:32,720
+take the actual number of flops remember
+
+938
+00:44:31,839 --> 00:44:35,599
+which
+
+939
+00:44:32,720 --> 00:44:37,599
+what you actually uh you know witnessed
+
+940
+00:44:35,599 --> 00:44:42,560
+the number of floatingoint operations
+
+941
+00:44:37,599 --> 00:44:44,960
+that that are useful for your model um
+
+942
+00:44:42,560 --> 00:44:46,960
+uh divided by the actual time it took
+
+943
+00:44:44,960 --> 00:44:48,800
+divided by this promise flops per second
+
+944
+00:44:46,960 --> 00:44:54,280
+which is you know from the glossy
+
+945
+00:44:48,800 --> 00:44:56,200
+brochure um you can get a MFU of uh 0.8
+
+946
+00:44:54,280 --> 00:44:59,359
+eight.
+
+947
+00:44:56,200 --> 00:45:02,720
+Okay. So, usually you see people talking
+
+948
+00:44:59,359 --> 00:45:05,119
+about their MFUs and um something
+
+949
+00:45:02,720 --> 00:45:07,839
+greater than 0.5 is you usually
+
+950
+00:45:05,119 --> 00:45:10,400
+considered to be good and if you're like
+
+951
+00:45:07,839 --> 00:45:12,560
+you know 5% MFU that's uh considered to
+
+952
+00:45:10,400 --> 00:45:15,680
+be really bad. usually can't get, you
+
+953
+00:45:12,560 --> 00:45:19,920
+know, close to that close to, you know,
+
+954
+00:45:15,680 --> 00:45:21,599
+uh, you know, 90 or 100 um because this
+
+955
+00:45:19,920 --> 00:45:23,440
+is sort of ignoring all sort of
+
+956
+00:45:21,599 --> 00:45:27,560
+communication and overhead. It's just
+
+957
+00:45:23,440 --> 00:45:30,480
+like the literal uh computation of the
+
+958
+00:45:27,560 --> 00:45:31,680
+flops. Okay. And usually MFU is much
+
+959
+00:45:30,480 --> 00:45:35,599
+higher if the magic matrix
+
+960
+00:45:31,680 --> 00:45:38,640
+multiplications dominate. Um Um, okay.
+
+961
+00:45:35,599 --> 00:45:41,920
+So that's MFU. Any any questions about
+
+962
+00:45:38,640 --> 00:45:45,040
+uh this? Yeah. Uh you're using the
+
+963
+00:45:41,920 --> 00:45:46,720
+promise flop per sec uh not considering
+
+964
+00:45:45,040 --> 00:45:50,800
+the sparse.
+
+965
+00:45:46,720 --> 00:45:54,720
+So this promised flop per sec is uh not
+
+966
+00:45:50,800 --> 00:45:57,839
+considering this as much. Yeah.
+
+967
+00:45:54,720 --> 00:46:00,000
+Um one a note is like uh this is
+
+968
+00:45:57,839 --> 00:46:02,839
+actually a you know there's also
+
+969
+00:46:00,000 --> 00:46:07,680
+something called hardware you know flops
+
+970
+00:46:02,839 --> 00:46:10,880
+uization and the the inov the motivation
+
+971
+00:46:07,680 --> 00:46:13,000
+here is that we are all we're trying to
+
+972
+00:46:10,880 --> 00:46:15,839
+look at
+
+973
+00:46:13,000 --> 00:46:17,839
+the it's it's called model because we're
+
+974
+00:46:15,839 --> 00:46:20,400
+looking at the number of effective
+
+975
+00:46:17,839 --> 00:46:24,000
+useful operations that the model is you
+
+976
+00:46:20,400 --> 00:46:25,920
+know performing okay And uh so it's a
+
+977
+00:46:24,000 --> 00:46:29,440
+way of kind of standardizing. It's not
+
+978
+00:46:25,920 --> 00:46:31,760
+the actual number of flops that are are
+
+979
+00:46:29,440 --> 00:46:34,400
+done because you could have optimization
+
+980
+00:46:31,760 --> 00:46:37,599
+in your code that cache a few things or
+
+981
+00:46:34,400 --> 00:46:40,880
+redo um you know um recomputation of
+
+982
+00:46:37,599 --> 00:46:42,720
+some things and in some sense you're
+
+983
+00:46:40,880 --> 00:46:44,880
+still computing the same model. So what
+
+984
+00:46:42,720 --> 00:46:46,560
+matters is that you're this is sort of
+
+985
+00:46:44,880 --> 00:46:48,079
+trying to look at the model complexity
+
+986
+00:46:46,560 --> 00:46:50,880
+and you shouldn't be penalized just
+
+987
+00:46:48,079 --> 00:46:52,720
+because you were clever in your MFU if
+
+988
+00:46:50,880 --> 00:46:56,440
+you were clever and you didn't actually
+
+989
+00:46:52,720 --> 00:46:59,200
+do the flops um but you you said you
+
+990
+00:46:56,440 --> 00:47:00,599
+did. Okay. So you can also do the same
+
+991
+00:46:59,200 --> 00:47:02,119
+with
+
+992
+00:47:00,599 --> 00:47:04,839
+BF16.
+
+993
+00:47:02,119 --> 00:47:11,680
+Um Oops.
+
+994
+00:47:04,839 --> 00:47:15,119
+And here we see that for uh BF the um
+
+995
+00:47:11,680 --> 00:47:18,440
+the time is actually much uh better
+
+996
+00:47:15,119 --> 00:47:21,440
+right so 03 um instead
+
+997
+00:47:18,440 --> 00:47:25,599
+of.16 so the actual flops per second is
+
+998
+00:47:21,440 --> 00:47:28,640
+higher um the even accounting for
+
+999
+00:47:25,599 --> 00:47:31,680
+sparsity the the promise flops is uh
+
+1000
+00:47:28,640 --> 00:47:35,240
+still quite high so the MFU actually um
+
+1001
+00:47:31,680 --> 00:47:38,280
+lower for BF uh
+
+1002
+00:47:35,240 --> 00:47:41,760
+16. Um this is you know maybe
+
+1003
+00:47:38,280 --> 00:47:43,920
+surprisingly low but
+
+1004
+00:47:41,760 --> 00:47:46,880
+um but sometimes the promise flops is a
+
+1005
+00:47:43,920 --> 00:47:46,880
+bit of a you know
+
+1006
+00:47:47,400 --> 00:47:52,720
+optimistic. So always benchmark your
+
+1007
+00:47:49,920 --> 00:47:54,240
+code uh and don't just uh kind of assume
+
+1008
+00:47:52,720 --> 00:47:55,319
+that you're going to get certain um
+
+1009
+00:47:54,240 --> 00:47:58,880
+levels of
+
+1010
+00:47:55,319 --> 00:48:02,640
+performance. Okay. So uh just to
+
+1011
+00:47:58,880 --> 00:48:06,319
+summarize um matrix multiplications u
+
+1012
+00:48:02,640 --> 00:48:08,640
+dominate the the compute and the general
+
+1013
+00:48:06,319 --> 00:48:11,560
+rule of the thumb is that it's two times
+
+1014
+00:48:08,640 --> 00:48:13,720
+the product of the dimensions
+
+1015
+00:48:11,560 --> 00:48:17,599
+flops. Um
+
+1016
+00:48:13,720 --> 00:48:21,119
+the flops per second floating points per
+
+1017
+00:48:17,599 --> 00:48:23,760
+second depends on you know the hardware
+
+1018
+00:48:21,119 --> 00:48:26,319
+and also the data type. So the fancier
+
+1019
+00:48:23,760 --> 00:48:29,119
+the hardware you have, the higher it is,
+
+1020
+00:48:26,319 --> 00:48:33,839
+the the smaller the data type, the
+
+1021
+00:48:29,119 --> 00:48:37,680
+usually the faster it is. Um and uh MFU
+
+1022
+00:48:33,839 --> 00:48:40,400
+is a useful notion to look at how well
+
+1023
+00:48:37,680 --> 00:48:44,319
+you've you're essentially squeezing you
+
+1024
+00:48:40,400 --> 00:48:47,040
+know your your hardware.
+
+1025
+00:48:44,319 --> 00:48:48,160
+Yeah, I I've heard that often uh in
+
+1026
+00:48:47,040 --> 00:48:49,599
+order to get like the maximum
+
+1027
+00:48:48,160 --> 00:48:52,640
+utilization, you want to use these like
+
+1028
+00:48:49,599 --> 00:48:54,640
+tensor cores on the machine. And so like
+
+1029
+00:48:52,640 --> 00:48:58,160
+does PyTorch by default use these tensor
+
+1030
+00:48:54,640 --> 00:49:00,559
+cores and like are these uh accounting
+
+1031
+00:48:58,160 --> 00:49:02,880
+for that? Yeah. So the question is uh
+
+1032
+00:49:00,559 --> 00:49:08,319
+what about those tensor cores? So if you
+
+1033
+00:49:02,880 --> 00:49:10,040
+go to this um spec sheet um you'll see
+
+1034
+00:49:08,319 --> 00:49:13,359
+that
+
+1035
+00:49:10,040 --> 00:49:15,760
+um you know these are all on the tensor
+
+1036
+00:49:13,359 --> 00:49:17,760
+core. So the tensor core is basically
+
+1037
+00:49:15,760 --> 00:49:23,880
+you know you know specialized hardware
+
+1038
+00:49:17,760 --> 00:49:27,920
+to do um map models. Um so if you are
+
+1039
+00:49:23,880 --> 00:49:29,839
+um you know if you're so by default it
+
+1040
+00:49:27,920 --> 00:49:31,920
+should use it and if you especially if
+
+1041
+00:49:29,839 --> 00:49:34,960
+you're using PyTorch you know compile it
+
+1042
+00:49:31,920 --> 00:49:38,480
+will generate the the code that will um
+
+1043
+00:49:34,960 --> 00:49:38,480
+use the the hardware
+
+1044
+00:49:43,240 --> 00:49:49,760
+properly. Okay. So um let's talk a
+
+1045
+00:49:46,880 --> 00:49:52,000
+little about you know gradients. So, and
+
+1046
+00:49:49,760 --> 00:49:55,040
+the the reason is that we've only looked
+
+1047
+00:49:52,000 --> 00:49:57,839
+at matrix multiplication or in other
+
+1048
+00:49:55,040 --> 00:50:00,160
+words basically feed forward um forward
+
+1049
+00:49:57,839 --> 00:50:01,680
+passes and the number of flops. Um but
+
+1050
+00:50:00,160 --> 00:50:03,520
+there's also a computation that comes
+
+1051
+00:50:01,680 --> 00:50:08,599
+from computing gradients and we want to
+
+1052
+00:50:03,520 --> 00:50:11,880
+track down how much uh that is. Um
+
+1053
+00:50:08,599 --> 00:50:15,680
+okay so just to consider a simple
+
+1054
+00:50:11,880 --> 00:50:18,000
+example simple linear model um where you
+
+1055
+00:50:15,680 --> 00:50:22,319
+take the uh the prediction of a linear
+
+1056
+00:50:18,000 --> 00:50:24,880
+model and you um you look at the MSE
+
+1057
+00:50:22,319 --> 00:50:26,880
+with respect to five. though not a very
+
+1058
+00:50:24,880 --> 00:50:30,440
+interesting loss but I think it'll it's
+
+1059
+00:50:26,880 --> 00:50:32,480
+illustrative for uh looking at the the
+
+1060
+00:50:30,440 --> 00:50:34,480
+gradients. Okay. So remember in the
+
+1061
+00:50:32,480 --> 00:50:39,040
+forward pass you have your x you have
+
+1062
+00:50:34,480 --> 00:50:41,280
+your your w which um you want to compute
+
+1063
+00:50:39,040 --> 00:50:44,880
+the gradient with respect to you make a
+
+1064
+00:50:41,280 --> 00:50:49,680
+prediction um by taking a linear product
+
+1065
+00:50:44,880 --> 00:50:52,079
+and then you you have your loss. Okay.
+
+1066
+00:50:49,680 --> 00:50:56,800
+And in the backward pass uh you just
+
+1067
+00:50:52,079 --> 00:50:59,280
+call loss backwards. And um in this case
+
+1068
+00:50:56,800 --> 00:51:02,800
+the the gradient which is this variable
+
+1069
+00:50:59,280 --> 00:51:04,920
+attached to the tensor is um turns out
+
+1070
+00:51:02,800 --> 00:51:08,160
+to be what you what you
+
+1071
+00:51:04,920 --> 00:51:12,200
+want. Okay. So everyone has done uh you
+
+1072
+00:51:08,160 --> 00:51:16,319
+know gradients in PyTorch before.
+
+1073
+00:51:12,200 --> 00:51:19,960
+Um so let's look at how many flops uh
+
+1074
+00:51:16,319 --> 00:51:23,520
+are required for computing gradients.
+
+1075
+00:51:19,960 --> 00:51:23,520
+Um, okay.
+
+1076
+00:51:24,440 --> 00:51:32,960
+So, let's uh look at a slightly more
+
+1077
+00:51:28,400 --> 00:51:36,640
+complicated model. So, now it's uh a
+
+1078
+00:51:32,960 --> 00:51:42,319
+two-layer linear model where you have X
+
+1079
+00:51:36,640 --> 00:51:45,760
+which is B by D times um W1 which is D
+
+1080
+00:51:42,319 --> 00:51:48,640
+by D. So that's the first layer and then
+
+1081
+00:51:45,760 --> 00:51:51,599
+you take the your hidden activations um
+
+1082
+00:51:48,640 --> 00:51:54,400
+H1 and you pass it through another
+
+1083
+00:51:51,599 --> 00:51:56,800
+linear layer W2 and to get a K
+
+1084
+00:51:54,400 --> 00:51:59,359
+dimensional vector and you do some
+
+1085
+00:51:56,800 --> 00:51:59,359
+compute some
+
+1086
+00:51:59,800 --> 00:52:05,280
+loss. Okay, so this is a two-layer
+
+1087
+00:52:02,319 --> 00:52:06,880
+linear network. And just as a kind of
+
+1088
+00:52:05,280 --> 00:52:11,200
+review, if you look at the number of
+
+1089
+00:52:06,880 --> 00:52:15,200
+forward flops, um what you had to do was
+
+1090
+00:52:11,200 --> 00:52:18,319
+um you have to multiply look at W1. You
+
+1091
+00:52:15,200 --> 00:52:21,400
+have to multiply X by W1
+
+1092
+00:52:18,319 --> 00:52:25,200
+um and add it to your
+
+1093
+00:52:21,400 --> 00:52:29,520
+H1 and you have to take H1 and W2 and
+
+1094
+00:52:25,200 --> 00:52:31,680
+you have to add it to your your H2.
+
+1095
+00:52:29,520 --> 00:52:34,960
+Okay, so the no total number of flops
+
+1096
+00:52:31,680 --> 00:52:37,520
+again is 2 * the the product of all the
+
+1097
+00:52:34,960 --> 00:52:39,760
+dimensions in your map mall plus two
+
+1098
+00:52:37,520 --> 00:52:42,160
+times the product dimensions your m all
+
+1099
+00:52:39,760 --> 00:52:43,920
+for the second matrix. Okay, in other
+
+1100
+00:52:42,160 --> 00:52:45,880
+words, two times the total number of
+
+1101
+00:52:43,920 --> 00:52:49,200
+parameters in this
+
+1102
+00:52:45,880 --> 00:52:52,400
+case. Okay, so so what about the
+
+1103
+00:52:49,200 --> 00:52:53,319
+backward pass? So this part will be um a
+
+1104
+00:52:52,400 --> 00:52:57,280
+little bit more
+
+1105
+00:52:53,319 --> 00:53:01,359
+involved. Um so we can recall the model
+
+1106
+00:52:57,280 --> 00:53:03,119
+uh x to h1 to h2 and the loss. So in the
+
+1107
+00:53:01,359 --> 00:53:05,920
+backward path you have to compute a
+
+1108
+00:53:03,119 --> 00:53:08,960
+bunch of gradients and the gradients
+
+1109
+00:53:05,920 --> 00:53:14,079
+that are relevant is you have to compute
+
+1110
+00:53:08,960 --> 00:53:19,640
+uh the gradient with respect to um h1
+
+1111
+00:53:14,079 --> 00:53:23,520
+um you know h2 w1 and
+
+1112
+00:53:19,640 --> 00:53:25,760
+w2 of of the loss. So D loss D each of
+
+1113
+00:53:23,520 --> 00:53:28,400
+these variables. Okay. So how long does
+
+1114
+00:53:25,760 --> 00:53:33,280
+it take to compute that? Let's just look
+
+1115
+00:53:28,400 --> 00:53:36,240
+at W2 for now. Okay. So the things that
+
+1116
+00:53:33,280 --> 00:53:41,240
+touch W2 um you can compute by looking
+
+1117
+00:53:36,240 --> 00:53:46,680
+at the the chain rule. Um so
+
+1118
+00:53:41,240 --> 00:53:55,480
+W2 grad. So the gradient with of d loss
+
+1119
+00:53:46,680 --> 00:54:00,280
+dw2 is um you you sum um h1 times uh the
+
+1120
+00:53:55,480 --> 00:54:03,520
+gradient of the loss with respect to h2.
+
+1121
+00:54:00,280 --> 00:54:09,040
+Okay. So that's just a chain rule for um
+
+1122
+00:54:03,520 --> 00:54:11,040
+for w2. And this is um so all the
+
+1123
+00:54:09,040 --> 00:54:15,000
+gradients are the you know the same size
+
+1124
+00:54:11,040 --> 00:54:16,760
+as the underlying you know of vectors.
+
+1125
+00:54:15,000 --> 00:54:21,440
+Um
+
+1126
+00:54:16,760 --> 00:54:23,559
+so this turns out to be um essentially
+
+1127
+00:54:21,440 --> 00:54:26,640
+looks like a matrix uh you know
+
+1128
+00:54:23,559 --> 00:54:29,040
+multiplication and so the same you know
+
+1129
+00:54:26,640 --> 00:54:32,800
+calculus holds which is that it's 2
+
+1130
+00:54:29,040 --> 00:54:36,599
+times the number of uh the product of
+
+1131
+00:54:32,800 --> 00:54:40,000
+all the dimensions B * D *
+
+1132
+00:54:36,599 --> 00:54:42,839
+K okay but this is only the gradient
+
+1133
+00:54:40,000 --> 00:54:45,760
+with respect to uh
+
+1134
+00:54:42,839 --> 00:54:48,720
+W2 We also need to compute the gradient
+
+1135
+00:54:45,760 --> 00:54:51,839
+with respect to h1 because we have to
+
+1136
+00:54:48,720 --> 00:54:57,000
+keep on back propagating um to w1 and
+
+1137
+00:54:51,839 --> 00:55:03,160
+and so on. Okay. So that is uh going to
+
+1138
+00:54:57,000 --> 00:55:06,839
+be um you know the product of w2
+
+1139
+00:55:03,160 --> 00:55:09,119
+um you know times uh you know
+
+1140
+00:55:06,839 --> 00:55:13,400
+h2 sorry I think this should be that
+
+1141
+00:55:09,119 --> 00:55:17,000
+grad of h2 h2.grad red.
+
+1142
+00:55:13,400 --> 00:55:20,480
+Um so that turns out to also be
+
+1143
+00:55:17,000 --> 00:55:24,559
+essentially you know um looks like the
+
+1144
+00:55:20,480 --> 00:55:27,200
+matrix multiplication and it's the same
+
+1145
+00:55:24,559 --> 00:55:29,880
+number of flops for for computing the
+
+1146
+00:55:27,200 --> 00:55:33,440
+gradient of uh each
+
+1147
+00:55:29,880 --> 00:55:37,280
+one. Okay. So when you add the two uh so
+
+1148
+00:55:33,440 --> 00:55:40,240
+that's just for w2. Um you do the same
+
+1149
+00:55:37,280 --> 00:55:44,359
+thing for W1 and that's uh which has D *
+
+1150
+00:55:40,240 --> 00:55:50,240
+D parameters and when you add it all uh
+
+1151
+00:55:44,359 --> 00:55:55,119
+up it's uh so for this um for W2 the
+
+1152
+00:55:50,240 --> 00:56:02,160
+amount of computation was 4 * B * D * K
+
+1153
+00:55:55,119 --> 00:56:05,440
+and for W1 it's also 4 * B * D * uh D
+
+1154
+00:56:02,160 --> 00:56:05,440
+because W1 is D by
+
+1155
+00:56:09,000 --> 00:56:15,440
+Okay. So, um I know there's a lot of
+
+1156
+00:56:12,240 --> 00:56:17,680
+symbols here. I'm going to try also to
+
+1157
+00:56:15,440 --> 00:56:19,920
+uh give you a visual account for this.
+
+1158
+00:56:17,680 --> 00:56:24,000
+So, this is from a a blog post that I
+
+1159
+00:56:19,920 --> 00:56:25,599
+think um may work uh better. We'll see.
+
+1160
+00:56:24,000 --> 00:56:28,160
+Um okay, I have to wait for the
+
+1161
+00:56:25,599 --> 00:56:30,240
+animation to loop back. So, so basically
+
+1162
+00:56:28,160 --> 00:56:33,280
+this is uh one layer of the neuron now.
+
+1163
+00:56:30,240 --> 00:56:36,640
+It has um you know the hiddens and then
+
+1164
+00:56:33,280 --> 00:56:38,640
+the weights to the next layer. And so I
+
+1165
+00:56:36,640 --> 00:56:41,000
+have to Okay, the problem with this
+
+1166
+00:56:38,640 --> 00:56:45,200
+animation is I have to
+
+1167
+00:56:41,000 --> 00:56:48,960
+wait. Okay, ready set. Okay, so first I
+
+1168
+00:56:45,200 --> 00:56:50,720
+have to multiply W and A and I have to
+
+1169
+00:56:48,960 --> 00:56:52,400
+add it to this. That's a forward pass.
+
+1170
+00:56:50,720 --> 00:56:55,359
+And now I'm going to multiply this these
+
+1171
+00:56:52,400 --> 00:56:57,359
+two and then add it to to that. And I'm
+
+1172
+00:56:55,359 --> 00:57:00,200
+going to multiply and then add it to
+
+1173
+00:56:57,359 --> 00:57:02,440
+that. Okay.
+
+1174
+00:57:00,200 --> 00:57:04,480
+Any
+
+1175
+00:57:02,440 --> 00:57:09,359
+questions? Which a way to slow this
+
+1176
+00:57:04,480 --> 00:57:11,440
+down? Um, but you know, the details
+
+1177
+00:57:09,359 --> 00:57:13,839
+maybe I'll I'll let you kind of ruminate
+
+1178
+00:57:11,440 --> 00:57:15,359
+on, but um the the high level is that
+
+1179
+00:57:13,839 --> 00:57:17,760
+there's two times the number of
+
+1180
+00:57:15,359 --> 00:57:19,040
+parameters for the forward pass and four
+
+1181
+00:57:17,760 --> 00:57:22,240
+times the number of parameters for the
+
+1182
+00:57:19,040 --> 00:57:24,000
+backward pass. And um we can just kind
+
+1183
+00:57:22,240 --> 00:57:26,160
+of work it out uh via the chain row
+
+1184
+00:57:24,000 --> 00:57:29,599
+here. Yeah. For the homeworks, are we
+
+1185
+00:57:26,160 --> 00:57:31,200
+also using the you said some PyTorch
+
+1186
+00:57:29,599 --> 00:57:34,240
+implementation is allowed, some isn't.
+
+1187
+00:57:31,200 --> 00:57:37,440
+Are we allowed to use docu or we are
+
+1188
+00:57:34,240 --> 00:57:40,559
+doing the like entirely by hand doing
+
+1189
+00:57:37,440 --> 00:57:42,480
+the gradient? Uh so the question is in
+
+1190
+00:57:40,559 --> 00:57:44,480
+the homework are you going to compute
+
+1191
+00:57:42,480 --> 00:57:46,880
+gradients by hand? And the answer is no.
+
+1192
+00:57:44,480 --> 00:57:49,200
+Uh you're going to just use pietorch
+
+1193
+00:57:46,880 --> 00:57:53,880
+gradient. This is uh just to break it
+
+1194
+00:57:49,200 --> 00:57:56,960
+down so we can do the the um counting
+
+1195
+00:57:53,880 --> 00:58:00,920
+flops. Okay. Any any questions about
+
+1196
+00:57:56,960 --> 00:58:00,920
+this before I move on.
+
+1197
+00:58:05,359 --> 00:58:12,079
+Okay, just to summarize the forward pass
+
+1198
+00:58:08,240 --> 00:58:13,839
+is for this particular model is 2 times
+
+1199
+00:58:12,079 --> 00:58:16,079
+the number of data points times the
+
+1200
+00:58:13,839 --> 00:58:17,440
+number of parameters and backward is
+
+1201
+00:58:16,079 --> 00:58:19,119
+four times the number of data points
+
+1202
+00:58:17,440 --> 00:58:20,799
+times the number of parameters which
+
+1203
+00:58:19,119 --> 00:58:23,680
+means that total it's six times number
+
+1204
+00:58:20,799 --> 00:58:26,880
+of data points times parameters okay and
+
+1205
+00:58:23,680 --> 00:58:28,480
+that's explains why uh there was that
+
+1206
+00:58:26,880 --> 00:58:30,200
+six in the beginning when I asked the
+
+1207
+00:58:28,480 --> 00:58:34,000
+motivating uh
+
+1208
+00:58:30,200 --> 00:58:37,200
+question So now this is for a simple you
+
+1209
+00:58:34,000 --> 00:58:40,559
+know linear model. Um it turns out that
+
+1210
+00:58:37,200 --> 00:58:42,880
+mo many models this is uh basically the
+
+1211
+00:58:40,559 --> 00:58:45,920
+bulk of a computation.
+
+1212
+00:58:42,880 --> 00:58:49,839
+um when essentially every computation
+
+1213
+00:58:45,920 --> 00:58:52,880
+you do has uh you know touches
+
+1214
+00:58:49,839 --> 00:58:55,119
+essentially a new parameters roughly
+
+1215
+00:58:52,880 --> 00:58:57,280
+right and you know obviously this
+
+1216
+00:58:55,119 --> 00:58:58,559
+doesn't hold you can find models where
+
+1217
+00:58:57,280 --> 00:59:00,400
+this doesn't hold because you can have
+
+1218
+00:58:58,559 --> 00:59:02,640
+like one parameter through parameter
+
+1219
+00:59:00,400 --> 00:59:05,760
+sharing um and have you know a billion
+
+1220
+00:59:02,640 --> 00:59:09,319
+flops but that's generally what not what
+
+1221
+00:59:05,760 --> 00:59:09,319
+models look like.
+
+1222
+00:59:09,680 --> 00:59:18,920
+Okay, so let me um move
+
+1223
+00:59:14,440 --> 00:59:21,520
+on. Um so far I've I've basically
+
+1224
+00:59:18,920 --> 00:59:23,760
+finished talking about the the resource
+
+1225
+00:59:21,520 --> 00:59:25,440
+accounting. So we looked at tensors. We
+
+1226
+00:59:23,760 --> 00:59:29,359
+looked at some computation on tensors.
+
+1227
+00:59:25,440 --> 00:59:32,000
+We looked at how uh much tensors take to
+
+1228
+00:59:29,359 --> 00:59:34,319
+store and also how many flops takes
+
+1229
+00:59:32,000 --> 00:59:37,119
+tensors uh take when you do various
+
+1230
+00:59:34,319 --> 00:59:39,599
+operations on them. Um now let's start
+
+1231
+00:59:37,119 --> 00:59:42,240
+building up uh different you know
+
+1232
+00:59:39,599 --> 00:59:46,559
+models. Um I think this part isn't
+
+1233
+00:59:42,240 --> 00:59:48,720
+necessarily going to be um you know that
+
+1234
+00:59:46,559 --> 00:59:50,799
+uh you know conceptually you know
+
+1235
+00:59:48,720 --> 00:59:52,839
+interesting or challenging but it's more
+
+1236
+00:59:50,799 --> 00:59:55,880
+for maybe just you know
+
+1237
+00:59:52,839 --> 00:59:59,280
+completeness. Okay. So
+
+1238
+00:59:55,880 --> 01:00:02,240
+um so parameters in PyTorch are stored
+
+1239
+00:59:59,280 --> 01:00:05,680
+as these nn parameter
+
+1240
+01:00:02,240 --> 01:00:08,359
+um objects. Um let's talk a little bit
+
+1241
+01:00:05,680 --> 01:00:14,680
+about parameter initialization.
+
+1242
+01:00:08,359 --> 01:00:19,280
+Um so if you have let's say a
+
+1243
+01:00:14,680 --> 01:00:22,400
+uh um you know parameter that has uh
+
+1244
+01:00:19,280 --> 01:00:25,280
+okay so you you generate um a okay do
+
+1245
+01:00:22,400 --> 01:00:28,559
+your sorry your w parameter is an input
+
+1246
+01:00:25,280 --> 01:00:30,319
+dimension by hidden dimension matrix um
+
+1247
+01:00:28,559 --> 01:00:32,400
+you're still in the linear model case so
+
+1248
+01:00:30,319 --> 01:00:35,520
+let's just generate an input and let's
+
+1249
+01:00:32,400 --> 01:00:37,599
+feed it through the output okay so rand
+
+1250
+01:00:35,520 --> 01:00:41,839
+and unit no gausian
+
+1251
+01:00:37,599 --> 01:00:43,680
+is uh you know seems innocuous. Um what
+
+1252
+01:00:41,839 --> 01:00:46,160
+happens when you do this is that if you
+
+1253
+01:00:43,680 --> 01:00:49,359
+look at the output um you get some
+
+1254
+01:00:46,160 --> 01:00:52,640
+pretty large numbers right and this is
+
+1255
+01:00:49,359 --> 01:00:55,760
+because when you you know have the the
+
+1256
+01:00:52,640 --> 01:00:58,319
+number uh grows as essentially the
+
+1257
+01:00:55,760 --> 01:01:01,280
+square root of the the hidden dimension.
+
+1258
+01:00:58,319 --> 01:01:04,480
+Um and so when you have large models, uh
+
+1259
+01:01:01,280 --> 01:01:07,720
+this is going to you know blow up and um
+
+1260
+01:01:04,480 --> 01:01:11,920
+and training can be very unstable.
+
+1261
+01:01:07,720 --> 01:01:15,280
+Um so so typically what you want to do
+
+1262
+01:01:11,920 --> 01:01:17,440
+is initialize in a way that's um you
+
+1263
+01:01:15,280 --> 01:01:18,720
+know invariant to hidden or at least you
+
+1264
+01:01:17,440 --> 01:01:20,640
+know when you you're guaranteed that
+
+1265
+01:01:18,720 --> 01:01:22,559
+it's not going to you know blow up. And
+
+1266
+01:01:20,640 --> 01:01:25,520
+one simple way to do this is just
+
+1267
+01:01:22,559 --> 01:01:30,160
+rescale by the one over square root of
+
+1268
+01:01:25,520 --> 01:01:33,680
+number of you know of inputs. Um so
+
+1269
+01:01:30,160 --> 01:01:36,400
+basically let's redo this w equals you
+
+1270
+01:01:33,680 --> 01:01:39,760
+know parameter where I simply divide by
+
+1271
+01:01:36,400 --> 01:01:42,559
+the square root of the input dimension.
+
+1272
+01:01:39,760 --> 01:01:44,400
+Um and then now when you uh feed it
+
+1273
+01:01:42,559 --> 01:01:46,720
+through the output now you get things
+
+1274
+01:01:44,400 --> 01:01:49,680
+that are stable around you know this
+
+1275
+01:01:46,720 --> 01:01:53,760
+will actually concentrate to um you know
+
+1276
+01:01:49,680 --> 01:01:56,720
+something like normal 01.
+
+1277
+01:01:53,760 --> 01:01:59,200
+Okay, so this is basically you know this
+
+1278
+01:01:56,720 --> 01:02:01,760
+has been explored pretty extensively in
+
+1279
+01:01:59,200 --> 01:02:04,240
+deep learning literature is known uh up
+
+1280
+01:02:01,760 --> 01:02:06,720
+to a constant as Xavier initialization
+
+1281
+01:02:04,240 --> 01:02:09,200
+and typically I guess it's uh fairly
+
+1282
+01:02:06,720 --> 01:02:10,799
+common if you want to be extra safe uh
+
+1283
+01:02:09,200 --> 01:02:13,200
+you don't trust the normal because it
+
+1284
+01:02:10,799 --> 01:02:14,880
+doesn't have it has unbounded tails and
+
+1285
+01:02:13,200 --> 01:02:17,440
+you just say I'm going to truncate to
+
+1286
+01:02:14,880 --> 01:02:19,680
+minus 33 so I don't get any large values
+
+1287
+01:02:17,440 --> 01:02:22,440
+and I don't want any to to mess with
+
+1288
+01:02:19,680 --> 01:02:25,440
+that.
+
+1289
+01:02:22,440 --> 01:02:25,440
+Okay.
+
+1290
+01:02:25,480 --> 01:02:30,040
+Um Okay. So
+
+1291
+01:02:30,640 --> 01:02:35,160
+um so let's build a you know just a
+
+1292
+01:02:33,280 --> 01:02:39,520
+simple model.
+
+1293
+01:02:35,160 --> 01:02:42,559
+Um it's going to have um dimensions and
+
+1294
+01:02:39,520 --> 01:02:44,319
+two layers. There's this you know I just
+
+1295
+01:02:42,559 --> 01:02:47,040
+made up this name cruncher. It's a
+
+1296
+01:02:44,319 --> 01:02:51,760
+custom model which is a deep linear
+
+1297
+01:02:47,040 --> 01:02:56,880
+network which has um num layers layers
+
+1298
+01:02:51,760 --> 01:03:00,119
+and each layer is a a linear um model
+
+1299
+01:02:56,880 --> 01:03:02,599
+which has essentially just a matrix
+
+1300
+01:03:00,119 --> 01:03:07,200
+multiplication. Okay.
+
+1301
+01:03:02,599 --> 01:03:13,520
+Um so um this parameters of these this
+
+1302
+01:03:07,200 --> 01:03:17,599
+model is looks like um I have um
+
+1303
+01:03:13,520 --> 01:03:20,720
+um layers for the the first layer um
+
+1304
+01:03:17,599 --> 01:03:22,319
+which is a D byD matrix uh the second
+
+1305
+01:03:20,720 --> 01:03:26,760
+layer which is also a D byD matrix and
+
+1306
+01:03:22,319 --> 01:03:31,039
+then I have a um a head um or a final
+
+1307
+01:03:26,760 --> 01:03:35,039
+layer. Okay. So if I get the number of
+
+1308
+01:03:31,039 --> 01:03:40,160
+of parameters of this model, then it's
+
+1309
+01:03:35,039 --> 01:03:43,520
+going to be um d^2 + d ^2 + d. Okay, so
+
+1310
+01:03:40,160 --> 01:03:45,680
+nothing too surprising there. Um and I'm
+
+1311
+01:03:43,520 --> 01:03:49,520
+going to move it to the GPU because I
+
+1312
+01:03:45,680 --> 01:03:51,680
+run want this to run one fast. And um
+
+1313
+01:03:49,520 --> 01:03:53,839
+I'm going to generate some random data
+
+1314
+01:03:51,680 --> 01:03:56,160
+and feed it through the data. And the
+
+1315
+01:03:53,839 --> 01:03:59,520
+forward pass is just going through um
+
+1316
+01:03:56,160 --> 01:04:01,760
+the layers um and then finally applying
+
+1317
+01:03:59,520 --> 01:04:01,760
+the
+
+1318
+01:04:02,200 --> 01:04:08,960
+head. Um okay. So with that model I
+
+1319
+01:04:07,039 --> 01:04:11,599
+let's try to I'm going to use this model
+
+1320
+01:04:08,960 --> 01:04:14,559
+and do some you know stuff with it. Um
+
+1321
+01:04:11,599 --> 01:04:19,359
+but just one kind of general digression.
+
+1322
+01:04:14,559 --> 01:04:22,640
+Um, randomness is something that uh is
+
+1323
+01:04:19,359 --> 01:04:24,240
+is sort of can be annoying in some cases
+
+1324
+01:04:22,640 --> 01:04:26,480
+if you're trying to reproduce a bug for
+
+1325
+01:04:24,240 --> 01:04:28,839
+example. It shows up in many places
+
+1326
+01:04:26,480 --> 01:04:32,880
+initialization dropout data ordering.
+
+1327
+01:04:28,839 --> 01:04:35,880
+Um, and just a best practice is I we
+
+1328
+01:04:32,880 --> 01:04:39,280
+recommend you always pass a fix a random
+
+1329
+01:04:35,880 --> 01:04:42,520
+seed. Um, so you can reproduce your your
+
+1330
+01:04:39,280 --> 01:04:46,240
+model or at least as well as you can.
+
+1331
+01:04:42,520 --> 01:04:47,599
+Um and in particular having a difference
+
+1332
+01:04:46,240 --> 01:04:50,319
+random seat for every source of
+
+1333
+01:04:47,599 --> 01:04:51,920
+randomness is is you know nice because
+
+1334
+01:04:50,319 --> 01:04:54,000
+then you can for example fix
+
+1335
+01:04:51,920 --> 01:04:56,799
+initialization or fix the data ordering
+
+1336
+01:04:54,000 --> 01:04:58,640
+but vary other other things. Um
+
+1337
+01:04:56,799 --> 01:05:02,160
+determinism is your your friend when
+
+1338
+01:04:58,640 --> 01:05:04,799
+you're debugging. Um and you know in
+
+1339
+01:05:02,160 --> 01:05:07,599
+code unfortunately there's you know many
+
+1340
+01:05:04,799 --> 01:05:10,960
+places where you can use randomness and
+
+1341
+01:05:07,599 --> 01:05:13,599
+just be uh cognizant of you know which
+
+1342
+01:05:10,960 --> 01:05:17,799
+one you're using and just if you want to
+
+1343
+01:05:13,599 --> 01:05:22,400
+be safe just uh set the C2 for all of
+
+1344
+01:05:17,799 --> 01:05:26,480
+them. Um data loading um I guess I'll go
+
+1345
+01:05:22,400 --> 01:05:28,319
+through this quickly. It's it's not um
+
+1346
+01:05:26,480 --> 01:05:32,000
+it'll be useful for your your
+
+1347
+01:05:28,319 --> 01:05:33,920
+assignment. Um so in language modeling
+
+1348
+01:05:32,000 --> 01:05:35,839
+data is typically just a sequence of
+
+1349
+01:05:33,920 --> 01:05:39,359
+integers because this is remember output
+
+1350
+01:05:35,839 --> 01:05:42,319
+by the tokenizer. Um and you serialize
+
+1351
+01:05:39,359 --> 01:05:47,640
+them into um you can serialize them into
+
+1352
+01:05:42,319 --> 01:05:51,760
+numpire arrays. Um and one I guess thing
+
+1353
+01:05:47,640 --> 01:05:53,599
+that's maybe useful is that uh you don't
+
+1354
+01:05:51,760 --> 01:05:56,400
+want to load all your data into memory
+
+1355
+01:05:53,599 --> 01:05:59,920
+at at once because for example the llama
+
+1356
+01:05:56,400 --> 01:06:02,720
+data is the 2.8 8 terabytes. Um, but you
+
+1357
+01:05:59,920 --> 01:06:05,200
+can sort of pretend to load it by using
+
+1358
+01:06:02,720 --> 01:06:08,240
+this uh handy function called memap. So,
+
+1359
+01:06:05,200 --> 01:06:10,880
+which gives you essentially a variable
+
+1360
+01:06:08,240 --> 01:06:15,119
+that is mapped to a file. So when you
+
+1361
+01:06:10,880 --> 01:06:18,720
+try to access um the data it actually on
+
+1362
+01:06:15,119 --> 01:06:21,440
+the on demand loads the file and then
+
+1363
+01:06:18,720 --> 01:06:25,119
+using that you can uh create a data
+
+1364
+01:06:21,440 --> 01:06:29,280
+loader that um you know is a you know
+
+1365
+01:06:25,119 --> 01:06:31,200
+samples data from your um batch. So I'm
+
+1366
+01:06:29,280 --> 01:06:34,240
+going to skip over that just in interest
+
+1367
+01:06:31,200 --> 01:06:36,400
+of time. Um let's talk a little bit
+
+1368
+01:06:34,240 --> 01:06:38,119
+about you know optimizer. So we've
+
+1369
+01:06:36,400 --> 01:06:40,599
+defined our
+
+1370
+01:06:38,119 --> 01:06:46,160
+model.
+
+1371
+01:06:40,599 --> 01:06:48,559
+Um so there's many optimizers. Um just
+
+1372
+01:06:46,160 --> 01:06:50,559
+kind of maybe going through the
+
+1373
+01:06:48,559 --> 01:06:51,680
+intuitions behind some of them. So of
+
+1374
+01:06:50,559 --> 01:06:53,440
+course there's stocastic gradient
+
+1375
+01:06:51,680 --> 01:06:55,039
+descent. You compute the gradient of
+
+1376
+01:06:53,440 --> 01:06:57,520
+your batch. You take a step in that
+
+1377
+01:06:55,039 --> 01:06:59,920
+direction. No questions asked. Um
+
+1378
+01:06:57,520 --> 01:07:03,680
+there's a idea called momentum which
+
+1379
+01:06:59,920 --> 01:07:07,200
+dates back to classic optimization nest.
+
+1380
+01:07:03,680 --> 01:07:10,880
+um where you uh have a running average
+
+1381
+01:07:07,200 --> 01:07:12,880
+of your um gradients and you update
+
+1382
+01:07:10,880 --> 01:07:14,839
+against the you know the running average
+
+1383
+01:07:12,880 --> 01:07:19,440
+instead of your instantaneous you know
+
+1384
+01:07:14,839 --> 01:07:22,960
+gradient. Um and then you have um adrad
+
+1385
+01:07:19,440 --> 01:07:26,400
+which um you you know you scale the
+
+1386
+01:07:22,960 --> 01:07:30,160
+gradients by uh your
+
+1387
+01:07:26,400 --> 01:07:33,039
+um your the average over the the norms
+
+1388
+01:07:30,160 --> 01:07:35,119
+of your or I guess not the norms the the
+
+1389
+01:07:33,039 --> 01:07:38,880
+square of the gradients. You also have
+
+1390
+01:07:35,119 --> 01:07:41,119
+RMS prop which uh is a improved version
+
+1391
+01:07:38,880 --> 01:07:43,760
+of adigra which uses a exponential
+
+1392
+01:07:41,119 --> 01:07:46,319
+averaging rather than just like a flat
+
+1393
+01:07:43,760 --> 01:07:48,480
+average. And then finally atom which
+
+1394
+01:07:46,319 --> 01:07:51,359
+appeared in 2014 which is essentially
+
+1395
+01:07:48,480 --> 01:07:54,760
+combining RMS prop and momentum. So
+
+1396
+01:07:51,359 --> 01:07:57,039
+that's why you're maintaining both uh
+
+1397
+01:07:54,760 --> 01:07:58,880
+your running average of your gradients
+
+1398
+01:07:57,039 --> 01:08:01,920
+but also running average of your
+
+1399
+01:07:58,880 --> 01:08:05,760
+gradient squared. Okay. So since you're
+
+1400
+01:08:01,920 --> 01:08:07,440
+going to implement uh Adam um in
+
+1401
+01:08:05,760 --> 01:08:10,000
+homework one I'm not going to do that
+
+1402
+01:08:07,440 --> 01:08:14,000
+instead I'm going to implement um you
+
+1403
+01:08:10,000 --> 01:08:14,839
+know adrad so so the way you implement
+
+1404
+01:08:14,000 --> 01:08:18,159
+an
+
+1405
+01:08:14,839 --> 01:08:19,920
+optimizer in in you know pietorch is
+
+1406
+01:08:18,159 --> 01:08:25,359
+that you override the the optimizer
+
+1407
+01:08:19,920 --> 01:08:26,199
+class and you have to um uh let's see
+
+1408
+01:08:25,359 --> 01:08:28,640
+maybe
+
+1409
+01:08:26,199 --> 01:08:32,960
+I'll and I'll get to the implementation
+
+1410
+01:08:28,640 --> 01:08:36,400
+once we step through it Um so let's
+
+1411
+01:08:32,960 --> 01:08:41,120
+define some data. Um compute the forward
+
+1412
+01:08:36,400 --> 01:08:43,759
+pass on the loss and then you compute
+
+1413
+01:08:41,120 --> 01:08:46,600
+the gradients and then you when you call
+
+1414
+01:08:43,759 --> 01:08:50,719
+optimizer.step
+
+1415
+01:08:46,600 --> 01:08:54,159
+um this is where the optimizer uh
+
+1416
+01:08:50,719 --> 01:08:58,400
+actually is active. So what this looks
+
+1417
+01:08:54,159 --> 01:09:00,560
+like is um your parameters are grouped u
+
+1418
+01:08:58,400 --> 01:09:02,960
+by for example you have one for the
+
+1419
+01:09:00,560 --> 01:09:08,960
+layer zero layer one and then the final
+
+1420
+01:09:02,960 --> 01:09:12,960
+you know weights um and you can access a
+
+1421
+01:09:08,960 --> 01:09:15,759
+state which is a a dictionary from
+
+1422
+01:09:12,960 --> 01:09:20,640
+parameters to um you know whatever you
+
+1423
+01:09:15,759 --> 01:09:23,040
+want to store as optimizer state. um the
+
+1424
+01:09:20,640 --> 01:09:27,359
+gradient of that parameter you assume is
+
+1425
+01:09:23,040 --> 01:09:30,400
+already uh calculated um by the the
+
+1426
+01:09:27,359 --> 01:09:33,239
+backward pass. Um and now you can do
+
+1427
+01:09:30,400 --> 01:09:37,440
+things like um you know
+
+1428
+01:09:33,239 --> 01:09:40,640
+in in adrad you're storing the sum of
+
+1429
+01:09:37,440 --> 01:09:43,839
+the gradient uh squares. So you can get
+
+1430
+01:09:40,640 --> 01:09:45,839
+that G2 variable um and you can update
+
+1431
+01:09:43,839 --> 01:09:47,359
+that based on the square of the
+
+1432
+01:09:45,839 --> 01:09:50,400
+gradient. So this is element wise
+
+1433
+01:09:47,359 --> 01:09:51,799
+squaring of the um the gradient and you
+
+1434
+01:09:50,400 --> 01:09:54,960
+put it back into the
+
+1435
+01:09:51,799 --> 01:09:57,440
+state. Okay. So then your obviously your
+
+1436
+01:09:54,960 --> 01:10:00,480
+optimizer is responsible for updating
+
+1437
+01:09:57,440 --> 01:10:02,320
+the parameters and this is just the you
+
+1438
+01:10:00,480 --> 01:10:05,360
+know you update the learning rate times
+
+1439
+01:10:02,320 --> 01:10:09,199
+the gradient divided by this uh scaling.
+
+1440
+01:10:05,360 --> 01:10:12,800
+So now this state is kept over across
+
+1441
+01:10:09,199 --> 01:10:14,960
+multiple uh invocations of um you know
+
+1442
+01:10:12,800 --> 01:10:14,960
+the
+
+1443
+01:10:16,840 --> 01:10:23,760
+optimizer. Okay. So um and then at the
+
+1444
+01:10:21,920 --> 01:10:26,239
+you know end of your optimizer step you
+
+1445
+01:10:23,760 --> 01:10:30,400
+can you know free up the memory uh just
+
+1446
+01:10:26,239 --> 01:10:33,120
+to um which is I think going to actually
+
+1447
+01:10:30,400 --> 01:10:35,679
+be more important when you look when we
+
+1448
+01:10:33,120 --> 01:10:38,000
+talk about model parallelism.
+
+1449
+01:10:35,679 --> 01:10:41,920
+Okay, so let's talk about the memory
+
+1450
+01:10:38,000 --> 01:10:43,640
+requirements of uh the optimizer states
+
+1451
+01:10:41,920 --> 01:10:48,719
+and actually basically at this point
+
+1452
+01:10:43,640 --> 01:10:52,239
+everything. So um you need to uh the
+
+1453
+01:10:48,719 --> 01:10:54,719
+number of parameters in this model is d²
+
+1454
+01:10:52,239 --> 01:10:59,159
+times the number of layers plus d for
+
+1455
+01:10:54,719 --> 01:11:02,040
+the final uh head. Okay.
+
+1456
+01:10:59,159 --> 01:11:04,239
+Um the number of
+
+1457
+01:11:02,040 --> 01:11:06,480
+activations. So this is something we
+
+1458
+01:11:04,239 --> 01:11:10,159
+didn't do before but now for this simple
+
+1459
+01:11:06,480 --> 01:11:14,000
+model it's fairly easy to do. It's just
+
+1460
+01:11:10,159 --> 01:11:16,239
+um B times you know D times the the
+
+1461
+01:11:14,000 --> 01:11:17,679
+number of of layers you have for every
+
+1462
+01:11:16,239 --> 01:11:19,679
+layer for every data point for every
+
+1463
+01:11:17,679 --> 01:11:21,280
+dimension you have to hold the
+
+1464
+01:11:19,679 --> 01:11:25,679
+activations.
+
+1465
+01:11:21,280 --> 01:11:28,239
+Um for the gradients um this is the same
+
+1466
+01:11:25,679 --> 01:11:31,159
+as the number of parameters and the
+
+1467
+01:11:28,239 --> 01:11:34,640
+number of optimizer states in for
+
+1468
+01:11:31,159 --> 01:11:36,600
+adigrad it's uh you remember we had to
+
+1469
+01:11:34,640 --> 01:11:40,320
+store
+
+1470
+01:11:36,600 --> 01:11:42,560
+um the the gradient squared. So that's
+
+1471
+01:11:40,320 --> 01:11:43,800
+another copy of the parameters. So
+
+1472
+01:11:42,560 --> 01:11:49,360
+putting all
+
+1473
+01:11:43,800 --> 01:11:53,000
+together we have um the total memory is
+
+1474
+01:11:49,360 --> 01:11:55,679
+assuming you know FP32 which means four
+
+1475
+01:11:53,000 --> 01:11:57,760
+bytes times the number of parameters,
+
+1476
+01:11:55,679 --> 01:11:59,640
+number of activations, number of
+
+1477
+01:11:57,760 --> 01:12:03,120
+gradients and number of optimizer
+
+1478
+01:11:59,640 --> 01:12:06,159
+states. Okay. And that gives us uh you
+
+1479
+01:12:03,120 --> 01:12:09,000
+know some number which
+
+1480
+01:12:06,159 --> 01:12:12,640
+um is 496
+
+1481
+01:12:09,000 --> 01:12:14,560
+here. Okay. So this is um a fairly
+
+1482
+01:12:12,640 --> 01:12:17,040
+simple calculation in the assignment
+
+1483
+01:12:14,560 --> 01:12:19,120
+one. Um you're going to do this for the
+
+1484
+01:12:17,040 --> 01:12:21,440
+transformer which is a little bit more
+
+1485
+01:12:19,120 --> 01:12:23,440
+involved because you have to there's not
+
+1486
+01:12:21,440 --> 01:12:26,000
+just matrix multiplications but there's
+
+1487
+01:12:23,440 --> 01:12:27,840
+um many matrices there's attention and
+
+1488
+01:12:26,000 --> 01:12:31,360
+there's all these other things but the
+
+1489
+01:12:27,840 --> 01:12:34,000
+general form of the calculation is the
+
+1490
+01:12:31,360 --> 01:12:38,760
+same. You have parameters activations
+
+1491
+01:12:34,000 --> 01:12:38,760
+gradients and optimizer states.
+
+1492
+01:12:40,960 --> 01:12:48,159
+Okay. And
+
+1493
+01:12:42,920 --> 01:12:51,760
+the so and the flops required again for
+
+1494
+01:12:48,159 --> 01:12:53,760
+this model is six times uh the number of
+
+1495
+01:12:51,760 --> 01:12:57,520
+tokens or number of data points times
+
+1496
+01:12:53,760 --> 01:13:00,080
+the number of parameters and um you know
+
+1497
+01:12:57,520 --> 01:13:03,640
+that's basically concludes the resource
+
+1498
+01:13:00,080 --> 01:13:07,040
+uh accounting for this particular model.
+
+1499
+01:13:03,640 --> 01:13:09,360
+Um and uh if for reference if you're
+
+1500
+01:13:07,040 --> 01:13:12,400
+curious about working this out for for
+
+1501
+01:13:09,360 --> 01:13:13,880
+transformers you can um consult um some
+
+1502
+01:13:12,400 --> 01:13:18,000
+of these
+
+1503
+01:13:13,880 --> 01:13:20,320
+articles. Okay. So in the remaining time
+
+1504
+01:13:18,000 --> 01:13:23,600
+I think um maybe I'll pause for
+
+1505
+01:13:20,320 --> 01:13:25,600
+questions. Um and we talked about
+
+1506
+01:13:23,600 --> 01:13:28,480
+building up the tensors and then we
+
+1507
+01:13:25,600 --> 01:13:31,199
+built a kind of a very small model and
+
+1508
+01:13:28,480 --> 01:13:33,520
+you know we talked about optimization
+
+1509
+01:13:31,199 --> 01:13:37,640
+and how many how much memory and how
+
+1510
+01:13:33,520 --> 01:13:37,640
+much uh compute was required.
+
+1511
+01:13:38,800 --> 01:13:41,800
+Yeah.
+
+1512
+01:13:42,239 --> 01:13:46,400
+So the question is why do you need to
+
+1513
+01:13:43,760 --> 01:13:48,719
+store the activations? So naively you
+
+1514
+01:13:46,400 --> 01:13:51,520
+need to store the activations because
+
+1515
+01:13:48,719 --> 01:13:55,280
+when you're uh when you're doing the
+
+1516
+01:13:51,520 --> 01:13:56,480
+peer pass the gradients um of let's say
+
+1517
+01:13:55,280 --> 01:13:58,239
+the first layer depend on the
+
+1518
+01:13:56,480 --> 01:14:01,040
+activation. So the gradients of the I
+
+1519
+01:13:58,239 --> 01:14:04,880
+layer depends on the activation there.
+
+1520
+01:14:01,040 --> 01:14:06,560
+Um now if you're smarter you don't have
+
+1521
+01:14:04,880 --> 01:14:08,239
+to store the activations or you don't
+
+1522
+01:14:06,560 --> 01:14:10,480
+have to store all of them. You can
+
+1523
+01:14:08,239 --> 01:14:12,560
+recomputee them and that's something a
+
+1524
+01:14:10,480 --> 01:14:14,000
+technique will uh called activation
+
+1525
+01:14:12,560 --> 01:14:16,640
+checkpointing which we're going to talk
+
+1526
+01:14:14,000 --> 01:14:16,640
+about later.
+
+1527
+01:14:19,679 --> 01:14:24,320
+Okay, so let's just do this quick uh you
+
+1528
+01:14:22,640 --> 01:14:26,239
+know actually there's not much to say
+
+1529
+01:14:24,320 --> 01:14:30,320
+here but you know here's your typical
+
+1530
+01:14:26,239 --> 01:14:33,360
+you know training loop um where you
+
+1531
+01:14:30,320 --> 01:14:37,360
+define the model define the optimizer
+
+1532
+01:14:33,360 --> 01:14:40,400
+and you get the data um feed forward
+
+1533
+01:14:37,360 --> 01:14:42,520
+backward and take a step in a parameter
+
+1534
+01:14:40,400 --> 01:14:45,719
+space
+
+1535
+01:14:42,520 --> 01:14:48,040
+um And
+
+1536
+01:14:45,719 --> 01:14:50,400
+um I
+
+1537
+01:14:48,040 --> 01:14:52,159
+guess it'll be more interesting I I
+
+1538
+01:14:50,400 --> 01:14:54,560
+guess next time I should show like
+
+1539
+01:14:52,159 --> 01:14:58,600
+actual one plug which I isn't available
+
+1540
+01:14:54,560 --> 01:15:00,360
+on this uh on this version but
+
+1541
+01:14:58,600 --> 01:15:04,120
+um
+
+1542
+01:15:00,360 --> 01:15:07,280
+so one note about checkpointing
+
+1543
+01:15:04,120 --> 01:15:10,560
+um so training language models takes a
+
+1544
+01:15:07,280 --> 01:15:11,920
+long time and you certainly will crash
+
+1545
+01:15:10,560 --> 01:15:13,360
+at some point so you don't want to lose
+
+1546
+01:15:11,920 --> 01:15:15,280
+all your progress.
+
+1547
+01:15:13,360 --> 01:15:18,400
+Um so you want to periodically save your
+
+1548
+01:15:15,280 --> 01:15:20,960
+model to disk and just to be very clear
+
+1549
+01:15:18,400 --> 01:15:23,800
+the thing you want to save is both the
+
+1550
+01:15:20,960 --> 01:15:25,920
+model and uh the
+
+1551
+01:15:23,800 --> 01:15:27,840
+optimizer and probably you know which
+
+1552
+01:15:25,920 --> 01:15:31,960
+iteration you're on. Um I should add
+
+1553
+01:15:27,840 --> 01:15:35,840
+that and then you can just load it up.
+
+1554
+01:15:31,960 --> 01:15:39,679
+Um one maybe final note and I'll uh end
+
+1555
+01:15:35,840 --> 01:15:44,400
+is um I alluded to kind of mix precision
+
+1556
+01:15:39,679 --> 01:15:46,560
+your training. Um you know choice of the
+
+1557
+01:15:44,400 --> 01:15:48,800
+data type has the different trade-offs.
+
+1558
+01:15:46,560 --> 01:15:51,920
+If you have higher precision it's uh
+
+1559
+01:15:48,800 --> 01:15:54,320
+more accurate and stable um but it's
+
+1560
+01:15:51,920 --> 01:15:59,840
+more expensive and lower precision vice
+
+1561
+01:15:54,320 --> 01:16:02,080
+versa. Um and as we mentioned before by
+
+1562
+01:15:59,840 --> 01:16:06,080
+default the recommendation is use float
+
+1563
+01:16:02,080 --> 01:16:09,920
+32 um but try to use VF uh 16 or even
+
+1564
+01:16:06,080 --> 01:16:12,719
+FP8 whenever possible. So you can use um
+
+1565
+01:16:09,920 --> 01:16:16,239
+lower precision for the FE forward pass
+
+1566
+01:16:12,719 --> 01:16:17,920
+um but flow 32 for the rest. Um and this
+
+1567
+01:16:16,239 --> 01:16:20,320
+is an idea that goes back to the you
+
+1568
+01:16:17,920 --> 01:16:23,360
+know 2017 there's exploring mixed
+
+1569
+01:16:20,320 --> 01:16:25,280
+precision training. Um, PyTorch has um
+
+1570
+01:16:23,360 --> 01:16:27,360
+some tools that automatically allow you
+
+1571
+01:16:25,280 --> 01:16:30,080
+to do, you know, mixed precision
+
+1572
+01:16:27,360 --> 01:16:33,360
+training. Um, because it can be sort of
+
+1573
+01:16:30,080 --> 01:16:35,520
+annoying to have to specify which parts
+
+1574
+01:16:33,360 --> 01:16:38,480
+of your model it needs to be, you know,
+
+1575
+01:16:35,520 --> 01:16:40,320
+what precision. Um, generally you define
+
+1576
+01:16:38,480 --> 01:16:42,800
+your model as, you know, sort of this
+
+1577
+01:16:40,320 --> 01:16:45,199
+clean modular thing and and the
+
+1578
+01:16:42,800 --> 01:16:47,280
+specifying the precision is sort of like
+
+1579
+01:16:45,199 --> 01:16:49,960
+a, you know, something that needs to cut
+
+1580
+01:16:47,280 --> 01:16:54,080
+across that.
+
+1581
+01:16:49,960 --> 01:16:56,320
+Um and one I guess maybe one kind of
+
+1582
+01:16:54,080 --> 01:16:59,600
+general comment is that people are
+
+1583
+01:16:56,320 --> 01:17:01,920
+pushing the envelope on what precision
+
+1584
+01:16:59,600 --> 01:17:04,960
+is needed. there's some you know papers
+
+1585
+01:17:01,920 --> 01:17:08,199
+that show you can actually use um FP8
+
+1586
+01:17:04,960 --> 01:17:11,679
+you know all the way you know through um
+
+1587
+01:17:08,199 --> 01:17:13,360
+there's um I guess one of the challenges
+
+1588
+01:17:11,679 --> 01:17:15,840
+is of course when you have lower
+
+1589
+01:17:13,360 --> 01:17:18,159
+precision it gets very numerically un
+
+1590
+01:17:15,840 --> 01:17:21,520
+unstable but then you can do various
+
+1591
+01:17:18,159 --> 01:17:23,600
+tricks to you know control the uh the
+
+1592
+01:17:21,520 --> 01:17:25,440
+numeric of your model during training so
+
+1593
+01:17:23,600 --> 01:17:29,520
+that you don't get into these you know
+
+1594
+01:17:25,440 --> 01:17:31,600
+bad regimes so this is where I think um
+
+1595
+01:17:29,520 --> 01:17:34,640
+the systems and the model architecture
+
+1596
+01:17:31,600 --> 01:17:38,760
+design kind of are synergistic because
+
+1597
+01:17:34,640 --> 01:17:41,199
+you want to design models now that we
+
+1598
+01:17:38,760 --> 01:17:43,520
+have a lot of model design is just
+
+1599
+01:17:41,199 --> 01:17:45,280
+governed by hardware. So even the
+
+1600
+01:17:43,520 --> 01:17:48,480
+transformer as we mentioned last time is
+
+1601
+01:17:45,280 --> 01:17:50,960
+governed by the having GPUs and now if
+
+1602
+01:17:48,480 --> 01:17:54,560
+we notice that you know Nvidia chips
+
+1603
+01:17:50,960 --> 01:17:56,640
+have the property that if um lower
+
+1604
+01:17:54,560 --> 01:17:59,920
+precision even like int four for example
+
+1605
+01:17:56,640 --> 01:18:03,360
+is one thing. Now if you can make your
+
+1606
+01:17:59,920 --> 01:18:05,600
+model training actually work on in four
+
+1607
+01:18:03,360 --> 01:18:08,000
+which is I think you know quite quite
+
+1608
+01:18:05,600 --> 01:18:09,920
+hard then you can get massive you know
+
+1609
+01:18:08,000 --> 01:18:13,000
+speed ups and your model will be more
+
+1610
+01:18:09,920 --> 01:18:16,159
+you know efficient. Um
+
+1611
+01:18:13,000 --> 01:18:18,159
+now there's another uh thing which we'll
+
+1612
+01:18:16,159 --> 01:18:21,520
+talk about later which is you know often
+
+1613
+01:18:18,159 --> 01:18:23,120
+you'll train your model using more sane
+
+1614
+01:18:21,520 --> 01:18:25,520
+you know floating point but when it
+
+1615
+01:18:23,120 --> 01:18:27,840
+comes to inference you can go crazy and
+
+1616
+01:18:25,520 --> 01:18:30,400
+you take your preach model and then you
+
+1617
+01:18:27,840 --> 01:18:33,080
+can quantize it and get a lot of the
+
+1618
+01:18:30,400 --> 01:18:35,920
+gains from very very uh aggressive
+
+1619
+01:18:33,080 --> 01:18:38,400
+quantization. So somehow training is a
+
+1620
+01:18:35,920 --> 01:18:39,679
+lot um more difficult to do with low
+
+1621
+01:18:38,400 --> 01:18:43,480
+precision but once you have a trained
+
+1622
+01:18:39,679 --> 01:18:47,120
+model it's much easier to um make it low
+
+1623
+01:18:43,480 --> 01:18:50,520
+precision. Okay. So um I will wrap up
+
+1624
+01:18:47,120 --> 01:18:53,760
+there just to conclude um we have talked
+
+1625
+01:18:50,520 --> 01:18:55,600
+about the different primitives to use to
+
+1626
+01:18:53,760 --> 01:18:57,280
+train a model building up from tensors
+
+1627
+01:18:55,600 --> 01:18:59,920
+all the way to the training loop. We
+
+1628
+01:18:57,280 --> 01:19:02,159
+talked about u memory accounting and
+
+1629
+01:18:59,920 --> 01:19:05,199
+flops accounting. um for these simple
+
+1630
+01:19:02,159 --> 01:19:07,520
+models. Um hopefully once you go through
+
+1631
+01:19:05,199 --> 01:19:10,480
+assignment one, all these concepts will
+
+1632
+01:19:07,520 --> 01:19:13,320
+be really solid because you'll be um uh
+
+1633
+01:19:10,480 --> 01:19:18,760
+applying these ideas for the actual
+
+1634
+01:19:13,320 --> 01:19:18,760
+transformer. Okay, see you next time.
+

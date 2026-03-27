@@ -1,0 +1,1182 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 6: Kernels, Triton}
+\newcommand{\noteauthors}{基于 Tatsu Hashimoto 授课内容整理}
+\newcommand{\notedate}{2025年5月}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-05}
+\newcommand{\videoduration}{1:20:18}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=E8Mju53VB00}
+\newcommand{\videocoverpath}{cover_real.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Section 1: 引言 ==========
+
+\section{引言：从理论到实践}
+
+上一节课（Lecture 5）从宏观层面讲解了 GPU 的硬件架构和性能优化原理。本节课将从\textbf{实操}角度出发，学习如何编写、度量和优化 GPU 上的高性能代码。核心目标有三个：
+
+\begin{enumerate}
+    \item \textbf{掌握基准测试（Benchmarking）与性能分析（Profiling）}——理解代码在 GPU 上实际的执行方式
+    \item \textbf{理解内核融合（Kernel Fusion）的重要性}——用 GeLU 和 Softmax 作为案例
+    \item \textbf{掌握五种实现方式的权衡}——手写 PyTorch、原生 PyTorch、CUDA C++、Triton、torch.compile
+\end{enumerate}
+
+\begin{importantbox}{本节课的核心信息}
+编程模型（PyTorch、Triton、PTX）与硬件之间存在巨大的抽象鸿沟，这会导致许多``性能之谜''。基准测试帮助我们理解扩展行为，性能分析帮助我们理解 PyTorch 函数的内部机制（最终归结为 CUDA 内核调用），查看 PTX 汇编帮助我们理解 CUDA 内核的内部工作。
+\end{importantbox}
+
+课程提供了五种实现同一函数的方法：
+\begin{itemize}
+    \item \textbf{Manual}：用基本 PyTorch 操作手写（最慢，因为没有融合）
+    \item \textbf{PyTorch native}：调用 PyTorch 内置函数（已优化）
+    \item \textbf{CUDA C++}：直接用 CUDA 编写内核
+    \item \textbf{Triton}：用 Python 编写 GPU 内核
+    \item \textbf{torch.compile}：让编译器自动优化手写代码
+\end{itemize}
+
+\begin{knowledgebox}{与上一节课的关系}
+Lecture 5 建立了 GPU 硬件的心智模型（SM、内存层次、Tiling、Fusion 等）。本节课用代码将这些概念``落地''——你将亲手编写内核，用分析工具验证理论预测，并直接观察不同实现的性能差异。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+本课以 MLP（线性层 + GeLU 激活堆叠）作为贯穿全课的实验对象，GeLU（逐元素操作）和 Softmax（行归约操作）作为内核编写的核心案例。掌握基准测试和性能分析是编写高性能代码的\textbf{第一步}，也是\textbf{最重要的一步}。
+
+%% ========== Section 2: GPU 复习 ==========
+
+\section{GPU 架构快速回顾}
+
+在进入本节课的核心内容之前，先快速回顾上一节课的关键概念。
+
+\subsection{硬件结构}
+
+GPU 的核心结构包括：
+\begin{itemize}
+    \item \textbf{SM（Streaming Multiprocessor）}：GPU 的计算单元，A100 有 108 个 SM
+    \item \textbf{内存层次}：
+    \begin{itemize}
+        \item DRAM（全局内存）：A100 有 80GB，大但慢
+        \item L2 Cache：A100 有 40MB
+        \item L1 Cache / Shared Memory：A100 每个 SM 有 192KB，小但快
+    \end{itemize}
+\end{itemize}
+
+\subsection{执行模型}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=2.5cm, minimum height=0.8cm, font=\small},
+    arr/.style={->, >=stealth, thick}
+]
+\node[box, fill=blue!10] (grid) {Grid（网格）};
+\node[box, fill=green!10, below left=1.2cm and 0.5cm of grid] (block0) {Block 0};
+\node[box, fill=green!10, below=1.2cm of grid] (block1) {Block 1};
+\node[box, fill=green!10, below right=1.2cm and 0.5cm of grid] (blockn) {Block N};
+\node[box, fill=orange!10, below=1.0cm of block1] (threads) {Thread 0, 1, ..., 31 (Warp)};
+
+\draw[arr] (grid) -- (block0);
+\draw[arr] (grid) -- (block1);
+\draw[arr] (grid) -- (blockn);
+\draw[arr] (block1) -- (threads);
+
+\node[right=0.3cm of blockn, font=\scriptsize, text width=3.5cm] {每个 Block 调度到一个 SM，Block 内线程共享 Shared Memory};
+\end{tikzpicture}
+\caption{GPU 执行模型层次：Grid $\rightarrow$ Block $\rightarrow$ Thread}
+\end{figure}
+
+\begin{itemize}
+    \item \textbf{Thread（线程）}：执行 $f(i)$ 的最小单位
+    \item \textbf{Thread Block}（又称 CTA）：调度到单个 SM 上的线程集合，Block 内线程共享 Shared Memory
+    \item \textbf{Grid}：所有 Thread Block 的集合
+\end{itemize}
+
+\subsection{Thread Block 的意义}
+
+为什么需要 Thread Block 而不是直接使用裸线程？
+\begin{enumerate}
+    \item Block 内线程拥有\textbf{共享内存}（Shared Memory），速度与 L1 Cache 相当
+    \item Block 内线程可以\textbf{同步}（synchronize），但跨 Block 无法同步
+    \item 需要线程间通信的操作（如矩阵乘法）应安排在同一个 Block 内
+\end{enumerate}
+
+\subsection{Wave Quantization 与 SM 利用率}
+
+Thread Block 以``波（wave）''为单位调度到 SM 上。理想情况下，每一波应填满所有 SM。
+
+\begin{warningbox}{Wave Quantization 陷阱}
+如果 Block 数不能被 SM 数量整除，最后一波会有 SM 空闲。经验法则：Block 数应 $\geq 4 \times$ SM 数量，以确保高利用率。
+\end{warningbox}
+
+\subsection{算术强度}
+
+\begin{importantbox}{算术强度 = FLOPs / 字节}
+\begin{itemize}
+    \item 高算术强度 $\Rightarrow$ \textbf{计算受限}（compute-bound）——这是好事
+    \item 低算术强度 $\Rightarrow$ \textbf{内存受限}（memory-bound）——GPU 计算单元闲置
+\end{itemize}
+一般规则：矩阵乘法是 compute-bound，\textbf{其余几乎所有操作都是 memory-bound}。
+\end{importantbox}
+
+\subsection{本章小结}
+
+GPU 执行模型的核心是：写一个函数 $f(i)$，GPU 对所有 $i = 0, \dots, N-1$ 并行执行。Block 提供了快速的共享内存和同步机制，但跨 Block 通信代价高昂。性能优化的关键在于最小化全局内存读写、最大化算术强度。
+
+%% ========== Section 3: Benchmarking ==========
+
+\section{基准测试（Benchmarking）}
+
+\subsection{为什么要基准测试}
+
+基准测试测量操作的\textbf{端到端墙钟时间}（wall-clock time）。虽然简单，但它是性能优化的基础：
+
+\begin{itemize}
+    \item 比较不同实现的速度（``CUDA 版本比 PyTorch 快吗？''）
+    \item 理解性能如何随参数缩放（``矩阵增大一倍，时间增加多少？''）
+\end{itemize}
+
+\begin{warningbox}{不能只靠理论推断性能}
+你可以阅读 spec sheet（营销材料）和论文，但实际性能取决于你的\textbf{库版本}、\textbf{硬件}和\textbf{工作负载}。没有什么能替代实际的基准测试。
+\end{warningbox}
+
+\subsection{正确的基准测试方法}
+
+一个正确的 GPU 基准测试函数需要注意以下几点：
+
+\begin{lstlisting}[caption={基准测试函数模板（Python）}]
+def benchmark(description, run, num_warmups=1, num_trials=3):
+    # 1. Warmup: 避免测量启动开销
+    for _ in range(num_warmups):
+        run()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()  # 等待 GPU 完成
+
+    # 2. 计时
+    times = []
+    for trial in range(num_trials):
+        start_time = time.time()
+        run()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()  # 重要！
+        end_time = time.time()
+        times.append((end_time - start_time) * 1000)
+
+    return mean(times)
+\end{lstlisting}
+
+\begin{importantbox}{基准测试两大要点}
+\begin{enumerate}
+    \item \textbf{Warmup}：首次运行时，PyTorch 会在后台编译 CUDA 代码、发送指令到 GPU 等。这些一次性开销不应计入稳态性能。
+    \item \textbf{torch.cuda.synchronize()}：GPU 和 CPU 是\textbf{两个独立的计算设备}。CPU 发送 CUDA 内核到 GPU 后会立即返回（异步执行）。如果不调用 synchronize()，你测量的是 CPU 端\textbf{入队}的时间，而非 GPU 端\textbf{执行}的时间。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{基准测试案例：矩阵乘法}
+
+对方阵矩阵乘法进行基准测试，可以观察到性能随维度的变化：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cc}
+\toprule
+\textbf{矩阵维度} & \textbf{典型耗时趋势} \\
+\midrule
+1024 & 基线 \\
+2048 & $\sim$3--4x 增长 \\
+4096 & $\sim$8--12x 增长 \\
+8192 & 显著增长，接近理论 $O(N^3)$ \\
+16384 & 非常大，充分利用 GPU \\
+\bottomrule
+\end{tabular}
+\caption{矩阵乘法的性能随维度缩放}
+\end{table}
+
+\subsection{基准测试案例：MLP 缩放}
+
+用一个简单的 MLP（Linear $\rightarrow$ GeLU $\rightarrow$ Linear $\rightarrow$ GeLU $\rightarrow \ldots$）作为实验对象，分别缩放不同参数：
+
+\begin{lstlisting}[caption={MLP 定义}]
+class MLP(nn.Module):
+    def __init__(self, dim, num_layers):
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [nn.Linear(dim, dim) for _ in range(num_layers)]
+        )
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+            x = torch.nn.functional.gelu(x)
+        return x
+\end{lstlisting}
+
+缩放实验的发现：
+\begin{itemize}
+    \item \textbf{步数 (num\_steps)}：线性缩放——2x 步数 $\approx$ 2x 时间
+    \item \textbf{层数 (num\_layers)}：线性缩放——每层增加固定时间
+    \item \textbf{批大小 (batch\_size)}：小批量时增长缓慢（GPU 未充分利用），大批量时接近线性
+    \item \textbf{维度 (dim)}：增长不太可预测——涉及矩阵乘法的非均匀 CUDA 内核调度
+\end{itemize}
+
+\begin{knowledgebox}{性能不总是可预测的}
+由于 CUDA 内核调度、硬件特性、缓存行为等因素，基准测试结果不总是符合简单的理论预测。这正是实际基准测试不可替代的原因。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+基准测试是性能优化的第一步。正确的基准测试需要 warmup 和 CUDA synchronize。它告诉你``多快''，但不告诉你``为什么快/慢''——这需要 Profiling。
+
+%% ========== Section 4: Profiling ==========
+
+\section{性能分析（Profiling）}
+
+\subsection{从端到端到深入内部}
+
+基准测试给出端到端时间，性能分析则揭示\textbf{时间花在了哪里}。更深层地，性能分析让你看到 PyTorch 高层调用背后实际执行的 CUDA 内核。
+
+\begin{importantbox}{Profiling 的两层价值}
+\begin{enumerate}
+    \item \textbf{显式价值}：哪些函数占用了最多时间？应该优化哪里？
+    \item \textbf{隐式价值}：PyTorch 调用在底层映射为哪些 CUDA 内核？理解这些映射关系帮助你建立对 GPU 执行的直觉。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{PyTorch 内置 Profiler}
+
+PyTorch 提供了方便的内置性能分析器，无需离开 Python 环境：
+
+\begin{lstlisting}[caption={PyTorch Profiler 使用模板}]
+def profile(description, run, num_warmups=1, with_stack=False):
+    # Warmup
+    for _ in range(num_warmups):
+        run()
+    torch.cuda.synchronize()
+
+    # Profile
+    with torch.profiler.profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        with_stack=with_stack,
+    ) as prof:
+        run()
+        torch.cuda.synchronize()
+
+    # Print results
+    table = prof.key_averages().table(
+        sort_by="cuda_time_total",
+        row_limit=10
+    )
+    return table
+\end{lstlisting}
+
+\subsection{Profiling 案例：简单操作}
+
+\subsubsection{矩阵加法}
+
+Profile 矩阵加法 \texttt{a + b}（维度 $2048 \times 2048$）：
+\begin{itemize}
+    \item PyTorch 层面：调用 \texttt{aten::add}（C++ 接口）
+    \item GPU 层面：启动一个 CUDA 内核 \texttt{vectorized\_elementwise\_kernel}
+    \item 这是最简单的一对一映射：一个 PyTorch 操作 $\rightarrow$ 一个 CUDA 内核
+\end{itemize}
+
+\subsubsection{矩阵乘法}
+
+Profile 矩阵乘法 \texttt{a @ b}：
+\begin{itemize}
+    \item 大矩阵（$2048 \times 2048$）：调用 CUTLASS 库的内核，如 \texttt{cutlass\_80\_simt\_sgemm\_256x128\_8x4\_nn\_align1}
+    \item 小矩阵（$128 \times 128$）：调用不同的内核，如 \texttt{xmma\_gemm\_f32f32}
+    \item 内核名称本身包含丰富信息：\texttt{cutlass}（NVIDIA 线性代数库）、\texttt{256x128}（tile 大小）
+\end{itemize}
+
+\begin{knowledgebox}{不同维度调度不同内核}
+PyTorch 的矩阵乘法 \texttt{a @ b} 在高层只是一行代码，但底层会根据矩阵维度、硬件类型等因素调度到\textbf{完全不同的 CUDA 内核}。\texttt{torch.compile} 甚至可以自动微基准测试不同的内核，选择最优的——这就是为什么它能给你``免费''的 10\% 加速。
+\end{knowledgebox}
+
+\subsubsection{复合操作：cdist}
+
+\texttt{torch.cdist(a, b)} 计算两组向量的欧氏距离矩阵：
+\begin{itemize}
+    \item 映射到 \texttt{aten::cdist} $\rightarrow$ \texttt{aten::euclidean\_dist}
+    \item 分解为多个原语：\texttt{aten::mm}（矩阵乘法，占 78\% GPU 时间）、\texttt{aten::pow}（5\%）、\texttt{aten::sum}（3\%）、数组拼接（6\%）
+    \item 这告诉我们：如果要优化 cdist，应该集中精力在矩阵乘法上
+\end{itemize}
+
+\subsubsection{GeLU 与 Softmax}
+
+GeLU（\texttt{a + b} 后接 GeLU）和 Softmax 是本课的两个核心案例，将在后续章节详细分析。
+
+\subsection{Profiling 案例：MLP（Nsight 火焰图）}
+
+对一个较大的 MLP（$\text{dim}=2048$, 64 层, $\text{batch}=1024$）进行 Profiling，使用 NVIDIA Nsight 可视化工具可以看到\textbf{火焰图}（flame graph）：
+
+\begin{knowledgebox}{CPU 与 GPU 的异步执行}
+Profiling 揭示了一个关键事实：CPU 和 GPU 是\textbf{异步执行}的。CPU 会持续向 GPU 发送内核调用命令（``run this next, run this next...''），远远领先于 GPU 的实际执行。例如：当 GPU 还在执行 Layer 1 时，CPU 可能已经在排队 Layer 9 的命令了。
+\end{knowledgebox}
+
+\begin{warningbox}{print 语句的隐藏性能影响}
+在训练循环中打印损失值（如 \texttt{print(loss.item())}）看似无害，但会\textbf{强制 CPU-GPU 同步}——CPU 必须等待 GPU 计算完损失值才能打印。这会破坏异步执行，让 CPU 和 GPU 变成锁步（lock-step）执行，显著降低性能。
+
+正确做法：只在必要时（如每 $N$ 步）打印，或使用日志缓冲区。
+\end{warningbox}
+
+\subsection{本章小结}
+
+性能分析是定位瓶颈的关键工具。它让你看到 PyTorch 高层调用背后的 CUDA 内核，理解 CPU-GPU 异步执行模型，发现隐藏的性能陷阱（如同步开销）。\textbf{每次修改代码后，都应该重新基准测试和 Profile}。
+
+%% ========== Section 5: Kernel Fusion ==========
+
+\section{内核融合（Kernel Fusion）动机}
+
+\subsection{仓库-工厂类比}
+
+Horace He 的经典博客文章 \emph{Making Deep Learning Go Brrrr} 用工厂比喻解释了内存瓶颈：
+
+\begin{itemize}
+    \item \textbf{仓库（Warehouse）}= DRAM（全局内存）——大、慢
+    \item \textbf{工厂（Factory）}= SRAM（片上计算）——小、快
+\end{itemize}
+
+如果每完成一步加工就把半成品运回仓库，再从仓库取出来做下一步，搬运成本远超加工成本。如果我们把多步加工\textbf{融合}在工厂内一次完成，只需要一次搬运。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=2cm, minimum height=0.7cm, font=\small},
+    arr/.style={->, >=stealth, thick}
+]
+% Naive version
+\node[font=\bfseries] at (-3.5, 2.5) {朴素执行};
+\node[box, fill=gray!15] (mem1) at (-3.5, 1.5) {DRAM};
+\node[box, fill=orange!20] (op1) at (-5.5, 0) {Op 1};
+\node[box, fill=orange!20] (op2) at (-3.5, 0) {Op 2};
+\node[box, fill=orange!20] (op3) at (-1.5, 0) {Op 3};
+\draw[arr, red] (mem1) -- (op1) node[midway, left, font=\tiny] {读};
+\draw[arr, red] (op1) -- (mem1) node[midway, left, font=\tiny] {写};
+\draw[arr, red] (mem1) -- (op2);
+\draw[arr, red] (op2) -- (mem1);
+\draw[arr, red] (mem1) -- (op3);
+\draw[arr, red] (op3) -- (mem1);
+
+% Fused version
+\node[font=\bfseries] at (4.5, 2.5) {融合执行};
+\node[box, fill=gray!15] (mem2) at (4.5, 1.5) {DRAM};
+\node[box, fill=green!20, minimum width=5cm] (fused) at (4.5, 0) {Op 1 + Op 2 + Op 3};
+\draw[arr, green!60!black] (mem2) -- (fused) node[midway, right, font=\tiny] {读 1 次};
+\draw[arr, green!60!black] (fused) -- (mem2) node[midway, left, font=\tiny] {写 1 次};
+\end{tikzpicture}
+\caption{内核融合的核心思想：减少全局内存读写次数}
+\end{figure}
+
+\begin{importantbox}{核心原则：组织计算以最小化读写}
+GPU 性能优化的首要原则是\textbf{减少全局内存的读写次数}。内核融合是实现这一目标的主要手段——将多个操作合并为一个 CUDA 内核，中间结果保留在寄存器或 Shared Memory 中。
+\end{importantbox}
+
+\subsection{GeLU：融合效果的完美案例}
+
+GeLU（Gaussian Error Linear Unit）是 Transformer 中广泛使用的激活函数。其 tanh 近似版本为：
+
+$$\text{GeLU}(x) = 0.5 \cdot x \cdot \left(1 + \tanh\left(\sqrt{\frac{2}{\pi}} \cdot (x + 0.044715 \cdot x^3)\right)\right)$$
+
+\begin{itemize}
+    \item $x$：输入值
+    \item $0.79788456 \approx \sqrt{2/\pi}$：常数系数
+    \item $0.044715$：近似修正系数
+\end{itemize}
+
+\textbf{手写实现}（未融合）：
+
+\begin{lstlisting}[caption={手写 GeLU（多个独立 CUDA 内核）}]
+def manual_gelu(x):
+    return 0.5 * x * (1 + torch.tanh(
+        0.79788456 * (x + 0.044715 * x * x * x)
+    ))
+\end{lstlisting}
+
+\textbf{PyTorch 内置实现}（已融合）：
+
+\begin{lstlisting}[caption={PyTorch 内置 GeLU（单个 CUDA 内核）}]
+def pytorch_gelu(x):
+    return torch.nn.functional.gelu(x, approximate="tanh")
+\end{lstlisting}
+
+\subsection{GeLU 性能对比}
+
+基准测试结果（$16384 \times 16384$ 矩阵）：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{实现} & \textbf{耗时 (ms)} & \textbf{相对于 PyTorch} \\
+\midrule
+Manual GeLU（手写） & $\sim$8.1 & 7.4x 慢 \\
+PyTorch GeLU（内置） & $\sim$1.1 & 1.0x（基线）\\
+\bottomrule
+\end{tabular}
+\caption{GeLU 融合 vs 未融合的性能差异}
+\end{table}
+
+Profiling 证实了原因：
+\begin{itemize}
+    \item \textbf{Manual GeLU}：启动多个 CUDA 内核（乘法 $\times 3$、加法、tanh），每个内核都要从全局内存读写
+    \item \textbf{PyTorch GeLU}：只启动\textbf{一个} CUDA 内核，所有计算在内核内部完成
+\end{itemize}
+
+\begin{warningbox}{8 倍差距仅来自内存读写开销}
+手写 GeLU 和 PyTorch GeLU 计算的 FLOPs 完全相同，8 倍的性能差距\textbf{完全来自多余的全局内存读写}。这是 memory-bound 操作的典型特征。
+\end{warningbox}
+
+\subsection{本章小结}
+
+内核融合是 GPU 性能优化的核心技术之一。对于 memory-bound 操作（如 GeLU），将多个操作融合为一个 CUDA 内核可以带来数倍的加速。PyTorch 内置函数通常已做了融合，但自定义操作需要手动融合。
+
+%% ========== Section 6: CUDA Kernels ==========
+
+\section{编写 CUDA 内核}
+
+\subsection{CUDA 编程基础}
+
+CUDA 是 NVIDIA 的 C/C++ API，用于编程 GPU。核心思想很简单：写一个函数 $f$，CUDA 对所有元素并行执行 $f$。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, minimum width=1.8cm, minimum height=0.6cm, font=\small},
+]
+\node[block, fill=blue!10] (b00) at (0,0) {Block (0,0)};
+\node[block, fill=blue!10] (b01) at (2.2,0) {Block (0,1)};
+\node[block, fill=blue!10] (b02) at (4.4,0) {Block (0,2)};
+\node[block, fill=green!10] (b10) at (0,-0.9) {Block (1,0)};
+\node[block, fill=green!10] (b11) at (2.2,-0.9) {Block (1,1)};
+\node[block, fill=green!10] (b12) at (4.4,-0.9) {Block (1,2)};
+\node[font=\small, above=0.2cm of b01] {Grid: numBlocks = (2, 3)};
+\node[font=\scriptsize, below=0.2cm of b11, text width=5cm, align=center] {每个 Block 包含 blockDim 个线程\\每个线程由 (blockIdx, threadIdx) 唯一标识};
+\end{tikzpicture}
+\caption{CUDA Grid-Block-Thread 组织结构}
+\end{figure}
+
+关键概念：
+\begin{itemize}
+    \item \texttt{blockIdx}：当前 Block 在 Grid 中的索引
+    \item \texttt{blockDim}：每个 Block 的线程数
+    \item \texttt{threadIdx}：当前线程在 Block 中的索引
+    \item 全局线程索引：$i = \text{blockIdx.x} \times \text{blockDim.x} + \text{threadIdx.x}$
+\end{itemize}
+
+\subsection{GeLU 的 CUDA 实现}
+
+\begin{lstlisting}[caption={GeLU CUDA 内核（gelu.cu）},language=C]
+__global__ void gelu_kernel(
+    const float* in, float* out, int num_elements
+) {
+    // 计算全局线程索引
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // 边界检查
+    if (i < num_elements) {
+        float x = in[i];
+        float a = 0.79788456f * (x + 0.044715f * x * x * x);
+        float tanh_a = tanhf(a);
+        out[i] = 0.5f * x * (1.0f + tanh_a);
+    }
+}
+\end{lstlisting}
+
+\begin{knowledgebox}{CUDA 内核的关键模式}
+几乎所有 CUDA 内核都遵循以下模式：
+\begin{enumerate}
+    \item 计算全局索引 $i$：\texttt{blockIdx.x * blockDim.x + threadIdx.x}
+    \item 边界检查：\texttt{if (i < num\_elements)}——因为最后一个 Block 可能有多余的线程
+    \item 执行计算：从输入指针读取、计算、写入输出指针
+\end{enumerate}
+\texttt{\_\_global\_\_} 关键字标识该函数为 CUDA 内核函数。
+\end{knowledgebox}
+
+\subsection{Python 端启动 CUDA 内核}
+
+PyTorch 提供了 \texttt{load\_inline} 工具，可以在 Python 中直接编译和调用 CUDA 代码：
+
+\begin{lstlisting}[caption={在 Python 中编译和使用 CUDA 代码}]
+from torch.utils.cpp_extension import load_inline
+
+# CUDA 源码（字符串形式）
+cuda_src = open("gelu.cu").read()
+cpp_src = "torch::Tensor gelu(torch::Tensor x);"
+
+# 编译为 Python 模块
+module = load_inline(
+    cuda_sources=[cuda_src],
+    cpp_sources=[cpp_src],
+    functions=["gelu"],
+    extra_cflags=["-O2"],
+    name="inline_gelu",
+)
+
+cuda_gelu = module.gelu  # 现在可以像普通函数一样调用
+\end{lstlisting}
+
+\subsection{CUDA GeLU 性能}
+
+Profiling CUDA GeLU 的结果显示，我们的自写内核确实只启动了\textbf{一个 CUDA 内核}（名为 \texttt{gelu\_kernel}），所有计算在内核内部完成。与 PyTorch 的差距来自于：
+
+\begin{itemize}
+    \item PyTorch 使用了更高效的数学库函数（如 \texttt{tanhf} 的向量化版本）
+    \item PyTorch 的内核做了更细致的\textbf{向量化加载}——一次从内存读取多个连续元素
+    \item PyTorch 内核可能使用了\textbf{更优的线程配置}和\textbf{寄存器分配}策略
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{实现} & \textbf{耗时 (ms)} & \textbf{说明} \\
+\midrule
+Manual（手写 PyTorch） & $\sim$8.1 & 多个内核，未融合 \\
+CUDA（自写内核） & $\sim$1.8 & 单内核，已融合 \\
+PyTorch（内置） & $\sim$1.1 & 单内核，高度优化 \\
+\bottomrule
+\end{tabular}
+\caption{GeLU 三种实现的性能对比}
+\end{table}
+
+我们的 CUDA 实现已经比手写 PyTorch 快了 4.5 倍，但仍不如 PyTorch 内置版本。PyTorch 的实现做了更多底层优化（如向量化加载、更优的数学库函数）。
+
+\begin{warningbox}{逐元素操作在 CUDA 中很简单，但...}
+GeLU 是逐元素（elementwise）操作——每个输出元素只依赖一个输入元素，因此 CUDA 实现很直接。但大多数有趣的操作（矩阵乘法、softmax、RMSNorm）需要读取多个值，涉及\textbf{共享内存管理}、\textbf{线程同步}等复杂问题。
+\end{warningbox}
+
+\subsection{本章小结}
+
+CUDA 让你直接控制 GPU 上的每个线程，实现内核融合。对于逐元素操作，CUDA 编程相对简单，主要是坐标计算和边界检查。但对于需要线程间通信的操作，CUDA 编程的复杂度会急剧上升——这正是 Triton 出现的原因。
+
+%% ========== Section 7: Triton ==========
+
+\section{Triton 内核编写}
+
+\subsection{Triton 简介}
+
+Triton 由 OpenAI 于 2021 年发布，目标是让 GPU 编程更易上手：
+
+\begin{itemize}
+    \item \textbf{用 Python 编写}——无需 C++
+    \item \textbf{以 Block 为思考单位}——而非线程
+    \item 编译器自动处理许多底层细节
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{职责} & \textbf{CUDA} & \textbf{Triton} \\
+\midrule
+内存合并（Coalescing） & 手动 & 自动 \\
+共享内存管理 & 手动 & 自动 \\
+SM 内线程调度 & 手动 & 自动 \\
+跨 SM 调度 & 手动 & 手动 \\
+\bottomrule
+\end{tabular}
+\caption{CUDA vs Triton 的职责划分}
+\end{table}
+
+\begin{importantbox}{Triton 的定位}
+Triton 在 CUDA 和 PyTorch 之间找到了一个甜蜜点：比 PyTorch 更底层（可以实现自定义融合内核），比 CUDA 更高层（编译器处理内存合并和共享内存）。对于许多操作，Triton 的性能可以\textbf{超越} PyTorch 内置实现。
+\end{importantbox}
+
+\subsection{GeLU 的 Triton 实现}
+
+\subsubsection{包装器函数（CPU 端）}
+
+\begin{lstlisting}[caption={Triton GeLU 包装器}]
+def triton_gelu(x: torch.Tensor):
+    assert x.is_cuda
+    assert x.is_contiguous()
+
+    y = torch.empty_like(x)  # 分配输出
+
+    num_elements = x.numel()
+    block_size = 1024         # 每个 Block 处理的元素数
+    num_blocks = triton.cdiv(num_elements, block_size)
+
+    # 启动内核
+    triton_gelu_kernel[(num_blocks,)](
+        x, y, num_elements, BLOCK_SIZE=block_size
+    )
+    return y
+\end{lstlisting}
+
+\subsubsection{内核函数（GPU 端）}
+
+\begin{lstlisting}[caption={Triton GeLU 内核}]
+@triton.jit
+def triton_gelu_kernel(x_ptr, y_ptr, num_elements,
+                       BLOCK_SIZE: tl.constexpr):
+    # 计算当前 Block 的起始位置
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+
+    # 当前 Block 负责的元素索引（向量！）
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+    # 边界掩码
+    mask = offsets < num_elements
+
+    # 读取数据
+    x = tl.load(x_ptr + offsets, mask=mask)
+
+    # 计算 GeLU（用 exp 实现 tanh）
+    a = 0.79788456 * (x + 0.044715 * x * x * x)
+    exp = tl.exp(2 * a)
+    tanh = (exp - 1) / (exp + 1)
+    y = 0.5 * x * (1 + tanh)
+
+    # 写回结果
+    tl.store(y_ptr + offsets, y, mask=mask)
+\end{lstlisting}
+
+\begin{importantbox}{Triton vs CUDA 的关键区别}
+\begin{itemize}
+    \item \textbf{CUDA}：每个线程处理\textbf{一个}元素，索引 $i$ 是\textbf{标量}
+    \item \textbf{Triton}：每个 Block 处理\textbf{一组}元素，\texttt{offsets} 是\textbf{向量}
+\end{itemize}
+Triton 让你在 Block 层面思考，编译器自动决定如何将向量操作映射到线程。这使得编译器可以执行更多优化（如 thread coarsening）。
+\end{importantbox}
+
+\subsection{PTX：查看 GPU ``汇编''代码}
+
+PTX（Parallel Thread Execution）是 NVIDIA GPU 的虚拟指令集，类似于 CPU 的汇编语言。Triton 编译后生成 PTX 代码，我们可以检查它来理解 GPU 实际执行的操作：
+
+\begin{knowledgebox}{PTX 代码的关键特征}
+\begin{itemize}
+    \item \texttt{ld.global.*}：从全局内存读取
+    \item \texttt{st.global.*}：写入全局内存
+    \item \texttt{\%ctaid.x}：Block 索引（对应 \texttt{blockIdx.x}）
+    \item \texttt{\%tid.x}：线程索引（对应 \texttt{threadIdx.x}）
+    \item \texttt{\%f*}：浮点寄存器，\texttt{\%r*}：整数寄存器
+\end{itemize}
+一个重要发现：\textbf{一个线程同时处理 8 个元素}（thread coarsening）——这是 Triton 编译器自动执行的优化，在 CUDA 中需要手动实现。
+\end{knowledgebox}
+
+\subsection{GeLU 五种实现的完整对比}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcccl}
+\toprule
+\textbf{实现} & \textbf{耗时 (ms)} & \textbf{语言} & \textbf{融合} & \textbf{说明} \\
+\midrule
+Manual & $\sim$8.1 & Python & 否 & 多个 CUDA 内核 \\
+CUDA & $\sim$1.8 & C++ & 是 & 单内核，手动编写 \\
+Triton & $\sim$1.5 & Python & 是 & 单内核，编译器优化 \\
+torch.compile & $\sim$1.47 & Python & 是 & 自动生成 Triton 代码 \\
+PyTorch & $\sim$1.1 & C++ & 是 & 高度手工优化 \\
+\bottomrule
+\end{tabular}
+\caption{GeLU 五种实现的完整性能对比（$16384 \times 16384$ 矩阵）}
+\end{table}
+
+\begin{knowledgebox}{Triton 实际上比我们的 CUDA 实现更快}
+虽然 CUDA 给了你``完全控制''，但 Triton 编译器可以执行 thread coarsening、自动内存合并等优化。对于简单内核，编译器的优化往往比手写的天真 CUDA 代码更好。当然，精心优化的 CUDA 代码可以更快，但开发成本高得多。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Triton 提供了 CUDA 级别的性能和 Python 级别的开发体验。它以 Block 为编程单元，编译器自动处理内存合并和共享内存管理。对于逐元素操作，Triton 代码的结构与 CUDA 非常相似，但用 Python 编写且更易调试。
+
+%% ========== Section 8: torch.compile ==========
+
+\section{PyTorch 编译优化（torch.compile）}
+
+\subsection{自动融合的魔力}
+
+\texttt{torch.compile} 是 PyTorch 2.0 引入的 JIT 编译器，可以\textbf{自动}将朴素 PyTorch 代码优化为融合的 Triton 内核：
+
+\begin{lstlisting}[caption={torch.compile 使用示例}]
+# 原始代码（未融合，约 8.1ms）
+def manual_gelu(x):
+    return 0.5 * x * (1 + torch.tanh(
+        0.79788456 * (x + 0.044715 * x * x * x)
+    ))
+
+# 一行代码即可优化（约 1.47ms）
+compiled_gelu = torch.compile(manual_gelu)
+\end{lstlisting}
+
+\texttt{torch.compile} 在底层做了什么？
+\begin{enumerate}
+    \item 分析 Python 代码的计算图
+    \item 识别可融合的操作
+    \item 自动生成优化的 Triton 内核代码
+    \item 编译并缓存生成的代码
+\end{enumerate}
+
+Profiling 证实：编译后的 GeLU 在底层调用了一个名为 \texttt{fused\_add\_multiply\_tanh} 的 Triton 内核——与我们手写的 Triton 代码做了类似的融合，但自动生成的代码略有优化。
+
+\subsection{torch.compile 的适用场景}
+
+\begin{importantbox}{何时用 torch.compile，何时手写 Triton？}
+\begin{itemize}
+    \item \textbf{简单的算子融合}（如 GeLU、pointwise 操作链）：\texttt{torch.compile} 完全够用，不需要手写内核
+    \item \textbf{矩阵乘法调度优化}：\texttt{torch.compile} 可以自动选择最优的内核实现，带来约 10\% 免费加速
+    \item \textbf{复杂的算法优化}（如 FlashAttention）：仍需手写 Triton/CUDA——编译器无法自动发现 online softmax 这样的算法创新
+    \item \textbf{硬件特定优化}（如 FlashAttention-3 利用 H100 特性）：需要手写底层代码
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{不要盲目手写 CUDA 内核}
+``不要回家后就给语言模型的每个组件都写 CUDA 内核——那可能不是你时间的最佳用途。'' 但如果你在开发新架构，某个复杂组件的 GPU 利用率很低，而你认为可以改善——那就是拿出 Triton 的时候。
+\end{warningbox}
+
+\subsection{本章小结}
+
+\texttt{torch.compile} 是``低垂的果实''——一行代码就能获得接近手写内核的性能。它在底层生成 Triton 代码来实现算子融合。对于标准操作，优先使用 \texttt{torch.compile}，只在需要非平凡优化时才手写 Triton 内核。
+
+%% ========== Section 9: Softmax ==========
+
+\section{Triton Softmax：行归约操作}
+
+\subsection{从逐元素到行归约}
+
+前面的 GeLU 是\textbf{逐元素}操作——每个输出只依赖一个输入。Softmax 则是\textbf{行归约}操作——每个输出依赖\textbf{整行}的所有输入：
+
+$$\text{softmax}(x_i) = \frac{e^{x_i - \max(\mathbf{x})}}{\sum_j e^{x_j - \max(\mathbf{x})}}$$
+
+\begin{itemize}
+    \item $x_i$：第 $i$ 个元素
+    \item $\max(\mathbf{x})$：整行的最大值（数值稳定性）
+    \item $\sum_j$：整行的求和
+\end{itemize}
+
+这意味着需要跨多个元素\textbf{通信}（求最大值、求和），不能简单地让每个线程独立工作。
+
+\subsection{朴素 Softmax 实现与内存分析}
+
+\begin{lstlisting}[caption={朴素 Softmax 实现及内存读写分析}]
+def manual_softmax(x):
+    M, N = x.shape
+    x_max = x.max(dim=1)[0]         # MN reads, M writes
+    x = x - x_max[:, None]          # MN+M reads, MN writes
+    numerator = torch.exp(x)        # MN reads, MN writes
+    denominator = numerator.sum(dim=1)  # MN reads, M writes
+    y = numerator / denominator[:, None]  # MN+M reads, MN writes
+    # Total: 5MN + 2M reads, 3MN + 2M writes
+    return y
+\end{lstlisting}
+
+\begin{importantbox}{朴素 Softmax 的内存开销}
+朴素实现需要 $5MN + 2M$ 次读和 $3MN + 2M$ 次写（全局内存访问）。
+而理论最优只需 $MN$ 次读和 $MN$ 次写——\textbf{潜在的 4 倍加速}！
+\end{importantbox}
+
+\subsection{Triton Softmax 实现}
+
+核心设计思想：\textbf{每个 Block 处理一行}。如果行的宽度能放入一个 Block（即放入 SM 的 Shared Memory），那么整行的 max、sum、归一化都可以在 Block 内完成，只需一次全局内存读和一次写。
+
+\subsubsection{包装器函数}
+
+\begin{lstlisting}[caption={Triton Softmax 包装器}]
+def triton_softmax(x):
+    y = torch.empty_like(x)
+    M, N = x.shape
+    block_size = triton.next_power_of_2(N)  # 列数向上取整到 2 的幂
+    num_blocks = M                           # 每行一个 Block
+
+    triton_softmax_kernel[(M,)](
+        x_ptr=x, y_ptr=y,
+        x_row_stride=x.stride(0),
+        y_row_stride=y.stride(0),
+        num_cols=N, BLOCK_SIZE=block_size
+    )
+    return y
+\end{lstlisting}
+
+\subsubsection{内核函数}
+
+\begin{lstlisting}[caption={Triton Softmax 内核——每个 Block 处理一行}]
+@triton.jit
+def triton_softmax_kernel(x_ptr, y_ptr,
+    x_row_stride, y_row_stride,
+    num_cols, BLOCK_SIZE: tl.constexpr):
+
+    # 当前处理哪一行
+    row_idx = tl.program_id(0)
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+
+    # 读取整行到 SM 内部
+    x_start_ptr = x_ptr + row_idx * x_row_stride
+    x_ptrs = x_start_ptr + col_offsets
+    x_row = tl.load(x_ptrs,
+        mask=col_offsets < num_cols,
+        other=float("-inf"))      # 超出列数的部分用 -inf 填充
+
+    # 在 SM 内部完成所有计算
+    x_row = x_row - tl.max(x_row, axis=0)  # 数值稳定
+    numerator = tl.exp(x_row)
+    denominator = tl.sum(numerator, axis=0)
+    y_row = numerator / denominator
+
+    # 写回全局内存
+    y_start_ptr = y_ptr + row_idx * y_row_stride
+    y_ptrs = y_start_ptr + col_offsets
+    tl.store(y_ptrs, y_row, mask=col_offsets < num_cols)
+\end{lstlisting}
+
+\begin{importantbox}{Triton Softmax 的设计精髓}
+\begin{enumerate}
+    \item \textbf{一行 = 一个 Block}：利用 Block 内的 Shared Memory 完成所有归约操作
+    \item \textbf{只需一次全局读写}：整行数据一次性加载到 SM，计算完成后一次性写回
+    \item \textbf{超出列数的元素用 $-\infty$ 填充}：确保 \texttt{tl.max} 和 \texttt{tl.exp} 的正确性（$e^{-\infty} = 0$）
+\end{enumerate}
+\end{importantbox}
+
+\begin{knowledgebox}{Block Size 为什么是 next\_power\_of\_2(N)？}
+Triton 要求 Block Size 必须是 2 的幂（这是硬件要求）。使用 \texttt{triton.next\_power\_of\_2(N)} 确保 Block 足够大以容纳整行，多余的位置用 mask 和 \texttt{other=float("-inf")} 处理。
+\end{knowledgebox}
+
+\subsection{Softmax 的读写次数详细分析}
+
+对 $M \times N$ 矩阵的逐行 Softmax，我们可以精确分析全局内存的读写次数：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{操作} & \textbf{读次数} & \textbf{写次数} \\
+\midrule
+\texttt{x.max(dim=1)} & $MN$ & $M$ \\
+\texttt{x - x\_max[:, None]} & $MN + M$ & $MN$ \\
+\texttt{torch.exp(x)} & $MN$ & $MN$ \\
+\texttt{numerator.sum(dim=1)} & $MN$ & $M$ \\
+\texttt{numerator / denom[:, None]} & $MN + M$ & $MN$ \\
+\midrule
+\textbf{合计} & $5MN + 2M$ & $3MN + 2M$ \\
+\textbf{融合最优} & $MN$ & $MN$ \\
+\textbf{加速比} & \multicolumn{2}{c}{$\sim 4\times$} \\
+\bottomrule
+\end{tabular}
+\caption{朴素 vs 融合 Softmax 的全局内存访问分析}
+\end{table}
+
+这个分析解释了为什么融合版本的 Softmax 加速比约为 2--3 倍（理论上限约 4 倍）——实际中融合内核还有一些不可避免的开销（如 Block 调度、掩码处理）。
+
+\subsection{Softmax 完整性能对比}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{实现} & \textbf{耗时 (ms)} & \textbf{相对于 PyTorch} \\
+\midrule
+Manual（朴素 PyTorch） & $\sim$3.7 & 2.5x 慢 \\
+Triton（自写内核） & $\sim$1.9 & 1.3x 慢 \\
+PyTorch（内置） & $\sim$1.5 & 1.0x \\
+torch.compile & $\sim$1.3 & 0.87x（更快！）\\
+\bottomrule
+\end{tabular}
+\caption{Softmax 四种实现的性能对比}
+\end{table}
+
+值得注意的是：
+\begin{itemize}
+    \item \texttt{torch.compile} 在 Softmax 上甚至超越了 PyTorch 内置实现——因为它知道输入的 shape，可以做更针对性的优化
+    \item 朴素实现的 3.7ms 到融合实现的 1.3--1.9ms，约 2--3x 加速，不如 GeLU 的 8x——因为 Softmax 本身就有归约操作，理论上限约 4x
+\end{itemize}
+
+\begin{warningbox}{本实现假设行宽 $\leq$ Block Size}
+当矩阵的列数非常大（超过 SM 的 Shared Memory 容量）时，单个 Block 无法容纳整行。此时需要更复杂的多 Block 协作方案，如 FlashAttention 中使用的 online softmax 和 tiling 策略。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Softmax 展示了 Triton 处理行归约操作的能力。核心设计是``一行 = 一个 Block''：整行数据加载到 SM 内部，在高速内存中完成所有归约计算，最后一次性写回。当行宽适中时，这种设计非常高效。
+
+%% ========== Section 10: 矩阵乘法 ==========
+
+\section{矩阵乘法补充：Tiling 与 L2 Cache 优化}
+
+\subsection{为什么手写矩阵乘法内核？}
+
+PyTorch 内置的矩阵乘法（调用 cuBLAS/CUTLASS）已经高度优化。那为什么还要手写？
+
+\textbf{答案：融合}。当你需要计算 $\text{GeLU}(A \cdot B)$ 时，朴素做法是先算 $A \cdot B$（写回全局内存），再算 GeLU（从全局内存读取）。如果你有自己的矩阵乘法内核，就可以在同一个内核中完成矩阵乘法\textbf{和} GeLU，避免中间结果写回全局内存。
+
+\subsection{Tiling 策略}
+
+矩阵乘法的 Tiling 策略（详见 Lecture 5）：
+\begin{enumerate}
+    \item 将 $A$、$B$ 矩阵切分为小块（tile）
+    \item 将 tile 加载到 Shared Memory
+    \item 在 Shared Memory 中执行小矩阵乘法
+    \item 累加部分和
+    \item 写回结果
+\end{enumerate}
+
+\subsection{L2 Cache 友好的遍历顺序}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.45]
+% Row-major order
+\node[font=\bfseries\small] at (1.5, 4.5) {行优先遍历};
+\foreach \i in {0,...,2} {
+    \foreach \j in {0,...,2} {
+        \draw (\j, 2-\i) rectangle (\j+1, 3-\i);
+    }
+}
+\draw[->, red, thick] (0.5, 2.5) -- (1.5, 2.5) -- (2.5, 2.5);
+\draw[->, red, thick] (0.5, 1.5) -- (1.5, 1.5) -- (2.5, 1.5);
+\draw[->, red, thick] (0.5, 0.5) -- (1.5, 0.5) -- (2.5, 0.5);
+\node[font=\scriptsize] at (1.5, -0.3) {加载 9+81=90 个块};
+
+% Grouped order
+\node[font=\bfseries\small] at (7.5, 4.5) {分组遍历};
+\foreach \i in {0,...,2} {
+    \foreach \j in {0,...,2} {
+        \draw (6+\j, 2-\i) rectangle (6+\j+1, 3-\i);
+    }
+}
+\draw[->, green!60!black, thick] (6.5, 2.5) -- (6.5, 1.5) -- (6.5, 0.5);
+\draw[->, green!60!black, thick] (7.5, 2.5) -- (7.5, 1.5) -- (7.5, 0.5);
+\draw[->, green!60!black, thick] (8.5, 2.5) -- (8.5, 1.5) -- (8.5, 0.5);
+\node[font=\scriptsize] at (7.5, -0.3) {加载 27+27=54 个块};
+\end{tikzpicture}
+\caption{不同遍历顺序对 L2 Cache 命中率的影响}
+\end{figure}
+
+分组遍历（grouped ordering）让相邻的 tile 共享更多的 $A$ 或 $B$ 矩阵块，从而提高 L2 Cache 命中率。
+
+\subsection{本章小结}
+
+矩阵乘法是 GPU 上最受优化的操作，但手写内核仍有价值——主要用于与其他操作的融合。Tiling 和 L2 Cache 友好的遍历顺序是两个关键优化策略。
+
+%% ========== Section 10.5: 实践建议 ==========
+
+\section{工程实践建议}
+
+\subsection{开发高性能代码的工作流}
+
+基于本课的内容，Hashimoto 教授推荐以下工作流：
+
+\begin{enumerate}
+    \item \textbf{先用 PyTorch 写正确的代码}：确保逻辑正确，编写测试用例
+    \item \textbf{基准测试}：测量端到端性能，建立 baseline
+    \item \textbf{Profile}：找到真正的瓶颈（不要凭直觉猜测）
+    \item \textbf{尝试 torch.compile}：一行代码可能就够了
+    \item \textbf{必要时写 Triton 内核}：仅对 Profile 确认的瓶颈操作
+    \item \textbf{重新基准测试}：验证优化效果
+\end{enumerate}
+
+\begin{warningbox}{避免过早优化}
+``有些同学花了三小时优化一个他们\textbf{以为}是瓶颈的组件，结果发现根本不是。'' 始终让 Profiling 数据指导你的优化方向。
+\end{warningbox}
+
+\subsection{CPU-GPU 异步执行的实践影响}
+
+CPU-GPU 异步执行模型对日常开发有几个重要影响：
+
+\begin{importantbox}{避免不必要的 CPU-GPU 同步}
+以下操作会强制同步，应谨慎使用：
+\begin{itemize}
+    \item \texttt{print(tensor.item())} 或 \texttt{print(loss)}：需要将 GPU 数据传回 CPU
+    \item \texttt{if tensor > threshold:}：需要在 CPU 上评估条件
+    \item \texttt{tensor.numpy()}：GPU tensor 到 NumPy 数组的转换
+    \item 任何在 CPU 上访问 GPU tensor 值的操作
+\end{itemize}
+\end{importantbox}
+
+\subsection{矩阵维度选择}
+
+来自上一节课的关键建议，在实践中极为重要：
+\begin{itemize}
+    \item 矩阵维度选择 \textbf{64/128/256 的倍数}
+    \item 避免质数或不规则的维度
+    \item nanoGPT 案例：词表大小从 50257 $\rightarrow$ 50304（最近的 64 的倍数），获得 25\% 加速
+\end{itemize}
+
+\subsection{选择正确的数值精度}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{操作类型} & \textbf{推荐精度} & \textbf{原因} \\
+\midrule
+矩阵乘法 & FP16/BF16 输入，FP32 累加 & Tensor Core 原生支持 \\
+Pointwise（ReLU, GeLU 等） & FP16/BF16 & 减少内存带宽需求 \\
+归约（sum, softmax, norm） & FP32 累加 & 避免小值累加误差 \\
+Loss 函数 & FP32 & 需要大动态范围 \\
+\bottomrule
+\end{tabular}
+\caption{不同操作类型的推荐数值精度}
+\end{table}
+
+\subsection{本章小结}
+
+高性能 GPU 编程不仅是关于写内核，更是关于\textbf{正确的开发方法论}：Profile 驱动的优化、理解异步执行、选择合适的维度和精度。这些工程实践建议在日常开发中往往比手写内核更能带来性能收益。
+
+%% ========== Section 11: 总结 ==========
+
+\section{总结与延伸}
+
+\subsection{五种实现方式的权衡}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccccc}
+\toprule
+& \textbf{Manual} & \textbf{PyTorch} & \textbf{torch.compile} & \textbf{CUDA} & \textbf{Triton} \\
+\midrule
+开发难度 & 最低 & 低 & 低 & 高 & 中 \\
+性能 & 最差 & 好 & 很好 & 好--很好 & 好--很好 \\
+灵活性 & 高 & 受限 & 中等 & 最高 & 高 \\
+可调试性 & 好 & 一般 & 差 & 差 & 好 \\
+自动融合 & 否 & 已融合 & 是 & 否 & 否 \\
+\bottomrule
+\end{tabular}
+\caption{五种实现方式的多维度对比}
+\end{table}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.9cm,
+    every node/.style={draw, rounded corners, minimum width=3.2cm, minimum height=0.7cm, font=\small}
+]
+\node (bench) {Benchmarking \& Profiling};
+\node (fusion) [below=of bench] {Kernel Fusion 动机};
+\node (cuda) [below left=1cm and -0.5cm of fusion] {CUDA 内核};
+\node (triton) [below=of fusion] {Triton 内核};
+\node (compile) [below right=1cm and -0.5cm of fusion] {torch.compile};
+\node (softmax) [below=of triton] {Softmax（行归约）};
+\draw[->, thick] (bench) -- (fusion);
+\draw[->, thick] (fusion) -- (cuda);
+\draw[->, thick] (fusion) -- (triton);
+\draw[->, thick] (fusion) -- (compile);
+\draw[->, thick] (triton) -- (softmax);
+
+\node[draw=none, right=1.2cm of bench, text width=4.5cm, font=\scriptsize] {warmup, synchronize, profiler, flame graph};
+\node[draw=none, right=1.2cm of fusion, text width=4.5cm, font=\scriptsize] {仓库-工厂类比, GeLU 8x 加速};
+\node[draw=none, left=1.2cm of softmax, text width=4.5cm, font=\scriptsize] {一行=一Block, mask 处理边界};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{六条核心原则}
+\begin{enumerate}
+    \item \textbf{编程模型与硬件之间有巨大鸿沟}：性能之谜源于此，理解这一点是性能优化的前提
+    \item \textbf{始终基准测试和 Profile}：不要凭直觉判断瓶颈，让数据说话
+    \item \textbf{核心原则是最小化读写}：内核融合、tiling、重计算本质上都是在减少全局内存访问
+    \item \textbf{torch.compile 是低垂的果实}：对标准操作，优先使用编译器自动优化
+    \item \textbf{Triton 是自定义内核的首选}：Python 开发体验 + 接近 CUDA 的性能
+    \item \textbf{自动编译器会越来越好}：今天需要手写的优化，明天可能由编译器自动完成
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Horace He 博客: \url{https://horace.io/brrr_intro.html} —— GPU 性能优化入门必读
+    \item Triton 官方教程（Fused Softmax）: \url{https://triton-lang.org/main/getting-started/tutorials/02-fused-softmax.html}
+    \item Triton 官方教程（Matrix Multiplication）: \url{https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html}
+    \item Triton 论文: Tillet et al., \url{https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf}
+    \item CUDA MODE Lecture 1（如何 Profile CUDA 内核）: \url{https://www.youtube.com/watch?v=LuhJEEJQgUM}
+    \item CUDA MODE Lecture 2（PPMP 书 ch.1--3）: \url{https://www.youtube.com/watch?v=NQ-0D5Ti2dc}
+    \item CUDA MODE Lecture 3（CUDA for Python Programmers）: \url{https://www.youtube.com/watch?v=4sgKnKbR-WE}
+    \item CUDA MODE Lecture 4（Compute and Memory Basics）: \url{https://www.youtube.com/watch?v=lTmYrKwjSOU}
+    \item CUDA MODE Lecture 8（CUDA Performance Checklist）: \url{https://www.youtube.com/watch?v=SGhfUhlowB4}
+    \item HetSys Course（GPU Programming）: \url{https://www.youtube.com/watch?v=8JGo2zylE80}
+    \item GPU Puzzles: \url{https://github.com/srush/gpu-puzzles}
+    \item NVIDIA Deep Learning Performance Guide: \url{https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html}
+    \item PyTorch 2.0 Operator Fusion:\\ {\small\url{https://towardsdatascience.com/how-pytorch-2-0-accelerates-deep-learning-with-operator-fusion-and-cpu-gpu-code-generation-35132a85bd26}}
+\end{itemize}
+
+\end{document}

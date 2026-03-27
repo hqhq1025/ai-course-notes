@@ -1,0 +1,747 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage[unicode,pdfencoding=auto]{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 13: Generative Models 1}
+\newcommand{\noteauthors}{基于 Justin Johnson 授课内容整理}
+\newcommand{\notedate}{2025年}
+\newcommand{\videochannel}{Stanford University}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 1:12:00}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=zbHXQRUNlH0}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 自监督学习回顾 ==========
+
+\section{自监督学习回顾}
+
+本节课的开头简要回顾了上一节课讨论的自监督学习（Self-Supervised Learning）内容。自监督学习的核心思想是：在没有人工标签的情况下，通过设计某种 pretext task，让模型从大量无标签数据中学习到有用的特征表示。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{自监督学习的基本范式：先在大规模无标签数据上通过 pretext task 训练 encoder-decoder，然后将 encoder 迁移到下游有标签任务\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{对比学习（Contrastive Learning）}
+
+对比学习是自监督学习中非常成功的一个范式。其核心思想是：
+
+\begin{itemize}
+    \item 对每张输入图片施加两种随机增强（Random Augmentation），得到一对正样本
+    \item 来自不同图片的增强视为负样本
+    \item 训练网络拉近正样本对的特征距离，推远负样本对的特征距离
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{对比学习流程：对同一图片的不同增强应拥有相似的特征向量（绿色），不同图片的增强应远离（红色）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。}
+
+SimCLR 是对比学习的经典工作之一，但它需要非常大的 batch size 才能收敛。后续的 MoCo（Momentum Contrast）通过维护一个负样本队列和动量编码器解决了这个问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{MoCo 通过维护一个负样本队列和动量编码器（EMA 更新），避免了对超大 batch size 的需求\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{knowledgebox}{DINOv2：当前最强的自监督视觉特征}
+DINOv2 在 DINO 的基础上将训练数据扩展到 1.42 亿张图片，是目前实践中最常用的自监督视觉特征模型之一。它结合了对比学习和自蒸馏（self-distillation）思想，在多种下游视觉任务上表现优异。如果需要一个通用的视觉特征 backbone，DINOv2 是首选。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+自监督学习通过 pretext task 在无标签数据上学习特征表示，然后迁移到下游任务。对比学习（SimCLR、MoCo、DINO 系列）是目前最成功的自监督方法之一。DINOv2 通过大规模数据和精心设计的训练策略，成为了当前最强的自监督视觉特征模型。
+
+%% ========== Part 2: 生成模型基础 ==========
+
+\section{生成模型基础概念}
+
+\subsection{监督学习 vs 无监督学习}
+
+在切入生成模型之前，Justin Johnson 首先梳理了深度学习任务的两个正交维度：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{监督学习 vs 无监督学习：监督学习有 (X, Y) 数据对，无监督学习只有数据 X\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\textbf{维度一：监督 vs 无监督}
+\begin{itemize}
+    \item \textbf{监督学习}：有 $(X, Y)$ 数据对，学习从 $X$ 到 $Y$ 的映射（如分类、检测、分割）
+    \item \textbf{无监督学习}：只有数据 $X$，从数据本身学习结构（如聚类、PCA、密度估计）
+\end{itemize}
+
+\textbf{维度二：判别式 vs 生成式}
+\begin{itemize}
+    \item \textbf{判别式模型}：学习 $p(Y|X)$，即给定输入 $X$ 预测标签 $Y$ 的概率分布
+    \item \textbf{生成式模型}：学习 $p(X)$，即数据本身的概率分布
+    \item \textbf{条件生成模型}：学习 $p(X|Y)$，即给定条件 $Y$ 生成数据 $X$ 的概率分布
+\end{itemize}
+
+\subsection{概率分布的归一化约束}
+
+理解生成模型的关键在于理解\textbf{概率分布的归一化约束}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{判别式模型 vs 生成模型 vs 条件生成模型：三种不同的概率建模方式\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+\begin{importantbox}{三种概率模型的本质区别}
+\begin{itemize}
+    \item \textbf{判别式模型} $p(Y|X)$：对于每个输入 $X$，不同标签 $Y$ 之间竞争概率质量。图片之间没有竞争——无法拒绝不合理的输入。
+    \item \textbf{生成模型} $p(X)$：所有可能的图片相互竞争概率质量。模型必须思考什么图片更「合理」。可以通过低概率来拒绝不合理的输入。
+    \item \textbf{条件生成模型} $p(X|Y)$：对于每个条件 $Y$，所有可能的图片相互竞争概率质量。这才是最有实用价值的模型。
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{论文中常省略条件变量 $Y$}
+大多数生成模型的论文和教程会写 $p(X)$ 而非 $p(X|Y)$，这是为了简化数学推导。但在实际应用中，几乎所有有实用价值的生成模型都是\textbf{条件生成模型}。阅读论文时应始终意识到：每个 $p(X)$ 背后可能隐含着一个条件变量 $Y$。
+\end{warningbox}
+
+\subsection{贝叶斯定理连接三种模型}
+
+三种概率模型之间通过贝叶斯定理相互关联：
+
+$$p(X|Y) = \frac{p(Y|X) \cdot p(X)}{p(Y)}$$
+
+\begin{itemize}
+    \item $p(Y|X)$：判别式模型
+    \item $p(X)$：生成模型
+    \item $p(Y)$：标签先验
+    \item $p(X|Y)$：条件生成模型
+\end{itemize}
+
+理论上，只要有其中任意两个模型，就能构造出第三个。虽然实践中通常直接训练条件生成模型，但这种关系在扩散模型的 Classifier-Free Guidance 中有重要应用。
+
+\subsection{为什么需要生成模型}
+
+生成模型的核心价值在于处理输出的\textbf{不确定性}和\textbf{多样性}：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-014.jpg}
+\caption{生成模型的应用场景：语言建模（ChatGPT）、文本生成图像、图像生成视频\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+\begin{itemize}
+    \item \textbf{语言建模}：输入文本，输出可能有多种合理的回答
+    \item \textbf{文本到图像}：一段文字描述可以对应无数张合理的图片
+    \item \textbf{图像到视频}：一张静态图片可以衍生出多种可能的未来
+\end{itemize}
+
+\begin{knowledgebox}{何时使用生成模型}
+只要任务的输出存在\textbf{歧义性}（ambiguity）——即给定输入可能有多种合理的输出——就应该考虑使用生成模型。生成模型建模的是输出的\textbf{分布}，而不是单一的确定性映射。
+\end{knowledgebox}
+
+\subsection{生成模型分类体系}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{生成模型的分类体系：显式密度（可精确/近似计算 $p(X)$） vs 隐式密度（只能采样，不能计算 $p(X)$）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+\begin{importantbox}{生成模型的四大类别}
+\begin{enumerate}
+    \item \textbf{自回归模型}（Autoregressive）：显式密度，可精确计算 $p(X)$
+    \item \textbf{变分自编码器}（VAE）：显式密度，但只能计算 $p(X)$ 的近似下界
+    \item \textbf{生成对抗网络}（GAN）：隐式密度，直接采样（单次前向传播）
+    \item \textbf{扩散模型}（Diffusion）：隐式密度，迭代采样（需多步推理）
+\end{enumerate}
+本节课覆盖前三类（自回归、VAE、GAN），下节课讲扩散模型。
+\end{importantbox}
+
+\subsection{本章小结}
+
+生成模型学习数据的概率分布 $p(X)$，使得模型能够生成新的数据样本。判别式、生成式、条件生成式三种模型通过贝叶斯定理相互关联。在实践中，条件生成模型最有价值。生成模型的分类体系根据是否能计算密度值以及采样方式分为四大类。
+
+%% ========== Part 3: 最大似然估计 ==========
+
+\section{最大似然估计}
+
+\subsection{基本框架}
+
+最大似然估计（Maximum Likelihood Estimation, MLE）是训练显式密度生成模型的通用方法。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-017.jpg}
+\caption{最大似然估计：用神经网络参数化密度函数 $p_W(X)$，通过最大化训练数据的对数似然来学习参数 $W$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第18页。}
+
+假设训练数据 $\{x^{(1)}, x^{(2)}, \ldots, x^{(N)}\}$ 独立同分布（i.i.d.）地来自某个未知的真实分布 $p_{\text{data}}$。我们用神经网络参数化一个密度函数 $p_W(X)$，目标是找到使训练数据最可能出现的参数 $W$：
+
+$$W^* = \arg\max_W \prod_{i=1}^{N} p_W(x^{(i)})$$
+
+通过取对数（log trick），将乘积转化为求和：
+
+$$W^* = \arg\max_W \sum_{i=1}^{N} \log p_W(x^{(i)})$$
+
+\begin{knowledgebox}{似然（Likelihood）vs 概率（Probability）}
+\textbf{概率}：固定分布，改变数据点，观察各数据点的概率。\\
+\textbf{似然}：固定数据点，改变分布（参数），观察哪个分布让这些数据点最可能出现。\\
+最大似然估计本质上是在所有可能的分布中，选择让已观测数据最「合理」的那个分布。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+最大似然估计通过最大化训练数据在模型分布下的概率来学习模型参数。log trick 将乘积转化为求和，便于优化。MLE 是自回归模型和 VAE 的共同理论基础。
+
+%% ========== Part 4: 自回归模型 ==========
+
+\section{自回归模型（Autoregressive Models）}
+
+\subsection{核心思想：链式分解}
+
+自回归模型利用概率论中的链式法则（Chain Rule）将联合分布分解为一系列条件分布的乘积：
+
+$$p(X) = p(x_1) \cdot p(x_2|x_1) \cdot p(x_3|x_1,x_2) \cdots p(x_T|x_1,\ldots,x_{T-1})$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{链式法则：将联合分布 $p(x_1, x_2, \ldots, x_T)$ 分解为条件分布的乘积\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\begin{importantbox}{自回归模型的两个核心要素}
+\begin{enumerate}
+    \item \textbf{将数据分解为序列}：定义元素之间的顺序（对语言是自然的，对图像需要人为定义）
+    \item \textbf{用神经网络建模条件分布}：每一步预测下一个元素的分布 $p(x_t | x_1, \ldots, x_{t-1})$
+\end{enumerate}
+\end{importantbox}
+
+\subsection{序列建模与采样}
+
+训练时，自回归模型通过 Teacher Forcing 的方式并行计算所有条件概率，然后通过 MLE 优化。采样时，则需要逐元素顺序生成：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{自回归采样过程：每次生成一个 token，将其追加到输入序列中，然后预测下一个\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+\begin{enumerate}
+    \item 从 $p(x_1)$ 采样得到 $x_1$
+    \item 将 $x_1$ 输入模型，从 $p(x_2|x_1)$ 采样得到 $x_2$
+    \item 将 $x_1, x_2$ 输入模型，从 $p(x_3|x_1,x_2)$ 采样得到 $x_3$
+    \item 重复直到序列完成
+\end{enumerate}
+
+\subsection{语言建模}
+
+自回归模型天然适合语言建模，因为语言本身就是一维的离散序列。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-024.jpg}
+\caption{语言建模中的自回归：用 RNN 或 Transformer 建模 token 序列的条件概率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第25页。}
+
+序列中的每个元素是一个 token（可以是字符、子词或单词），模型输出每个位置上所有可能 token 的概率分布（通常通过 softmax）。ChatGPT 等大语言模型本质上就是超大规模的自回归模型。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{温度采样：温度参数 $\tau$ 控制采样的随机性。$\tau \to 0$ 趋向贪心解码，$\tau \to \infty$ 趋向均匀随机\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+$$p(x_t = v | x_{<t}) = \frac{\exp(s_v / \tau)}{\sum_k \exp(s_k / \tau)}$$
+
+\begin{itemize}
+    \item $s_v$：模型输出的 logit
+    \item $\tau$：温度参数
+    \item $\tau \to 0$：趋向 argmax（确定性，低多样性）
+    \item $\tau \to \infty$：趋向均匀分布（高多样性，低质量）
+\end{itemize}
+
+\subsection{图像上的自回归模型}
+
+将图像展平为像素序列，每个子像素（R/G/B）是 0-255 的离散整数值。一张 $1024 \times 1024$ 的图片会产生约 300 万个 token 的序列，计算代价极高。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{PixelRNN/PixelCNN：将图像像素视为序列，逐像素进行自回归建模\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第30页。}
+
+\begin{warningbox}{直接在像素空间做自回归效率极低}
+一张 $1024 \times 1024$ 的 RGB 图像有 $\sim$3M 子像素值。这意味着自回归序列的长度达到 300 万，对 Transformer 而言计算代价极其昂贵。解决方案是先将图像编码为更短的 latent token 序列，然后在 latent 空间上做自回归——这正是现代 token-based 图像生成方法的核心思路。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-032.jpg}
+\caption{PixelCNN 生成的图像样本：分辨率低，质量有限，但展示了自回归方法的可行性\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第33页。}
+
+\subsection{本章小结}
+
+自回归模型利用链式法则将联合分布分解为条件分布的乘积，可以精确计算 $p(X)$ 并用 MLE 训练。它天然适合语言建模，但在图像上面临序列过长的问题。现代方法通过 latent tokenization 缓解这一问题。
+
+%% ========== Part 5: 变分自编码器 ==========
+
+\section{变分自编码器（VAE）}
+
+\subsection{从自编码器到 VAE 的动机}
+
+传统自编码器（Autoencoder）通过 encoder-decoder 架构学习数据的压缩表示：encoder 将输入 $X$ 映射到低维 latent code $Z$，decoder 从 $Z$ 重构 $X$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{传统自编码器：通过瓶颈层 $Z$ 重构输入数据，学习压缩表示\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\begin{knowledgebox}{传统自编码器的局限}
+传统自编码器可以学习到数据的压缩表示，但存在两个核心问题：
+\begin{enumerate}
+    \item 无法从 latent space 中采样生成新数据——因为 latent space 没有已知的概率结构
+    \item latent space 可能不连续、不平滑——相邻的 $Z$ 值不一定对应相似的 $X$
+\end{enumerate}
+VAE 正是为了解决这两个问题而提出的。
+\end{knowledgebox}
+
+如果想用自编码器生成新数据，需要能在 latent space 中采样 $Z$，然后通过 decoder 生成 $X$。但问题是：latent space 没有已知的分布结构，无法进行有意义的采样。
+
+\subsection{VAE 的概率框架}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{VAE 的概率图模型：假设每个数据 $x^{(i)}$ 由某个隐变量 $z^{(i)}$ 生成\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+VAE 的核心假设是：每个数据点 $x^{(i)}$ 是由某个不可观测的隐变量 $z^{(i)}$ 生成的。数据的生成过程为：
+
+\begin{enumerate}
+    \item 从先验分布 $p(Z)$（通常是标准高斯分布 $\mathcal{N}(0, I)$）中采样 $Z$
+    \item 从条件分布 $p_\theta(X|Z)$（decoder）中生成 $X$
+\end{enumerate}
+
+数据的边际似然为：
+
+$$p_\theta(X) = \int p_\theta(X|Z) \cdot p(Z) \, dZ$$
+
+\begin{warningbox}{积分不可解（Intractable）}
+$p_\theta(X) = \int p_\theta(X|Z) p(Z) dZ$ 这个积分在高维空间中无法直接计算。同样，后验分布 $p_\theta(Z|X) = \frac{p_\theta(X|Z) p(Z)}{p_\theta(X)}$ 也因为分母不可解而无法直接计算。这正是 VAE 需要引入\textbf{变分推断}的根本原因。
+\end{warningbox}
+
+\subsection{变分下界（ELBO）}
+
+为了绕过不可解的积分，VAE 引入一个\textbf{编码器网络} $q_\phi(Z|X)$（也叫推断网络），用它来近似真实的后验分布 $p_\theta(Z|X)$。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{VAE 的数学推导：通过引入变分分布 $q_\phi(Z|X)$，推导出 ELBO\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+通过数学推导，可以将对数似然分解为：
+
+$$\log p_\theta(X) = \underbrace{\mathbb{E}_{Z \sim q_\phi(Z|X)}\left[\log p_\theta(X|Z)\right]}_{\text{重构项}} - \underbrace{D_{KL}(q_\phi(Z|X) \| p(Z))}_{\text{先验匹配项}} + \underbrace{D_{KL}(q_\phi(Z|X) \| p_\theta(Z|X))}_{\geq 0, \text{不可计算}}$$
+
+由于 KL 散度 $\geq 0$，丢弃最后一项得到下界：
+
+$$\log p_\theta(X) \geq \underbrace{\mathbb{E}_{Z \sim q_\phi(Z|X)}\left[\log p_\theta(X|Z)\right]}_{\text{重构项}} - \underbrace{D_{KL}(q_\phi(Z|X) \| p(Z))}_{\text{先验匹配项}}$$
+
+这就是\textbf{变分下界}（Variational Lower Bound），也叫\textbf{证据下界}（Evidence Lower Bound, ELBO）。
+
+\begin{importantbox}{ELBO 的两个组成部分}
+\begin{enumerate}
+    \item \textbf{重构项}（Reconstruction）：$\mathbb{E}_{q_\phi(Z|X)}[\log p_\theta(X|Z)]$——encoder 编码的 $Z$ 应该能让 decoder 重构出原始数据 $X$。等价于最小化重构误差（固定方差时等价于 L2 loss）。
+    \item \textbf{先验匹配项}（Prior Matching）：$D_{KL}(q_\phi(Z|X) \| p(Z))$——encoder 输出的 $Z$ 分布应该接近先验 $p(Z) = \mathcal{N}(0, I)$。这保证了 latent space 的结构化。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{训练过程}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-043.jpg}
+\caption{VAE 的训练流程：encoder 输出 $(\mu, \sigma)$，通过 reparameterization trick 采样 $Z$，decoder 重构 $X$\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第44页。}
+
+训练 VAE 的具体步骤：
+
+\begin{enumerate}
+    \item \textbf{Encoder}：输入数据 $X$，输出高斯分布的参数 $(\mu, \sigma)$
+    \item \textbf{KL 项}：计算 $D_{KL}(q_\phi(Z|X) \| \mathcal{N}(0,I))$，鼓励 $\mu \to 0$，$\sigma \to 1$
+    \item \textbf{采样}：使用 reparameterization trick $Z = \mu + \sigma \odot \epsilon$（$\epsilon \sim \mathcal{N}(0,I)$），使梯度可以回传
+    \item \textbf{Decoder}：输入 $Z$，输出重构的 $\hat{X}$
+    \item \textbf{重构项}：计算重构误差 $\|X - \hat{X}\|^2$
+\end{enumerate}
+
+\begin{knowledgebox}{重参数化技巧（Reparameterization Trick）}
+直接从分布 $q_\phi(Z|X)$ 采样是不可微的，无法进行反向传播。解决方法是将采样操作改写为确定性变换加外部噪声：$Z = \mu + \sigma \odot \epsilon$，其中 $\epsilon \sim \mathcal{N}(0, I)$。这样梯度可以通过 $\mu$ 和 $\sigma$ 回传到 encoder。
+\end{knowledgebox}
+
+\subsection{重构损失 vs 先验损失的博弈}
+
+VAE 训练中两个损失项存在有趣的对抗关系：
+
+\begin{itemize}
+    \item \textbf{重构损失}希望：$\sigma \to 0$（减少噪声），$\mu$ 对每个数据点都不同（编码更多信息）
+    \item \textbf{先验损失}希望：$\sigma \to 1$，$\mu \to 0$（都变成标准高斯）
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-044.jpg}
+\caption{VAE 中重构损失和先验损失的对抗：两个损失对 latent space 的结构有不同的要求\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第45页。}
+
+这种博弈迫使模型在\textbf{保留足够信息以重构数据}和\textbf{保持 latent space 结构化}之间找到平衡。
+
+\subsection{采样与 Latent Space 操作}
+
+训练完成后，可以直接从先验 $p(Z) = \mathcal{N}(0, I)$ 采样 $Z$，然后通过 decoder 生成新数据。此外，由于 latent space 是连续且结构化的，可以在 latent space 中进行插值。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{VAE latent space 的 2D 可视化：在 MNIST 上训练的 VAE，不同维度平滑地编码了数字的不同属性\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+\begin{warningbox}{VAE 生成的样本通常偏模糊}
+VAE 使用对角高斯分布建模 $p(X|Z)$，假设像素间独立。这意味着 VAE 倾向于预测像素值的\textbf{均值}，导致生成的图像看起来偏模糊。此外，L2 重构损失也会惩罚高频细节。要获得清晰的生成结果，通常需要结合其他技术（如对抗训练或更强的 decoder）。
+\end{warningbox}
+
+\subsection{本章小结}
+
+VAE 在传统自编码器基础上引入概率框架：encoder 输出 latent 分布的参数，通过 KL 散度强制 latent space 接近标准高斯。ELBO 是由重构项和先验匹配项组成的变分下界，两者在训练中相互博弈。VAE 的主要贡献是提供了结构化的 latent space，但生成的样本通常较模糊。
+
+%% ========== Part 6: 生成对抗网络 ==========
+
+\section{生成对抗网络（GAN）}
+
+\subsection{GAN 的基本思想}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{GAN 的基本架构：Generator 将噪声 $Z$ 转化为数据 $X$，Discriminator 判断数据是真实还是生成的\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。}
+
+GAN 属于\textbf{隐式密度模型}——放弃显式建模 $p(X)$，转而通过一个博弈过程隐式地学习数据分布。
+
+GAN 包含两个神经网络：
+\begin{itemize}
+    \item \textbf{Generator $G$}：输入噪声 $Z \sim \mathcal{N}(0,I)$，输出生成数据 $G(Z)$
+    \item \textbf{Discriminator $D$}：输入数据（真实或生成），输出「真实」的概率 $D(X) \in [0,1]$
+\end{itemize}
+
+\subsection{目标函数}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{GAN 的 minimax 目标函数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+GAN 的训练是一个 minimax 博弈：
+
+$$\min_G \max_D \left[ \mathbb{E}_{X \sim p_{\text{data}}}[\log D(X)] + \mathbb{E}_{Z \sim p(Z)}[\log(1 - D(G(Z)))] \right]$$
+
+\begin{itemize}
+    \item \textbf{Discriminator 的目标}（最大化）：正确分类真实数据为真（$D(X) \to 1$），生成数据为假（$D(G(Z)) \to 0$）
+    \item \textbf{Generator 的目标}（最小化）：让 Discriminator 把生成数据误判为真（$D(G(Z)) \to 1$）
+\end{itemize}
+
+\subsection{训练过程}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{GAN 的交替训练：先更新 Discriminator 若干步，再更新 Generator 一步\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第54页。}
+
+训练交替进行两个步骤：
+\begin{enumerate}
+    \item \textbf{训练 Discriminator}：固定 Generator，用真实数据和生成数据训练 Discriminator 做二分类
+    \item \textbf{训练 Generator}：固定 Discriminator，通过 Discriminator 的反馈优化 Generator
+\end{enumerate}
+
+\begin{warningbox}{GAN 训练的梯度消失问题}
+在训练初期，Generator 产生的样本质量极差，Discriminator 很容易将其识别为假。此时 $D(G(Z)) \approx 0$，而 $\log(1 - D(G(Z)))$ 在 $D(G(Z)) \approx 0$ 处梯度非常小。这意味着 Generator 在训练初期几乎收不到有效的梯度信号。实践中常用的替代目标是最大化 $\log D(G(Z))$（而非最小化 $\log(1 - D(G(Z)))$），因为前者在 $D(G(Z)) \approx 0$ 处梯度更大。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{Generator 的两种目标函数对比：原始目标在训练初期梯度平坦，替代目标梯度更强\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+\subsection{GAN 的训练难点}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-058.jpg}
+\caption{GAN 训练的典型曲线：Generator 和 Discriminator 的损失曲线难以解读，无法判断训练进展\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第59页。}
+
+\begin{warningbox}{GAN 训练是出了名的不稳定}
+\begin{itemize}
+    \item \textbf{没有有意义的损失曲线}：与其他模型不同，GAN 的损失值不能直观反映生成质量。数百篇论文试图解决这个问题，但至今仍未有完美方案。
+    \item \textbf{模式坍缩}（Mode Collapse）：Generator 可能只学会生成少数几种样本，忽略数据分布的多样性。
+    \item \textbf{训练不收敛}：Generator 和 Discriminator 的对抗可能导致训练震荡而非收敛。
+    \item \textbf{超参数敏感}：对学习率、网络架构、训练步数等超参数极为敏感。
+\end{itemize}
+\end{warningbox}
+
+\subsection{GAN 生成的图像质量}
+
+尽管训练困难，GAN 在生成图像质量上曾长期领先。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-060.jpg}
+\caption{GAN 生成的高质量人脸图像（StyleGAN 系列）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第61页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-062.jpg}
+\caption{BigGAN 生成的高分辨率类别条件图像：从犬类到食物的多种类别\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第63页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-067.jpg}
+\caption{GAN 的 latent space 插值：在两个 latent code 之间线性插值产生平滑过渡\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第68页。}
+
+GAN 在约 2016--2021 年间是图像生成的主流方法。它的优势在于：
+\begin{itemize}
+    \item 单次前向传播即可生成样本（推理速度快）
+    \item 生成的样本清晰、锐利
+\end{itemize}
+
+\subsection{条件 GAN}
+
+通过向 Generator 和 Discriminator 输入条件信息 $Y$（如类别标签、文本描述），可以将 GAN 扩展为条件生成模型。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-070.jpg}
+\caption{条件 GAN 的应用：语义分割图到逼真图像的转换（Pix2Pix）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第71页。}
+
+\subsection{GAN vs VAE 的权衡}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-073.jpg}
+\caption{VAE vs GAN：VAE 有 latent vectors 和密度估计但样本模糊；GAN 样本清晰但训练困难\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第74页。}
+
+\begin{importantbox}{VAE 和 GAN 的权衡}
+\begin{itemize}
+    \item \textbf{VAE}：可以计算（近似的）$p(X)$；有结构化的 latent space（可做编码和插值）；但样本通常偏模糊
+    \item \textbf{GAN}：样本质量高、清晰锐利；推理速度快（单次前向）；但训练困难、无有效损失指标、容易模式坍缩、没有 encoder（无法从 $X$ 到 $Z$ 的映射）
+\end{itemize}
+\end{importantbox}
+
+\subsection{本章小结}
+
+GAN 通过 Generator 和 Discriminator 的对抗训练隐式地学习数据分布。它放弃了密度估计的能力，换来了更清晰的生成样本。GAN 在 2016--2021 年间主导了图像生成领域，但其训练不稳定性是重大缺陷。后来被扩散模型取代成为主流方法。
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-076.jpg}
+\caption{Lecture 13 总结：覆盖了生成模型家族树的一半——显式密度（自回归、VAE）和直接隐式密度（GAN）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第77页。}
+
+Justin Johnson 在课程结尾总结了本节课的三大主题：
+
+\begin{enumerate}
+    \item \textbf{生成模型的概率基础}：判别式 vs 生成式 vs 条件生成式，归一化约束的含义
+    \item \textbf{显式密度方法}：自回归模型（可精确计算密度），VAE（可计算近似密度下界）
+    \item \textbf{隐式密度方法}：GAN（直接采样，但不可计算密度）
+\end{enumerate}
+
+下一节课将覆盖家族树的另一半——\textbf{扩散模型}，它属于隐式密度的迭代采样方法。
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.6cm,
+    every node/.style={draw, rounded corners, minimum width=2.8cm, minimum height=0.6cm, font=\small},
+    level1/.style={fill=blue!10},
+    level2/.style={fill=yellow!15},
+    level3/.style={fill=green!10}
+]
+\node[level1] (gen) {生成模型 $p(X)$};
+\node[level2, below left=0.8cm and 0.5cm of gen] (explicit) {显式密度};
+\node[level2, below right=0.8cm and 0.5cm of gen] (implicit) {隐式密度};
+\node[level3, below left=0.6cm and -0.5cm of explicit] (ar) {自回归};
+\node[level3, below right=0.6cm and -0.5cm of explicit] (vae) {VAE};
+\node[level3, below left=0.6cm and -0.5cm of implicit] (gan) {GAN};
+\node[level3, below right=0.6cm and -0.5cm of implicit] (diff) {扩散模型};
+
+\draw[->, thick] (gen) -- (explicit);
+\draw[->, thick] (gen) -- (implicit);
+\draw[->, thick] (explicit) -- (ar);
+\draw[->, thick] (explicit) -- (vae);
+\draw[->, thick] (implicit) -- (gan);
+\draw[->, thick] (implicit) -- (diff);
+
+\node[draw=none, below=0.1cm of ar, font=\scriptsize, text width=2cm, align=center] {精确密度\\链式分解};
+\node[draw=none, below=0.1cm of vae, font=\scriptsize, text width=2cm, align=center] {近似密度\\ELBO};
+\node[draw=none, below=0.1cm of gan, font=\scriptsize, text width=2cm, align=center] {直接采样\\对抗训练};
+\node[draw=none, below=0.1cm of diff, font=\scriptsize, text width=2cm, align=center] {迭代采样\\去噪过程};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{归一化约束是生成模型的核心}：不同概率模型的本质区别在于什么东西在竞争概率质量
+    \item \textbf{条件生成模型最有实用价值}：$p(X|Y)$ 才是真正有用的模型，$p(X)$ 更多是理论工具
+    \item \textbf{MLE 是显式密度方法的统一框架}：自回归和 VAE 都在（直接或间接地）最大化数据的对数似然
+    \item \textbf{每种方法都有其权衡}：自回归（精确但慢）、VAE（有 latent space 但模糊）、GAN（清晰但难训练）
+    \item \textbf{扩散模型最终统一了质量与稳定性}：解决了 GAN 的训练问题，同时达到甚至超越 GAN 的生成质量
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Kingma \& Welling, ``Auto-Encoding Variational Bayes'' (2013): \url{https://arxiv.org/abs/1312.6114} --- VAE 原始论文
+    \item Goodfellow et al., ``Generative Adversarial Nets'' (2014): \url{https://arxiv.org/abs/1406.2661} --- GAN 原始论文
+    \item van den Oord et al., ``Pixel Recurrent Neural Networks'' (2016): \url{https://arxiv.org/abs/1601.06759} --- PixelRNN
+    \item Karras et al., ``A Style-Based Generator Architecture for GANs'' (2019): \url{https://arxiv.org/abs/1812.04948} --- StyleGAN
+    \item Lilian Weng's Blog, ``From Autoencoder to Beta-VAE'': \url{https://lilianweng.github.io/posts/2018-08-12-vae/} --- VAE 详解
+\end{itemize}
+
+\end{document}

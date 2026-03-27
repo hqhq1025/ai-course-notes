@@ -1,0 +1,710 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS224N Lecture 2: Word Vectors and Language Models}
+\newcommand{\noteauthors}{基于 Chris Manning 授课内容整理}
+\newcommand{\notedate}{2024年4月}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2024}
+\newcommand{\videoduration}{1:19:06}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=nBor4jfWetQ}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 优化基础 ==========
+
+\section{优化基础回顾}
+
+本节课承接上一讲的内容，首先回顾梯度下降优化的基本思想，然后深入讨论 Word2Vec 的更多细节，介绍基于计数的词向量方法（共现矩阵与 GloVe），探讨词向量的评估方式和词义消歧问题，最后引入神经网络分类器的基本概念。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{本讲大纲：涵盖优化基础、Word2Vec 回顾与扩展、共现计数方法、词向量评估、词义问题、分类器与神经网络入门\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+\subsection{梯度下降（Gradient Descent）}
+
+梯度下降是训练词向量（以及所有神经网络）的核心优化算法。其基本思想是：
+
+\begin{enumerate}
+    \item 我们有一个损失函数 $J(\theta)$，希望找到使其最小化的参数 $\theta$
+    \item 计算 $J(\theta)$ 关于 $\theta$ 的梯度 $\nabla_\theta J(\theta)$，得到``下坡''方向
+    \item 沿梯度的反方向走一小步，更新参数
+    \item 重复上述过程
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{梯度下降示意：从随机初始值出发，沿梯度反方向逐步走向最小值\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+参数更新公式为：
+
+$$\theta^{\text{new}} = \theta^{\text{old}} - \alpha \nabla_\theta J(\theta)$$
+
+\begin{itemize}
+    \item $\theta$：模型的所有参数（对于 Word2Vec，就是所有的词向量）
+    \item $\alpha$：学习率（step size），通常是一个很小的数（如 $10^{-3}$ 到 $10^{-5}$）
+    \item $\nabla_\theta J(\theta)$：损失函数关于参数的梯度
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-004.jpg}
+\caption{梯度下降更新公式：矩阵形式和逐参数形式\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{warningbox}{学习率不能太大}
+如果学习率 $\alpha$ 过大，参数更新的步幅过大，可能会``跳过''最小值，甚至导致损失函数发散。因此必须选择足够小的学习率，使参数在每一步都朝着正确的方向微调。
+\end{warningbox}
+
+\subsection{随机梯度下降（SGD）}
+
+标准梯度下降需要在\textbf{整个训练语料}上计算损失函数和梯度，这在数据量很大时极其耗时。实际中，我们使用\textbf{随机梯度下降}（Stochastic Gradient Descent, SGD）：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{随机梯度下降：每次只在一个小的数据子集（mini-batch）上计算梯度，大幅加速训练\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+\begin{importantbox}{SGD 的核心思想}
+每次只选取一个小批量（mini-batch，如 16 或 32 个样本）数据，在这个子集上估计梯度，并据此更新参数。虽然每步的梯度估计是\textbf{有噪声的}，但：
+\begin{enumerate}
+    \item 训练速度大幅提升（不必等待遍历全部数据）
+    \item 噪声反而有正则化效果，帮助模型跳出局部最优，实际上往往能得到更好的结果
+\end{enumerate}
+\end{importantbox}
+
+\begin{lstlisting}[caption={随机梯度下降伪代码},language=Python]
+while True:
+    window = sample_window(corpus)
+    theta_grad = evaluate_gradient(J, window, theta)
+    theta = theta - alpha * theta_grad
+\end{lstlisting}
+
+\subsection{本章小结}
+
+梯度下降是所有神经网络训练的基础。在实践中，我们几乎总是使用随机梯度下降（SGD）或其变体（如 Adam），因为它不仅比全量梯度下降快得多，而且由于引入的噪声，往往能找到更好的解。参数初始化必须使用\textbf{随机小数}（而非全零），否则会因为对称性无法学习。
+
+%% ========== Part 2: Word2Vec 回顾与深入 ==========
+
+\section{Word2Vec 回顾与深入}
+
+\subsection{Word2Vec 的核心思想回顾}
+
+Word2Vec 的 Skip-gram 模型的核心思想非常简单：
+
+\begin{enumerate}
+    \item 为词表中的每个词随机初始化一个向量
+    \item 遍历语料中的每个位置，用当前的中心词（center word）预测周围的上下文词（context words）
+    \item 根据预测误差更新词向量，使其逐渐学会捕捉词与词之间的语义关系
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{Word2Vec 核心思想：以 banking 为中心词，预测上下文词 problems、turning、into、crises 等的概率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+预测概率使用 softmax 函数：
+
+$$P(o|c) = \frac{\exp(u_o^T v_c)}{\sum_{w \in V} \exp(u_w^T v_c)}$$
+
+\begin{itemize}
+    \item $v_c$：中心词 $c$ 的词向量
+    \item $u_o$：上下文词 $o$ 的词向量
+    \item $V$：整个词表
+\end{itemize}
+
+\begin{knowledgebox}{为什么使用两套词向量？}
+Word2Vec 为每个词维护两个向量：中心词向量 $v$ 和上下文词向量 $u$，这\textbf{不是}为了提升性能，而是为了\textbf{简化数学推导}。如果只用一套向量，当中心词自身出现在归一化求和中时，会产生一个 $x^2$ 项，使梯度计算变得更复杂。实际上使用一套向量效果略好，但通常的做法是分别训练两套向量，最后取平均。
+\end{knowledgebox}
+
+\subsection{Word2Vec 参数与计算}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-007.jpg}
+\caption{Word2Vec 的参数矩阵 $U$（outside）和 $V$（center），以及计算过程：通过点积和 softmax 得到概率分布\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页。}
+
+Word2Vec 是一个\textbf{词袋模型}（Bag of Words）：它不区分上下文词在左边还是右边，对窗口内所有位置预测相同的概率分布。虽然这看起来是一个很强的简化假设，但仅凭这一点就足以学到非常有用的词向量。
+
+\subsection{Word2Vec 算法族}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-009.jpg}
+\caption{Word2Vec 将语义相近的词映射到向量空间中相近的位置\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。Word2Vec 可视化，使用 t-SNE 降维展示。}
+
+Mikolov 等人（2013）的论文中描述了一族算法：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-011.jpg}
+\caption{Word2Vec 算法族：两种模型架构（Skip-gram 和 CBOW）与多种损失函数（Na\"ive softmax、Hierarchical softmax、Negative sampling）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第10页。}
+
+\begin{importantbox}{Word2Vec 的两种模型与三种损失函数}
+\textbf{模型架构}：
+\begin{enumerate}
+    \item \textbf{Skip-gram（SG）}：给定中心词，预测上下文词（本课主要介绍的版本）
+    \item \textbf{Continuous Bag of Words（CBOW）}：给定上下文词，预测中心词
+\end{enumerate}
+\textbf{损失函数}：
+\begin{enumerate}
+    \item Na\"ive softmax：简单但计算代价高
+    \item Hierarchical softmax：用二叉树加速
+    \item Negative sampling：最常用的高效替代方案
+\end{enumerate}
+\end{importantbox}
+
+\subsection{负采样（Negative Sampling）}
+
+Na\"ive softmax 的分母需要对词表中\textbf{所有}词求和，当词表有 40 万词时，这个计算量很大。负采样提供了一种高效的替代方案。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-010.jpg}
+\caption{Softmax 的归一化项需要对整个词表求和，计算量极大\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第11页。}
+
+负采样的目标函数为：
+
+$$J_{\text{neg-sample}}(u_o, v_c, U) = -\log \sigma(u_o^T v_c) - \sum_{k \in \{K \text{ sampled}\}} \log \sigma(-u_k^T v_c)$$
+
+\begin{itemize}
+    \item $\sigma(x) = \frac{1}{1 + e^{-x}}$：logistic/sigmoid 函数
+    \item 第一项：希望真实上下文词的点积概率\textbf{尽量高}
+    \item 第二项：随机采样 $K$ 个``噪声''词，希望它们的点积概率\textbf{尽量低}
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{Skip-gram 负采样的完整目标函数与 sigmoid 函数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第12页。}
+
+\begin{knowledgebox}{负样本的采样策略}
+负样本不是从均匀分布中采样，而是使用\textbf{调整过的 unigram 分布}：
+$$P(w) = \frac{U(w)^{3/4}}{Z}$$
+将词频的 $3/4$ 次方作为采样权重。这个指数使得\textbf{低频词被采样的概率相对增加}，介于均匀分布（指数为 0）和按频率采样（指数为 1）之间。实验表明这种``中间''策略效果最好。通常只采样 $K = 5 \sim 10$ 个负样本。
+\end{knowledgebox}
+
+\subsection{梯度的稀疏性}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-013.jpg}
+\caption{负采样下的梯度极其稀疏：在 $\mathbb{R}^{2dV}$ 维梯度向量中，只有窗口内出现的少数几个词对应的梯度非零\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+使用负采样后，每个窗口只涉及 $2m + 1$ 个窗口词加 $2km$ 个负样本，因此梯度向量\textbf{极其稀疏}——绝大多数词的梯度为零。这意味着：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-014.jpg}
+\caption{稀疏更新：只需更新实际出现的词的词向量行，避免发送巨大的稠密梯度\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第14页。}
+
+\begin{warningbox}{稀疏更新的实现细节}
+在分布式训练中，梯度的稀疏性非常重要：我们只需更新出现在当前窗口中的少数词向量，而不是整个嵌入矩阵。在实际的深度学习框架中，词嵌入矩阵通常按\textbf{行}存储（而非列），每行对应一个词的向量。
+\end{warningbox}
+
+\subsection{词向量的``魔力''：类比关系}
+
+训练好的词向量展现出令人惊叹的语义属性。最著名的发现是\textbf{向量类比}（vector analogies）：
+
+$$\text{king} - \text{man} + \text{woman} \approx \text{queen}$$
+
+这意味着向量空间中的\textbf{方向}对应于语义关系：``man $\to$ king'' 的方向与 ``woman $\to$ queen'' 的方向近似平行，编码了``统治者''这一语义成分。
+
+Chris Manning 在课堂上演示了多个类比示例：
+
+\begin{itemize}
+    \item \textbf{性别类比}：man : king :: woman : \textbf{queen}
+    \item \textbf{文化知识}：Australia : beer :: Russia : \textbf{vodka}
+    \item \textbf{工具-动作}：pencil : sketching :: camera : \textbf{photographing}
+    \item \textbf{政治}：Obama : Clinton :: Reagan : \textbf{Nixon}
+    \item \textbf{语法}：tall : tallest :: long : \textbf{longest}
+\end{itemize}
+
+\begin{importantbox}{词向量类比的深层含义}
+仅仅通过``预测上下文词''这一简单任务，在大量文本上训练，就能自动习得丰富的语义知识——这在词向量刚被发现时几乎被视为``魔法''。虽然现在有了更强大的 ChatGPT 等模型，但词向量所揭示的\textbf{分布式语义表示}原理，仍然是现代 NLP 的基石。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Word2Vec 通过极其简单的``预测上下文''任务，在大规模语料上学习到的词向量，能够：（1）将语义相近的词映射到空间中相近的位置；（2）通过向量运算执行语义类比。负采样是实际训练中最常用的高效技巧，它用少量二分类（真实对 vs 噪声对）替代了对整个词表的 softmax 归一化。
+
+%% ========== Part 3: 基于计数的词向量方法 ==========
+
+\section{基于共现计数的词向量方法}
+
+\subsection{从``预测''到``计数''：另一种思路}
+
+Word2Vec 是一种\textbf{基于预测}的方法：通过神经网络预测上下文词来学习词向量。但还有一种更直观的思路：既然我们关心的是词与词之间的共现关系，为什么不直接\textbf{统计}它们？
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{为什么不直接统计共现次数？两种构建共现矩阵的方式：基于窗口和基于文档\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第15页。}
+
+构建共现矩阵 $X$ 有两种方式：
+\begin{itemize}
+    \item \textbf{基于窗口}：类似 Word2Vec，统计每个词在固定窗口内与其他词的共现次数，捕捉\textbf{语法和语义}信息
+    \item \textbf{基于文档}：统计词在不同文档中的共现，捕捉\textbf{主题}信息（即潜在语义分析 LSA 的思路）
+\end{itemize}
+
+\subsection{共现矩阵示例}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-016.jpg}
+\caption{基于窗口的共现矩阵示例：语料为三个短句，窗口大小为 1\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+以一个极小的语料为例（``I like deep learning. I like NLP. I enjoy flying.''），窗口大小为 1，可以构建出如图所示的共现矩阵。矩阵中的每个元素 $X_{ij}$ 表示词 $i$ 和词 $j$ 在窗口内共现的次数。
+
+\begin{warningbox}{共现矩阵的维度问题}
+共现矩阵的大小为 $|V| \times |V|$（词表大小的平方）。如果词表有 40 万词，矩阵大小为 $400{,}000 \times 400{,}000$，远大于 Word2Vec 的 $400{,}000 \times d$（$d$ 通常为 100-300）。因此，直接使用共现矩阵作为词向量既\textbf{存储浪费}，又\textbf{稀疏低效}。
+\end{warningbox}
+
+\subsection{SVD 降维}
+
+解决高维问题的经典方法是\textbf{奇异值分解}（Singular Value Decomposition, SVD）：
+
+$$X = U \Sigma V^T$$
+
+\begin{itemize}
+    \item $U$ 和 $V$ 是正交矩阵（列向量互相正交且模为 1）
+    \item $\Sigma$ 是对角矩阵，对角元素（奇异值）按大小递减排列
+\end{itemize}
+
+通过只保留最大的 $k$ 个奇异值（将其余的置零），我们得到矩阵 $X$ 的最优 $k$ 维近似，从而将高维共现矩阵压缩为低维词向量。
+
+\begin{knowledgebox}{从 LSA 到现代词向量}
+这种``共现矩阵 + SVD 降维''的方法最早被称为\textbf{潜在语义分析}（Latent Semantic Analysis, LSA），在心理学和信息检索领域有广泛应用。但直接对原始计数做 SVD 效果不佳。Doug Rohde 在 2000 年代的博士论文中发现了一系列改进技巧：对频率取对数、加权窗口距离、使用 Pearson 相关代替原始计数等。他甚至独立发现了线性语义成分的性质，但当时未受到广泛关注。
+\end{knowledgebox}
+
+\subsection{GloVe：统一计数与预测的模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{GloVe 的核心直觉：共现概率的\textbf{比率}能编码语义成分\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。Pennington, Socher, and Manning, EMNLP 2014。}
+
+GloVe（Global Vectors for Word Representation）由 Stanford 的 Jeffrey Pennington、Richard Socher 和 Chris Manning 于 2014 年提出。它的核心洞察是：
+
+\begin{importantbox}{GloVe 的关键直觉：共现概率的比率}
+单独看一个词与 ice 或 steam 的共现概率，无法提取出有意义的语义成分。但如果看它们的\textbf{比率}：
+\begin{itemize}
+    \item $P(\text{solid} | \text{ice}) / P(\text{solid} | \text{steam})$ $\gg$ 1（solid 与 ice 相关）
+    \item $P(\text{gas} | \text{ice}) / P(\text{gas} | \text{steam})$ $\ll$ 1（gas 与 steam 相关）
+    \item $P(\text{water} | \text{ice}) / P(\text{water} | \text{steam})$ $\approx$ 1（water 对两者无偏）
+\end{itemize}
+这些比率\textbf{编码了 ice 与 steam 之间的``固态 vs 气态''语义差异}。
+\end{importantbox}
+
+为了将这种比率关系转化为向量空间中的\textbf{线性}关系，GloVe 引入了对数：比率的对数变为差值。因此 GloVe 的目标是学习词向量 $w_i$ 和 $\tilde{w}_j$，使得：
+
+$$w_i^T \tilde{w}_j + b_i + \tilde{b}_j \approx \log X_{ij}$$
+
+\begin{itemize}
+    \item $X_{ij}$：词 $i$ 和词 $j$ 的共现次数
+    \item $b_i, \tilde{b}_j$：偏置项
+\end{itemize}
+
+这样，两个词向量的差就对应于它们共现概率比率的对数，从而将语义差异编码为向量空间中的线性关系。
+
+\begin{knowledgebox}{GloVe 与 Word2Vec 的关系}
+表面上看，Word2Vec 是``基于预测''的方法，GloVe 是``基于计数''的方法。但实际上两者\textbf{深度相关}：
+\begin{itemize}
+    \item Word2Vec 的 Skip-gram 目标函数可以证明等价于对共现概率矩阵的隐式分解
+    \item GloVe 的优化目标可以看作对共现矩阵的显式分解
+    \item 两者在实践中产生质量相当的词向量
+\end{itemize}
+区别更多在于实现细节和训练效率，而非根本原理。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+基于共现计数的方法（SVD、LSA、GloVe）提供了学习词向量的另一条路径。GloVe 通过建立共现概率比率与向量差之间的对应关系，将``计数''与``预测''两种方法的优势统一起来。其关键洞察是：共现概率的\textbf{比率}（而非绝对值）编码了有意义的语义成分，而\textbf{取对数}将比率转化为向量空间中的线性关系。
+
+%% ========== Part 4: 词向量的评估 ==========
+
+\section{词向量的评估}
+
+\subsection{内在评估与外在评估}
+
+在 NLP 中，评估方法分为两大类：
+
+\begin{importantbox}{两类评估方法}
+\begin{itemize}
+    \item \textbf{内在评估}（Intrinsic evaluation）：在特定的子任务上直接评估词向量质量（如类比测试、相似度评分）。优点：快速、帮助理解组件行为。缺点：与最终应用的相关性不确定。
+    \item \textbf{外在评估}（Extrinsic evaluation）：将词向量嵌入到真实任务中（如命名实体识别、问答系统），评估任务性能的提升。优点：直接衡量实用价值。缺点：慢、难以隔离词向量本身的贡献。
+\end{itemize}
+\end{importantbox}
+
+\subsection{内在评估：类比任务与相似度}
+
+词向量的内在评估主要有两种方式：
+
+\textbf{1. 向量类比任务}：形如 ``a : b :: c : ?'' 的类比题。例如 ``man : king :: woman : ?'' 应该得到 queen。通过在大量类比题上的正确率来评估词向量质量。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{GloVe 可视化：性别维度上的线性关系——man/woman、king/queen、brother/sister 等词对之间的方向近似平行\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+\textbf{2. 词相似度评分}：让人类标注者给词对打相似度分数（0-10 分），然后计算模型给出的余弦相似度与人类评分之间的\textbf{相关系数}。
+
+\begin{knowledgebox}{人类相似度判断的数据集}
+经典的人类相似度评估数据集包括 WordSim-353、SimLex-999 等。例如：
+\begin{itemize}
+    \item tiger/tiger: 10.0（完全相同）
+    \item book/paper: 7.46（高度相关）
+    \item plane/car: 5.77（同为交通工具）
+    \item stock/phone: 1.62（关系较弱）
+    \item stock/jaguar: 0.92（几乎无关）
+\end{itemize}
+好的词向量应该与人类判断高度相关。
+\end{knowledgebox}
+
+\subsection{外在评估：命名实体识别}
+
+命名实体识别（Named Entity Recognition, NER）是一个经典的外在评估任务：识别文本中的人名、地名、组织名等实体。
+
+将 GloVe 词向量加入到 NER 系统中，可以显著提升识别准确率——这说明词向量确实捕捉到了对下游任务有用的语义信息。
+
+\subsection{本章小结}
+
+评估词向量需要同时关注内在指标（类比正确率、与人类相似度判断的相关性）和外在指标（在下游任务上的性能提升）。内在评估帮助我们理解词向量的质量，外在评估告诉我们它们在实际应用中是否有用。GloVe 和 Word2Vec 在各类评估中表现相当，远优于简单的 SVD 方法。
+
+%% ========== Part 5: 词义与多义性 ==========
+
+\section{词义与多义性问题}
+
+\subsection{一词多义是常态}
+
+自然语言中的绝大多数词都有\textbf{多个含义}。Manning 以 ``pike'' 为例：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{pike 的多种含义：尖头武器、鱼类、收费公路、跳水姿势等\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\begin{itemize}
+    \item 一种\textbf{武器}（长矛/戟）
+    \item 一种\textbf{鱼类}（梭鱼）
+    \item 一种\textbf{道路}（收费公路，turnpike 的缩写）
+    \item 一种\textbf{跳水姿势}
+    \item 动词：用矛刺
+    \item 澳大利亚俚语：临阵退缩
+\end{itemize}
+
+更常见的多义词如 bank（银行 / 河岸）、star（星星 / 明星）等在日常文本中无处不在。
+
+\begin{warningbox}{词义消歧的困难}
+虽然字典会为每个词列出明确的义项（sense 1, sense 2, ...），但实际上词义之间的边界往往是\textbf{模糊的}。例如 ``field'' 可以指农田、运动场、学术领域、数学中的域等——这些含义之间有程度不等的关联，硬性划分义项本身就是一种``人为的简化''。
+\end{warningbox}
+
+\subsection{Word2Vec 如何处理多义词？}
+
+Word2Vec 为每个词只学习\textbf{一个}向量，不区分不同义项。那么这个唯一的向量代表什么？
+
+\begin{importantbox}{词义的叠加（Superposition）}
+一个多义词的词向量是其各个义项向量的\textbf{加权平均}，权重为各义项在语料中出现的相对频率：
+$$v_{\text{pike}} = f_1 \cdot v_{\text{pike}_1} + f_2 \cdot v_{\text{pike}_2} + \cdots + f_k \cdot v_{\text{pike}_k}$$
+其中 $f_i$ 是第 $i$ 个义项的相对频率，$v_{\text{pike}_i}$ 是该义项如果单独训练会得到的向量。
+\end{importantbox}
+
+这种``叠加''看起来会丢失信息——从一个平均向量怎么可能恢复各个义项？但有一个惊人的数学结果：
+
+\begin{knowledgebox}{稀疏编码与义项恢复}
+由于词向量空间是\textbf{高维且稀疏}的，来自\textbf{稀疏编码理论}的方法可以从单个叠加向量中\textbf{恢复出各个义项的向量}。Arora 等人（其中包括 Stanford 的 Tengyu Ma）在论文中展示了这一技术：从 ``tie'' 的单一向量中成功分离出了``领带''、``比赛平局''、``电线束扎''、``音乐连接符''等不同义项。
+\end{knowledgebox}
+
+不过在实际应用中，现代 NLP 更倾向于使用\textbf{上下文词向量}（contextual word vectors，如 BERT、GPT），它们为每个词在每次出现时生成不同的向量，从根本上解决了多义性问题。
+
+\subsection{本章小结}
+
+一词多义是自然语言的基本特征。Word2Vec 等静态词向量将多义词表示为各义项的加权平均，虽然看似丢失了信息，但高维空间的稀疏性使得义项在理论上可以被恢复。这一发现为理解词向量的表示能力提供了深刻的数学洞察。后续课程中将介绍的上下文词向量（如 BERT）则从根本上解决了多义性问题。
+
+%% ========== Part 6: 分类与神经网络入门 ==========
+
+\section{分类与神经网络入门}
+
+\subsection{命名实体识别：一个分类问题}
+
+词向量的一个重要应用是作为分类器的输入特征。以\textbf{命名实体识别}（NER）为例：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{分类问题的形式化：训练数据 $\{x_i, y_i\}_{i=1}^N$，$x_i$ 为输入（如词向量），$y_i$ 为类别标签\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+例如，判断文本中的 ``Paris'' 是人名还是地名：
+\begin{itemize}
+    \item ``\textbf{Paris Hilton} is famous'' $\rightarrow$ Paris 是\textbf{人名}
+    \item ``I visited \textbf{Paris} last spring'' $\rightarrow$ Paris 是\textbf{地名}
+\end{itemize}
+
+这需要看上下文才能判断。方法是取中心词及其两侧若干词的词向量，拼接成一个长向量，作为分类器的输入。
+
+\subsection{从线性分类器到神经网络}
+
+传统的统计机器学习分类器（如逻辑回归、SVM、朴素贝叶斯）大多是\textbf{线性分类器}：它们学习权重 $W$，但输入 $x$ 是固定的，决策边界是线性的。
+
+\begin{importantbox}{神经网络分类器的两大优势}
+\begin{enumerate}
+    \item \textbf{学习输入表示}：不仅学习分类权重 $W$，还同时学习词的分布式表示（词向量本身也可以被更新），这使得在原始符号空间中，分类器是\textbf{非线性的}
+    \item \textbf{非线性决策边界}：通过隐藏层和非线性激活函数，可以表示比线性分类器复杂得多的函数
+\end{enumerate}
+\end{importantbox}
+
+\subsection{窗口分类器的神经网络实现}
+
+Manning 展示了一个简单但完整的神经网络分类器：
+
+\begin{enumerate}
+    \item \textbf{输入层}：将窗口内 5 个词（如 ``museums in Paris are amazing''）的词向量拼接为一个 $5d$ 维向量（若 $d = 100$，则为 500 维）
+    \item \textbf{隐藏层}：将拼接向量乘以权重矩阵 $W$（如 $8 \times 500$），加偏置 $b$，通过非线性激活函数（如 sigmoid），得到 8 维隐藏表示
+    \item \textbf{输出层}：将隐藏表示乘以另一个权重向量，通过 sigmoid 函数输出概率（如``是否为地名''）
+\end{enumerate}
+
+\subsection{神经元与 logistic 回归的类比}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{一个 logistic 回归单元类似于一个简化的神经元：多个输入加权求和后通过非线性激活函数产生输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+单个人工神经元的数学表达为：
+
+$$h_{w,b}(x) = f(w^T x + b)$$
+
+其中 $f$ 是非线性激活函数（如 sigmoid）：
+
+$$f(z) = \sigma(z) = \frac{1}{1 + e^{-z}}$$
+
+这和 logistic 回归完全相同。\textbf{神经网络的关键在于}：不是只有一个这样的单元，而是有\textbf{一层}这样的单元，它们各自学习不同的权重，提取不同的特征，然后将输出传递给下一层。
+
+\subsection{非线性激活函数的必要性}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-045.jpg}
+\caption{非线性激活函数的必要性：没有非线性，多层线性变换可以合并为单层（$W_1 W_2 x = Wx$）；有了非线性，网络可以逼近任意复杂的函数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+\begin{warningbox}{没有非线性，深度毫无意义}
+如果所有层都是纯线性变换（不加激活函数），那么无论堆叠多少层，整个网络都等价于一个\textbf{单层线性变换}：$W_1 W_2 x = Wx$。只有引入非线性激活函数，每增加一层才真正增加了模型的表达能力，使其能够逼近越来越复杂的函数。
+\end{warningbox}
+
+\subsection{交叉熵损失函数}
+
+在 PyTorch 中训练分类器时，最常用的损失函数是\textbf{交叉熵损失}（Cross-Entropy Loss）：
+
+$$H(p, q) = -\sum_c p(c) \log q(c)$$
+
+\begin{itemize}
+    \item $p$：真实分布（通常是 one-hot 向量，正确类别为 1，其余为 0）
+    \item $q$：模型预测的概率分布
+\end{itemize}
+
+当真实标签是 one-hot 时，交叉熵简化为：
+
+$$H(p, q) = -\log q(\text{correct class})$$
+
+即\textbf{负对数似然}（negative log-likelihood）——我们已经很熟悉的损失函数形式。
+
+\begin{knowledgebox}{交叉熵与负对数似然的关系}
+交叉熵损失和负对数似然在分类任务中是\textbf{等价的}。在 PyTorch 中使用 \texttt{CrossEntropyLoss} 时，它已经内置了 softmax 和负对数似然的计算，因此模型输出层不需要再手动加 softmax。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+神经网络分类器相比传统线性分类器有两个关键优势：（1）可以同时学习输入表示和分类权重，实现端到端的训练；（2）通过非线性激活函数，可以学习任意复杂的决策边界。一个简单的前馈神经网络由输入层、隐藏层和输出层组成，其中隐藏层通过非线性变换将输入重新表示为更适合分类的形式。
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+Chris Manning 在本讲中建立了从词向量到神经网络分类器的完整认知链：
+
+\begin{enumerate}
+    \item \textbf{优化基础}：梯度下降（特别是 SGD）是训练所有神经网络模型的基础
+    \item \textbf{Word2Vec 深入}：Skip-gram 与 CBOW 两种架构，负采样作为高效训练技巧
+    \item \textbf{计数方法与 GloVe}：共现矩阵 + SVD 降维是另一种学习词向量的路径，GloVe 统一了两种方法
+    \item \textbf{词向量评估}：内在评估（类比、相似度）与外在评估（NER 等下游任务）
+    \item \textbf{词义问题}：多义词向量是各义项的加权叠加，可通过稀疏编码恢复
+    \item \textbf{神经网络入门}：从 logistic 回归到多层网络，非线性激活函数是深度的关键
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3cm, minimum height=0.7cm, font=\small}]
+\node (opt) {优化：GD / SGD};
+\node (w2v) [below=of opt] {Word2Vec：Skip-gram + 负采样};
+\node (count) [below=of w2v] {计数方法：共现矩阵 / SVD / GloVe};
+\node (eval) [below=of count] {评估：内在 vs 外在};
+\node (sense) [below=of eval] {词义：多义性与叠加};
+\node (nn) [below=of sense] {神经网络分类器};
+\draw[->, thick] (opt) -- (w2v);
+\draw[->, thick] (w2v) -- (count);
+\draw[->, thick] (count) -- (eval);
+\draw[->, thick] (eval) -- (sense);
+\draw[->, thick] (sense) -- (nn);
+\node[draw=none, right=1cm of opt, text width=5cm, font=\scriptsize] {损失函数、梯度、学习率、mini-batch};
+\node[draw=none, right=1cm of w2v, text width=5cm, font=\scriptsize] {中心词/上下文词向量、sigmoid、稀疏梯度};
+\node[draw=none, right=1cm of count, text width=5cm, font=\scriptsize] {共现概率比率、对数双线性模型};
+\node[draw=none, right=1cm of eval, text width=5cm, font=\scriptsize] {类比、相似度、NER};
+\node[draw=none, right=1cm of sense, text width=5cm, font=\scriptsize] {Superposition、稀疏编码、上下文向量};
+\node[draw=none, right=1cm of nn, text width=5cm, font=\scriptsize] {隐藏层、非线性、交叉熵损失};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{分布式假设是基石}：词的含义由其上下文决定——无论是 Word2Vec 的预测方法还是 GloVe 的计数方法，都是这一假设的不同实现
+    \item \textbf{向量空间中的方向编码语义}：词向量不仅捕捉相似性，还通过向量差编码语义关系（类比性质）
+    \item \textbf{预测与计数殊途同归}：Word2Vec 和 GloVe 看似不同，实际上都在对共现统计进行建模
+    \item \textbf{一词多义不是障碍}：静态词向量通过叠加编码多个义项，上下文词向量则彻底解决了这一问题
+    \item \textbf{非线性是深度学习的灵魂}：没有非线性激活函数，再多的层也只是线性变换
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Mikolov et al., 2013: ``Efficient Estimation of Word Representations in Vector Space'' — Word2Vec 原始论文
+    \item Mikolov et al., 2013: ``Distributed Representations of Words and Phrases and their Compositionality'' — 负采样等技巧
+    \item Pennington, Socher, Manning, 2014: ``GloVe: Global Vectors for Word Representation'' — \url{https://nlp.stanford.edu/projects/glove/}
+    \item Levy \& Goldberg, 2014: ``Neural Word Embedding as Implicit Matrix Factorization'' — 证明 Word2Vec 与矩阵分解的等价性
+    \item Arora et al., 2018: ``Linear Algebraic Structure of Word Senses, with Applications to Polysemy'' — 从单一词向量恢复义项
+    \item CS224N 课程主页：\url{https://web.stanford.edu/class/cs224n/}
+\end{itemize}
+
+\end{document}

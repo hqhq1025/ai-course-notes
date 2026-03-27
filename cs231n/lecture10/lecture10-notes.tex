@@ -1,0 +1,578 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 10: Video Understanding}
+\newcommand{\noteauthors}{基于 Ruohan Gao 授课内容整理}
+\newcommand{\notedate}{2025年5月1日}
+\newcommand{\videochannel}{Stanford CS231n 10th Anniversary}
+\newcommand{\videopublishdate}{2025-05-01}
+\newcommand{\videoduration}{}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\ifdefempty{\videoduration}{未填写}{\videoduration}\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 从 2D 图像到视频 ==========
+
+\section{从图像理解到视频理解}
+
+这是一节 guest lecture。Ruohan Gao 的主线很清楚：先把我们在前几节课里已经熟悉的 \textbf{图像理解} 扩展到 \textbf{视频理解}，再逐步把问题拆成短时序建模、长时序建模、多模态融合和高效推理几个方向。
+
+\subsection{视频到底是什么}
+
+视频可以看成是带时间维度的图像序列。对图像分类而言，输入通常是 $3 \times H \times W$；对视频而言，输入可以写成
+
+$$T \times 3 \times H \times W \qquad \text{或} \qquad 3 \times T \times H \times W$$
+
+这里 $T$ 是时间长度。和单张图像相比，视频包含两类信息：
+
+\begin{itemize}
+    \item \textbf{外观}：物体长什么样，场景是什么。
+    \item \textbf{运动}：东西怎么动，动作如何展开。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{从图像分类开始回顾：前几节课我们已经能做分类、检测和分割，接下来要把同样的视觉能力扩展到视频\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-003.jpg}
+\caption{上一讲的 2D 任务回顾：分类、检测、语义分割和实例分割。视频理解通常会进一步关注动作和时序边界\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页。}
+
+\subsection{视频理解的典型任务}
+
+视频任务和图像任务很像，但目标更偏向 \textbf{动作} 而不是静态类别。常见任务包括：
+
+\begin{itemize}
+    \item \textbf{Video classification}：判断整个 clip 里在做什么动作。
+    \item \textbf{Temporal action localization}：找出动作在时间轴上何时发生。
+    \item \textbf{Spatio-temporal detection}：既定位时间，也定位空间位置。
+    \item \textbf{Audio-visual understanding}：结合声音和画面做识别或分离。
+\end{itemize}
+
+\begin{importantbox}{为什么视频更难}
+视频比图像难的原因不只是“多一维”，而是同时多了三种复杂性：
+\begin{enumerate}
+    \item \textbf{数据更大}：存储、传输、训练都更重。
+    \item \textbf{信息更稀疏}：关键动作可能只出现在少数帧里。
+    \item \textbf{时序模式更复杂}：同样的动作可以出现在不同时间、不同速度和不同背景下。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{视频太大了}
+
+讲义里给出的一个很直接的估算是：未压缩视频在空间和时间上都很大。大致上，标准清晰度视频每分钟就已经是 GB 级别，高清视频更夸张。对深度学习来说，这带来两个问题：
+
+\begin{itemize}
+    \item 训练时无法把整段长视频直接喂进模型。
+    \item 即使能喂进去，计算和显存也不划算。
+\end{itemize}
+
+因此，一个基本策略是把长视频切成短 clip，降低采样帧率和空间分辨率，然后在 clip 层面做训练和推理。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-006.jpg}
+\caption{视频任务中的实用策略：缩短时间长度、降低帧率、缩小分辨率，把长视频变成可训练的短 clip\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页。}
+
+\begin{knowledgebox}{短 clip 训练的直觉}
+很多动作的判别信息并不要求看完整部视频。对“跑步”“游泳”“举重”这类动作，几秒钟的短 clip 往往就足够。实际系统通常会：
+\begin{itemize}
+    \item 从长视频中采样多个短片段；
+    \item 对每个短片段做分类；
+    \item 再把多个片段的结果聚合成视频级预测。
+\end{itemize}
+\end{knowledgebox}
+
+%% ========== Part 2: 短时序建模 ==========
+
+\section{短时序建模：从早期融合到 3D CNN}
+
+\subsection{单帧基线}
+
+最简单的思路是把视频当成一堆图像来处理：抽取单帧、用图像分类器训练、最后在时间上做平均或投票。这个 baseline 往往 surprisingly strong，原因是很多动作本身就带有明显的外观线索，比如器械、场景或人体姿态。
+
+\begin{importantbox}{单帧基线为什么常常不差}
+单帧模型虽然完全不看运动，但它能利用静态背景、物体和姿态信息。对一些数据集来说，这些外观线索已经很强，因此单帧分类器会有不低的性能。
+\end{importantbox}
+
+\subsection{Early fusion, late fusion, 3D CNN}
+
+讲义里把短时序建模分成三类。它们的差别，本质上就是“什么时候开始融合时间维度”。
+
+\begin{center}
+\begin{tabular}{p{2.9cm} p{4.1cm} p{4.0cm}}
+\toprule
+方法 & 核心做法 & 主要特点 \\
+\midrule
+Late fusion & 每帧各自用 2D CNN 提特征，最后再在时间上池化 & 先学空间，再合并时间；实现简单 \\
+Early fusion & 把多帧直接堆成更厚的 channel，一开始就融合时间 & 时间融合很早，但很粗暴 \\
+3D CNN & 用 3D 卷积和 3D pooling 在网络中逐步融合时空信息 & 更自然的时空建模，但算力更贵 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{Video classification 的核心想法之一：用 3D CNN 在网络内部逐步融合时间信息\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\begin{importantbox}{3D CNN 的直觉}
+对视频来说，卷积不应该只在空间上滑动，还应该在时间上滑动。这样模型就能学习“某个局部动作模式在不同时间位置都能出现”的规律，也就是时间上的平移不变性。
+\end{importantbox}
+
+\subsection{3D CNN 的形式}
+
+如果输入是 $C \times T \times H \times W$，那 3D 卷积核就对应一个 $k_T \times k_H \times k_W$ 的小立方体，在时间、空间、通道三个维度上一起滑动。直观地看：
+
+\begin{itemize}
+    \item 2D 卷积只在 $H \times W$ 上滑；
+    \item 3D 卷积同时在 $T \times H \times W$ 上滑；
+    \item 3D pooling 也同样可以对时空窗口做下采样。
+\end{itemize}
+
+这意味着 3D CNN 不是在最后一层才“看见时间”，而是从一开始就让时间参与特征抽取。
+
+\subsection{C3D：3D CNN 的 VGG 风格版本}
+
+一个经典例子是 C3D。它的思想非常朴素：像 VGG 那样堆很多简单的 `3x3x3` 卷积和 `2x2x2` pooling，再接全连接层做分类。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{C3D：3D CNN 的“VGG 风格”实现，结构简单、可迁移性强，曾被广泛用作视频特征提取器\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+\begin{knowledgebox}{C3D 的价值}
+C3D 的重要性不在于它是最强模型，而在于它把“视频也可以像图像一样被标准化地卷积处理”这件事讲清楚了。很多后续方法都建立在这个基本形式上。
+\end{knowledgebox}
+
+\subsection{早期结果：Sports-1M}
+
+课程里给了 Sports-1M 上的一个典型对比。结论很有启发性：
+
+\begin{itemize}
+    \item 单帧模型已经有相当强的 baseline。
+    \item Early fusion 和 late fusion 有小幅差别。
+    \item 3D CNN 可以再带来一点提升，但代价明显更高。
+\end{itemize}
+
+更重要的是，视频数据集本身非常不稳定。很多早年的视频数据集是基于 URL 发布的，时间一长，链接可能失效，数据集完整性会受影响。这也是视频领域和图像领域很不同的现实问题。
+
+\begin{warningbox}{视频数据集的工程问题}
+视频任务不仅是模型问题，也是数据工程问题。数据太大、链接会失效、解码成本高、采样策略复杂，这些都会直接影响实验结果。
+\end{warningbox}
+
+\subsection{方法小结}
+
+短时序建模阶段的关键结论是：
+
+\begin{enumerate}
+    \item 先用单帧 baseline 判断外观信息有多强；
+    \item 再决定是早融合、晚融合，还是直接上 3D CNN；
+    \item 3D CNN 的优势是自然地学习时空局部模式；
+    \item 但它通常会更贵，因此需要更聪明的结构设计。
+\end{enumerate}
+
+%% ========== Part 3: 运动与外观分离 ==========
+
+\section{运动与外观分离：Two-Stream 网络}
+
+\subsection{为什么要分开建模}
+
+视频中的信息并不总是混在一起才最好。很多动作识别任务里，\textbf{外观} 和 \textbf{运动} 可以用不同的网络分别建模：
+
+\begin{itemize}
+    \item 外观分支更像图像分类器，关注人、物体、背景；
+    \item 运动分支更像动作分类器，关注帧与帧之间的变化。
+\end{itemize}
+
+这个直觉直接导向了 two-stream network。
+
+\subsection{光流}
+
+two-stream 里最经典的运动表示是 \textbf{optical flow}。它不是直接喂原始 RGB 帧，而是喂相邻帧之间每个像素的位移估计。简单说，光流描述的是“这个点下一帧会往哪儿动”。
+
+\begin{itemize}
+    \item 横向位移记作 $d_x$。
+    \item 纵向位移记作 $d_y$。
+    \item 一个光流图通常包含两个通道，对应水平和垂直方向的运动。
+\end{itemize}
+
+\begin{knowledgebox}{光流的作用}
+光流把“运动”显式化了。这样做的好处是，网络不必从 RGB 里自己猜运动，而是直接拿到一个已经编码好位移信息的输入。
+\end{knowledgebox}
+
+\subsection{Two-stream 架构}
+
+Two-stream 的结构很直接：
+
+\begin{enumerate}
+    \item \textbf{Spatial stream}：输入单帧 RGB 图像，学外观。
+    \item \textbf{Temporal stream}：输入光流堆叠，学运动。
+    \item \textbf{Fusion}：把两个分支的预测做平均、加权或用 SVM 融合。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{Two-stream network 在 UCF-101 上的结果：运动分支、外观分支和融合后效果有明显差别\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+\begin{importantbox}{Two-stream 的经验现象}
+课程中强调了一个反直觉但重要的现象：只看 motion 的 temporal stream 往往已经很强，有时甚至比单纯的 spatial stream 更强。这说明动作任务里，运动信号可能比静态外观更关键。
+\end{importantbox}
+
+\subsection{Two-stream 的局限}
+
+Two-stream 解决了“外观和运动混在一起不容易学”的问题，但它也有明显代价：
+
+\begin{itemize}
+    \item 光流本身要预计算，工程成本高；
+    \item 模型是两个分支，整体更复杂；
+    \item 两个分支的信息融合还比较粗。
+\end{itemize}
+
+这也是后续 3D CNN、I3D、Non-local block 和 Transformer 风格方法出现的背景。
+
+%% ========== Part 4: 长时序建模 ==========
+
+\section{长时序建模}
+
+\subsection{为什么只看短 clip 不够}
+
+短 clip 可以捕获局部动作，但很多视频任务需要的是更长时间跨度上的语义。例如：
+
+\begin{itemize}
+    \item 一个动作可能持续很久；
+    \item 同一个人可能先站、后跑、再停下；
+    \item 视频级标签往往依赖全局上下文，而不是某一瞬间。
+\end{itemize}
+
+\subsection{CNN + RNN / LSTM}
+
+一个自然的做法是：先用 CNN 对每个短 clip 或每个片段提取特征，再把这些特征送进 RNN 或 LSTM 做时序聚合。这样做的好处是把问题拆成两个层次：
+
+\begin{itemize}
+    \item CNN 负责局部时空特征；
+    \item RNN 负责长程时间依赖。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{长时序建模的第一步：先用 CNN 提取每个时间片的局部特征，再交给序列模型处理更长的依赖\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-051.jpg}
+\caption{如果用 LSTM 处理这些局部特征，就能把短时序表征扩展到更长的视频级表示\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第52页。}
+
+\begin{knowledgebox}{CNN + RNN 的核心思想}
+CNN 看到的是局部窗口，RNN 看到的是时间序列。把两者串起来，就能兼顾“局部动作模式”和“全局视频语义”。
+\end{knowledgebox}
+
+\subsection{Recurrent convolutional network}
+
+课程还提到一种更细粒度的组合方式：把 RNN 的矩阵乘法替换成卷积，得到 recurrent convolutional network。它的思想是：
+
+\begin{itemize}
+    \item 在空间维度上保留卷积的局部归纳偏置；
+    \item 在时间维度上递归地传递状态；
+    \item 通过时空联合建模来处理视频序列。
+\end{itemize}
+
+这种设计在概念上很自然，但受限于 RNN 本身的顺序性，训练和推理都不算高效。
+
+\subsection{非局部块与自注意力}
+
+当视频足够长时，局部卷积和循环结构仍然会受限。一个更直接的思路是引入 \textbf{self-attention} 或 \textbf{non-local block}：让任意两个时空位置都能交互，而不是只看邻近窗口。
+
+\begin{itemize}
+    \item Query / Key / Value 的逻辑和 Transformer 类似；
+    \item 它可以在 3D 特征图上做全局匹配；
+    \item 这样能捕获更长范围的时空依赖。
+\end{itemize}
+
+\begin{importantbox}{长时序建模的共同目标}
+不管是 RNN、Non-local block 还是 Transformer，目标都一样：把“很远的帧之间可能有关联”这件事显式地编码进模型。
+\end{importantbox}
+
+%% ========== Part 5: 迁移与效率 ==========
+
+\section{从 2D 到 3D：I3D 与更高效的设计}
+
+\subsection{I3D：Inflate 2D Networks}
+
+I3D 的思想非常漂亮：既然 2D CNN 在图像任务上已经被训练得很好，那能不能把 2D 卷积核“膨胀”成 3D 卷积核，再把图像预训练权重迁移到视频里？
+
+\begin{itemize}
+    \item 2D kernel 的形状是 $k_H \times k_W$。
+    \item 3D kernel 的形状是 $k_T \times k_H \times k_W$。
+    \item 如果把 2D kernel 在时间维度上复制并按 $k_T$ 归一化，就能得到一个合理的 3D 初始化。
+\end{itemize}
+
+这就让很多现成的 2D 视觉骨干网可以平滑迁移到视频任务。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{C3D 展示了 3D CNN 的标准化结构，而 I3D 的关键则是“把成熟的 2D 网络膨胀成 3D”\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+\subsection{为什么 I3D 有意义}
+
+I3D 的意义不只是“把卷积从 2D 改成 3D”，而是把 \textbf{架构迁移} 和 \textbf{权重迁移} 统一起来：
+
+\begin{enumerate}
+    \item 架构上，原来图像领域的网络可以直接改造成视频网络；
+    \item 权重上，图像预训练可以给视频训练一个好初始化；
+    \item 工程上，这比从头训练一个纯 3D 模型更稳。
+\end{enumerate}
+
+\subsection{效率问题}
+
+到了这一步，视频理解已经很强，但效率仍然是大问题。课程后半段反复强调：
+
+\begin{itemize}
+    \item 视频很长，不能对每个 clip 都全量处理；
+    \item 3D 卷积、光流和 attention 都很贵；
+    \item 因此要想办法做剪枝、采样、选择和分层建模。
+\end{itemize}
+
+这也是后面 X3D、重要片段采样和模态选择等方向的出发点。
+
+%% ========== Part 6: 更复杂的视频任务 ==========
+
+\section{更复杂的视频任务}
+
+\subsection{Temporal action localization}
+
+分类只回答“是什么动作”，但实际视频中还常常要问“动作什么时候开始、什么时候结束”。Temporal action localization 就是在时间轴上找动作边界。
+
+\begin{itemize}
+    \item 输入仍然是视频；
+    \item 输出是时间区间和动作类别；
+    \item 关键是把“片段级分类”变成“时间上的定位 + 分类”。
+\end{itemize}
+
+\subsection{Spatio-temporal detection}
+
+如果还想知道动作发生在画面的哪个位置，那就变成空间和时间同时定位的问题。它比普通检测更难，因为每个预测不仅有 box，还要有时间维度。
+
+\subsection{视频级识别和动作理解}
+
+课程里提到一个现实观察：对于很多视频识别任务，模型并不一定要看完整个视频，只要能从代表性片段里抓到关键动作就够了。因此实际系统经常做：
+
+\begin{enumerate}
+    \item 先采样多个 clip；
+    \item 对每个 clip 做局部判断；
+    \item 再聚合成视频级决策。
+\end{enumerate}
+
+\begin{warningbox}{长视频的计算策略}
+真正困难的不是“有没有模型”，而是“模型怎么在有限算力下看完足够多的内容”。这也是 clip 采样、关键片段选择和高效推理的核心动机。
+\end{warningbox}
+
+%% ========== Part 7: 多模态与未来方向 ==========
+
+\section{多模态视频理解}
+
+\subsection{为什么要加音频}
+
+视频并不只有视觉。很多场景里，音频同样提供重要线索：
+
+\begin{itemize}
+    \item 人在说话时，声音能帮助识别是谁在说；
+    \item 乐器演奏时，画面和声音可以互相约束；
+    \item 某些动作在视觉上相似，但声音差异很大。
+\end{itemize}
+
+\subsection{视觉引导的音频分离}
+
+课程提到一个很有代表性的任务：\textbf{visually guided audio source separation}。直觉是：既然视频里能看到谁在动、谁在发声，那就可以用视觉信息帮助把混合音频拆开。
+
+\begin{itemize}
+    \item 对语音场景，它可以帮助分离不同说话人的声音；
+    \item 对音乐场景，它可以帮助分离不同乐器；
+    \item 本质上是把视觉和声音对齐后再做分解。
+\end{itemize}
+
+\subsection{Audio-visual transformers}
+
+进一步地，研究者开始把图像 patch、视频 clip 和音频谱图都送进 Transformer 结构里，做统一的多模态建模。这样做有两个方向：
+
+\begin{enumerate}
+    \item \textbf{判别式}：做分类、检索、定位。
+    \item \textbf{生成式}：做重建、补全、mask prediction。
+\end{enumerate}
+
+\subsection{高效视频理解}
+
+另一个持续存在的问题是效率。课程里列了几类思路：
+
+\begin{itemize}
+    \item 更高效的 3D 网络设计，比如 X3D；
+    \item 关键 clip 采样，只处理最有信息的片段；
+    \item 用策略学习选择模态或时间片段；
+    \item 在长视频上只对少量关键区域做精细建模。
+\end{itemize}
+
+\subsection{Egocentric 视频和基础模型}
+
+最后，讲义把话题引向未来：可穿戴设备、第一视角视频、多麦克风音频、多模态交互和 video foundation models。这个方向的目标已经不只是识别动作，而是更广泛的理解：
+
+\begin{itemize}
+    \item 谁在看谁；
+    \item 谁在和谁互动；
+    \item 发生了什么事件；
+    \item 能不能用自然语言询问视频内容。
+\end{itemize}
+
+\begin{importantbox}{视频理解正在靠近“问答式”交互}
+未来的视频模型不只是分类器，而是可以被 prompt 的系统：输入视频和问题，输出描述、解释或结构化答案。这和多模态基础模型的方向是一致的。
+\end{importantbox}
+
+%% ========== Part 8: 总结 ==========
+
+\section{总结}
+
+\subsection{整节课的主线}
+
+这节课从一个非常朴素的问题开始：视频怎么表示？然后一步一步把视频理解拆成了几个层次：
+
+\begin{enumerate}
+    \item \textbf{短 clip 分类}：单帧、early fusion、late fusion、3D CNN。
+    \item \textbf{外观与运动分离}：Two-stream 和 optical flow。
+    \item \textbf{长时序建模}：CNN + RNN、LSTM、non-local/self-attention。
+    \item \textbf{架构迁移}：I3D 把 2D 预训练迁移到视频。
+    \item \textbf{更复杂任务}：时序定位、时空检测、多模态融合、音频分离。
+    \item \textbf{未来方向}：高效视频模型、第一视角理解、视频 foundation models。
+\end{enumerate}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{这节课最值得记住的几句话}
+\begin{enumerate}
+    \item 视频就是 \textbf{2D + time}，但时间维度会带来完全不同的建模挑战。
+    \item 单帧 baseline 往往不差，但它忽略了真正的运动信息。
+    \item 3D CNN 的本质是让卷积在时空体上滑动，而不是只在图像平面上滑动。
+    \item Two-stream 说明了外观和运动可以分开建模，光流是经典运动表示。
+    \item 长视频不能只靠短 clip；需要 RNN、attention 或更高效的时序聚合。
+    \item 现实系统里，数据规模、采样策略和效率和模型结构同样重要。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{推荐阅读}
+
+\begin{itemize}
+    \item Ji et al., \textit{3D Convolutional Neural Networks for Human Action Recognition}。
+    \item Tran et al., \textit{Learning Spatiotemporal Features with 3D Convolutional Networks}（C3D）。
+    \item Simonyan and Zisserman, \textit{Two-Stream Convolutional Networks for Action Recognition in Videos}。
+    \item Donahue et al., \textit{Long-term Recurrent Convolutional Networks for Visual Recognition and Description}。
+    \item Carreira and Zisserman, \textit{Quo Vadis, Action Recognition? A New Model and the Kinetics Dataset}（I3D）。
+\end{itemize}
+
+\end{document}

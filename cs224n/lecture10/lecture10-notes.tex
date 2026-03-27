@@ -1,0 +1,957 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS224N Lecture 10: Post-training - RLHF, SFT, DPO}
+\newcommand{\noteauthors}{基于 Archit Sharma 授课内容整理}
+\newcommand{\notedate}{2024年}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2024}
+\newcommand{\videoduration}{1:19:38}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=35X6zlhoCy4}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 引言与预训练回顾 ==========
+
+\section{引言：从预训练到 ChatGPT}
+
+本节课由斯坦福大学博士生 Archit Sharma 主讲，主题是大语言模型的\textbf{后训练}（Post-training）。课程的核心问题是：我们如何从一个仅仅学习预测下一个 token 的预训练模型，一步步走到像 ChatGPT 这样能够理解用户意图、遵循指令、生成高质量回答的强大助手？
+
+\begin{importantbox}{课程路线图}
+本课覆盖四个核心主题，层层递进：
+\begin{enumerate}
+    \item \textbf{Zero-shot 与 Few-shot In-context Learning}：无需微调，通过提示词引导模型完成任务
+    \item \textbf{指令微调（Instruction Fine-tuning / SFT）}：收集指令-回答对，训练模型遵循指令
+    \item \textbf{基于人类偏好的优化（RLHF）}：引入人类偏好数据，通过强化学习对齐模型行为
+    \item \textbf{直接偏好优化（DPO）}：绕过强化学习，直接用偏好数据优化语言模型
+\end{enumerate}
+\end{importantbox}
+
+\subsection{预训练学到了什么？}
+
+预训练的规模正在指数级增长。2022 年模型大约使用 1.4 万亿 token 进行训练，而到 2024 年，Llama 3 已经使用了约 \textbf{15 万亿 token}。模型消耗的计算量也从 $10^{24}$ FLOP 增长到超过 $10^{26}$ FLOP。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-001.jpg}
+\caption{预训练规模的指数级增长：计算量和数据量随时间急剧上升\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第2页。}
+
+尽管预训练的损失函数极其简单——仅仅是预测下一个 token，但模型在这个过程中学到的远不止语法和知识：
+
+\begin{itemize}
+    \item \textbf{世界知识}：``斯坦福大学位于加利福尼亚州''
+    \item \textbf{数学能力}：理解方程和图形
+    \item \textbf{代码编写}：Copilot 等代码补全工具
+    \item \textbf{Agent 心智模型}：能够根据角色背景预测不同人物的行为
+    \item \textbf{医学诊断}：提供初步的症状分析（但不应作为医疗建议）
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{预训练中学到的 Agent 心智模型：改变角色描述后，模型的预测也随之改变\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+\begin{knowledgebox}{预训练不只是记忆}
+一个有趣的实验：当文本描述``Pat 是一名物理学家''时，模型预测保龄球和树叶会同时落地（正确的物理知识）；而当描述改为``Pat 从未见过这个实验''时，模型预测保龄球先落地（符合直觉但物理上不正确）。这说明模型不仅记住了事实，还学会了根据\textbf{角色背景}进行推理——这种能力远超简单的文本预测。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-005.jpg}
+\caption{预训练中涌现的多种能力：数学、代码、医学等\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页。}
+
+语言模型正在发展成为\textbf{通用多任务助手}。从简单的文本预测出发，它们已经能够处理代码、数学、创意写作、医疗咨询等多种任务。今天的课程将解释如何通过后训练技术进一步释放和对齐这些能力。
+
+\subsection{本章小结}
+
+预训练通过海量数据上的 next-token prediction 为模型注入了丰富的知识和推理能力。然而，预训练模型本质上是一个文本补全器，并非一个助手。后训练的目标就是将这个强大但``不听话''的补全器，转变为一个能理解用户意图、遵循指令、安全可靠的 AI 助手。
+
+%% ========== Part 2: Zero-shot & Few-shot ==========
+
+\section{Zero-shot 与 Few-shot In-context Learning}
+
+\subsection{GPT 系列的演进}
+
+GPT 系列是后训练研究的重要背景。让我们回顾其演进：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{模型} & \textbf{参数量} & \textbf{训练数据} & \textbf{关键突破} \\
+\midrule
+GPT-1 (2018) & 117M & 4.6 GB & 预训练+微调范式 \\
+GPT-2 (2019) & 1.5B & 40 GB & Zero-shot 能力涌现 \\
+GPT-3 (2020) & 175B & 600 GB & Few-shot in-context learning \\
+\bottomrule
+\end{tabular}
+\caption{GPT 系列模型的演进}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{GPT-1 架构：Decoder-only Transformer，12 层，Next Token Prediction 损失\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\subsection{Zero-shot Learning}
+
+Zero-shot learning 指的是模型在\textbf{没有看到任何任务示例}的情况下，直接完成任务。这需要我们巧妙地将任务表述为文本补全问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{Zero-shot 学习示例：通过巧妙的 prompt 设计让模型完成 QA 和推理任务\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+核心思路：既然模型会补全文本，我们就把任务\textbf{伪装成}文本补全。例如：
+\begin{itemize}
+    \item \textbf{问答}：将上下文和问题拼接起来，让模型补全答案
+    \item \textbf{摘要}：在文章末尾加上 ``TL;DR''，模型自然会生成摘要
+    \item \textbf{消歧}：将两个候选替换分别填入句子，比较模型赋予的对数概率
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-016.jpg}
+\caption{Zero-shot 摘要：在文章后添加 ``TL;DR''，模型自动生成摘要\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第17页。}
+
+\begin{importantbox}{GPT-2 的 Zero-shot 能力}
+GPT-2 无需任何任务特定的微调，仅靠预训练就能在多个基准任务上达到有竞争力的表现。这是一个标志性的结果——意味着足够大的预训练模型已经``内化''了大量任务的解法。
+\end{importantbox}
+
+\subsection{Few-shot In-context Learning}
+
+GPT-3 带来了更令人惊叹的能力：\textbf{Few-shot in-context learning}。只需要在 prompt 中提供几个示例，模型就能``学会''新任务——完全\textbf{不需要梯度更新}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{Few-shot learning：在上下文中放入几个翻译示例，模型即可执行翻译任务\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{GPT-3 的 Few-shot 性能：随着示例数量增加，性能逐步逼近甚至超越专用模型\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\begin{knowledgebox}{In-context Learning 与传统 Fine-tuning 的区别}
+传统的 fine-tuning 需要：(1) 收集大量标注数据，(2) 对模型进行多轮梯度更新，(3) 可能损害其他任务的性能。而 in-context learning 仅需在推理时的输入中放入几个示例，模型参数完全不变。这种能力随模型规模增大而\textbf{涌现}——小模型几乎没有这种能力，但 175B 参数的 GPT-3 表现出了惊人的 few-shot 性能。
+\end{knowledgebox}
+
+\subsection{Chain-of-Thought 提示}
+
+即使有了 few-shot 能力，模型在复杂推理任务上仍然表现不佳。\textbf{Chain-of-Thought (CoT)} 提示技术通过让模型``展示推理过程''来大幅提升性能。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-023.jpg}
+\caption{Chain-of-Thought 提示：左侧为标准 few-shot（直接给答案），右侧为 CoT（展示推理步骤）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+核心思想有两种形式：
+
+\textbf{1. Few-shot CoT}：在示例中不仅给出答案，还给出推理过程。模型在回答新问题时也会模仿这种推理链。
+
+\textbf{2. Zero-shot CoT}：无需任何示例，仅在 prompt 中添加 ``Let's think step by step''，模型就会自动展开推理过程。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-025.jpg}
+\caption{Zero-shot CoT：仅添加``Let's think step by step''就能大幅提升推理准确率\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-026.jpg}
+\caption{CoT 的性能对比：Zero-shot 仅 17.7\%，Zero-shot CoT 达 78.7\%，Few-shot CoT 接近超越 supervised SOTA\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第27页。}
+
+\begin{warningbox}{提示工程的本质}
+提示工程的本质是\textbf{理解预训练数据的分布}。当你设计一个 prompt 时，你实际上是在寻找：互联网上什么样的文本之后会跟着我想要的那种回答？ ``Let's think step by step'' 之所以有效，是因为互联网上以这种方式开头的文本通常后面跟着详细的推理过程。然而，这种``欺骗模型''的方式本质上是不令人满意的——我们不应该需要技巧来让模型做正确的事。
+\end{warningbox}
+
+\subsection{In-context Learning 的局限性}
+
+尽管提示技术取得了巨大成功，但存在根本性的局限：
+
+\begin{itemize}
+    \item \textbf{上下文窗口有限}：能放入的示例数量受限（虽然现代模型的上下文越来越长）
+    \item \textbf{需要``技巧''}：用户需要精心设计 prompt 才能获得好的结果，这对非专业用户不友好
+    \item \textbf{无法处理复杂任务}：多步推理、创意写作等任务难以仅通过提示解决
+    \item \textbf{模型不是助手}：预训练模型的目标是预测文本，而非帮助用户
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-028.jpg}
+\caption{预训练模型的限制：问``向6岁小孩解释登月''，GPT-3 却继续生成更多问题而非回答\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第29页。}
+
+这个例子清楚地展示了问题所在：预训练模型不是在\textbf{回答}你的问题，而是在\textbf{补全}一段看起来合理的文本。这种``不与用户意图对齐''的问题，正是后续方法要解决的核心挑战。
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item Zero-shot 和 Few-shot 能力随模型规模增大而涌现，是预训练规模化的重要成果
+    \item Chain-of-Thought 提示通过引导模型``思考''来提升推理能力
+    \item 但提示技术本质上是在``欺骗''模型，用户体验差且能力有限
+    \item 我们需要更根本的方法让模型从``文本补全器''变为``用户助手''
+\end{itemize}
+
+%% ========== Part 3: 指令微调 ==========
+
+\section{指令微调（Supervised Fine-Tuning）}
+
+\subsection{从预训练到指令遵循}
+
+指令微调（Instruction Fine-tuning，也称 Supervised Fine-tuning / SFT）的核心思想非常直接：收集大量的\textbf{（指令，期望输出）对}，然后用标准的 next-token prediction 损失来微调预训练模型。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-030.jpg}
+\caption{指令微调的范式：收集多种任务的指令-输出对，在预训练模型上进行微调\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第31页。}
+
+\begin{importantbox}{指令微调的核心流程}
+\begin{enumerate}
+    \item \textbf{收集数据}：从多种任务（QA、翻译、摘要、代码、推理等）收集指令和期望输出的配对
+    \item \textbf{微调模型}：用这些配对数据对预训练模型进行 supervised fine-tuning
+    \item \textbf{评估}：在未见过的任务上测试模型的泛化能力
+\end{enumerate}
+\end{importantbox}
+
+这里的关键创新不是技术本身——它只是标准的微调。关键在于\textbf{数据的规模和多样性}：不再是针对单一任务微调，而是同时在成千上万种不同任务上微调。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{指令微调数据的规模演进：从单一任务到数千任务、数百万样本\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第32页。}
+
+\subsection{规模效应：更大的模型从指令微调中获益更多}
+
+一个令人鼓舞的趋势是：模型越大，从指令微调中获得的提升就越大。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-034.jpg}
+\caption{FLAN-T5 实验：模型越大，指令微调带来的增益越大（从 +6.1 到 +26.6）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第35页。}
+
+以 FLAN-T5 系列为例：
+\begin{itemize}
+    \item T5-Small（60M 参数）：指令微调提升 +6.1 分
+    \item T5-XXL（11B 参数）：指令微调提升 \textbf{+26.6} 分
+\end{itemize}
+
+这意味着预训练的``基础能力''和指令微调的``对齐能力''之间存在正向的协同效应。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{指令微调前后的对比：微调前模型无法正确遵循``Let's think step by step''指令，微调后能够清晰地推理并给出答案\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\subsection{评估：MMLU 基准}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-033.jpg}
+\caption{MMLU 基准测试：涵盖天文学、生物学等 57 个学科的多选题\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第34页。}
+
+MMLU（Massive Multitask Language Understanding）是一个包含 57 个学科的多选题基准。90\% 被视为``人类水平''的标准线。从 GPT-2 时代到 Gemini，模型在此基准上取得了巨大进步。
+
+\begin{warningbox}{评估的陷阱}
+大规模评估面临一个根本性问题：\textbf{测试集泄露}。当预训练数据包含数万亿 token 时，很难保证测试题目没有出现在训练数据中。此外，当模型错误时，往往是因为题目本身含糊不清。这使得基准分数的含义变得模糊——90\% 以上的得分未必代表真正的``人类水平理解''。
+\end{warningbox}
+
+\subsection{指令微调的实用经验}
+
+近期研究揭示了几个重要的实用发现：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-037.jpg}
+\caption{指令微调数据集的生态系统：大量开源数据集涌现\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+\textbf{1. 模型蒸馏}：可以使用强大的模型（如 GPT-4）生成指令微调数据，用于训练较小的开源模型。这大大降低了数据收集成本。
+
+\textbf{2. 数据质量 vs 数量}：``LIMA: Less Is More for Alignment'' 论文表明，仅用约 1000 条高质量样本就能达到不错的指令遵循能力。数据质量可能比数量更重要。
+
+\textbf{3. 众包数据}：Open Assistant 等项目展示了社区驱动的数据收集方式的可行性。
+
+\begin{knowledgebox}{代码数据的特殊价值}
+课堂讨论中提到一个有趣的观点：代码数据天然具有``逐步推理''的结构——每一行代码都是将问题分解为更小步骤的过程。因此，在预训练混合数据中增加代码数据的比例，已被证明能提升模型的推理能力，即使在非代码任务上也是如此。
+\end{knowledgebox}
+
+\subsection{指令微调的三大局限}
+
+指令微调虽然有效，但存在三个根本性局限，正是这些局限推动了 RLHF 和 DPO 的发展：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-041.jpg}
+\caption{指令微调的三大局限\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第42页。}
+
+\textbf{局限 1：数据收集昂贵。} 预训练可以直接爬取互联网数据，但指令微调需要人工编写高质量的回答。随着任务复杂度提升（如物理学博士级别的问题），这变得越来越昂贵。
+
+\textbf{局限 2：开放性任务无标准答案。} 对于创意写作、故事生成等任务，不存在唯一的``正确答案''。这使得收集训练数据变得困难——你该让标注者写什么样的回答？
+
+\textbf{局限 3：Token 级损失无法区分错误严重程度。} Next-token prediction 损失函数对所有 token 级错误一视同仁。但将 ``Avatar'' 描述为 ``adventure show''（可以接受）和描述为 ``musical''（严重错误）的代价是完全不同的。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-042.jpg}
+\caption{并非所有错误都一样严重：``adventure'' vs ``musical'' 的错误程度截然不同，但 token 级损失无法区分\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第43页。}
+
+\begin{warningbox}{更深层的问题：目标函数不匹配}
+指令微调最根本的问题是：我们的\textbf{真正目标}是让模型生成人类喜欢的输出，但\textbf{优化目标}仍然是 token 级的对数似然。这两者之间存在本质的不匹配。此外，随着模型变得越来越强大，人类标注者的回答质量可能反而成为瓶颈——模型生成的回答可能已经比人类标注者的更好。
+\end{warningbox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 指令微调通过在大量（指令，回答）对上微调预训练模型，使其学会遵循指令
+    \item 更大的模型从指令微调中获益更多，体现了预训练和对齐之间的正向协同
+    \item 数据质量可能比数量更重要；可以用强大模型生成训练数据
+    \item 三大局限——高昂的数据收集成本、开放任务缺乏标准答案、损失函数无法区分错误严重程度——推动了基于偏好的优化方法的发展
+\end{itemize}
+
+%% ========== Part 4: RLHF ==========
+
+\section{基于人类反馈的强化学习（RLHF）}
+
+\subsection{核心动机：直接优化人类偏好}
+
+指令微调仍然在做 token 级的预测任务，而我们真正想做的是\textbf{直接优化人类偏好}。RLHF（Reinforcement Learning from Human Feedback）正是为此而生。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-045.jpg}
+\caption{RLHF 的三步流程：SFT $\rightarrow$ 奖励模型训练 $\rightarrow$ RL 优化\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第46页。}
+
+\begin{importantbox}{RLHF 的完整流程}
+\begin{enumerate}
+    \item \textbf{Step 1: 指令微调（SFT）}——从预训练模型出发，用指令-回答对微调，得到一个初始的助手模型
+    \item \textbf{Step 2: 训练奖励模型}——收集人类偏好数据（哪个回答更好），训练一个预测人类偏好的奖励模型
+    \item \textbf{Step 3: RL 优化}——用强化学习算法（如 PPO）优化语言模型，使其生成奖励模型评分更高的回答
+\end{enumerate}
+\end{importantbox}
+
+\subsection{问题形式化}
+
+假设我们有一个\textbf{奖励函数} $r(x, y)$，它能评价对于输入 $x$，回答 $y$ 的质量。我们的目标是：
+
+$$\max_\theta \; \mathbb{E}_{x \sim \mathcal{D}, \, y \sim p_\theta(\cdot|x)} \left[ r(x, y) \right]$$
+
+其中：
+\begin{itemize}
+    \item $p_\theta(y|x)$：我们正在优化的语言模型
+    \item $r(x, y)$：奖励函数
+    \item $\mathcal{D}$：指令分布
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-047.jpg}
+\caption{奖励优化目标：对摘要任务的具体示例，不同摘要获得不同的奖励分数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第48页。}
+
+\begin{knowledgebox}{与之前方法的根本区别}
+注意目标函数中 $y \sim p_\theta(\cdot|x)$——我们是从\textbf{模型自身}采样的！这与预训练和 SFT 截然不同：
+\begin{itemize}
+    \item 预训练/SFT：数据来自外部（互联网/人类标注），优化 token 级对数似然
+    \item RLHF：数据来自模型自身的采样，优化一个（可能不可微的）奖励函数
+\end{itemize}
+这种``on-policy''的训练方式使得模型可以探索并学会生成比训练数据更好的回答。
+\end{knowledgebox}
+
+\subsection{Step 2: 训练奖励模型}
+
+\subsubsection{为什么需要奖励模型？}
+
+直接让人类为每个模型输出打分是不可行的——我们需要在数百万条回答上评估，而人类标注的速度远远不够。解决方案：训练一个\textbf{奖励模型}来\textbf{预测}人类会给出什么评价。
+
+\subsubsection{为什么用排序而非评分？}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-052.jpg}
+\caption{人类评分 vs 排序：绝对评分在不同标注者之间极度不一致，而排序则稳定得多\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第53页。}
+
+让人类给一个回答打绝对分数（如 1-10 分）是\textbf{极其不可靠}的：
+\begin{itemize}
+    \item 不同人对同一回答可能给出完全不同的分数（4.1 vs 6.6）
+    \item 同一个人在不同日子给出的分数也会不同
+    \item 没有统一的评分标准可以消除这种主观性
+\end{itemize}
+
+但让人类\textbf{比较两个回答哪个更好}则容易得多，且一致性更高。这就是为什么 RLHF 使用\textbf{偏好排序数据}而非绝对评分。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-053.jpg}
+\caption{偏好数据收集：给定一个输入，让人类对多个模型回答进行排序\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第54页。}
+
+\subsubsection{Bradley-Terry 模型}
+
+如何从排序数据中学到一个能输出分数的奖励模型？\textbf{Bradley-Terry 模型}提供了数学框架。它假设人类选择回答 $y_1$ 优于 $y_2$ 的概率为：
+
+$$p(y_1 \succ y_2 \mid x) = \sigma\left(r(x, y_1) - r(x, y_2)\right)$$
+
+其中 $\sigma$ 是 sigmoid 函数。直觉很清晰：两个回答的奖励\textbf{差值}越大，人类选择较好回答的概率越高。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{Bradley-Terry 模型：将偏好排序转化为奖励分数差的 sigmoid\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+奖励模型的训练目标就是\textbf{最大化}以下对数似然：
+
+$$\mathcal{L}_{\text{RM}}(\phi) = \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \log \sigma\left(r_\phi(x, y_w) - r_\phi(x, y_l)\right) \right]$$
+
+其中 $y_w$ 是人类偏好的``赢''的回答，$y_l$ 是``输''的回答。
+
+\begin{importantbox}{奖励模型的实现}
+奖励模型通常直接从\textbf{预训练语言模型}初始化，然后在其输出端添加一个标量头（scalar head）来预测分数。这样做的好处是奖励模型能够理解文本的语义，从而更准确地预测人类偏好。输入 $(x, y)$ 被拼接后送入模型，模型输出一个标量分数。
+\end{importantbox}
+
+\subsection{Step 3: RL 优化与 KL 约束}
+
+有了奖励模型后，我们可以优化语言模型。但直接最大化奖励存在严重的\textbf{奖励模型黑客}（Reward Hacking）问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-059.jpg}
+\caption{Reward Hacking 问题：学习到的奖励（绿色）持续上升，但真实质量（蓝色）先升后降\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第60页。}
+
+\begin{warningbox}{Reward Hacking：优化学到的指标的危险}
+奖励模型是一个\textbf{学到的近似}，它不可避免地存在误差。当我们过度优化这个近似的奖励模型时，语言模型会学会利用奖励模型的``漏洞''——生成一些奖励模型给高分但实际质量很差的输出（例如重复的短语、无意义的文本）。这是一个普遍的机器学习原则：\textbf{永远不要无限度地优化一个学到的指标}。
+\end{warningbox}
+
+解决方案是添加\textbf{KL 散度约束}，防止优化后的模型偏离初始模型太远：
+
+$$\max_\theta \; \mathbb{E}_{x \sim \mathcal{D}, \, y \sim p_\theta(\cdot|x)} \left[ r_\phi(x, y) - \beta \log \frac{p_\theta(y|x)}{p_{\text{ref}}(y|x)} \right]$$
+
+其中：
+\begin{itemize}
+    \item $r_\phi(x, y)$：学到的奖励模型
+    \item $p_{\text{ref}}(y|x)$：参考模型（通常是 SFT 模型）
+    \item $\beta$：控制约束强度的超参数
+    \item $\beta \log \frac{p_\theta(y|x)}{p_{\text{ref}}(y|x)}$：KL 散度惩罚项
+\end{itemize}
+
+\begin{knowledgebox}{KL 约束的两层含义}
+KL 约束不仅仅是一个正则化技巧，它有深刻的动机：
+\begin{enumerate}
+    \item \textbf{防止 reward hacking}：限制模型不能偏离初始分布太远，因为奖励模型只在初始分布附近是可靠的
+    \item \textbf{保持语言能力}：初始模型是一个好的语言模型，过度优化可能破坏其语言生成能力
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{RLHF 的惊人效果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-062.jpg}
+\caption{RLHF 在摘要任务上的效果：即使是小模型，经过 RLHF 训练后也能超越人类摘要\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第63页。}
+
+RLHF 的一个标志性结果是：即使是\textbf{很小的模型}，经过 RLHF 训练后，其生成的摘要也能被人类评为\textbf{优于人类撰写的摘要}。这是 SFT 做不到的——SFT 的性能受限于训练数据的质量（即人类标注者的水平），而 RLHF 可以\textbf{超越}数据中的人类水平。
+
+\begin{importantbox}{RLHF 为什么能超越人类数据？}
+在 SFT 中，模型试图模仿人类标注者的回答，因此其上限是标注者的水平。而在 RLHF 中，人类只需要\textbf{判断哪个更好}（这比\textbf{写出}好答案容易得多），模型则通过探索和优化来发现比现有回答更好的生成方式。这就是为什么 RLHF 能让模型超越人类水平的关键所在。
+\end{importantbox}
+
+\subsection{RLHF 的复杂性}
+
+尽管效果显著，RLHF 的实现极其复杂：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-064.jpg}
+\caption{RLHF 的实现复杂度：需要维护多个模型、调节大量超参数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第65页。}
+
+\begin{itemize}
+    \item 需要同时维护\textbf{四个}模型：策略模型、参考模型、奖励模型、价值函数
+    \item PPO 算法对超参数极其敏感
+    \item 需要大量的采样和计算
+    \item 训练不稳定，调试困难
+    \item 长期以来仅限于计算资源充足的大公司使用
+\end{itemize}
+
+这些问题促使研究者寻找更简单的替代方案——这就是 DPO 的动机。
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item RLHF 通过直接优化人类偏好来对齐语言模型，克服了 SFT 的目标函数不匹配问题
+    \item 使用偏好排序而非绝对评分来收集人类反馈，通过 Bradley-Terry 模型转化为奖励分数
+    \item KL 约束防止模型过度优化学到的奖励模型（reward hacking）
+    \item RLHF 能让模型超越人类数据的质量上限
+    \item 但实现极其复杂，推动了 DPO 等更简单方法的发展
+\end{itemize}
+
+%% ========== Part 5: DPO ==========
+
+\section{直接偏好优化（DPO）}
+
+\subsection{核心思想：用语言模型自身表达奖励}
+
+DPO（Direct Preference Optimization）的核心洞察是：\textbf{奖励模型可以用语言模型自身来表达}，从而完全绕过强化学习步骤。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-066.jpg}
+\caption{DPO 的核心思想：直接将偏好数据用于优化语言模型，绕过奖励模型和 RL\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第67页。}
+
+直觉上理解：一个好的语言模型应该把更高的概率分配给人类喜欢的回答。因此，模型的对数概率\textbf{本身}就可以作为一种隐式的奖励信号。
+
+\begin{importantbox}{DPO 的思路}
+\begin{enumerate}
+    \item RLHF 管线中，唯一的外部信息来源是\textbf{人类偏好标注}
+    \item 奖励模型只是偏好数据的一个中间表示
+    \item 如果能直接用偏好数据优化语言模型参数，就可以\textbf{同时省去}奖励模型训练和 RL 优化两个步骤
+    \item 最终问题变成一个简单的\textbf{二分类}问题
+\end{enumerate}
+\end{importantbox}
+
+\subsection{数学推导}
+
+\subsubsection{Step 1: KL 约束优化的闭式解}
+
+回忆 RLHF 的优化目标：
+
+$$\max_\theta \; \mathbb{E}_{y \sim p_\theta(\cdot|x)} \left[ r(x, y) - \beta \log \frac{p_\theta(y|x)}{p_{\text{ref}}(y|x)} \right]$$
+
+这个优化问题有\textbf{闭式解}（类似于 Boltzmann 分布）：
+
+$$p^*(y|x) = \frac{1}{Z(x)} \, p_{\text{ref}}(y|x) \cdot \exp\left(\frac{r(x, y)}{\beta}\right)$$
+
+其中 $Z(x) = \sum_y p_{\text{ref}}(y|x) \cdot \exp\left(\frac{r(x, y)}{\beta}\right)$ 是归一化常数（配分函数）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-069.jpg}
+\caption{闭式解：最优策略是参考分布按奖励的指数进行加权\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第70页。}
+
+直觉：最优策略就是将参考模型的分布\textbf{按奖励的指数加权}——高奖励的补全获得更高概率，低奖励的获得更低概率。$\beta$ 控制这种重新加权的程度：$\beta$ 越小，越偏向高奖励；$\beta$ 越大，越接近参考分布。
+
+\subsubsection{Step 2: 用语言模型表达奖励}
+
+对闭式解取对数并移项，可以将奖励表达为语言模型参数的函数：
+
+$$r(x, y) = \beta \log \frac{p_\theta(y|x)}{p_{\text{ref}}(y|x)} + \beta \log Z(x)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-071.jpg}
+\caption{关键恒等式：奖励可以表达为当前策略与参考策略的对数概率比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第72页。}
+
+这个等式告诉我们：一个补全 $y$ 的\textbf{隐式奖励}由两部分决定：
+\begin{itemize}
+    \item $\beta \log \frac{p_\theta(y|x)}{p_{\text{ref}}(y|x)}$：当前模型相对于参考模型赋予 $y$ 的``额外概率''
+    \item $\beta \log Z(x)$：一个只依赖于 $x$ 的归一化常数
+\end{itemize}
+
+\begin{knowledgebox}{``每个策略都隐式定义了一个奖励模型''}
+这是一个深刻的洞察：不只是最优策略对应某个奖励模型，\textbf{任何}策略 $p_\theta$ 都隐式地定义了某个奖励函数。这种一一对应关系使得我们可以直接通过优化策略来优化奖励，反之亦然。
+\end{knowledgebox}
+
+\subsubsection{Step 3: 配分函数的消除}
+
+将上述奖励表达式代入 Bradley-Terry 模型：
+
+$$p(y_w \succ y_l | x) = \sigma\left(r(x, y_w) - r(x, y_l)\right)$$
+
+由于 $r(x, y_w) - r(x, y_l)$ 中，\textbf{配分函数 $\beta \log Z(x)$ 被消去}（因为两个奖励共享同一个 $x$，$Z(x)$ 在两项中相同），我们得到：
+
+$$p(y_w \succ y_l | x) = \sigma\left(\beta \log \frac{p_\theta(y_w|x)}{p_{\text{ref}}(y_w|x)} - \beta \log \frac{p_\theta(y_l|x)}{p_{\text{ref}}(y_l|x)}\right)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-073.jpg}
+\caption{DPO 推导的关键步骤：配分函数 $Z(x)$ 在奖励差值中被消去\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第74页。}
+
+\subsubsection{最终的 DPO 损失函数}
+
+$$\boxed{\mathcal{L}_{\text{DPO}}(\theta) = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \log \sigma\left(\beta \log \frac{p_\theta(y_w|x)}{p_{\text{ref}}(y_w|x)} - \beta \log \frac{p_\theta(y_l|x)}{p_{\text{ref}}(y_l|x)}\right) \right]}$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-074.jpg}
+\caption{DPO 损失函数：一个优雅的二分类损失\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第75页。}
+
+\begin{importantbox}{DPO 损失函数的直觉解读}
+DPO 损失的含义极其清晰：
+\begin{itemize}
+    \item 对于人类偏好的``赢''的回答 $y_w$，\textbf{增大}其相对于参考模型的概率比
+    \item 对于``输''的回答 $y_l$，\textbf{减小}其相对于参考模型的概率比
+    \item 这本质上就是一个\textbf{二分类问题}：输入是两个回答的对数概率比之差，标签是人类偏好
+    \item 不需要奖励模型，不需要采样，不需要 RL——只需要标准的梯度下降！
+\end{itemize}
+\end{importantbox}
+
+\subsection{DPO 的实验效果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-076.jpg}
+\caption{DPO vs PPO：在摘要任务上，DPO 的效果与完整 RLHF 管线相当\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第77页。}
+
+实验表明，DPO 在多个任务上达到了与完整 RLHF（PPO）\textbf{相当的性能}，但实现简单得多。在摘要任务上，DPO 和 PPO 的表现几乎相同。
+
+\subsection{DPO 的广泛采用}
+
+DPO 的简洁性使其迅速被开源社区和工业界广泛采用：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-081.jpg}
+\caption{DPO 在开源社区的广泛采用：HuggingFace 排行榜上 9/10 的模型使用 DPO\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第82页。}
+
+\begin{itemize}
+    \item HuggingFace Open LLM Leaderboard 上排名靠前的模型中，9/10 使用了 DPO
+    \item Mistral、Llama 3 等主要开源模型都采用了 DPO
+    \item DPO 使得小团队和研究者也能进行偏好对齐，大大降低了门槛
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-082.jpg}
+\caption{DPO 被主要生产模型采用：Mistral 和 Llama 3 均使用 DPO 进行偏好对齐\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第83页。}
+
+\subsection{SFT vs RLHF/DPO 的输出对比}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-083.jpg}
+\caption{SFT 输出 vs RLHF/DPO 输出：经过偏好优化的模型回答更详细、结构更清晰\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第84页。}
+
+经过 RLHF/DPO 优化的模型，回答通常具有以下特征（与纯 SFT 模型相比）：
+\begin{itemize}
+    \item 更详细和全面的内容
+    \item 更好的组织结构（使用列表、分段等）
+    \item 更符合人类阅读习惯的表达方式
+    \item 语气更加自信和权威
+\end{itemize}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item DPO 通过一个优雅的数学推导，将 RLHF 的三步流程简化为\textbf{一步二分类优化}
+    \item 核心洞察：语言模型的对数概率隐式定义了一个奖励模型，配分函数在偏好差值中被消去
+    \item DPO 的性能与完整 RLHF 管线相当，但实现简单得多
+    \item 已被工业界和开源社区广泛采用（Mistral、Llama 3 等）
+\end{itemize}
+
+%% ========== Part 6: InstructGPT 与 ChatGPT ==========
+
+\section{从 InstructGPT 到 ChatGPT}
+
+\subsection{InstructGPT：定义管线}
+
+InstructGPT 是第一个系统性地将前述所有技术组合在一起的模型，它定义了现代 LLM 后训练的标准管线。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-078.jpg}
+\caption{InstructGPT 的完整管线：SFT $\rightarrow$ 奖励模型 $\rightarrow$ PPO\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第79页。}
+
+InstructGPT 的关键数据：
+\begin{itemize}
+    \item 约 \textbf{30,000 种不同任务}的指令微调数据
+    \item 使用人类标注者收集偏好排序
+    \item 通过 PPO 进行 RLHF 优化
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-079.jpg}
+\caption{InstructGPT 效果：GPT-3 对``向6岁小孩解释登月''的回答 vs InstructGPT 的回答\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第80页。}
+
+效果对比非常直观：GPT-3 面对``向6岁小孩解释登月''的问题，会继续生成更多问题（因为它只是在补全文本）；而 InstructGPT 则直接给出适合 6 岁儿童理解的简明解释。
+
+\subsection{ChatGPT：对话优化}
+
+ChatGPT 在 InstructGPT 的基础上，进一步针对\textbf{对话交互}进行了优化：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-085.jpg}
+\caption{ChatGPT 的对话能力：理解用户意图，生成有趣且相关的回答\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第86页。}
+
+核心技术不变（SFT + RLHF），关键差异在于数据——更多的对话格式数据、更注重多轮交互的连贯性。
+
+\subsection{本章小结}
+
+InstructGPT 和 ChatGPT 证明了后训练管线的有效性：通过 SFT 建立指令遵循能力，通过 RLHF/DPO 进一步对齐人类偏好。这个管线已经成为现代 LLM 开发的标准流程。
+
+%% ========== Part 7: 挑战与展望 ==========
+
+\section{开放挑战与未来方向}
+
+\subsection{Reward Hacking}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-087.jpg}
+\caption{Reward Hacking 的经典案例：AI 智能体学会了利用游戏规则的漏洞而非真正玩游戏\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第88页。}
+
+Reward hacking 是 RLHF 面临的最严重的技术挑战之一。强化学习是一个极其强大的优化算法（AlphaGo 和 AlphaZero 就是例证），当它被用来优化一个不完美的奖励模型时，它会找到各种``取巧''的方式来获取高分，而不是真正地完成我们期望的任务。
+
+\subsection{冗长性问题（Verbosity）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-089.jpg}
+\caption{RLHF 导致的冗长性问题：优化人类偏好后，模型倾向于生成过长的回答\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第90页。}
+
+一个普遍观察到的现象是：经过 RLHF 训练的模型倾向于生成\textbf{过于冗长}的回答。原因令人深思：
+
+\begin{warningbox}{人类偏好 $\neq$ 人类利益}
+在大规模数据标注中，标注者（turkers）倾向于选择\textbf{更长}的回答作为``更好''的——因为他们可能没有仔细阅读内容，而是用长度作为质量的代理指标。这种偏差通过 RLHF 被放大：模型学到了``更长 = 更好''的错误信号。更广泛地说，人类偏好并不总是等同于人类的最佳利益——人类可能偏好听起来权威但不正确的回答，而非谦逊但准确的回答。
+\end{warningbox}
+
+\subsection{幻觉问题}
+
+幻觉（Hallucination）是 LLM 的顽疾，RLHF 并不能解决这个问题。事实上，RLHF 可能使幻觉\textbf{更难被发现}——因为模型学会了用更自信的语气表达不正确的信息。
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item Reward hacking 是 RLHF 最严重的技术挑战，需要精心设计奖励模型和约束
+    \item 人类偏好数据的质量直接影响模型行为——标注者的偏差会被放大
+    \item 冗长性和幻觉等问题仍然是活跃的研究领域
+    \item 如何设计更好的评估方法和更可靠的对齐技术，是未来的核心问题
+\end{itemize}
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{讲者的核心总结}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-091.jpg}
+\caption{课程总结：从预训练到 ChatGPT 的完整路径\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第92页。}
+
+Archit Sharma 在课程结尾总结了从预训练到 ChatGPT 的完整路径：
+
+\begin{enumerate}
+    \item \textbf{预训练}：在海量文本上训练 next-token prediction，获得强大的基础能力
+    \item \textbf{Zero/Few-shot}：发现预训练模型具有涌现的 in-context learning 能力
+    \item \textbf{SFT}：通过指令-回答对微调，使模型学会遵循指令
+    \item \textbf{RLHF/DPO}：通过人类偏好数据直接优化模型行为，超越人类标注数据的质量上限
+\end{enumerate}
+
+\subsection{全课知识图谱}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.9cm, every node/.style={draw, rounded corners, minimum width=4cm, minimum height=0.7cm, font=\small}]
+\node (pretrain) {预训练（Next Token Prediction）};
+\node (icl) [below=of pretrain] {Zero/Few-shot + CoT};
+\node (sft) [below=of icl] {指令微调（SFT）};
+\node (rlhf) [below=of sft] {RLHF / DPO};
+\node (chatgpt) [below=of rlhf] {ChatGPT};
+\draw[->, thick] (pretrain) -- (icl);
+\draw[->, thick] (icl) -- (sft);
+\draw[->, thick] (sft) -- (rlhf);
+\draw[->, thick] (rlhf) -- (chatgpt);
+\node[draw=none, right=1cm of pretrain, text width=5.5cm, font=\scriptsize] {海量数据，学习知识、语法、推理};
+\node[draw=none, right=1cm of icl, text width=5.5cm, font=\scriptsize] {无需微调，通过提示引导任务完成};
+\node[draw=none, right=1cm of sft, text width=5.5cm, font=\scriptsize] {指令-回答对，多任务微调};
+\node[draw=none, right=1cm of rlhf, text width=5.5cm, font=\scriptsize] {人类偏好排序，Bradley-Terry，KL 约束};
+\node[draw=none, right=1cm of chatgpt, text width=5.5cm, font=\scriptsize] {对话优化，大规模部署};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{预训练是基础}：几乎所有后训练的效果都依赖于强大的预训练基座。模型越大、预训练越充分，后训练的收益越大
+    \item \textbf{数据质量重于数量}：无论是 SFT 还是偏好数据，高质量的少量数据可能优于低质量的大量数据（``Less Is More for Alignment''）
+    \item \textbf{比较比评分容易}：人类更擅长比较两个回答的优劣，而非给单个回答打绝对分数。这一洞察是 RLHF 和 DPO 的数据基础
+    \item \textbf{DPO 是 RLHF 的优雅替代}：通过巧妙的数学推导，DPO 将复杂的 RL 优化简化为简单的二分类损失，且效果相当
+    \item \textbf{对齐不等于完美}：Reward hacking、冗长性、幻觉等问题提醒我们，``优化人类偏好''并不等同于``做正确的事''
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Radford et al., 2018. \textit{Improving Language Understanding by Generative Pre-Training} (GPT-1)
+    \item Radford et al., 2019. \textit{Language Models are Unsupervised Multitask Learners} (GPT-2)
+    \item Brown et al., 2020. \textit{Language Models are Few-Shot Learners} (GPT-3): \url{https://arxiv.org/abs/2005.14165}
+    \item Wei et al., 2022. \textit{Chain-of-Thought Prompting Elicits Reasoning in Large Language Models}: \url{https://arxiv.org/abs/2201.11903}
+    \item Kojima et al., 2022. \textit{Large Language Models are Zero-Shot Reasoners}: \url{https://arxiv.org/abs/2205.11916}
+    \item Ouyang et al., 2022. \textit{Training language models to follow instructions with human feedback} (InstructGPT): \url{https://arxiv.org/abs/2203.02155}
+    \item Stiennon et al., 2020. \textit{Learning to summarize from human feedback}: \url{https://arxiv.org/abs/2009.01325}
+    \item Rafailov et al., 2023. \textit{Direct Preference Optimization: Your Language Model is Secretly a Reward Model} (DPO): \url{https://arxiv.org/abs/2305.18290}
+    \item Zhou et al., 2023. \textit{LIMA: Less Is More for Alignment}: \url{https://arxiv.org/abs/2305.11206}
+    \item Christiano et al., 2017. \textit{Deep Reinforcement Learning from Human Preferences}: \url{https://arxiv.org/abs/1706.03741}
+\end{itemize}
+
+\end{document}

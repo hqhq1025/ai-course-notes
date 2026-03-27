@@ -1,0 +1,800 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 5: Image Classification with CNNs}
+\newcommand{\noteauthors}{基于 Justin Johnson 授课内容整理}
+\newcommand{\notedate}{2025}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:15:00}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=f3g1zGdxptI}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: 深度学习基础回顾 ==========
+
+\section{深度学习基础回顾}
+
+本节课由 Justin Johnson 主讲，他是 CS231N 的创始人之一，曾在 Stanford 攻读博士学位（2012--2018），之后在 Facebook AI Research 和 University of Michigan 从事深度学习与计算机视觉研究。本节课是课程前半段（深度学习基础）与后半段（视觉世界感知）的分水岭，我们首先回顾前几节课的核心内容，然后深入介绍卷积神经网络。
+
+\subsection{图像分类与线性分类器}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-002.jpg}
+\caption{课程前半段回顾：从图像分类到优化的完整流程\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页。}
+
+图像分类是计算机视觉最核心的任务之一：给定一张输入图像（三维张量，$H \times W \times 3$），模型需要输出一组分数，表示该图像属于每个预定义类别的可能性。
+
+线性分类器是最简单的模型形式：
+
+$$f(x) = Wx + b$$
+
+其中 $x$ 是展平后的像素向量（如 $32 \times 32 \times 3 = 3072$ 维），$W$ 是权重矩阵，$b$ 是偏置。每一行 $W_i$ 可以被视为一个\textbf{类别模板}——模型通过计算输入图像与每个模板的内积来得到分类分数。
+
+\begin{knowledgebox}{线性分类器的两种视角}
+\begin{itemize}
+    \item \textbf{模板视角}：权重矩阵的每一行是一个与整张图像大小相同的模板。分类分数就是输入与模板的相似度。缺陷：每个类别只能有\textbf{一个模板}，无法处理同一类物体的多种外观（如红色汽车 vs 蓝色汽车）。
+    \item \textbf{几何视角}：线性分类器在高维空间中用超平面划分不同类别的区域。缺陷：如果数据不是线性可分的，线性分类器无能为力。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{损失函数与优化}
+
+有了模型之后，我们需要\textbf{损失函数}来衡量当前参数的好坏。常用的分类损失包括 Softmax 交叉熵损失和 SVM Hinge 损失。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-004.jpg}
+\caption{优化景观：横轴代表所有可能的权重配置，纵轴为损失函数值，目标是找到谷底\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页。}
+
+优化算法负责在参数空间中搜索低损失的区域。常用算法包括随机梯度下降（SGD）、带动量的 SGD、RMSProp 和 Adam 等。
+
+\begin{importantbox}{Adam 获得 ICLR 2025 时间检验奖}
+就在本节课授课前一天，ICLR 2025 将``时间检验奖''（Test of Time Award）颁给了 Adam 优化器的论文。Adam 最初于 2015 年在 ICLR 发表，至今仍是深度学习中使用最广泛的优化器之一。
+\end{importantbox}
+
+\subsection{从线性到非线性：神经网络}
+
+线性分类器的表达能力严重不足。解决方案：堆叠多个线性变换并在它们之间插入\textbf{非线性激活函数}。
+
+$$f(x) = W_2 \cdot \sigma(W_1 x + b_1) + b_2$$
+
+这就是最简单的两层神经网络。虽然代数变化很小（多了一个矩阵和一个非线性函数），但分类能力得到了质的飞跃。
+
+\subsection{计算图与反向传播}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-008.jpg}
+\caption{计算图与反向传播：数据从左到右前向传播计算输出，梯度从右到左反向传播\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页。}
+
+\begin{importantbox}{反向传播的核心思想}
+反向传播将\textbf{全局问题}（计算损失对所有参数的梯度）转化为\textbf{局部问题}——每个计算节点只需要：
+\begin{enumerate}
+    \item 前向：根据输入计算输出
+    \item 反向：接收上游梯度，计算对自身输入的梯度（链式法则）
+\end{enumerate}
+节点不需要知道自己处于什么样的网络中、要解决什么问题。这种局部 API 设计使得我们可以像搭积木一样构建任意复杂的神经网络。
+\end{importantbox}
+
+\begin{warningbox}{梯度形状法则}
+对于标量损失 $L$：
+\begin{itemize}
+    \item 上游梯度 $\frac{\partial L}{\partial \text{output}}$ 的形状 = output 的形状
+    \item 下游梯度 $\frac{\partial L}{\partial \text{input}}$ 的形状 = input 的形状
+\end{itemize}
+这是因为 $L$ 是标量，梯度本质上是``如果微扰张量中某个元素，损失会怎么变化''。
+\end{warningbox}
+
+\subsection{深度学习通用配方}
+
+这几节课建立了解决几乎所有深度学习问题的通用配方：
+
+\begin{enumerate}
+    \item 将问题编码为\textbf{张量输入/输出}
+    \item 设计\textbf{计算图}（神经网络架构）
+    \item 选择\textbf{损失函数}
+    \item 用\textbf{梯度下降 + 反向传播}优化
+\end{enumerate}
+
+无论是图像分类、图像生成还是大语言模型，底层都遵循这个配方。
+
+\subsection{本章小结}
+
+前四节课覆盖了深度学习的所有基础组件：线性分类器定义了问题形式，损失函数衡量了解的质量，优化算法搜索参数空间，神经网络提供了强大的函数族，计算图和反向传播让梯度计算自动化。接下来我们将进入课程第二阶段，学习如何针对图像设计更好的网络架构。
+
+%% ========== Part 2: 从特征工程到端到端学习 ==========
+
+\section{从特征工程到端到端学习}
+
+\subsection{传统特征表示}
+
+在深度学习时代之前（约 2000--2012 年），计算机视觉的标准范式是\textbf{手工特征提取 + 线性分类器}。研究者会设计各种特征表示来捕获图像中的关键信息：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-012.jpg}
+\caption{传统特征表示：颜色直方图（左上）和方向梯度直方图 HoG（右侧）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第13页。}
+
+\begin{itemize}
+    \item \textbf{颜色直方图}（Color Histogram）：将色彩空间离散化为若干桶，统计每个桶中像素数量。捕获颜色分布，但完全丢弃空间结构。
+    \item \textbf{方向梯度直方图}（HoG, Histogram of Oriented Gradients）：在图像的每个局部区域计算边缘方向的分布。捕获空间结构，但丢弃颜色信息。
+    \item \textbf{拼接特征}：实践中通常将多种特征向量拼接起来，形成一个大的特征表示。
+\end{itemize}
+
+\subsection{特征提取 vs 端到端学习}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-015.jpg}
+\caption{两种范式对比：（A）手工特征 + 学习分类器 vs（B）端到端神经网络\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第16页。}
+
+\begin{importantbox}{端到端学习的核心理念}
+\textbf{梯度下降可能比你更擅长编程，海量数据可能比你更了解问题。}
+
+传统方法中，特征提取部分由人类设计（可能包含错误直觉或遗漏），只有分类器部分从数据中学习。而端到端神经网络让\textbf{整个系统}——从原始像素到最终预测——都通过梯度下降从数据中学习。
+
+过去十余年的实践反复证明：端到端学习在几乎所有问题上都优于手工特征工程。
+\end{importantbox}
+
+\begin{knowledgebox}{人类设计者的角色变化}
+在端到端学习时代，人类的角色从``设计特征提取器''变为``设计网络架构''。两者的区别是：
+\begin{itemize}
+    \item 设计特征提取器 = 定义一个\textbf{具体函数}
+    \item 设计网络架构 = 定义一个\textbf{函数族}（由计算图结构决定），具体参数留给梯度下降从数据中学习
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+从手工特征提取到端到端学习是计算机视觉发展的关键转折。端到端学习的成功建立在三个基础之上：（1）足够强大的函数族（深度神经网络），（2）足够多的数据（ImageNet 等大规模数据集），（3）足够快的计算（GPU）。接下来我们将学习专门为图像设计的计算图元件——卷积层和池化层。
+
+%% ========== Part 3: 卷积神经网络 ==========
+
+\section{卷积神经网络概述}
+
+\subsection{为什么需要卷积？}
+
+到目前为止，我们唯一会用的网络架构是``全连接网络''——将图像展平为一维向量，然后做矩阵乘法。这有一个致命问题：\textbf{它破坏了图像的空间结构}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-019.jpg}
+\caption{全连接层的缺陷：图像被展平后丢失了二维空间结构\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第20页。}
+
+图像是二维对象——像素之间的空间关系（邻近、对称、层次结构）对于理解图像内容至关重要。全连接层将图像视为无结构的数字序列，无法利用这些先验知识。
+
+\begin{warningbox}{全连接网络处理图像的根本缺陷}
+\begin{itemize}
+    \item 展平操作破坏了二维空间结构
+    \item 参数数量巨大（如 $224 \times 224 \times 3 = 150528$ 维输入，即使只有 1000 个隐藏单元也需要 1.5 亿参数）
+    \item 无法利用图像的局部性和平移不变性
+\end{itemize}
+\end{warningbox}
+
+\subsection{卷积网络的整体结构}
+
+卷积神经网络（CNN / ConvNet）是由卷积层、池化层、全连接层和非线性激活函数构成的计算图，其一般结构为：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.6cm, every node/.style={draw, rounded corners, minimum width=2.2cm, minimum height=0.6cm, font=\small}]
+\node (input) {输入图像};
+\node (conv) [right=of input] {卷积 + ReLU};
+\node (pool) [right=of conv] {池化};
+\node (dots) [right=of pool, draw=none] {$\cdots$};
+\node (fc) [right=of dots] {全连接层};
+\node (out) [right=of fc] {分类分数};
+\draw[->, thick] (input) -- (conv);
+\draw[->, thick] (conv) -- (pool);
+\draw[->, thick] (pool) -- (dots);
+\draw[->, thick] (dots) -- (fc);
+\draw[->, thick] (fc) -- (out);
+\end{tikzpicture}
+\end{center}
+
+\begin{itemize}
+    \item \textbf{前缀}（body）：交替的卷积层 + 激活函数 + 池化层，负责从原始像素中提取越来越抽象的特征表示
+    \item \textbf{后缀}（head）：一个或多个全连接层，将特征映射到最终的预测分数
+    \item 整个系统通过梯度下降端到端训练
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-021.jpg}
+\caption{LeNet-5 架构（1998）：Yann LeCun 等人提出的经典卷积网络，用于手写数字识别\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第22页。}
+
+\begin{knowledgebox}{卷积网络的历史}
+卷积神经网络的历史可以追溯到 1998 年 Yann LeCun 等人的 LeNet-5。尽管当时没有 GPU，计算资源极其有限，但网络架构的基本形式与 2010 年代的现代 CNN 几乎一致。2012 年 AlexNet 在 ImageNet 竞赛中的巨大成功开启了深度学习革命，从那时到约 2020 年，CNN 在计算机视觉的几乎每个任务上都占据统治地位。
+\end{knowledgebox}
+
+\subsection{CNN 的应用领域}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-023.jpg}
+\caption{CNN 的广泛应用：目标检测、语义分割、图像描述生成、文本到图像生成\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第24页。}
+
+从 2012 到 2020 年，CNN 几乎垄断了所有图像相关任务：
+\begin{itemize}
+    \item \textbf{目标检测}：在图像中画出每个物体的边界框并标注类别
+    \item \textbf{语义分割}：为每个像素分配一个类别标签
+    \item \textbf{图像描述生成}：从图像生成自然语言描述
+    \item \textbf{图像生成}：Stable Diffusion 的第一个版本也基于卷积网络
+\end{itemize}
+
+\subsection{CNN vs Transformer}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-025.jpg}
+\caption{Vision Transformer（ViT, 2021）：将 Transformer 架构直接应用于图像\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第26页。}
+
+2017 年 Transformer 架构出现在 NLP 领域，2021 年 ViT（Vision Transformer）将几乎相同的架构应用于图像处理，并在许多任务上超越了 CNN。现在的趋势是 Transformer 逐渐取代 CNN 成为视觉任务的主流架构。
+
+\begin{knowledgebox}{为什么还要学习 CNN？}
+尽管 Transformer 在很多任务上超越了 CNN，学习 CNN 仍然非常重要：
+\begin{enumerate}
+    \item 巨大的\textbf{历史意义}——CNN 开启了深度学习时代
+    \item CNN 在实践中\textbf{仍被广泛使用}
+    \item 帮助建立\textbf{图像处理的直觉}
+    \item CNN 并未完全``死亡''——很多现代系统是 CNN + Transformer 的\textbf{混合架构}
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+卷积神经网络是专门为处理图像（以及其他具有空间结构的数据）设计的网络架构。它通过卷积层保留空间结构，通过池化层逐步缩小空间尺寸、扩大感受野，最终通过全连接层输出预测。尽管 Transformer 正在逐步取代 CNN，后者仍是理解现代视觉系统的重要基础。
+
+%% ========== Part 4: 卷积层 ==========
+
+\section{卷积层详解}
+
+\subsection{从全连接到卷积}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-027.jpg}
+\caption{全连接层 vs 卷积层：全连接层将整张图像展平后做内积；卷积层保持三维张量结构\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第28页。}
+
+全连接层中，输出向量的每个元素是权重矩阵的一行与\textbf{整个}输入向量的内积。这意味着：
+\begin{itemize}
+    \item 每个输出数值``看到''了图像中的\textbf{所有}像素
+    \item 空间结构被完全丢弃
+\end{itemize}
+
+卷积层的核心改变：每个输出数值只依赖于输入图像的一个\textbf{局部区域}。
+
+\subsection{卷积运算}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-029.jpg}
+\caption{单个卷积滤波器的工作方式：$5 \times 5 \times 3$ 的滤波器在 $32 \times 32 \times 3$ 的输入图像上滑动\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第30页。}
+
+卷积层的核心操作：
+\begin{enumerate}
+    \item 定义一组\textbf{滤波器}（filters / kernels），每个滤波器是一个小的三维张量，空间尺寸为 $K \times K$，深度等于输入通道数 $C_{in}$
+    \item 将滤波器在输入图像上\textbf{滑动}，在每个位置计算滤波器与对应局部区域的\textbf{内积}（点积 + 偏置）
+    \item 每个滤波器产生一个二维\textbf{激活图}（activation map）
+    \item $C_{out}$ 个滤波器产生 $C_{out}$ 个激活图，堆叠后形成输出张量
+\end{enumerate}
+
+\begin{importantbox}{卷积层的参数与输出形状}
+\textbf{输入}：$C_{in} \times H \times W$
+
+\textbf{滤波器}：$C_{out}$ 个，每个大小为 $C_{in} \times K \times K$
+
+\textbf{输出}：$C_{out} \times H' \times W'$
+
+其中 $H' = \lfloor(H - K + 2P) / S\rfloor + 1$，$W'$ 类似。
+
+\textbf{总参数量}：$C_{out} \times (C_{in} \times K \times K + 1)$（含偏置）
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-031.jpg}
+\caption{多滤波器卷积：6 个 $5 \times 5 \times 3$ 滤波器产生 $6 \times 28 \times 28$ 的输出\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第32页。}
+
+\subsection{参数 vs 超参数}
+
+\begin{warningbox}{区分参数与超参数}
+\begin{itemize}
+    \item \textbf{超参数}（训练前设定，不可学习）：滤波器数量 $C_{out}$、滤波器大小 $K$、步幅 $S$、填充 $P$
+    \item \textbf{参数}（通过梯度下降学习）：滤波器中每个元素的数值、偏置值
+\end{itemize}
+超参数决定了张量的\textbf{形状}，参数决定了张量的\textbf{数值}。滤波器在训练开始时随机初始化，然后通过反向传播不断优化。
+\end{warningbox}
+
+\subsection{卷积滤波器学到了什么？}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-039.jpg}
+\caption{AlexNet 第一层卷积滤波器的可视化：学到了颜色对比和边缘检测器\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第40页。}
+
+对第一层卷积滤波器的可视化揭示了两类模式：
+\begin{itemize}
+    \item \textbf{颜色检测器}：检测对比色（如红-绿对比、色块等）
+    \item \textbf{边缘检测器}：检测水平、垂直、对角线方向的边缘
+\end{itemize}
+
+这个结果具有惊人的普遍性——几乎所有 CNN、所有数据集、所有任务中，第一层滤波器都学到类似的模式。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-040.jpg}
+\caption{深层卷积滤波器的可视化：更高层学到了更大的空间结构——纹理、物体部件、甚至完整物体\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第41页。}
+
+\begin{importantbox}{CNN 的层级特征学习}
+CNN 自动学习了一个从低级到高级的\textbf{特征层次结构}：
+\begin{itemize}
+    \item 第 1 层：边缘和颜色
+    \item 中间层：纹理和简单形状
+    \item 高层：物体部件和语义概念
+\end{itemize}
+这与人类视觉系统中初级视皮层到高级视觉区域的层级处理有着惊人的相似性。
+\end{importantbox}
+
+\subsection{非线性激活函数不可或缺}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-037.jpg}
+\caption{堆叠卷积层但不加激活函数 = 一个卷积层（线性复合仍是线性）\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第38页。}
+
+卷积运算本质上是内积——一种线性运算。两个线性运算的复合仍然是线性运算。因此，如果直接堆叠多个卷积层而不加非线性激活函数，整个网络的表达能力等价于单个卷积层。
+
+\begin{warningbox}{线性层堆叠 = 单层}
+$f_2 \circ f_1(x) = W_2(W_1 x) = (W_2 W_1)x = W'x$
+
+无论堆叠多少个线性层，等价于一个线性变换。\textbf{必须}在卷积层之间插入非线性激活函数（如 ReLU）才能增加网络的表达能力。
+\end{warningbox}
+
+\subsection{本章小结}
+
+卷积层是 CNN 的核心组件。它通过局部连接和权值共享实现了两个关键优势：（1）保留图像的空间结构，（2）大幅减少参数量。滤波器通过梯度下降自动学习，无需人工设计。不同层的滤波器自然形成从边缘到物体的层级特征表示。非线性激活函数是多层卷积网络表达能力的关键保障。
+
+%% ========== Part 5: 卷积运算细节 ==========
+
+\section{卷积运算的数学细节}
+
+\subsection{输出尺寸计算}
+
+给定输入空间尺寸 $W$、滤波器大小 $K$、填充 $P$ 和步幅 $S$，输出尺寸为：
+
+$$W_{out} = \left\lfloor \frac{W - K + 2P}{S} \right\rfloor + 1$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-044.jpg}
+\caption{不同超参数对输出尺寸的影响示例\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第45页。}
+
+\subsection{填充（Padding）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-046.jpg}
+\caption{零填充：在输入边缘添加零值，使得卷积后空间尺寸保持不变\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第47页。}
+
+不使用填充时，每次卷积都会使空间尺寸缩小 $K-1$ 个像素。这在深层网络中会导致特征图迅速缩小到 0。
+
+\begin{importantbox}{保持空间尺寸的常用设置}
+当 $K$ 为奇数时，设置 $P = \frac{K-1}{2}$、$S = 1$ 可以保持卷积前后的空间尺寸不变。这是最常见的卷积配置。例如：
+\begin{itemize}
+    \item $K = 3, P = 1, S = 1$
+    \item $K = 5, P = 2, S = 1$
+    \item $K = 7, P = 3, S = 1$
+\end{itemize}
+\end{importantbox}
+
+\subsection{步幅（Stride）与下采样}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-048.jpg}
+\caption{步幅为 2 的卷积：滤波器每次跳过一个位置，有效地对特征图进行下采样\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第49页。}
+
+步幅大于 1 的卷积会\textbf{缩小}空间尺寸——这是在网络内部实现\textbf{下采样}的一种方式。下采样非常重要，因为它允许网络的感受野以指数速度增长。
+
+\subsection{感受野（Receptive Field）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-050.jpg}
+\caption{感受野的增长：单层 $3 \times 3$ 卷积的感受野为 3，三层 $3 \times 3$ 卷积的感受野增长到 7\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第51页。}
+
+\textbf{感受野}（receptive field）指的是：网络某一层的一个激活值，能``看到''原始输入图像中多大的区域。
+
+\begin{importantbox}{感受野的增长规律}
+\begin{itemize}
+    \item \textbf{无下采样}（$S = 1$）：感受野\textbf{线性}增长。$L$ 层 $K \times K$ 卷积的感受野为 $L(K-1) + 1$。这意味着需要很多层才能覆盖大图像的全部区域。
+    \item \textbf{有下采样}（$S = 2$）：感受野\textbf{指数}增长。较少的层即可覆盖整张图像。
+\end{itemize}
+最终分类决策需要聚合整张图像的信息，因此下采样对于构建实用的 CNN 至关重要。
+\end{importantbox}
+
+\subsection{1x1 卷积}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-053.jpg}
+\caption{$1 \times 1$ 卷积：在每个空间位置上对通道维度做全连接变换\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第54页。}
+
+$1 \times 1$ 卷积是一种特殊的卷积：空间上不做任何邻域操作，只在\textbf{通道维度}上做线性组合。它可以看作在每个空间位置独立应用的全连接层。主要用途：
+\begin{itemize}
+    \item 改变通道数（降维或升维）
+    \item 增加非线性（配合激活函数）
+    \item 减少计算量（先降维再做大卷积）
+\end{itemize}
+
+\subsection{卷积层的计算量分析}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{卷积层的计算量分析：FLOPs、参数量、内存占用\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+对于一个卷积层（$C_{in}$ 输入通道，$C_{out}$ 输出通道，$K \times K$ 滤波器，输出空间大小 $H' \times W'$）：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{指标} & \textbf{数值} \\
+\midrule
+参数量 & $C_{out} \times C_{in} \times K \times K$ \\
+FLOPs & $C_{out} \times C_{in} \times K \times K \times H' \times W'$ \\
+输出内存 & $C_{out} \times H' \times W'$ \\
+\bottomrule
+\end{tabular}
+\caption{卷积层资源消耗}
+\end{table}
+
+\begin{knowledgebox}{CNN 中计算量和参数量的分布}
+在典型的 CNN 中：
+\begin{itemize}
+    \item \textbf{前面的卷积层}：空间尺寸大、通道数少，计算量大但参数少
+    \item \textbf{后面的卷积层}：空间尺寸小、通道数多，计算量相对小但参数多
+    \item \textbf{全连接层}：参数量最多但计算量相对少
+\end{itemize}
+这种分布特性对网络设计和硬件优化都非常重要。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+卷积运算的数学细节虽然看起来复杂，但核心思想简单：在局部区域做内积，然后滑动。填充保持空间尺寸，步幅实现下采样，感受野随深度增长。理解这些细节对于设计和调试 CNN 架构至关重要。
+
+%% ========== Part 6: 池化层 ==========
+
+\section{池化层}
+
+\subsection{池化的基本概念}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-057.jpg}
+\caption{池化层：对每个通道独立进行空间下采样\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第58页。}
+
+池化层是 CNN 中另一种实现\textbf{空间下采样}的方式。与带步幅的卷积不同，池化层：
+\begin{itemize}
+    \item 没有可学习的参数
+    \item 对每个通道\textbf{独立}操作
+    \item 保持通道数不变，只缩小空间尺寸
+\end{itemize}
+
+\subsection{最大池化（Max Pooling）}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slides-images/slide-058.jpg}
+\caption{$2 \times 2$ 最大池化（步幅 2）：在每个不重叠的 $2 \times 2$ 区域内取最大值\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第59页。}
+
+最常见的池化操作是 $2 \times 2$ 最大池化，步幅为 2：
+\begin{itemize}
+    \item 将每个通道的特征图划分为不重叠的 $2 \times 2$ 小块
+    \item 在每个小块内取\textbf{最大值}
+    \item 空间尺寸缩小为原来的一半
+\end{itemize}
+
+其他选择包括平均池化（Average Pooling）和抗锯齿下采样（Anti-alias Downsampling）。
+
+\begin{knowledgebox}{池化层的实践建议}
+\begin{itemize}
+    \item 最常用的配置：$2 \times 2$ kernel，stride 2（``我想把空间尺寸减半''）
+    \item 池化层通常\textbf{不使用填充}——对于最大池化，填充零等价于 ReLU，是多余的
+    \item 现代架构越来越倾向于用\textbf{带步幅的卷积}代替池化，因为前者有可学习参数
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{全局平均池化}
+
+在 CNN 的末尾，常用\textbf{全局平均池化}（Global Average Pooling）将每个通道的整个空间维度压缩为一个数值。如果最后的特征图大小为 $C \times H \times W$，全局平均池化输出 $C \times 1 \times 1$，直接用于分类。
+
+\subsection{本章小结}
+
+池化层通过无参数的空间下采样操作缩小特征图尺寸，从而增大后续层的感受野并减少计算量。最大池化是最经典的选择，但现代架构中带步幅的卷积越来越多地取代了池化层的角色。
+
+%% ========== Part 7: 构建完整的 CNN ==========
+
+\section{构建完整的 CNN}
+
+\subsection{经典 CNN 架构模式}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-060.jpg}
+\caption{典型 CNN 架构：卷积层、激活函数和池化层交替出现，最后是全连接层\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第61页。}
+
+经典的 CNN 遵循以下模式：
+
+$$\text{[Conv} \rightarrow \text{ReLU} \rightarrow \text{Pool]}^N \rightarrow \text{[FC} \rightarrow \text{ReLU]}^M \rightarrow \text{FC (输出)}$$
+
+\begin{itemize}
+    \item 随着网络深度增加，空间尺寸逐渐\textbf{缩小}（通过池化或带步幅的卷积）
+    \item 通道数逐渐\textbf{增加}（每次池化后通常将通道数翻倍）
+    \item 直觉：空间尺寸缩小但通道数增加，总信息量大致保持不变
+\end{itemize}
+
+\subsection{详细示例：一个简单的 CNN}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-061.jpg}
+\caption{完整 CNN 示例：$224 \times 224$ 输入经过多层卷积和池化，最终输出 1000 类分数\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第62页。}
+
+以输入尺寸 $3 \times 224 \times 224$ 的 CNN 为例，追踪各层的张量形状变化：
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{层} & \textbf{输出形状} & \textbf{参数量} & \textbf{说明} \\
+\midrule
+输入 & $3 \times 224 \times 224$ & -- & RGB 图像 \\
+Conv1 ($7 \times 7$, S=2) & $64 \times 112 \times 112$ & 9,472 & 下采样 2x \\
+Pool ($2 \times 2$, S=2) & $64 \times 56 \times 56$ & 0 & 下采样 2x \\
+Conv2 ($3 \times 3$) & $192 \times 56 \times 56$ & 110,784 & 增加通道 \\
+Pool ($2 \times 2$, S=2) & $192 \times 28 \times 28$ & 0 & 下采样 2x \\
+Conv3 ($3 \times 3$) & $384 \times 28 \times 28$ & 663,936 & 增加通道 \\
+\bottomrule
+\end{tabular}
+\caption{CNN 各层张量形状变化示例}
+\end{table}
+
+\subsection{处理不同尺寸的输入}
+
+\begin{warningbox}{输入图像必须大小一致}
+在当前框架下，同一个 batch 中的所有图像必须具有\textbf{相同的空间尺寸}。常见的处理方法：
+\begin{itemize}
+    \item 将所有图像 resize 到固定大小（最常见）
+    \item 用零填充到统一大小
+    \item 宽高比分桶（Aspect Ratio Bucketing）——同一 batch 内使用相同宽高比，不同 batch 可以不同
+\end{itemize}
+\end{warningbox}
+
+\subsection{本章小结}
+
+构建一个完整的 CNN 就是在计算图中组合卷积层、激活函数、池化层和全连接层。核心设计原则是：空间尺寸逐层缩小，通道数逐层增加，形成从像素到语义的特征金字塔。输出端用全连接层（或全局平均池化 + 线性层）将特征映射到分类分数。
+
+%% ========== Part 8: AlexNet ==========
+
+\section{AlexNet：深度学习的引爆点}
+
+\subsection{AlexNet 的历史意义}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-063.jpg}
+\caption{AlexNet 架构（2012）：深度学习革命的起点\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第64页。}
+
+AlexNet（Krizhevsky, Sutskever, Hinton, 2012）是在 ImageNet 大规模视觉识别挑战赛（ILSVRC 2012）上取得突破性成绩的卷积神经网络。它在 Top-5 错误率上以 $\sim$10\% 的优势击败了传统方法（从 $\sim$26\% 降到 $\sim$16\%），开启了深度学习在计算机视觉中的统治时代。
+
+AlexNet 的成功因素：
+\begin{itemize}
+    \item 使用\textbf{GPU} 训练（当时是两块 GTX 580）
+    \item 大规模数据集 ImageNet（120 万张图片）
+    \item ReLU 激活函数（取代 sigmoid/tanh）
+    \item Dropout 正则化
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-065.jpg}
+\caption{ImageNet 竞赛中各年份最优模型的错误率和层数变化\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第66页。}
+
+\subsection{本章小结}
+
+AlexNet 的架构本身并不复杂——它基本上就是 LeNet-5 的放大版本。它的革命性在于证明了三件事：（1）CNN 可以在大规模数据集上训练，（2）GPU 是深度学习的关键加速器，（3）端到端学习的特征远优于手工特征。
+
+%% ========== 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{全课知识图谱}
+
+本节课建立了从深度学习基础到卷积神经网络的完整知识链：
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={draw, rounded corners, minimum width=3.5cm, minimum height=0.7cm, font=\small}]
+\node (review) {深度学习基础回顾};
+\node (feature) [below=of review] {特征工程 vs 端到端学习};
+\node (conv) [below=of feature] {卷积层与池化层};
+\node (arch) [below=of conv] {CNN 架构设计};
+\node (alex) [below=of arch] {AlexNet 与深度学习革命};
+\draw[->, thick] (review) -- (feature);
+\draw[->, thick] (feature) -- (conv);
+\draw[->, thick] (conv) -- (arch);
+\draw[->, thick] (arch) -- (alex);
+\node[draw=none, right=0.8cm of review, text width=5.5cm, font=\scriptsize] {线性分类器、损失函数、优化、计算图、反向传播};
+\node[draw=none, right=0.8cm of feature, text width=5.5cm, font=\scriptsize] {颜色直方图、HoG、端到端学习优势};
+\node[draw=none, right=0.8cm of conv, text width=5.5cm, font=\scriptsize] {局部连接、权值共享、感受野、步幅、填充};
+\node[draw=none, right=0.8cm of arch, text width=5.5cm, font=\scriptsize] {Conv-ReLU-Pool 模式、通道数递增、空间递减};
+\node[draw=none, right=0.8cm of alex, text width=5.5cm, font=\scriptsize] {GPU 训练、ImageNet、CNN vs Transformer};
+\end{tikzpicture}
+\end{center}
+
+\subsection{关键 Takeaways}
+
+\begin{importantbox}{五条核心原则}
+\begin{enumerate}
+    \item \textbf{端到端学习优于手工特征}：让梯度下降从数据中学习特征表示，而非依赖人类直觉
+    \item \textbf{卷积利用了图像的先验知识}：局部性（每个输出只看一小块区域）和平移不变性（同一滤波器在所有位置共享）
+    \item \textbf{层级特征自动涌现}：浅层学边缘和颜色，深层学纹理和物体部件，无需人工设计
+    \item \textbf{非线性是深度网络的灵魂}：没有激活函数，再深的网络也等价于一层线性变换
+    \item \textbf{设计模式}：空间尺寸逐步缩小 + 通道数逐步增加 = 从像素到语义的特征金字塔
+\end{enumerate}
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item LeCun et al., ``Gradient-Based Learning Applied to Document Recognition'' (1998) —— LeNet-5 原始论文
+    \item Krizhevsky et al., ``ImageNet Classification with Deep Convolutional Neural Networks'' (2012) —— AlexNet
+    \item Dosovitskiy et al., ``An Image is Worth 16x16 Words'' (2021) —— Vision Transformer (ViT)
+    \item CS231N 课程主页：\url{https://cs231n.stanford.edu/}
+\end{itemize}
+
+\end{document}

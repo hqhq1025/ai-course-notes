@@ -1,0 +1,473 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS231N Lecture 14: Generative Models (Part 2)}
+\newcommand{\noteauthors}{基于 Justin Johnson 授课内容整理}
+\newcommand{\notedate}{2025年5月20日}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-05-20}
+\newcommand{\videoduration}{1:12:00}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Part 1: Generative modeling recap ==========
+
+\section{生成式建模回顾}
+
+上一讲我们已经把生成式建模的前半张图铺好了：判别式模型直接预测条件分布 $p(y\mid x)$，生成式模型则试图建模数据分布本身，或者建模条件生成分布 $p(x\mid y)$。这一讲继续往下走，重点是另一半 family tree：\textbf{隐式密度模型}，以及它们最终如何走到今天的 diffusion / latent diffusion / text-to-image pipeline。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-000.jpg}
+\caption{本讲标题页：Generative Models (part 2)\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第1页。}
+
+\begin{knowledgebox}{本讲主线}
+\begin{itemize}
+    \item \textbf{显式密度}：autoregressive、VAE，能写出或近似写出 $p(x)$。
+    \item \textbf{隐式密度}：GAN 不给你显式 $p(x)$，但能从学到的分布里采样。
+    \item \textbf{扩散模型}：通过逐步去噪来学习数据流形，训练更稳定，样本质量更好。
+    \item \textbf{现代大模型管线}：VAE + GAN + diffusion + transformer + text encoder，几乎全部一起上。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{从显式到隐式}
+
+回顾一下上一讲的结论。autoregressive 模型把图像拉直成序列，用 RNN 或 Transformer 按顺序建模；VAE 通过 encoder / decoder 和变分下界学习一个近似密度。两者都属于显式密度范式，区别只是一个能精确算似然，一个只能优化下界。
+
+本讲要讨论的第一类新东西是 GAN。它不再执着于输出密度值，而是学一个能产生样本的映射。只要生成的样本看起来像真数据，它就算赢了。这个思路的好处是样本质量可以很高，坏处是训练极不稳定。
+
+\subsection{为什么训练生成模型这么难}
+
+生成模型的根问题始终没变：我们有一个容易采样的先验分布 $p(z)$，也有真实而复杂的数据分布 $p_{\text{data}}(x)$，但我们并不知道如何把前者对齐到后者。不同方法的差别在于，它们用什么机制来对齐这两个世界。
+
+\begin{importantbox}{所有生成模型都在做同一件事}
+它们都在尝试解决“如何把简单噪声 $z$ 变成复杂数据 $x$”这个问题，只不过：
+\begin{itemize}
+    \item VAE 用 encoder / decoder 和 ELBO；
+    \item GAN 用对抗训练；
+    \item diffusion 用逐步去噪；
+    \item latent diffusion 则把这些模块拼成工业级系统。
+\end{itemize}
+\end{importantbox}
+
+\section{GAN}
+
+\subsection{生成器与判别器}
+
+GAN 的标准设定很简单：从先验 $p(z)$ 采样一个 latent $z$，经过生成器 $G(z)$ 得到一个样本；再把这个样本送入判别器 $D(x)$，让判别器判断它是真的还是假的。生成器希望骗过判别器，判别器希望把真伪分开。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-020.jpg}
+\caption{GAN 的训练目标：生成器和判别器做 minimax 对抗\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第21页。}
+
+\[
+\min_G \max_D \;
+\mathbb{E}_{x \sim p_{\text{data}}}[\log D(x)]
+\;+\;
+\mathbb{E}_{z \sim p(z)}[\log(1 - D(G(z)))]
+\]
+
+这个式子最关键的点不是数学形式本身，而是\textbf{训练视角}。固定生成器时，判别器是在做二分类；固定判别器时，生成器是在通过判别器的梯度，去优化自己输出样本的分布。
+
+\begin{knowledgebox}{判别器输出的语义}
+\begin{itemize}
+    \item $D(x)=1$ 表示“我认为这是一个真实样本”。
+    \item $D(x)=0$ 表示“我认为这是一个假样本”。
+    \item 判别器一般输出概率而不是硬标签，因此训练目标写成 log-likelihood 更自然。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{训练循环}
+
+GAN 的训练是交替进行的：先更新判别器，再更新生成器，再更新判别器，循环往复。判别器更新时希望把真样本打高分、假样本打低分；生成器更新时则希望让判别器把自己的输出误判为真。
+
+\begin{importantbox}{生成器常用的“非饱和”损失}
+实践中，生成器常常不直接最小化 $\log(1-D(G(z)))$，而改为最小化
+\[
+\mathcal{L}_G = -\log D(G(z)).
+\]
+这样在训练初期判别器很强、生成器很弱时，梯度会更有用。
+\end{importantbox}
+
+GAN 里一个常见误解是把 $V(G,D)$ 当成普通 loss 来看。其实不行。它是一个博弈值，数值大小本身没有稳定的可解释性。判别器强，值会变；生成器强，值也会变。你不能像看分类 loss 那样看它单调下降。
+
+\subsection{为什么 GAN 难训}
+
+GAN 的难点主要有四个。
+
+\begin{enumerate}
+    \item \textbf{非平稳}：判别器面对的“数据集”会随着生成器变强而不断变化。
+    \item \textbf{信号稀薄}：训练初期判别器可能过强，生成器梯度会变得很差。
+    \item \textbf{没有好曲线看}：generator loss / discriminator loss 通常都不太能反映真实进展。
+    \item \textbf{容易塌缩}：mode collapse 会让生成器只记住少数几个样本模式。
+\end{enumerate}
+
+\begin{warningbox}{GAN 训练不是普通分类问题}
+判别器虽然形式上像分类器，但它面对的正负样本分布在训练过程中不断变化。这和 ImageNet 这类静态数据集完全不同，因此“看 loss 曲线”这套经验在这里经常失效。
+\end{warningbox}
+
+\subsection{理论与局限}
+
+从理论上看，如果判别器足够强，可以写出最优判别器，并且证明在理想条件下，唯一的均衡点是 $p_G(x)=p_{\text{data}}(x)$。但这里的“理想条件”非常苛刻：无限容量、完美优化、有限样本误差忽略不计。现实里的神经网络都不满足这些前提。
+
+更麻烦的是，GAN 的样本质量虽然高，但它没有反向映射。也就是说，你一般能从 $z \mapsto x$，却没法从一个真实样本方便地回到对应的 latent $z$。这和 VAE 非常不同。
+
+\begin{knowledgebox}{GAN 的优缺点}
+\begin{itemize}
+    \item 优点：采样快，样本锐利，很多时候视觉质量非常好。
+    \item 缺点：训练不稳定，mode collapse 严重，loss 曲线不可信。
+    \item 额外限制：通常没有显式的 $x \to z$ 编码器。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{GAN 的经典现象}
+
+GAN 很喜欢在 latent space 里表现出平滑插值。若从两个 latent 向量 $z_0, z_1$ 之间做线性插值，生成图像往往会平滑变形，而不是跳变。这说明生成器学到了一些有用的语义结构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{rectified flow 的采样图展示了“从噪声一步步走回数据”的几何直觉。GAN 和 diffusion 都共享“从简单分布到复杂分布”的大目标，但实现方式不同\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+GAN 的另一个典型问题是 mode collapse：生成器可能只输出极少数模板，但这些模板足够“真”，以至于判别器也未必能轻易抓出来。于是看起来好像训练成功了，实际上多样性已经没了。
+
+\subsection{GAN 的历史位置}
+
+GAN 在 2016 到 2021 左右长期占据生成式建模主流。DCGAN、StyleGAN 等工作把 GAN 推到很高的样本质量，尤其是在图像领域。但后来 diffusion 以更稳定的训练、更可靠的 loss 和更好的规模化能力逐步取代了它。
+
+\begin{importantbox}{GAN 留下来的真正遗产}
+GAN 的遗产不只是“能生成很漂亮的图”，还包括 latent space 结构化、生成质量评估、以及对生成模型训练稳定性的长期刺激。很多今天的工业级系统仍会把 GAN 作为局部模块塞进去。
+\end{importantbox}
+
+\section{Diffusion}
+
+\subsection{为什么 diffusion 成了主流}
+
+GAN 解决了样本质量问题，但代价是训练地狱。diffusion 则用另一种方式换取稳定：把“生成”拆成很多步的“去噪”。每一步只做一点点修正，最后从纯噪声走回数据分布。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-035.jpg}
+\caption{Diffusion Models 章节开始：从 GAN 转向逐步去噪的思路\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第36页。}
+
+\subsection{直觉}
+
+最朴素的 diffusion 直觉是这样的：训练一个网络，输入一个带噪样本，输出“去掉一点噪声之后”的样本。训练时让它学会不同噪声强度下的修复；采样时从纯噪声开始，重复应用这个网络，最终逐步回到清晰样本。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-076.jpg}
+\caption{Optimal Prediction：训练目标就是让网络在中等噪声区域学会最合理的“去噪方向”\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第76页。}
+
+训练目标的核心是：给网络一个中间状态 $x_t$ 和噪声水平 $t$，让它预测一个合适的方向。对于 rectified flow，这个方向可以直接理解为从数据样本指向噪声样本的速度向量。
+
+\subsection{Rectified flow}
+
+在讲义里最容易写清楚、也最容易实现的一种 diffusion 变体就是 rectified flow。它的训练流程可以压缩成三步。
+
+\begin{enumerate}
+    \item 从数据分布采样 $x$，从噪声分布采样 $z$，再采样一个 $t \sim U[0,1]$。
+    \item 构造中间点 $x_t = (1-t)x + tz$。
+    \item 让网络输入 $(x_t, t)$，预测速度向量 $v = z-x$。
+\end{enumerate}
+
+\[
+\mathcal{L}(\theta) = \mathbb{E}\left[\left\|f_\theta(x_t,t) - (z-x)\right\|_2^2\right]
+\]
+
+\begin{importantbox}{rectified flow 的好处}
+\begin{itemize}
+    \item 训练像普通回归，loss 好看且可解释。
+    \item 采样时只需要反复沿预测速度场前进。
+    \item 比 GAN 更稳定，比传统 diffusion 更容易用几何直觉理解。
+\end{itemize}
+\end{importantbox}
+
+\subsection{采样}
+
+采样阶段从纯噪声 $x_1 \sim p_{\text{noise}}$ 开始，设定若干步数 $T$，然后从 $t=1$ 迭代到 $t=0$。每一步调用网络预测速度 $v_t$，再沿这个速度方向做小步更新。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-055.jpg}
+\caption{Rectified Flow: Sampling。采样时从纯噪声出发，沿着学到的向量场逐步走向数据分布\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第56页。}
+
+这和 GAN 的区别非常明显。GAN 采样时是一跳到位，diffusion 采样时是一小步一小步走。前者快，但训练不稳定；后者慢一点，但稳定得多。
+
+\subsection{为什么中间噪声最难}
+
+一个很重要的经验是，中等噪声水平往往最难学。极高噪声和极低噪声都比较简单，因为模型只要学会数据均值或噪声均值就行；但中间位置会有很多不同的 $(x,z)$ 对应同一个 $x_t$，模型必须学会在这些可能性之间平均。
+
+这也是为什么实践中会用不同的噪声采样策略，比如 log-normal 或 shifted schedule，而不是死板地均匀采样 $t$。
+
+\begin{warningbox}{噪声调度不是装饰品}
+在高分辨率任务里，合适的噪声调度会直接影响训练质量。低分辨率数据和高分辨率数据的相关结构不同，同样的 $t$ 分布未必能同时适配两者。
+\end{warningbox}
+
+\subsection{条件生成与 CFG}
+
+无条件生成很少真正有用，现实里我们几乎总是想要条件生成：给定文本、类别、草图、掩码或别的用户输入，生成满足条件的样本。
+
+条件 rectified flow 很自然：训练时把条件 $y$ 作为额外输入，采样时也把 $y$ 送进去即可。但实战里还会有一个关键技巧叫 classifier-free guidance（CFG）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-101.jpg}
+\caption{Text-to-Image：文本编码器 + diffusion transformer + decoder，构成现代条件生成管线\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第101页。}
+
+CFG 的做法是：训练时随机把一部分条件置空，让同一个模型同时学会“有条件”和“无条件”的两种向量场。采样时再将两者做线性组合：
+
+\[
+v_{\text{cfg}} = (1+w)\,v(x,t,y) - w\,v(x,t,\varnothing)
+\]
+
+其中 $w$ 是 guidance strength。$w$ 越大，模型越“听话”；但太大也会损伤多样性。
+
+\begin{knowledgebox}{CFG 的作用}
+\begin{itemize}
+    \item 提高条件遵循度。
+    \item 几乎是现代 diffusion 系统的标配。
+    \item 代价是采样时要多跑一次模型，成本翻倍。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{Diffusion 的三种视角}
+
+这一讲特意强调，diffusion 不是只有一种数学解释。
+
+\begin{enumerate}
+    \item \textbf{Latent variable model}：把“加噪后的轨迹”看成潜变量，和 VAE 很像。
+    \item \textbf{Score matching}：学习 $\nabla_x \log p(x)$，也就是把样本往高密度区域推的向量场。
+    \item \textbf{SDE / ODE}：把采样理解成数值积分过程，rectified flow 可以看作某种 Euler 风格更新。
+\end{enumerate}
+
+这三种解释表面上不同，但最后落到工程上，很多算法长得非常像：采样噪声、输入噪声级别、输出一个回归目标、最小化一个均方误差。
+
+\section{Latent diffusion 与现代管线}
+
+\subsection{为什么要进 latent space}
+
+直接在像素空间上做 diffusion 会很贵，尤其是高分辨率图像和视频。一个非常实用的想法是先用 encoder 把图像压到较小的 latent 空间，再在 latent 上做 diffusion，最后用 decoder 还原。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-116.jpg}
+\caption{Diffusion is a Latent Variable Model：前向过程加噪，反向过程学去噪，和 VAE 的 latent 视角非常接近\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第116页。}
+
+这就是 latent diffusion。工程上，encoder / decoder 往往来自 VAE，diffusion 模型只在 latent 上运行。这样序列长度更短、计算量更低、训练更稳定。
+
+\subsection{现代系统为什么是拼装怪}
+
+现代生成模型管线不是“单一模型统治一切”，而是拼装怪：
+
+\begin{itemize}
+    \item 用 \textbf{VAE} 把图像压到 latent；
+    \item 用 \textbf{GAN} 或其他对抗模块提高局部重建质量；
+    \item 用 \textbf{diffusion} 在 latent 上建模生成；
+    \item 用 \textbf{transformer} 做主干网络；
+    \item 用 \textbf{text encoder} 提供条件信号；
+    \item 必要时再加 \textbf{distillation} 降低采样步数。
+\end{itemize}
+
+\begin{importantbox}{现代生成模型不是单模型思维}
+真正能跑起来的系统，几乎都不是单纯的 VAE、GAN 或 diffusion，而是这些方法的组合体。你在论文里看到的是一个名字，在产品里看到的是一堆模块。
+\end{importantbox}
+
+\subsection{Text-to-Image}
+
+文本到图像的流程最典型。先把 prompt 送入预训练文本编码器，比如 T5 或 CLIP；然后把文本 embedding 和 noisy latent 一起送入 diffusion transformer；最后把生成出来的 clean latent 通过 decoder 还原成图像。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-101.jpg}
+\caption{Text-to-Image 的标准管线：文本编码器、latent diffusion transformer、decoder\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第101页。}
+
+这一类系统很重要的一点是：文本编码器通常是冻结的。它提供的是语义条件，不参与 diffusion 的主训练。真正要学的是如何把语义条件和噪声轨迹对齐。
+
+\subsection{Text-to-Video}
+
+视频生成和图像生成的结构非常像，只是 latent 多了一个时间维度。也就是说，除了空间上的 $H \times W$，还要建模帧之间的动态关系。于是 sequence length 会猛增，算力成本也猛增。
+
+\begin{itemize}
+    \item 图像生成通常已经有几百到上千个 token。
+    \item 视频生成会直接冲到几万甚至更多 token。
+    \item 这也是为什么视频 diffusion 模型特别贵。
+\end{itemize}
+
+\subsection{为什么又回到 Transformer}
+
+在 diffusion 主干网络里，Transformer 重新变得非常重要。原因很直接：它对序列建模灵活，而且能把 noisy latent、时间步和条件信号统一接入。现代 diffusion transformer（DiT）基本已经成了主流结构之一。
+
+\begin{knowledgebox}{Transformer 在 diffusion 中的角色}
+\begin{itemize}
+    \item 负责处理序列化的 latent token。
+    \item 通过 cross-attention / joint attention 接收文本条件。
+    \item 通过 scale-and-shift 或类似机制注入时间步。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{高质量视频生成}
+
+讲义里提到了 Sora 和 Veo 这类最新视频模型。它们的共同点是：大规模 latent 视频建模、强条件控制、以及非常昂贵的训练和推理成本。概念上和图像 diffusion 没有本质区别，但规模一上去，工程复杂度就完全不同了。
+
+\subsection{为什么还要 distillation}
+
+diffusion 的最大问题之一是慢。无论是 rectified flow 还是更传统的 diffusion，都要多次迭代模型才能得到最终样本。于是就有了 distillation：把多步采样“蒸馏”成更少步，甚至一步。
+
+\begin{itemize}
+    \item 优点：显著降低采样时间。
+    \item 缺点：通常会牺牲一部分样本质量。
+    \item 现实里：几乎所有大模型都会想办法做某种 distillation。
+\end{itemize}
+
+\section{总结}
+
+\subsection{这一讲到底解决了什么}
+
+如果把这一讲压缩成一句话，那就是：\textbf{现代生成式建模的工业实践，已经不是在 VAE、GAN、diffusion 里选一个，而是把它们全部组合起来。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{slides-images/slide-116.jpg}
+\caption{从 latent variable 角度看，diffusion 和 VAE、GAN 其实共享同一个核心难题：如何把简单噪声和复杂数据对齐\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第116页。}
+
+\begin{importantbox}{最后的 Takeaways}
+\begin{enumerate}
+    \item \textbf{GAN} 让我们拿到了高质量样本，但训练太不稳定。
+    \item \textbf{Diffusion} 把生成变成逐步去噪，训练稳定、样本强。
+    \item \textbf{Rectified flow} 给了 diffusion 一个特别清楚的几何解释。
+    \item \textbf{Latent diffusion} 是真正的工业主力，因为它把计算量压到了可接受范围。
+    \item \textbf{Text-to-image / text-to-video} 的核心不是“生成图像或视频”，而是把条件信号接入一个可控的 latent generative pipeline。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{与前两讲的联系}
+
+这三讲其实是连在一起的。第 13 讲讲的是 autoregressive、VAE、GAN 的前半部分；第 14 讲把 GAN 和 diffusion 的后半部分收完。到了现代，生成模型通常不再是单一算法，而是多个算法模块的混合系统。
+
+\begin{itemize}
+    \item 如果你要高质量静态图像，latent diffusion 是主流。
+    \item 如果你要更强的条件控制，CFG 和 text encoder 是标配。
+    \item 如果你要更快采样，distillation 是绕不开的。
+    \item 如果你要真正理解现代系统，就得同时懂 VAE、GAN 和 diffusion。
+\end{itemize}
+
+\subsection{延伸阅读}
+
+\begin{itemize}
+    \item Goodfellow et al., Generative Adversarial Nets (2014)
+    \item Ho et al., Denoising Diffusion Probabilistic Models (2020)
+    \item Song et al., Score-Based Generative Modeling through SDEs (2021)
+    \item Liu et al., Flow Straight and Fast / Flow Matching for Generative Modeling (2022)
+    \item 近年的 latent diffusion / DiT / video diffusion technical reports
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,363 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 13: Data}
+\newcommand{\noteauthors}{基于讲者授课内容整理}
+\newcommand{\notedate}{2025年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{2025-03}
+\newcommand{\videoduration}{-}
+\newcommand{\videourl}{https://stanford-cs336.github.io/spring2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{导言：为什么这一讲是数据}
+
+这节课的核心观点很直接：如果前几讲回答的是“给定数据，模型怎么训练”，那么这一讲要回答的是“到底该用什么数据训练”。讲者的立场很明确，数据不是训练流水线里的一个可有可无的附件，而是决定语言模型上限的关键因素。
+
+\begin{importantbox}{这一讲的主线}
+\begin{enumerate}
+    \item 先区分训练阶段：pre-training、mid-training、post-training。
+    \item 再看不同模型公开了多少数据细节，为什么公开程度差异这么大。
+    \item 之后按数据类型梳理主流语料：网页、书籍、百科、代码、论文、对话、合成数据。
+    \item 最后讨论版权、许可协议和 fair use 这些绕不开的法律问题。
+\end{enumerate}
+\end{importantbox}
+
+讲者对“data is the most important thing”这个判断非常强。理由并不是抽象口号，而是现实中的工程分工：架构往往由小团队定义，数据工作却是高度并行、长期、需要大量人工和自动化协作的系统性工作。模型做大之后，数据质量、覆盖面和过滤策略会直接决定你能不能把算力用在刀刃上。
+
+\subsection{为什么公司对数据这么保密}
+
+公开模型的论文通常会详细讲结构、训练流程和损失函数，但对数据只给出很粗粒度的描述。原因大致有两个：
+\begin{itemize}
+    \item \textbf{竞争原因}：数据配方本身就是产品竞争力的一部分。
+    \item \textbf{法律风险}：版权、隐私、条款违约都可能带来诉讼。
+\end{itemize}
+
+这也解释了为什么“公开权重”并不等于“公开数据”。前者解决的是模型可用性，后者涉及的是数据供应链和合规问题。
+
+\section{训练阶段与术语}
+
+数据工作通常不止一阶段。比较清晰的划分是：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.18\textwidth}p{0.27\textwidth}p{0.45\textwidth}}
+\toprule
+\textbf{阶段} & \textbf{目标} & \textbf{典型数据} \\
+\midrule
+Pre-training & 学到语言分布与通用知识 & 大规模原始网页、书籍、百科、代码、论文 \\
+Mid-training & 纠偏和补强某些能力 & 更高质量的网页、数学、代码、长上下文、合成任务 \\
+Post-training & 对齐成可对话、可指令跟随的模型 & 指令数据、聊天数据、偏好数据、RL 数据 \\
+\bottomrule
+\end{tabular}
+\caption{语言模型常见训练阶段}
+\end{table}
+
+这里的一个实用术语是：
+\begin{knowledgebox}{Base model 与 Instruct model}
+\textbf{Base model} 通常指 pre-training 加上 mid-training 后的检查点。\\
+\textbf{Instruct/chat model} 通常指 post-training 后的模型，也就是能更自然地跟人对话的版本。
+\end{knowledgebox}
+
+讲者强调，阶段边界在现实里并不总是严格清晰。很多新模型会在训练流程里插入更多子阶段，但基本方向都一样：先用大规模低质量数据打底，再用更小规模高质量数据修正和对齐。
+
+\section{公开数据配方的典型例子}
+
+\subsection{OLMo / AI2 的公开路径}
+
+一个很重要的对照组是 AI2 的开放模型路线。它们在论文里会更明确地展示训练数据混合方式，因此我们能够看到 pre-training、mid-training 和 post-training 各自大概在用什么：
+
+\begin{itemize}
+    \item \textbf{Pre-training}：网页、代码、学术论文、数学、Wikipedia 等混合，规模很大。
+    \item \textbf{Mid-training}：从大规模网页里筛到更高质量的子集，并加入 FLAN 类数据和合成数据。
+    \item \textbf{Post-training}：以对话和指令数据为主，外加合成生成的数据。
+\end{itemize}
+
+这类公开配方的价值在于，它让我们能把“模型效果”拆成“数据选择”的结果，而不是只看最终指标。
+
+\subsection{典型混合的结构}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.2\textwidth}p{0.34\textwidth}p{0.35\textwidth}}
+\toprule
+\textbf{阶段} & \textbf{常见来源} & \textbf{讲者强调的特点} \\
+\midrule
+Pre-training & Web pages, code, papers, math, Wikipedia & 覆盖广、噪声大、体量最大 \\
+Mid-training & 过滤后的网页、FLAN、GSM8K、synthetic data & 质量更高，面向具体能力 \\
+Post-training & chat logs, instruction data, preference data & 让模型“像助手”而不是“像语料库” \\
+\bottomrule
+\end{tabular}
+\caption{从粗到细的数据混合}
+\end{table}
+
+讲者还特别点到，很多所谓“看起来像模型能力”的东西，实际上是在数据阶段被提前塑形的：数学、代码、长上下文、安全拒答、对话风格，都可以通过数据设计明显影响。
+
+\section{预训练语料：从 Wikipedia 到 Common Crawl}
+
+\subsection{BERT 的数据}
+
+一个早期但典型的例子是 BERT。它的训练数据由两部分构成：
+\begin{itemize}
+    \item \textbf{BooksCorpus}：来自 Smashwords 的自出版电子书，规模约 7 千本、接近 10 亿词。
+    \item \textbf{Wikipedia}：自由编辑的百科全书，提供相对高质量的通用文本。
+\end{itemize}
+
+这个组合说明了早期预训练数据的思路：先找高质量、结构化、可长期复用的文本，再把它们拼成足够大的训练集。
+
+\subsection{GPT-2 与 OpenWebText}
+
+GPT-2 的 WebText 思路很有代表性：从 Reddit 中高 karma 帖子的外链网页出发，用“人类实际愿意转发什么”作为粗糙的质量代理。开源复现版本 OpenWebText 进一步通过 URL 抽取、英文过滤和去重来构建类似数据集。
+
+这类数据集有一个共同点：它们不是“干净数据”，而是“经过一系列启发式筛选后，尽可能接近人类偏好分布”的网页文本。
+
+\subsection{Common Crawl 及其后续处理}
+
+Common Crawl 是整个网页语料生态的底层原料。它每月左右进行一次大规模网络爬取，产物通常经历 WARC 到 WET 再到可训练纯文本的多级转换。讲者特别强调，HTML 到文本的转换并不是无关紧要的前处理，转换策略会显著影响下游效果。
+
+\begin{importantbox}{网页语料的三个现实问题}
+\begin{enumerate}
+    \item 网页噪声非常大，绝大多数内容不是训练语言模型的好材料。
+    \item 相同内容会以很多近重复版本出现，必须做去重。
+    \item 语言识别和质量过滤通常依赖启发式或分类器，而不是“直接相信网页”。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{CCNet、C4 与 GPT-3}
+
+在 Common Crawl 之上，各种后续数据集做了不同程度的清洗：
+
+\begin{itemize}
+    \item \textbf{CCNet}：做去重、语言识别和质量过滤，尤其关注低资源语言。
+    \item \textbf{C4}：T5 相关数据集，使用大量规则清洗 Common Crawl，输出大规模可训练文本。
+    \item \textbf{GPT-3 数据}：Common Crawl、WebText2、Books1/Books2、Wikipedia 的组合，约 570GB、4000 亿 token 级别。
+\end{itemize}
+
+这些例子说明了一个趋势：数据处理越往后越强调过滤、去重和配比，而不是“收集越多越好”。
+
+\subsection{The Pile 与开放社区}
+
+The Pile 是开源模型生态的重要里程碑。它把很多不同来源的高质量文本放在一起，包括书籍、论文、代码、百科、问答和其他领域文本。它的意义不只在规模，也在于它把“数据配方”变成了社区可讨论、可复现实验的问题。
+
+\section{更系统的数据工程：Gopher、LLaMA、RefinedWeb、Dolma、DCLM}
+
+\subsection{Gopher 的 MassiveText}
+
+Gopher 使用的 MassiveText 展示了一个更工程化的配方：在 MassiveWeb、C4、Books、News、GitHub、Wikipedia 等来源上做拼接和过滤。讲者给出的重点不是某个单一来源，而是这种“混合 + 规则过滤 + 质量筛选”的整体范式。
+
+\subsection{LLaMA 与 RedPajama}
+
+LLaMA 的公开数据配方更加系统，包含 Common Crawl、C4、GitHub、Wikipedia、Project Gutenberg、Books3、arXiv 和 Stack Exchange 等来源。后续社区复现的 RedPajama 和 SlimPajama 则进一步强调了可复现、可去重和子集精炼。
+
+\subsection{RefinedWeb 与 FineWeb}
+
+RefinedWeb 的口号很直接：网页数据本身就足够强，关键在处理方式。它强调：
+\begin{itemize}
+    \item 用更稳健的 HTML-to-text 工具提取正文。
+    \item 采用基于规则的过滤，减少模型偏置。
+    \item 用 MinHash 做模糊去重。
+\end{itemize}
+
+FineWeb 在此基础上进一步改进，加入更大规模的 Common Crawl snapshot、更系统的语言识别和隐私清理，形成更现代的高质量网页语料。
+
+\subsection{Dolma、DataComp-LM 与 Nemotron-CC}
+
+这三类数据集反映了更近一代的数据思路：
+
+\begin{itemize}
+    \item \textbf{Dolma}：把 Reddit、学术论文、Wikipedia、C4、Project Gutenberg 等多种来源组合起来，强调来源多样性。
+    \item \textbf{DataComp-LM}：尝试为数据处理方法建立统一基准，尤其关注模型式过滤的可比较性。
+    \item \textbf{Nemotron-CC}：继续追求规模，同时尝试通过分类器集成和合成数据重写，在保留质量的同时扩大有效 token 数。
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.16\textwidth}p{0.28\textwidth}p{0.38\textwidth}}
+\toprule
+\textbf{数据集} & \textbf{关键动作} & \textbf{讲者强调的意义} \\
+\midrule
+MassiveText & 规则过滤 + 多源混合 & 说明网页不是单一语料，而是可被工程化利用的资源 \\
+LLaMA data & 多语种、多来源、手工规则 & 开源模型需要更明确的数据公开 \\
+\shortstack[l]{RefinedWeb\\FineWeb} & MinHash、语言识别、PII 处理 & 网页数据仍然可以继续改进 \\
+Dolma & 多域聚合 & 来源多样性很重要 \\
+DCLM & 统一的处理基准 & 数据处理方法本身应成为研究对象 \\
+Nemotron-CC & 分类器集成 + 合成重写 & 质量和规模可以同时追求 \\
+\bottomrule
+\end{tabular}
+\caption{几类代表性数据工程路线}
+\end{table}
+
+\section{长上下文、任务化数据与指令数据}
+
+\subsection{长上下文}
+
+模型想要做书本级问答、长文档总结或多轮推理，就需要更长的上下文窗口。但 Transformer 的注意力代价对序列长度是二次增长，因此讲者认为不应在 pre-training 阶段就一开始全都用长上下文，而更适合在后期单独扩展。
+
+LongLoRA 是一个典型思路：把 LLaMA2 7B 的上下文从 4K 扩到 100K，并借助 shifted sparse attention 与 positional interpolation，让长上下文训练更现实。
+
+\subsection{任务数据}
+
+另一条路线是把现有 NLP 数据集转成指令式 prompt：
+\begin{itemize}
+    \item \textbf{Super-Natural Instructions}：大量任务模板，强调将原始任务转成统一 prompt 形式。
+    \item \textbf{FLAN}：把多种任务改写成 zero-shot、few-shot 和 CoT 版本，进一步提高模型泛化。
+\end{itemize}
+
+这类数据的核心不是“新知识”，而是“如何把已有监督数据变成更容易迁移的训练格式”。
+
+\subsection{指令跟随与聊天数据}
+
+讲者把大量篇幅放在 open-ended instruction/chat 数据上，因为这是现代助手模型最关键的 post-training 来源之一。
+
+\begin{itemize}
+    \item \textbf{Alpaca}：用 self-instruct 从 text-davinci-003 生成 52K 级别数据。
+    \item \textbf{Vicuna}：使用 ShareGPT 中的真实聊天记录。
+    \item \textbf{Baize}：用 self-chat 生成对话，并以上下文种子扩大覆盖。
+    \item \textbf{WizardLM}：通过 Evol-Instruct 让问题更难、更广。
+    \item \textbf{MAmmoTH2}：面向数学能力的数据构造，强调从 Common Crawl 中抽取高价值问答。
+    \item \textbf{OpenHermes 2.5}：把多个来源的数据合并成更大的指令混合。
+    \item \textbf{Llama 2 chat}：更高质量、但规模相对较小的人工标注数据。
+    \item \textbf{Llama-Nemotron post-training}：结合真实提示、合成回答和 reasoning traces。
+\end{itemize}
+
+\begin{knowledgebox}{为什么合成数据这么重要}
+合成数据的价值不只在“便宜”，而在于它能主动覆盖人类日志里不容易出现的能力区域，比如更难的数学题、结构化的多步推理、或者特定风格的对话行为。问题不是“要不要合成”，而是“怎么过滤、怎么混合、怎么验证”。
+\end{knowledgebox}
+
+\section{版权、许可与 fair use}
+
+这一讲后半部分把技术问题拉回现实世界：数据不只是抓取和清洗，还涉及版权法、许可协议和平台条款。
+
+\subsection{基本框架}
+
+\begin{itemize}
+    \item \textbf{版权}保护的是表达，而不是思想本身。
+    \item \textbf{许可}本质上是“允许你做某件事而不被起诉”的合同安排。
+    \item \textbf{Fair use} 是美国法里判断合理使用的四因素测试。
+\end{itemize}
+
+\subsection{Fair use 的四个因素}
+
+\begin{enumerate}
+    \item 使用目的和性质：教育、研究、转换性用途更有利。
+    \item 作品性质：事实性内容通常比纯创作内容更容易被合理使用。
+    \item 使用量与实质性：用小片段比整部复制更有利。
+    \item 对市场的影响：是否替代了原作品的市场。
+\end{enumerate}
+
+\begin{warningbox}{对 foundation model 的现实风险}
+模型训练会先复制数据到自己的流程里，这本身就可能触发法律争议。即使训练行为具有转换性，语言模型也可能显著影响原作品的市场，尤其是作者、插画师、摄影师和教育内容生产者。
+\end{warningbox}
+
+\subsection{条款与授权}
+
+除了版权，平台条款也会限制数据使用。例如某些内容即使在版权上可用，也可能因为服务条款不允许下载或再分发而不能直接拿来训练。讲者特别强调，模型开发者通常必须同时面对：
+\begin{itemize}
+    \item 版权许可，
+    \item 服务条款，
+    \item 隐私要求，
+    \item 数据删除与合规义务。
+\end{itemize}
+
+\section{总结}
+
+这一讲的结论可以压缩成三句话：
+
+\begin{importantbox}{本讲 Takeaways}
+\begin{enumerate}
+    \item 数据不是自然生成的，必须通过收集、清洗、过滤、去重和重配比来构造。
+    \item 数据决定的不只是“有没有知识”，还决定模型的能力边界、交互方式和对齐效果。
+    \item 数据工作里既有大量启发式工程，也有绕不开的法律与伦理问题。
+\end{enumerate}
+\end{importantbox}
+
+更具体一点说，现代语言模型的数据管线通常遵循一个模式：从原始互联网和用户行为中得到粗糙材料，再通过大规模工程把它们变成可训练、可控、可合规的数据集合。讲者希望传达的不是某个单一配方，而是一个研究和工程视角：\textbf{数据本身就是模型设计的一部分}。
+
+\end{document}

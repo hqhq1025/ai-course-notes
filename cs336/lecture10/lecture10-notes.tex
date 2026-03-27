@@ -1,0 +1,1104 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS336 Lecture 10: Inference}
+\newcommand{\noteauthors}{基于 Percy Liang 授课内容整理}
+\newcommand{\notedate}{2025年5月}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{1:22:48}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=fcgPYo3OtV0}
+\newcommand{\videocoverpath}{cover.png}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ========== Section 1: 引言 ==========
+
+\section{引言：推理的重要性}
+
+本节课的主题是\textbf{推理}（Inference）：给定一个已经训练好的固定模型，根据输入的提示（prompt）生成响应。推理看似简单，但其效率优化涉及硬件特性、算法设计和系统工程等多个层面，是大语言模型实际应用中最关键的环节之一。
+
+\begin{importantbox}{推理的定义}
+\textbf{推理}（Inference）：给定一个\textbf{固定模型}，根据提示生成响应。与训练不同，推理不更新模型参数，但需要反复执行，因此效率至关重要。
+\end{importantbox}
+
+\subsection{推理的应用场景}
+
+推理不仅仅是``搭建一个聊天机器人''那么简单，它在以下多个场景中扮演核心角色：
+
+\begin{enumerate}
+    \item \textbf{实际使用}：聊天机器人、代码补全（如 Cursor）、批量数据处理等
+    \item \textbf{模型评估}：在指令遵循等任务上评估模型性能，本质上也是推理
+    \item \textbf{测试时计算}（Test-time Compute）：让模型``思考''更多步骤再输出最终答案——思考本身就是生成 token
+    \item \textbf{强化学习训练}：采样响应并根据奖励评分，采样过程即推理
+\end{enumerate}
+
+\begin{knowledgebox}{推理的规模有多大？}
+一些数据帮助理解推理的规模：
+\begin{itemize}
+    \item OpenAI 每天生成超过 1000 亿个词
+    \item Cursor 每天生成约 10 亿行被用户接受的代码
+\end{itemize}
+训练是一次性成本，而推理会被反复执行无数次，因此推理成本在总成本中的占比日益增长。
+\end{knowledgebox}
+
+\subsection{推理的核心度量指标}
+
+\begin{importantbox}{推理性能的三个核心指标}
+\begin{itemize}
+    \item \textbf{首 token 延迟}（TTFT, Time-to-First-Token）：用户等待第一个生成 token 出现的时间。对交互式应用至关重要
+    \item \textbf{延迟}（Latency, 秒/token）：每个 token 的生成速度。影响用户的流式阅读体验
+    \item \textbf{吞吐量}（Throughput, tokens/秒）：系统整体每秒生成的 token 数。对批处理应用尤为重要
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{高吞吐量不等于低延迟}
+吞吐量衡量的是系统整体的处理能力，而延迟关注的是单个用户的体验。一个系统可以有很高的吞吐量（同时处理大量请求），但某些请求的延迟可能很高。这两个指标之间存在根本性的权衡。
+\end{warningbox}
+
+\subsection{推理与训练的核心差异}
+
+\begin{itemize}
+    \item \textbf{训练}：可以看到所有 token，可以在序列维度上并行化（矩阵乘法），\textbf{计算受限}（compute-limited）
+    \item \textbf{推理}：必须逐 token 顺序生成（每个 token 依赖之前的所有 token），难以充分利用计算资源，\textbf{内存受限}（memory-limited）
+\end{itemize}
+
+这一根本差异决定了推理优化的方向：与训练追求更高计算利用率不同，推理优化的核心是减少内存传输。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=3.2cm, minimum height=1cm, align=center, font=\small},
+    arrow/.style={->, thick, >=stealth}
+]
+\node[box, fill=blue!15] (train) at (0, 0) {\textbf{训练}\\看到所有 token\\可并行化};
+\node[box, fill=red!15] (infer) at (6, 0) {\textbf{推理（生成）}\\逐 token 生成\\顺序执行};
+\node[box, fill=green!15] (compute) at (0, -2.2) {\textbf{计算受限}\\GPU 利用率高};
+\node[box, fill=orange!15] (memory) at (6, -2.2) {\textbf{内存受限}\\GPU 利用率低};
+
+\draw[arrow] (train) -- (compute);
+\draw[arrow] (infer) -- (memory);
+\draw[arrow, dashed, gray] (train) -- node[above, font=\footnotesize, gray]{核心差异} (infer);
+\end{tikzpicture}
+\caption{训练与推理的核心差异：计算受限 vs. 内存受限}
+\end{figure}
+
+\subsection{推理优化技术全景}
+
+本节课将覆盖以下推理优化技术，按照从理解问题到解决问题的顺序展开：
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    level/.style={draw, rounded corners, minimum width=4cm, minimum height=0.8cm, align=center, font=\small},
+    arrow/.style={->, thick, >=stealth}
+]
+\node[level, fill=gray!10] (base) at (0, 0) {理解推理工作负载};
+\node[level, fill=yellow!15] (lossy1) at (-4, -1.5) {缩减 KV Cache};
+\node[level, fill=yellow!15] (lossy2) at (0, -1.5) {替代架构};
+\node[level, fill=yellow!15] (lossy3) at (4, -1.5) {量化与剪枝};
+\node[level, fill=green!15] (lossless) at (-3, -3) {投机采样（无损）};
+\node[level, fill=blue!15] (system) at (3, -3) {系统优化};
+
+\draw[arrow] (base) -- (lossy1);
+\draw[arrow] (base) -- (lossy2);
+\draw[arrow] (base) -- (lossy3);
+\draw[arrow] (base) -- (lossless);
+\draw[arrow] (base) -- (system);
+
+\node[font=\footnotesize, gray] at (-4, -0.7) {有损};
+\node[font=\footnotesize, gray] at (0, -0.7) {有损};
+\node[font=\footnotesize, gray] at (4, -0.7) {有损};
+\end{tikzpicture}
+\caption{本节课推理优化技术的组织结构}
+\end{figure}
+
+\subsection{推理生态}
+
+从事推理优化的公司和项目包括：
+
+\begin{itemize}
+    \item \textbf{闭源模型提供商}：OpenAI、Anthropic、Google 等
+    \item \textbf{开源权重模型服务商}：Together、Fireworks、DeepInfra 等
+    \item \textbf{开源推理框架}：
+    \begin{itemize}
+        \item vLLM（UC Berkeley）
+        \item TensorRT-LLM（NVIDIA）
+        \item TGI（Hugging Face）
+    \end{itemize}
+\end{itemize}
+
+\subsection{本章小结}
+
+推理是大语言模型从训练到实际部署的关键环节。它不仅出现在最终用户交互中，还贯穿于模型评估、测试时计算和强化学习训练的全过程。推理的核心特征是\textbf{顺序生成}和\textbf{内存受限}，这决定了后续所有优化技术的方向。
+
+%% ========== Section 2: 理解推理工作负载 ==========
+
+\section{理解推理工作负载}
+
+要优化推理，首先需要深入理解推理过程中的计算和内存传输特性。本节从矩阵乘法的算术强度出发，分析 Transformer 推理中 MLP 层和注意力层的性能特征。
+
+\subsection{回顾：算术强度}
+
+\begin{knowledgebox}{符号约定}
+本节使用的符号（与 Scaling Book 一致）：
+\begin{itemize}
+    \item $B$：批大小（batch size）
+    \item $S$：条件序列长度（prompt 长度）
+    \item $T$：生成序列长度
+    \item $D$：模型隐藏维度
+    \item $F$：MLP 隐藏维度（通常 $F = 4D$）
+    \item $N$：Query 注意力头数
+    \item $K$：Key/Value 注意力头数
+    \item $H$：每个头的维度（$N \times H = D$）
+    \item $L$：层数
+    \item $V$：词表大小
+\end{itemize}
+\end{knowledgebox}
+
+\textbf{算术强度}（Arithmetic Intensity）是衡量计算效率的核心指标：每传输一个字节数据能完成多少次浮点运算。
+
+以基本的矩阵乘法 $Y = X \cdot W$ 为例，其中 $X$ 的形状为 $B \times D$，$W$ 的形状为 $D \times F$：
+
+\begin{enumerate}
+    \item 从 HBM 读取 $X$：传输 $2BD$ 字节（bf16）
+    \item 从 HBM 读取 $W$：传输 $2DF$ 字节
+    \item 计算 $Y = X \cdot W$：$2BDF$ FLOPs
+    \item 将 $Y$ 写回 HBM：传输 $2BF$ 字节
+\end{enumerate}
+
+$$\text{算术强度} = \frac{\text{FLOPs}}{\text{bytes transferred}} = \frac{2BDF}{2BD + 2DF + 2BF}$$
+
+当 $B \ll D, F$ 时（这是推理中的常见情况），可简化为：
+
+$$\text{算术强度} \approx B$$
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=10cm, height=6.5cm,
+    xlabel={算术强度 (FLOPs/Byte)},
+    ylabel={性能 (TFLOPS)},
+    xmode=log, ymode=log,
+    xmin=0.5, xmax=2000,
+    ymin=1, ymax=2000,
+    grid=both,
+    legend pos=south east,
+    title={Roofline Model（H100 SXM）}
+]
+% Memory roof
+\addplot[blue, thick, domain=0.5:295] {3.35*x};
+% Compute roof
+\addplot[red, thick, domain=295:2000] {989};
+% Intersection point
+\addplot[only marks, mark=*, mark size=3pt, black] coordinates {(295, 989)};
+\node[font=\footnotesize] at (axis cs:295, 500) {$B=295$};
+
+% Annotations
+\node[font=\footnotesize, blue] at (axis cs:5, 50) {内存受限};
+\node[font=\footnotesize, red] at (axis cs:700, 700) {计算受限};
+
+% Generation point
+\addplot[only marks, mark=triangle*, mark size=4pt, orange] coordinates {(1, 3.35)};
+\node[font=\footnotesize, orange, anchor=west] at (axis cs:1.5, 5) {Generation ($B=1$)};
+
+% Prefill point
+\addplot[only marks, mark=square*, mark size=3pt, green!60!black] coordinates {(512, 989)};
+\node[font=\footnotesize, green!60!black, anchor=east] at (axis cs:400, 600) {Prefill};
+\end{axis}
+\end{tikzpicture}
+\caption{H100 的 Roofline 模型。Generation 阶段（$B=1$）位于内存受限区域的最低端，Prefill 则可以达到计算受限区域。}
+\end{figure}
+
+\begin{importantbox}{H100 的加速器强度}
+对于 H100 GPU：
+\begin{itemize}
+    \item bf16 峰值算力：989 TFLOPS
+    \item HBM 带宽：3.35 TB/s
+    \item 加速器强度 = $989 / 3.35 \approx 295$
+\end{itemize}
+因此：
+\begin{itemize}
+    \item 当 $B > 295$ 时：\textbf{计算受限}（compute-limited）——GPU 利用率高，效率好
+    \item 当 $B < 295$ 时：\textbf{内存受限}（memory-limited）——GPU 大部分时间在等待数据传输
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{B=1 的极端情况}
+当 $B=1$ 时（矩阵-向量乘法），算术强度仅为 1。这意味着每读取一个权重元素只做一次乘加运算——几乎所有时间都花在内存读取上。\textbf{这正是自回归生成的典型场景}。
+\end{warningbox}
+
+\subsection{朴素推理与 KV Cache}
+
+\textbf{朴素推理}：生成每个 token 时，将整个历史序列送入 Transformer。生成 $T$ 个 token 需要 $O(T^3)$ FLOPs（每次前向传播 $O(T^2)$）。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    token/.style={draw, minimum width=0.8cm, minimum height=0.8cm, align=center, font=\footnotesize},
+    trans/.style={draw, fill=blue!10, minimum width=1cm, minimum height=0.6cm, align=center, font=\footnotesize},
+    arrow/.style={->, thick, >=stealth}
+]
+% Step 1
+\node[font=\small\bfseries] at (0, 2.5) {Step 1};
+\node[token, fill=gray!20] (p1a) at (-0.8, 1.5) {A};
+\node[token, fill=gray!20] (p1b) at (0, 1.5) {B};
+\node[token, fill=gray!20] (p1c) at (0.8, 1.5) {C};
+\node[trans] (t1) at (0, 0.5) {Transformer};
+\node[token, fill=green!20] (o1) at (0, -0.3) {D};
+\draw[arrow] (0, 1.1) -- (t1);
+\draw[arrow] (t1) -- (o1);
+
+% Step 2
+\node[font=\small\bfseries] at (3.5, 2.5) {Step 2};
+\node[token, fill=gray!20] (p2a) at (2.3, 1.5) {A};
+\node[token, fill=gray!20] (p2b) at (3.1, 1.5) {B};
+\node[token, fill=gray!20] (p2c) at (3.9, 1.5) {C};
+\node[token, fill=green!20] (p2d) at (4.7, 1.5) {D};
+\node[trans] (t2) at (3.5, 0.5) {Transformer};
+\node[token, fill=green!20] (o2) at (3.5, -0.3) {E};
+\draw[arrow] (3.5, 1.1) -- (t2);
+\draw[arrow] (t2) -- (o2);
+
+% Step 3
+\node[font=\small\bfseries] at (7.5, 2.5) {Step 3};
+\node[token, fill=gray!20] (p3a) at (5.9, 1.5) {A};
+\node[token, fill=gray!20] (p3b) at (6.7, 1.5) {B};
+\node[token, fill=gray!20] (p3c) at (7.5, 1.5) {C};
+\node[token, fill=green!20] (p3d) at (8.3, 1.5) {D};
+\node[token, fill=green!20] (p3e) at (9.1, 1.5) {E};
+\node[trans] (t3) at (7.5, 0.5) {Transformer};
+\node[token, fill=green!20] (o3) at (7.5, -0.3) {F};
+\draw[arrow] (7.5, 1.1) -- (t3);
+\draw[arrow] (t3) -- (o3);
+
+% Annotation
+\draw[red, thick, decorate, decoration={brace, amplitude=5pt, mirror}] (2.3, 1.0) -- (3.9, 1.0) node[midway, below=6pt, font=\footnotesize, red]{重复计算!};
+\draw[red, thick, decorate, decoration={brace, amplitude=5pt, mirror}] (5.9, 1.0) -- (8.3, 1.0) node[midway, below=6pt, font=\footnotesize, red]{重复计算!};
+\end{tikzpicture}
+\caption{朴素推理：每步都重新处理整个序列，灰色为 prompt，绿色为已生成 token。前缀部分的计算完全冗余。}
+\end{figure}
+
+\begin{knowledgebox}{观察：前缀计算的冗余}
+在因果（自回归）Transformer 中，由于 causal mask 的存在，生成第 $t$ 个 token 时，前 $t-1$ 个 token 的中间表示与之前完全相同。这些计算是完全冗余的。注意：这一性质仅对单向（causal）Transformer 成立。对于双向 Transformer（如 BERT），新增 token 会改变所有位置的表示。
+\end{knowledgebox}
+
+\textbf{解决方案}：\textbf{KV Cache}——将每一层注意力计算中的 Key 和 Value 向量缓存在 HBM 中，后续生成时直接复用。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    token/.style={draw, minimum width=0.8cm, minimum height=0.8cm, align=center, font=\footnotesize},
+    cache/.style={draw, fill=orange!15, minimum width=0.8cm, minimum height=0.8cm, align=center, font=\footnotesize},
+    trans/.style={draw, fill=blue!10, minimum width=1cm, minimum height=0.6cm, align=center, font=\footnotesize},
+    arrow/.style={->, thick, >=stealth}
+]
+% Prefill
+\node[font=\small\bfseries] at (0, 3) {Prefill};
+\node[token, fill=gray!20] at (-0.8, 2) {A};
+\node[token, fill=gray!20] at (0, 2) {B};
+\node[token, fill=gray!20] at (0.8, 2) {C};
+\node[trans] (tp) at (0, 1) {Transformer};
+\draw[arrow] (0, 1.6) -- (tp);
+
+\node[cache] at (-0.8, -0.2) {$k_A$};
+\node[cache] at (0, -0.2) {$k_B$};
+\node[cache] at (0.8, -0.2) {$k_C$};
+\draw[arrow] (tp) -- (0, -0.2+0.4);
+\node[font=\footnotesize] at (0, -0.9) {KV Cache};
+
+\node[token, fill=green!20] at (0, 1) {};
+\node[font=\footnotesize] at (2.2, 1) {$\rightarrow$ D};
+
+% Generate step 1
+\node[font=\small\bfseries] at (5, 3) {Generate 1};
+\node[token, fill=green!20] at (5, 2) {D};
+\node[trans] (tg1) at (5, 1) {Transformer};
+\draw[arrow] (5, 1.6) -- (tg1);
+
+\node[cache] at (3.8, -0.2) {$k_A$};
+\node[cache] at (4.6, -0.2) {$k_B$};
+\node[cache] at (5.4, -0.2) {$k_C$};
+\node[cache, fill=green!10] at (6.2, -0.2) {$k_D$};
+\draw[arrow, dashed] (tg1) -- (5, -0.2+0.4);
+\node[font=\footnotesize] at (5, -0.9) {KV Cache（扩展）};
+
+\node[font=\footnotesize] at (7.2, 1) {$\rightarrow$ E};
+
+% Generate step 2
+\node[font=\small\bfseries] at (10, 3) {Generate 2};
+\node[token, fill=green!20] at (10, 2) {E};
+\node[trans] (tg2) at (10, 1) {Transformer};
+\draw[arrow] (10, 1.6) -- (tg2);
+
+\node[cache] at (8.4, -0.2) {$k_A$};
+\node[cache] at (9.2, -0.2) {$k_B$};
+\node[cache] at (10, -0.2) {$k_C$};
+\node[cache, fill=green!10] at (10.8, -0.2) {$k_D$};
+\node[cache, fill=green!10] at (11.6, -0.2) {$k_E$};
+\draw[arrow, dashed] (tg2) -- (10, -0.2+0.4);
+\node[font=\footnotesize] at (10, -0.9) {KV Cache（扩展）};
+\end{tikzpicture}
+\caption{KV Cache 推理：Prefill 阶段并行处理 prompt 并建立缓存，Generation 阶段每步只处理一个新 token，复用缓存中的 K/V 向量。}
+\end{figure}
+
+KV Cache 的大小：对于每个序列、每个 token、每一层、每个 KV 头，存储一个 $H$ 维向量：
+
+$$\text{KV Cache 大小（每序列）} = S \times K \times H \times L \times 2 \times 2 \text{ 字节}$$
+
+其中第一个 $\times 2$ 是 Key + Value，第二个 $\times 2$ 是 bf16 的字节数。
+
+使用 KV Cache 后，生成 $T$ 个 token 的复杂度从 $O(T^3)$ 降低到 $O(T^2)$——每步只需要 $O(T)$ 的计算（与缓存中的所有 Key 做点积）。
+
+\subsection{推理的两个阶段}
+
+\begin{importantbox}{Prefill 与 Generation}
+\begin{enumerate}
+    \item \textbf{Prefill}（预填充）：给定 prompt，将其编码为向量并填充 KV Cache。可以并行处理所有 token（类似训练），\textbf{计算受限}
+    \item \textbf{Generation}（生成）：逐个生成新的响应 token。每步只处理一个 token（$T=1$），\textbf{内存受限}
+\end{enumerate}
+\end{importantbox}
+
+\subsection{MLP 层的算术强度分析}
+
+对 MLP 层的矩阵乘法进行精确计量（使用 gated MLP：上投影 $W_\text{up}$、门控 $W_\text{gate}$、下投影 $W_\text{down}$）：
+
+\begin{itemize}
+    \item \textbf{FLOPs}：$6 \cdot B \cdot T \cdot D \cdot F$（三个矩阵乘法，各贡献 $2BTDF$）
+    \item \textbf{传输字节}：$4BTD + 4BTF + 6DF$
+\end{itemize}
+
+当 $BT \ll D, F$ 时（推理常见情况），MLP 层的算术强度简化为：
+
+$$\text{MLP 算术强度} \approx B \cdot T$$
+
+\begin{itemize}
+    \item \textbf{Prefill}（$T = S$）：$BT$ 可以很大，容易达到计算受限
+    \item \textbf{Generation}（$T = 1$）：算术强度仅为 $B$——需要大量并发请求才能饱和 GPU
+\end{itemize}
+
+\subsection{注意力层的算术强度分析}
+
+使用 FlashAttention 时，注意力层的计量：
+
+\begin{itemize}
+    \item \textbf{FLOPs}：$4BSTD$
+    \item \textbf{传输字节}：$4BSD + 4BTD$
+\end{itemize}
+
+$$\text{注意力算术强度} = \frac{ST}{S + T}$$
+
+代入两个阶段：
+
+\begin{itemize}
+    \item \textbf{Prefill}（$T = S$）：强度为 $S/2$，随序列长度增长
+    \item \textbf{Generation}（$T = 1$）：强度为 $\frac{S}{S+1} < 1$——\textbf{始终内存受限}！
+\end{itemize}
+
+\begin{warningbox}{注意力层与 MLP 层的关键区别}
+\begin{itemize}
+    \item \textbf{MLP 层}：所有序列共享相同的权重矩阵（$W_\text{up}$, $W_\text{gate}$, $W_\text{down}$ 不依赖于 $B$），因此增大批大小可以分摊权重读取成本
+    \item \textbf{注意力层}：每个序列有自己的 KV Cache（Q、K、V 都依赖于 $B$），因此\textbf{增大批大小无法提高算术强度}
+\end{itemize}
+这意味着注意力层在生成阶段\textbf{不可避免地}是内存受限的。
+\end{warningbox}
+
+\subsection{延迟与吞吐量的理论分析}
+
+既然推理是内存受限的，性能瓶颈在于内存传输速度。以 Llama 2 13B 在单个 H100 上的推理为例：
+
+\textbf{模型配置}：$S=1024$, $D=5120$, $F=13824$, $N=40$, $K=40$, $H=128$, $L=40$, $V=32000$。
+
+\begin{itemize}
+    \item \textbf{参数数量}：约 130 亿
+    \item \textbf{参数存储}（bf16）：$\text{num\_params} \times 2$ 字节
+    \item \textbf{KV Cache}（每序列）：$S \times K \times H \times L \times 2 \times 2$ 字节
+    \item \textbf{总内存} = $B \times \text{KV Cache} + \text{参数存储}$
+\end{itemize}
+
+延迟（每个 token 的生成时间）由内存传输决定：
+
+$$\text{Latency} = \frac{\text{Total Memory}}{\text{Memory Bandwidth}}$$
+
+$$\text{Throughput} = \frac{B}{\text{Latency}}$$
+
+不同批大小下的表现：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cccc}
+\toprule
+$B$ & 内存占用 & 延迟 (ms/token) & 吞吐量 (tokens/s) \\
+\midrule
+1 & $\sim$26 GB & $\sim$8 & $\sim$124 \\
+64 & $\sim$79 GB & $\sim$24 & $\sim$2700 \\
+256 & $\sim$240 GB & --- & --- \\
+\bottomrule
+\end{tabular}
+\caption{Llama 2 13B 在 H100 上不同批大小下的推理性能（理论值）}
+\end{table}
+
+\begin{importantbox}{延迟与吞吐量的权衡}
+\begin{itemize}
+    \item 小批大小 $\rightarrow$ 低延迟，低吞吐量
+    \item 大批大小 $\rightarrow$ 高延迟，高吞吐量（但有上限，且受内存容量限制）
+    \item $B=256$ 时，Llama 2 13B 已超出 H100 的 80GB HBM 容量
+\end{itemize}
+\end{importantbox}
+
+\textbf{并行策略}：
+
+\begin{itemize}
+    \item \textbf{简单并行}：启动 $M$ 个模型副本，延迟不变，吞吐量提升 $M$ 倍
+    \item \textbf{模型并行}：将模型和 KV Cache 分片到多个 GPU 上（更复杂，但能处理单卡放不下的模型）
+\end{itemize}
+
+\begin{knowledgebox}{TTFT 与 Prefill 的关系}
+首 token 延迟（TTFT）本质上由 Prefill 阶段决定。实际部署中可以采用分离策略：
+\begin{itemize}
+    \item Prefill 阶段使用较小的批大小，以缩短 TTFT
+    \item Generation 阶段使用较大的批大小，以提高吞吐量
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+推理工作负载的核心特征是：
+\begin{itemize}
+    \item Prefill 是计算受限的（类似训练），Generation 是内存受限的
+    \item MLP 层的算术强度为 $B \cdot T$，可通过增大批大小改善
+    \item 注意力层的算术强度在生成时 $<1$，\textbf{无法通过增大批大小改善}
+    \item 延迟和吞吐量之间存在根本性权衡，受 GPU 内存容量约束
+\end{itemize}
+
+%% ========== Section 3: 有损优化——缩减 KV Cache ==========
+
+\section{有损优化：缩减 KV Cache}
+
+既然推理是内存受限的，核心优化思路就是\textbf{减少需要传输的内存量}。KV Cache 是推理中最大的内存消耗之一，本节介绍几种在不显著损失精度的前提下缩减 KV Cache 的方法。
+
+\subsection{分组查询注意力（GQA）}
+
+\begin{importantbox}{GQA 的核心思想}
+标准多头注意力（MHA）中，每个 Query 头都有对应的 Key 和 Value 头（$K = N$）。GQA 让多个 Query 头\textbf{共享}同一组 Key/Value 头，从而减少 KV Cache 大小。
+\begin{itemize}
+    \item \textbf{MHA}：$K = N$（每个 Query 头一个 KV 头）
+    \item \textbf{MQA}：$K = 1$（所有 Query 头共享一个 KV 头）
+    \item \textbf{GQA}：$1 < K < N$（折中方案）
+\end{itemize}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    qhead/.style={draw, fill=blue!20, minimum width=0.6cm, minimum height=0.6cm, font=\tiny},
+    kvhead/.style={draw, fill=orange!30, minimum width=0.6cm, minimum height=0.6cm, font=\tiny},
+    arrow/.style={->, thick, >=stealth}
+]
+% MHA
+\node[font=\small\bfseries] at (0, 2.5) {MHA ($K=N$)};
+\foreach \i in {0,...,7} {
+    \node[qhead] (q1\i) at (\i*0.7-2.45, 1.5) {Q};
+    \node[kvhead] (kv1\i) at (\i*0.7-2.45, 0.3) {KV};
+    \draw[arrow, thin] (q1\i) -- (kv1\i);
+}
+
+% GQA
+\node[font=\small\bfseries] at (0, -1) {GQA ($K=2, G=4$)};
+\foreach \i in {0,...,7} {
+    \node[qhead] (q2\i) at (\i*0.7-2.45, -2) {Q};
+}
+\node[kvhead] (kv20) at (-1.05, -3.2) {KV};
+\node[kvhead] (kv21) at (1.05, -3.2) {KV};
+\foreach \i in {0,...,3} { \draw[arrow, thin] (q2\i) -- (kv20); }
+\foreach \i in {4,...,7} { \draw[arrow, thin] (q2\i) -- (kv21); }
+
+% MQA
+\node[font=\small\bfseries] at (7, 2.5) {MQA ($K=1$)};
+\foreach \i in {0,...,7} {
+    \node[qhead] (q3\i) at (\i*0.7+4.55, 1.5) {Q};
+}
+\node[kvhead] (kv30) at (7, 0.3) {KV};
+\foreach \i in {0,...,7} { \draw[arrow, thin] (q3\i) -- (kv30); }
+\end{tikzpicture}
+\caption{MHA、GQA、MQA 的区别：Q 头（蓝）到 KV 头（橙）的映射关系。GQA 是 MHA 和 MQA 之间的折中。}
+\end{figure}
+
+GQA 将 KV Cache 缩减为原来的 $K/N$ 倍。以 Llama 2 13B 为例：
+
+\begin{itemize}
+    \item 原始配置（$K=40$, $B=64$）：内存约 79 GB，$B=256$ 时超出 H100 容量
+    \item 使用 GQA（$K=8$, $B=64$）：内存显著减少，吞吐量大幅提升
+    \item 使用 GQA（$K=8$, $B=256$）：现在可以放入 H100 内存，进一步提升吞吐量
+\end{itemize}
+
+\begin{knowledgebox}{GQA 的精度影响}
+实验表明，GQA 在大幅降低推理成本的同时，对模型精度的影响微乎其微。Llama 3 已全面采用 GQA。实际上 Llama 2 的 70B 版本已经使用了 GQA，但较小的模型没有使用。
+\end{knowledgebox}
+
+\subsection{多头潜在注意力（MLA）}
+
+MLA（Multi-head Latent Attention）来自 DeepSeek v2，采用与 GQA 不同的策略来缩减 KV Cache。
+
+\begin{importantbox}{MLA 的核心思想}
+GQA 通过\textbf{减少 KV 头的数量}来缩减缓存。MLA 则保持头的数量不变，而是将每个 Key/Value 向量\textbf{投影到低维空间}。
+
+具体做法：将每个 token 的 KV 表示从 $N \times H$ 维投影到 $C$ 维（$C \ll N \times H$）。
+\end{importantbox}
+
+DeepSeek v2 的配置：
+\begin{itemize}
+    \item 原始 KV 维度：$N \times H = 16384$
+    \item 投影后维度：$C = 512$（压缩比超过 30 倍）
+    \item 由于 MLA 与 RoPE 不兼容，需要额外 64 维来编码位置信息，实际为 576 维
+\end{itemize}
+
+\begin{knowledgebox}{MLA 的精度表现}
+DeepSeek 的实验表明：
+\begin{enumerate}
+    \item MHA 优于 GQA（精度更高，但开销也更大）
+    \item MLA 比 MHA 精度略好，同时推理开销远低于 MHA
+\end{enumerate}
+MLA 在精度-效率的帕累托前沿上优于 GQA 和 MHA。
+\end{knowledgebox}
+
+\subsection{跨层注意力（CLA）}
+
+\begin{importantbox}{CLA 的核心思想}
+GQA 在\textbf{头}的维度上共享 KV 向量，CLA 则在\textbf{层}的维度上共享——让多个相邻层共享同一组 KV Cache。
+\end{importantbox}
+
+实验表明，CLA 能够在精度与 KV Cache 大小之间改善帕累托前沿。CLA 可以与 GQA 叠加使用，进一步缩减缓存。
+
+\subsection{局部注意力}
+
+\begin{importantbox}{局部注意力（滑动窗口注意力）}
+核心思想：每个 token 只关注局部上下文（最近的 $w$ 个 token），而非全部历史。
+\begin{itemize}
+    \item 有效上下文随层数线性增长
+    \item KV Cache 大小\textbf{不再依赖序列长度}——变为常数
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{局部注意力的精度损失}
+纯局部注意力会损失对远距离依赖的建模能力。解决方案：\textbf{混合架构}——交替使用局部注意力层和全局注意力层。例如 character.ai 每 6 层使用 1 层全局注意力（结合 CLA），在大幅降低推理成本的同时保持了良好的精度。Mistral 7B 也采用了滑动窗口注意力。
+\end{warningbox}
+
+\subsection{本章小结}
+
+缩减 KV Cache 的核心策略包括：
+\begin{enumerate}
+    \item \textbf{减少 KV 头数量}：GQA（头间共享）
+    \item \textbf{降低 KV 维度}：MLA（低秩投影）
+    \item \textbf{跨层共享}：CLA（层间共享）
+    \item \textbf{限制注意力范围}：局部注意力（固定窗口）
+\end{enumerate}
+这些方法可以组合使用，且实验表明对精度的影响可控。所有方法都直接转化为更低的延迟和更高的吞吐量，因为推理是内存受限的。
+
+%% ========== Section 4: Transformer 的替代架构 ==========
+
+\section{Transformer 的替代架构}
+
+前一节在 Transformer 框架内进行优化。本节探讨更激进的方向：是否可以\textbf{跳出 Transformer}，从根本上改变推理的计算特性？
+
+\begin{knowledgebox}{为什么需要新架构？}
+Transformer 的设计初衷是高效\textbf{训练}（通过并行处理序列），但自回归生成+全注意力的组合导致了推理的内存瓶颈。注意力层在生成阶段的算术强度 $< 1$，这是\textbf{架构层面的根本限制}，无法通过系统优化完全克服。
+\end{knowledgebox}
+
+\subsection{状态空间模型（SSM）}
+
+状态空间模型借鉴信号处理和控制论的思想，试图用\textbf{次二次时间复杂度}处理长序列。
+
+\textbf{发展脉络}：
+
+\begin{enumerate}
+    \item \textbf{S4}（2021）：基于经典线性动力系统，具有 RNN 和卷积两种解释方式。在合成长序列任务上表现出色，但在语言建模上效果不佳
+
+    \item \textbf{问题诊断}：SSM 在\textbf{关联检索}（Associative Recall）任务上表现差——给定一系列键值对，查找特定键对应的值。这类任务需要``精确查找''能力，而 SSM 更擅长平滑的信号处理
+
+    \item \textbf{Mamba}（2023）：让 SSM 参数依赖于输入（input-dependent），在 1B 规模上匹配 Transformer 性能
+
+    \item \textbf{Jamba}（AI21, 2024）：交替使用 Transformer 和 Mamba 层（比例约 1:7），总参数 52B（MoE 架构）。仍然需要少量 Transformer 层
+
+    \item \textbf{BASED}：线性注意力 + 局部注意力的组合
+
+    \item \textbf{MiniMax-01}：线性注意力 + 全注意力的混合架构，456B MoE，达到 SOTA 水平
+\end{enumerate}
+
+\begin{importantbox}{SSM 对推理的意义}
+SSM 将 $O(T)$ 的 KV Cache 替换为 $O(1)$ 的固定状态——这从根本上改变了内存瓶颈。当前的趋势是混合架构（少量全注意力层 + 大量线性/局部注意力层），在保持精度的同时大幅提升推理效率。
+\end{importantbox}
+
+\subsection{扩散模型}
+
+扩散模型是另一个有前景的方向，其核心思想是\textbf{并行生成所有 token}（而非自回归逐个生成）。
+
+\begin{itemize}
+    \item 传统方法：从随机噪声开始，通过多步迭代精炼生成整个序列
+    \item 扩散模型在图像生成中已非常成功，但在文本生成中还不够成熟
+    \item Inception Labs 的最新结果显示，扩散语言模型在代码生成基准测试上速度远超自回归模型
+\end{itemize}
+
+\begin{knowledgebox}{扩散模型为什么能加速推理？}
+自回归生成的根本瓶颈是顺序依赖——每个 token 依赖前一个 token。扩散模型打破了这一约束，可以并行生成所有位置的 token，然后通过多步精炼逐渐提高质量。虽然需要多次迭代，但每次迭代可以充分利用 GPU 的并行计算能力。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+替代架构的意义在于\textbf{绕过} Transformer 推理的根本限制：
+\begin{itemize}
+    \item SSM：$O(1)$ 固定状态替代 $O(T)$ KV Cache，彻底消除缓存瓶颈
+    \item 扩散模型：并行生成替代自回归生成，充分利用 GPU 并行计算
+    \item 当前 SOTA 采用混合架构（少量全注意力 + 大量高效层）
+    \item 架构创新可能带来比系统优化更大的推理加速
+\end{itemize}
+
+%% ========== Section 5: 量化 ==========
+
+\section{量化与模型剪枝}
+
+\subsection{量化：降低数值精度}
+
+量化的核心思想极其简单：用更少的位数表示数值，从而减少内存占用和传输量。
+
+\begin{importantbox}{常见数值格式}
+\begin{itemize}
+    \item \textbf{fp32}（4 字节）：训练时用于参数和优化器状态
+    \item \textbf{bf16}（2 字节）：推理的默认格式
+    \item \textbf{fp8}（1 字节）：范围 $[-240, 240]$（e4m3），H100 原生支持
+    \item \textbf{int8}（1 字节）：范围 $[-128, 127]$，精度低于 fp8，但更便宜
+    \item \textbf{int4}（0.5 字节）：范围 $[-8, 7]$，极低精度
+\end{itemize}
+\end{importantbox}
+
+两种量化策略：
+
+\begin{itemize}
+    \item \textbf{量化感知训练}（QAT）：训练过程中模拟量化效果，但需要重新训练，扩展性差
+    \item \textbf{训练后量化}（PTQ）：对已训练好的模型，在少量校准数据上确定量化参数（缩放因子和零点）
+\end{itemize}
+
+\subsubsection{LLM.int8()：处理异常值}
+
+标准的 int8 量化步骤：将向量中的值缩放到 $[-128, 127]$ 范围内（除以最大绝对值，乘以 128）。
+
+\begin{warningbox}{异常值问题}
+大模型中某些激活值会出现\textbf{异常大的数值}（outliers），这些异常值会严重扭曲量化的缩放因子，导致其他正常值的精度急剧下降。这个问题在较大的网络中尤为突出。
+\end{warningbox}
+
+LLM.int8() 的解决方案：
+\begin{enumerate}
+    \item 识别矩阵中的异常值列（通常只占 0.1\%）
+    \item 异常值部分保持 fp16 精度处理
+    \item 其余部分使用 int8 量化
+    \item 两部分结果合并
+\end{enumerate}
+
+实验表明该方法效果良好（BLOOM 176B 模型上几乎无精度损失），但因为混合精度处理，实际速度比纯 fp16 慢 15--23\%。主要优势在于\textbf{能将大模型装入更少的 GPU}。
+
+\subsubsection{AWQ：激活感知量化}
+
+AWQ（Activation-aware Weight Quantization）的思路：
+
+\begin{importantbox}{AWQ 的核心思想}
+不是所有权重同等重要。通过观察\textbf{激活值}来确定哪些权重对输出影响最大，将最重要的 0.1--1\% 权重保持高精度，其余权重激进量化。
+
+AWQ 可以将模型从 fp16 量化到 int3/int4，实现 4 倍内存缩减和 3.2 倍推理加速。
+\end{importantbox}
+
+\subsection{模型剪枝与知识蒸馏}
+
+剪枝的思想更为直接：\textbf{直接移除模型中不重要的部分}，然后通过知识蒸馏修复精度损失。
+
+\begin{importantbox}{剪枝-蒸馏流程（NVIDIA 方案）}
+\begin{enumerate}
+    \item 在小规模校准数据集（约 1024 个样本）上，识别重要的层、头和隐藏维度
+    \item 移除不重要的部分，得到更小的模型
+    \item 用原始模型作为教师，对剪枝后的模型进行知识蒸馏
+\end{enumerate}
+\end{importantbox}
+
+\begin{knowledgebox}{从头训练 vs. 蒸馏}
+获得更快推理模型有两条路径：
+\begin{itemize}
+    \item \textbf{从头训练}：定义更快的架构 $\rightarrow$ 训练新模型。缺点：训练成本高
+    \item \textbf{蒸馏}：定义更快的架构 $\rightarrow$ 从原始模型初始化权重 $\rightarrow$ 用蒸馏修复。优点：可以利用已有模型
+\end{itemize}
+两种方法的目标相同：在不显著损失精度的前提下，降低推理复杂度。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 量化通过降低数值精度直接减少内存传输量，是最简单直接的推理优化手段
+    \item 异常值处理（LLM.int8()）和激活感知量化（AWQ）解决了朴素量化的精度问题
+    \item 模型剪枝+蒸馏可以在结构层面缩小模型，效果与量化互补
+    \item 这些方法都是``有损''的——需要在精度和效率之间做权衡
+\end{itemize}
+
+%% ========== Section 6: 投机采样 ==========
+
+\section{无损加速：投机采样}
+
+前面的方法都在``走捷径''——通过降低精度或改变架构来换取速度，可能影响输出质量。投机采样（Speculative Sampling）提供了一种\textbf{无损}的加速方案：保证从目标模型的精确分布中采样。
+
+\subsection{核心直觉：验证比生成快}
+
+\begin{importantbox}{推理两阶段的不对称性}
+\begin{itemize}
+    \item \textbf{Prefill}：给定序列，并行编码所有 token（计算受限，很快）——这本质上就是``验证''
+    \item \textbf{Generation}：逐个生成 token（内存受限，很慢）
+\end{itemize}
+也就是说：\textbf{检查一个序列是否合理，比从头生成这个序列要快得多}。
+\end{importantbox}
+
+\subsection{投机采样算法}
+
+\begin{importantbox}{投机采样的工作流程}
+\begin{enumerate}
+    \item 使用一个\textbf{廉价的草稿模型}（draft model）$p$ 快速生成若干候选 token（如 4 个）
+    \item 将这些候选 token 送入\textbf{目标模型}（target model）$q$ 进行并行验证（Prefill 操作）
+    \item 使用改进的拒绝采样来决定接受或拒绝每个候选 token
+    \item 被接受的 token 直接使用；被拒绝时，从修正后的分布中采样一个 token
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=2cm, minimum height=0.7cm, align=center, font=\footnotesize},
+    token/.style={draw, minimum width=0.7cm, minimum height=0.7cm, align=center, font=\footnotesize},
+    arrow/.style={->, thick, >=stealth}
+]
+% Draft model generates
+\node[box, fill=blue!10] (draft) at (0, 3) {草稿模型 $p$};
+\node[font=\footnotesize] at (0, 2.3) {快速自回归生成};
+\foreach \i/\c in {0/the, 1/cat, 2/sat, 3/on} {
+    \node[token, fill=blue!5] (d\i) at (\i*1.2-1.8, 1.3) {\c};
+}
+
+% Target model verifies
+\node[box, fill=red!10] (target) at (6, 3) {目标模型 $q$};
+\node[font=\footnotesize] at (6, 2.3) {并行验证（Prefill）};
+\foreach \i/\c/\col in {0/the/green, 1/cat/green, 2/sat/green, 3/on/red} {
+    \node[token, fill=\col!15] (t\i) at (\i*1.2+4.2, 1.3) {\c};
+}
+
+% Result
+\node[font=\footnotesize] at (3, 0.3) {接受 3 个 token，拒绝第 4 个，从修正分布采样替代};
+\node[token, fill=green!20] at (4.2, -0.3) {the};
+\node[token, fill=green!20] at (5.4, -0.3) {cat};
+\node[token, fill=green!20] at (6.6, -0.3) {sat};
+\node[token, fill=yellow!30] at (7.8, -0.3) {down};
+
+\draw[arrow] (draft) -- (1.8, 3) -- (1.8, 1.7) -- (d0);
+\draw[arrow] (4.2, 3) -- (4.2, 1.7);
+\draw[arrow, dashed, gray] (1.8, 1.3) -- (4.2, 1.3) node[midway, above, font=\footnotesize, gray]{发送候选};
+\end{tikzpicture}
+\caption{投机采样流程：草稿模型快速猜测 4 个 token，目标模型并行验证，接受前 3 个，对第 4 个从修正分布重采样。}
+\end{figure}
+
+\subsection{正确性保证}
+
+投机采样的关键性质：\textbf{保证是目标模型的精确采样}。
+
+以二元词表 $\{A, B\}$ 为例进行证明：
+
+设目标模型概率为 $[q(A), q(B)]$，草稿模型概率为 $[p(A), p(B)]$。假设 $p(A) > q(A)$（草稿模型过度采样 $A$），则 $p(B) < q(B)$。
+
+\begin{enumerate}
+    \item 草稿模型提议 token $x$，以概率 $\min(1, q(x)/p(x))$ 接受
+    \item 若接受，使用 $x$
+    \item 若拒绝，从残差分布 $\max(q - p, 0)$（归一化后）中采样
+\end{enumerate}
+
+计算总采样概率：
+
+$$P[\text{采样} A] = p(A) \cdot \frac{q(A)}{p(A)} + p(B) \cdot 1 \cdot 0 = q(A)$$
+
+$$P[\text{采样} B] = p(B) \cdot 1 + p(A) \cdot \left(1 - \frac{q(A)}{p(A)}\right) \cdot 1 = q(B)$$
+
+\begin{knowledgebox}{与标准拒绝采样的区别}
+标准拒绝采样在拒绝后会重新采样（可能循环很多次）。投机采样的修改是：拒绝后不重试，而是直接从残差分布中采样——保证每一步至少产生一个 token。这种``付出代价直接采样''的策略避免了无限循环。
+\end{knowledgebox}
+
+\subsection{实践配置与扩展}
+
+实际部署中的典型配置：
+
+\begin{itemize}
+    \item 目标模型 70B $\leftrightarrow$ 草稿模型 8B
+    \item 目标模型 8B $\leftrightarrow$ 草稿模型 1B
+    \item 草稿模型越接近目标模型，接受率越高，加速比越大
+    \item 可通过知识蒸馏让草稿模型更好地模拟目标模型
+\end{itemize}
+
+实验结果显示约 2 倍的端到端加速。
+
+\textbf{改进草稿模型的方向}：
+
+\begin{itemize}
+    \item \textbf{Medusa}：草稿模型并行生成多个候选 token（而非自回归）
+    \item \textbf{EAGLE}：草稿模型接收目标模型的高层特征，``寄生''在目标模型上生成候选
+\end{itemize}
+
+\begin{warningbox}{投机采样的适用条件}
+投机采样的加速效果取决于草稿模型的接受率。如果草稿模型与目标模型的分布差异过大，大量候选 token 会被拒绝，加速效果可能不明显甚至有额外开销。因此，草稿模型的质量是关键。
+\end{warningbox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 投机采样利用了``验证比生成快''的不对称性
+    \item 保证从目标模型的\textbf{精确分布}中采样（无损！）
+    \item 典型加速比约 2 倍
+    \item 草稿模型的设计（Medusa、EAGLE 等）是活跃的研究方向
+    \item 可以与前述所有有损方法结合：草稿模型可以使用更激进的量化、更小的架构等
+\end{itemize}
+
+%% ========== Section 7: 动态工作负载处理 ==========
+
+\section{处理动态工作负载}
+
+前面的优化方法关注单个请求或静态批处理的效率。在实际在线服务中，请求是动态到达的，带来了额外的系统级挑战。
+
+\begin{knowledgebox}{在线推理服务的挑战}
+与训练时拥有整齐的 token 块（batch size $\times$ sequence length）不同，在线推理面临三个问题：
+\begin{enumerate}
+    \item 请求到达时间不同（等待凑批会伤害先到的请求）
+    \item 部分序列共享前缀（如系统提示、同一 prompt 的多次采样）
+    \item 序列长度各不相同（填充 padding 浪费资源）
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{连续批处理（Continuous Batching）}
+
+\begin{importantbox}{连续批处理的核心思想}
+不再等待一个批次全部完成后才开始下一个批次。而是：
+\begin{enumerate}
+    \item 逐步解码，每生成一个 token 后将控制权交还给调度器
+    \item 新到达的请求可以\textbf{立即加入}当前批次
+    \item 完成生成的请求立即退出，为新请求腾出位置
+\end{enumerate}
+这种``迭代级调度''（iteration-level scheduling）来自 Orca 系统。
+\end{importantbox}
+
+\textbf{选择性批处理}（Selective Batching）解决不同长度序列的批处理问题：
+
+\begin{itemize}
+    \item \textbf{注意力计算}：每个序列必须单独处理（因为 KV Cache 长度不同）
+    \item \textbf{MLP 计算}：所有序列的 token 可以拼接在一起——将 $[3, H], [9, H], [5, H]$ 拼为 $[17, H]$，因为 MLP 对每个 token 独立作用
+\end{itemize}
+
+\subsection{PagedAttention 与 vLLM}
+
+PagedAttention 是 vLLM 系统的核心创新，解决了 KV Cache 的\textbf{内存碎片化}问题。
+
+\textbf{传统方式的问题}：
+
+\begin{itemize}
+    \item 请求到达时，为其分配最大可能长度的 KV Cache 空间
+    \item \textbf{内部碎片}：实际生成的 token 数远少于预分配空间
+    \item \textbf{外部碎片}：不同请求之间有未使用的内存间隙
+\end{itemize}
+
+\begin{importantbox}{PagedAttention 的核心思想}
+借鉴操作系统的\textbf{虚拟内存分页}机制：
+\begin{enumerate}
+    \item 将 KV Cache 划分为固定大小的\textbf{页}（block）
+    \item 页可以在物理内存中\textbf{不连续}存储
+    \item 使用页表（block table）维护逻辑地址到物理地址的映射
+    \item 按需分配页，不预分配
+\end{enumerate}
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, minimum width=1cm, minimum height=0.6cm, align=center, font=\tiny},
+    arrow/.style={->, thick, >=stealth}
+]
+% Traditional allocation
+\node[font=\small\bfseries] at (2, 3.5) {传统分配方式};
+\node[block, fill=blue!20] at (0, 2.5) {Req 1};
+\node[block, fill=blue!20] at (1, 2.5) {Req 1};
+\node[block, fill=blue!10] at (2, 2.5) {预留};
+\node[block, fill=gray!10] at (3, 2.5) {空闲};
+\node[block, fill=red!20] at (4, 2.5) {Req 2};
+\node[block, fill=red!10] at (5, 2.5) {预留};
+\draw[red, thick, decorate, decoration={brace, amplitude=4pt}] (2, 2.1) -- (3, 2.1) node[midway, below=5pt, font=\tiny, red]{碎片};
+
+% Paged allocation
+\node[font=\small\bfseries] at (2, 1.2) {PagedAttention};
+\node[block, fill=blue!20] at (0, 0.3) {Req 1};
+\node[block, fill=red!20] at (1, 0.3) {Req 2};
+\node[block, fill=blue!20] at (2, 0.3) {Req 1};
+\node[block, fill=red!20] at (3, 0.3) {Req 2};
+\node[block, fill=green!20] at (4, 0.3) {空闲};
+\node[block, fill=green!20] at (5, 0.3) {空闲};
+\node[font=\tiny, gray] at (2.5, -0.3) {非连续存储，无碎片};
+\end{tikzpicture}
+\caption{传统连续分配 vs. PagedAttention：页式存储消除了内部和外部碎片。}
+\end{figure}
+
+PagedAttention 还支持高效的\textbf{前缀共享}：
+
+\begin{itemize}
+    \item 多个请求共享相同的系统提示——共享对应的 KV Cache 页
+    \item 同一 prompt 生成多个响应——共享 prompt 部分的页
+    \item 使用\textbf{写时复制}（Copy-on-Write）：当共享页需要被修改时才复制
+\end{itemize}
+
+\begin{knowledgebox}{vLLM 的其他优化}
+除 PagedAttention 外，vLLM 还包含多项系统优化：
+\begin{itemize}
+    \item 融合 kernel：将块读取和注意力计算合并为一个 CUDA kernel，减少启动开销
+    \item 使用最新的计算 kernel（FlashAttention、FlashDecoding）
+    \item CUDA Graphs：预编译执行图，减少 kernel 启动开销
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+\begin{itemize}
+    \item 在线推理服务面临动态、异构的请求流
+    \item 连续批处理消除了等待凑批的延迟浪费
+    \item 选择性批处理允许不同长度序列共存于同一批次
+    \item PagedAttention 将操作系统的内存管理思想应用于 KV Cache，消除碎片化
+    \item 前缀共享和写时复制进一步提高了内存利用率
+\end{itemize}
+
+%% ========== Section 8: 总结与延伸 ==========
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本节课从推理的工作负载分析出发，系统性地介绍了优化推理效率的多种技术：
+
+\begin{importantbox}{推理优化技术全景}
+\begin{enumerate}
+    \item \textbf{理解工作负载}：推理（特别是 Generation 阶段）是内存受限的，算术强度低
+    \item \textbf{有损优化——缩减 KV Cache}：GQA、MLA、CLA、局部注意力
+    \item \textbf{有损优化——替代架构}：SSM（Mamba 等）、扩散模型
+    \item \textbf{有损优化——量化与剪枝}：int8/int4 量化、AWQ、模型剪枝+蒸馏
+    \item \textbf{无损加速}：投机采样（保证精确采样）
+    \item \textbf{系统优化}：连续批处理、PagedAttention
+\end{enumerate}
+\end{importantbox}
+
+\subsection{关键洞察}
+
+\begin{enumerate}
+    \item \textbf{推理不仅仅是``运行模型''}：推理优化本质上是在给定资源预算下最大化输出质量。这意味着架构设计、模型训练和推理部署需要协同考虑。
+
+    \item \textbf{最大的优化潜力在于架构创新}：系统级优化（更好的 kernel、更高效的调度）能带来常数级的改进。而架构创新（SSM、扩散模型）可以改变计算复杂度的\textbf{渐近行为}，潜力远大于系统优化。
+
+    \item \textbf{借鉴经典计算机科学}：投机采样借鉴了处理器中的\textbf{投机执行}（speculative execution），PagedAttention 借鉴了操作系统的\textbf{虚拟内存分页}（paging）。
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item \textbf{Scaling Book --- Transformers 章节}：\url{https://jax-ml.github.io/scaling-book/transformers/}
+    \item \textbf{Scaling Book --- Inference 章节}：\url{https://jax-ml.github.io/scaling-book/inference/}
+    \item \textbf{GQA 论文}：Ainslie et al., ``GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints''
+    \item \textbf{MLA / DeepSeek v2}：DeepSeek-AI, ``DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model''
+    \item \textbf{Mamba}：Gu and Dao, ``Mamba: Linear-Time Sequence Modeling with Selective State Spaces'' (\url{https://arxiv.org/abs/2312.00752})
+    \item \textbf{投机采样}：Leviathan et al. (\url{https://arxiv.org/abs/2211.17192}); Chen et al. (\url{https://arxiv.org/abs/2302.01318})
+    \item \textbf{Medusa}：\url{https://arxiv.org/abs/2401.10774}
+    \item \textbf{EAGLE}：\url{https://arxiv.org/abs/2401.15077}
+    \item \textbf{LLM.int8()}：Dettmers et al. (\url{https://arxiv.org/abs/2208.07339})
+    \item \textbf{AWQ}：Lin et al. (\url{https://arxiv.org/abs/2306.00978})
+    \item \textbf{vLLM / PagedAttention}：Kwon et al. (\url{https://arxiv.org/abs/2309.06180})
+    \item \textbf{Orca (Continuous Batching)}：Yu et al. (\url{https://www.usenix.org/system/files/osdi22-yu.pdf})
+    \item \textbf{character.ai 推理优化}：\url{https://research.character.ai/optimizing-inference/}
+\end{itemize}
+
+\end{document}
