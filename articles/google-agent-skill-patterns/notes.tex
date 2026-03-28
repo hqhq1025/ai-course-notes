@@ -1,0 +1,367 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{tikz}
+\IfFileExists{pgfplots.sty}{
+    \usepackage{pgfplots}
+    \pgfplotsset{compat=1.18}
+}{}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{5 Agent Skill Design Patterns Every ADK Developer Should Know}
+\newcommand{\noteauthors}{五道口纳什}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Google Cloud Tech}
+\newcommand{\videopublishdate}{2026-03-17}
+\newcommand{\videoduration}{X Article}
+\newcommand{\videourl}{https://x.com/GoogleCloudTech/status/2033953579824758855}
+\newcommand{\videocoverpath}{}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 文章笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{作者/来源}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{内容形式}：\videoduration\par
+\textbf{原文链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：从格式到内容设计}
+
+随着 Agent 工具生态的快速发展，超过 30 种 Agent 工具（如 Claude Code、Gemini CLI、Cursor 等）已经在 \texttt{SKILL.md} 的文件格式上达成了标准化共识。格式问题基本已经解决，真正的挑战转移到了\textbf{内容设计}层面。
+
+\begin{knowledgebox}{什么是 SKILL.md？}
+\texttt{SKILL.md} 是 Agent Skills 规范中的核心文件，用于定义一个 skill 的指令、触发条件和行为逻辑。它是 Agent 工具加载和执行 skill 的入口。该规范由 Google ADK（Agent Development Kit）推动，已被多个主流 Agent 工具采纳。
+\end{knowledgebox}
+
+规范本身只说明了如何\textbf{打包}一个 skill，却没有提供如何\textbf{设计内部逻辑}的指导。例如，一个封装 FastAPI 约定的 skill 和一个四步文档生成 pipeline，虽然外部的 \texttt{SKILL.md} 文件看起来完全一样，但内部运作方式截然不同。
+
+\begin{importantbox}{核心观点}
+通过研究生态系统中 skill 的构建方式（从 Anthropic 的仓库到 Vercel 和 Google 的内部指南），可以总结出五种反复出现的设计模式，帮助开发者构建更可靠的 Agent。
+\end{importantbox}
+
+本文介绍的五种模式分别是：
+\begin{enumerate}
+    \item \textbf{Tool Wrapper}：让 Agent 成为任意库的即时专家
+    \item \textbf{Generator}：基于可复用模板生成结构化文档
+    \item \textbf{Reviewer}：按严重级别对代码进行检查评分
+    \item \textbf{Inversion}：Agent 先采访你，再行动
+    \item \textbf{Pipeline}：强制执行带检查点的多步骤工作流
+\end{enumerate}
+
+\subsection{本章小结}
+
+Agent Skill 的格式标准化已经成熟，开发者的关注点应从"如何写对 YAML"转向"如何设计 skill 内部的逻辑结构"。五种设计模式为这一问题提供了系统性的解决框架。
+
+\section{Pattern 1：Tool Wrapper（工具封装）}
+
+Tool Wrapper 为 Agent 提供针对特定库的\textbf{按需上下文}。与其将 API 约定硬编码到 system prompt 中，不如将它们打包成一个 skill，Agent 只在实际使用该技术时才加载相关上下文。
+
+\begin{importantbox}{Tool Wrapper 的核心机制}
+\texttt{SKILL.md} 文件监听用户 prompt 中的特定库关键词，动态从 \texttt{references/} 目录加载内部文档，并将这些规则作为绝对真理应用。这正是将团队内部编码规范或特定框架最佳实践直接分发到开发者工作流中的机制。
+\end{importantbox}
+
+\subsection{工作原理}
+
+Tool Wrapper 是最简单的模式。其核心流程为：
+
+\begin{enumerate}
+    \item Agent 检测到用户 prompt 中包含特定库的关键词（如 ``FastAPI''）
+    \item \texttt{SKILL.md} 指令触发，动态加载 \texttt{references/} 目录下的约定文档（如 \texttt{conventions.md}）
+    \item Agent 将加载的规则作为上下文，指导代码编写或审查
+\end{enumerate}
+
+\subsection{适用场景}
+
+\begin{itemize}
+    \item 分发团队内部的编码规范
+    \item 封装特定框架的最佳实践
+    \item 在不同项目间复用一致的技术标准
+\end{itemize}
+
+\begin{knowledgebox}{按需加载的优势}
+Tool Wrapper 不会在所有对话中都占用 context window。只有当用户的请求涉及特定技术栈时，相关文档才会被加载。这种按需加载策略既节省了 token 开销，又保证了上下文的精准性。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Tool Wrapper 是最简单也最基础的模式，通过关键词触发和按需加载，将特定库的知识动态注入 Agent 的上下文中，适合封装编码规范和框架约定。
+
+\section{Pattern 2：Generator（生成器）}
+
+Tool Wrapper 负责\textbf{应用知识}，而 Generator 则负责\textbf{强制输出一致性}。如果你发现 Agent 每次运行时生成的文档结构都不同，Generator 通过编排一个填空式流程来解决这个问题。
+
+\begin{importantbox}{Generator 的关键目录结构}
+Generator 利用两个可选目录：
+\begin{itemize}
+    \item \texttt{assets/}：存放输出模板
+    \item \texttt{references/}：存放风格指南
+\end{itemize}
+\texttt{SKILL.md} 中的指令充当项目经理角色，告诉 Agent 加载模板、读取风格指南、向用户询问缺失变量，然后填充文档。
+\end{importantbox}
+
+\subsection{工作原理}
+
+Generator 的执行流程是严格有序的：
+
+\begin{enumerate}
+    \item 加载 \texttt{assets/} 中的输出模板
+    \item 读取 \texttt{references/} 中的风格指南
+    \item 向用户询问缺失的变量
+    \item 按照模板和风格指南填充文档
+\end{enumerate}
+
+关键在于：\texttt{SKILL.md} 文件本身不包含实际的布局或语法规则，它只负责\textbf{协调资产的检索}并强制 Agent 按步骤执行。
+
+\subsection{适用场景}
+
+\begin{itemize}
+    \item 生成可预测的 API 文档
+    \item 标准化 commit message
+    \item 脚手架式的项目架构搭建
+\end{itemize}
+
+\begin{warningbox}{常见误区}
+不要把模板内容直接写在 \texttt{SKILL.md} 中。Generator 模式的精髓在于\textbf{关注点分离}：指令文件负责流程编排，模板和风格指南作为独立资产存储在各自的目录中。这样更换模板或风格指南时不需要修改 skill 逻辑。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Generator 通过模板 + 风格指南 + 填空流程的组合，确保 Agent 每次生成的文档结构一致。指令与资产的分离使得 skill 具有高度可复用性。
+
+\section{Pattern 3：Reviewer（审查者）}
+
+Reviewer 模式将\textbf{检查什么}与\textbf{如何检查}分离。与其在 system prompt 中写一长串代码质量规则，不如将模块化的评分标准（rubric）存储在 \texttt{references/review-checklist.md} 文件中。
+
+\begin{importantbox}{Reviewer 的核心设计}
+指令保持静态不变，Agent 动态加载外部 checklist 中的具体审查标准，并按严重级别输出结构化的评审结果。更换 checklist 即可切换审查维度：Python 风格检查 $\rightarrow$ OWASP 安全审计，无需修改 skill 基础设施。
+\end{importantbox}
+
+\subsection{工作原理}
+
+\begin{enumerate}
+    \item 用户提交代码
+    \item Agent 加载 \texttt{references/review-checklist.md} 中的检查清单
+    \item Agent 逐项对照清单进行系统化评审
+    \item 按严重级别（severity）分组输出发现的问题
+\end{enumerate}
+
+\subsection{适用场景}
+
+\begin{itemize}
+    \item 自动化 PR review
+    \item 安全漏洞预检
+    \item 代码质量评估
+    \item 合规性检查
+\end{itemize}
+
+\begin{knowledgebox}{模块化的威力}
+Reviewer 模式最大的优势在于 checklist 的可插拔性。同一套 skill 基础设施，配合不同的 checklist 文件，可以变成完全不同的专业审查工具。这种设计让 skill 的复用效率最大化。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Reviewer 通过将审查标准外置为独立的 checklist 文件，实现了检查逻辑与检查内容的解耦。更换 checklist 即可获得全新的审查能力，是自动化代码审查和安全审计的理想选择。
+
+\section{Pattern 4：Inversion（反转）}
+
+Agent 天生倾向于\textbf{猜测并立即生成}。Inversion 模式翻转了这一动态：不是用户驱动 prompt、Agent 执行，而是 \textbf{Agent 充当采访者}，在行动之前先收集完整的上下文。
+
+\begin{importantbox}{Inversion 的核心约束}
+Inversion 依赖于明确的、不可协商的门控指令（gating instructions），例如"在所有阶段完成之前，不得开始构建"。Agent 按顺序提出结构化问题，等待用户回答后才进入下一阶段，直到获得完整的需求和部署约束后才生成最终输出。
+\end{importantbox}
+
+\subsection{工作原理}
+
+\begin{enumerate}
+    \item Agent 按预定义的阶段依次向用户提问
+    \item 每个阶段收集特定类别的信息（需求、约束、偏好等）
+    \item 严格的门控条件阻止 Agent 跳过任何阶段
+    \item 只有所有答案收集完毕后，Agent 才综合生成最终输出
+\end{enumerate}
+
+\begin{warningbox}{为什么需要显式门控？}
+如果没有显式的门控指令，Agent 很容易在收集到部分信息后就急于生成结果。这会导致输出质量低下，遗漏关键需求。门控指令（如 ``DO NOT start building until all phases are complete''）是 Inversion 模式的生命线，必须用强硬、明确的语言表达。
+\end{warningbox}
+
+\subsection{适用场景}
+
+\begin{itemize}
+    \item 项目规划（需要全面了解需求后才能制定方案）
+    \item 架构设计（需要了解各种约束条件）
+    \item 复杂任务分解（需要明确上下文后才能合理拆分）
+\end{itemize}
+
+\subsection{本章小结}
+
+Inversion 模式通过显式门控指令，强制 Agent 在行动前完成信息收集。这种"先问后做"的策略显著提升了输出质量，特别适合需要全面上下文的复杂任务。
+
+\section{Pattern 5：Pipeline（流水线）}
+
+对于复杂任务，跳过步骤或忽略指令的代价是不可接受的。Pipeline 模式通过\textbf{硬性检查点}（hard checkpoints）强制执行严格的顺序工作流。
+
+\begin{importantbox}{Pipeline 的核心特征}
+指令本身即是工作流定义。通过实现显式的菱形门控条件（diamond gate conditions），例如要求用户在 docstring 生成步骤确认后才能进入最终组装阶段，Pipeline 确保 Agent 无法绕过复杂任务直接呈现未经验证的最终结果。
+\end{importantbox}
+
+\subsection{工作原理}
+
+\begin{enumerate}
+    \item 工作流被分解为多个严格有序的步骤
+    \item 每个步骤之间设置门控条件（通常需要用户确认）
+    \item 不同步骤按需加载不同的 reference 文件和模板
+    \item Agent 被明确禁止跳过任何步骤或门控
+\end{enumerate}
+
+\begin{knowledgebox}{上下文窗口管理}
+Pipeline 模式的一个精妙之处在于，它利用所有可选目录，但只在需要特定资产的步骤才加载对应的 reference 文件和模板。这种按步骤加载的策略保持了 context window 的整洁，避免了不必要的 token 消耗。
+\end{knowledgebox}
+
+\subsection{适用场景}
+
+\begin{itemize}
+    \item 多步骤文档生成流水线
+    \item 需要人工审批的自动化工作流
+    \item 质量要求严格的代码生成任务
+\end{itemize}
+
+\subsection{本章小结}
+
+Pipeline 模式是五种模式中最严格的一种，通过硬性检查点和门控条件确保复杂工作流的每一步都被正确执行和验证。适合对质量和完整性要求极高的场景。
+
+\section{如何选择合适的模式}
+
+每种模式回答的是不同的问题。以下是选择指南：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{模式} & \textbf{核心问题} & \textbf{典型场景} \\
+\midrule
+Tool Wrapper & 如何注入特定库的知识？ & 编码规范、框架约定 \\
+Generator & 如何保证输出结构一致？ & API 文档、项目脚手架 \\
+Reviewer & 如何系统化检查代码？ & PR review、安全审计 \\
+Inversion & 如何确保信息收集完整？ & 项目规划、架构设计 \\
+Pipeline & 如何强制多步骤顺序执行？ & 文档流水线、审批工作流 \\
+\bottomrule
+\end{tabular}
+\caption{五种 Agent Skill 设计模式对比}
+\end{table}
+
+\begin{knowledgebox}{模式可以组合}
+这五种模式并非互斥。它们可以自由组合：
+\begin{itemize}
+    \item Pipeline 可以在最后一步嵌入 Reviewer 来自检工作成果
+    \item Generator 可以在开始阶段使用 Inversion 来收集必要的模板变量
+\end{itemize}
+得益于 ADK 的 \texttt{SkillToolset} 和渐进式披露（progressive disclosure）机制，Agent 在运行时只在需要的模式上花费 context token。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+选择模式时应根据核心问题匹配，而非盲目套用。更重要的是，模式之间可以组合使用，形成更强大的复合 skill。
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本文系统梳理了 Agent Skill 的五种设计模式：
+
+\begin{enumerate}
+    \item \textbf{Tool Wrapper}：按需加载，注入特定库知识
+    \item \textbf{Generator}：模板驱动，确保输出一致性
+    \item \textbf{Reviewer}：checklist 外置，实现可插拔审查
+    \item \textbf{Inversion}：先问后做，门控式信息收集
+    \item \textbf{Pipeline}：硬性检查点，强制顺序执行
+\end{enumerate}
+
+\begin{warningbox}{最重要的启示}
+不要试图将复杂而脆弱的指令塞进一个 system prompt 中。将工作流分解，应用合适的结构化模式，才能构建出可靠的 Agent。
+\end{warningbox}
+
+\subsection{延伸思考}
+
+\begin{itemize}
+    \item \textbf{Agent Skills 规范}是开源的，且已被 ADK 原生支持。开发者可以直接基于这些模式开始构建。
+    \item 随着更多 Agent 工具采纳统一的 skill 格式，\textbf{跨工具的 skill 复用}将成为可能。一个设计良好的 skill 可以同时在 Claude Code、Gemini CLI 和 Cursor 中使用。
+    \item 模式的组合潜力值得进一步探索：例如 Inversion + Generator + Reviewer 的三层组合，可以构建一个"先收集需求、再生成文档、最后自审"的完整工作流。
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Google Agent Development Kit (ADK) 官方文档
+    \item Agent Skills 开源规范
+    \item 原文作者：@Saboo\_Shubham\_ 和 @lavinigam
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

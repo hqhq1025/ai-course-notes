@@ -119,6 +119,41 @@ xelatex -interaction=nonstopmode <file>.tex  # 第二次（解析引用）
   - Percy 讲授的课以 `.py` 文件形式发布
 - Spring 2024 Slides：https://github.com/stanford-cs336/spring2024-lectures
 
+## 文章整理流程
+
+除视频外，本仓库也整理技术博客、X/Twitter 文章等内容为 LaTeX PDF。
+
+### 内容获取
+- **博客/网页**：用 `fetch_content` 或 `WebFetch` 抓取全文
+- **X/Twitter**：用 `api.fxtwitter.com/{user}/status/{id}` 获取 JSON，Article 内容在 `tweet.article.content.blocks` 中
+- **YouTube**：沿用现有 youtube-render-pdf skill
+
+### 译文处理规则（重要）
+当文章为译文时（标题含【译】、正文标注"原文链接"、作者为已知翻译账号如 @dotey 等）：
+1. **必须找到并获取原文**，基于原文内容整理笔记
+2. 在笔记首页和元数据中标注原文作者、原文链接
+3. 译文仅作参考，帮助理解术语翻译，不作为主要内容来源
+4. 原文为英文时，笔记仍用中文撰写，但技术术语保留英文原文
+
+### 目录结构
+```
+articles/
+├── anthropic-harness-design/    # 按主题命名
+│   ├── harness-design-notes.tex
+│   ├── harness-design-notes.pdf
+│   └── cover.jpg (如有)
+├── karpathy-agentic-thinking/
+└── ...
+```
+
+### LaTeX 适配
+文章笔记复用视频讲义的 LaTeX 模板，但元数据区适配为：
+- 首页标题改为"文章笔记"
+- `\videochannel` → 文章作者/来源
+- `\videopublishdate` → 发布日期
+- `\videoduration` → 阅读时长（估算）
+- 不需要视频时间戳脚注
+
 ## 注意事项
 
 - `yt-dlp` 版本需保持最新（`pip install --upgrade yt-dlp`），YouTube 经常更新反爬策略
@@ -126,3 +161,4 @@ xelatex -interaction=nonstopmode <file>.tex  # 第二次（解析引用）
 - slides 图片比视频帧质量高得多，优先使用
 - 矩阵维度、公式细节以 slides 为准（字幕可能有听写错误）
 - 编译 PDF 需要运行两次 xelatex 才能正确生成目录和引用
+- X/Twitter 内容获取使用 `api.fxtwitter.com`（无需 API key，零依赖）
