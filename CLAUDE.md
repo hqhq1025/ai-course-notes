@@ -49,9 +49,11 @@ ai-course-notes/
 
 1. 用 `yt-dlp --dump-json` 检查元数据（标题、章节、时长、字幕）
 2. 下载封面图（最高分辨率 thumbnail）
-3. 获取字幕：
+3. 获取字幕（**哪里方便就从哪里拿**，不限定平台）：
+   - 同一讲座若多平台有源，优先从有现成字幕的平台获取
    - YouTube：优先手动字幕，fallback 到 `youtube-transcript-api`
    - Bilibili：CC 字幕 → Whisper ASR → 纯视觉模式
+   - 允许混合：视频从 A 平台下载，字幕从 B 平台获取
 4. 下载视频（720p 通常够用于帧提取）
 
 ### Step 3: 通读字幕，梳理课程结构
