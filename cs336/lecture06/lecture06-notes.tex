@@ -59,7 +59,7 @@
 \newcommand{\videopublishdate}{2025-05}
 \newcommand{\videoduration}{1:20:18}
 \newcommand{\videourl}{https://www.youtube.com/watch?v=E8Mju53VB00}
-\newcommand{\videocoverpath}{cover_real.jpg}
+\newcommand{\videocoverpath}{cover.jpg}
 
 \begin{document}
 
@@ -96,6 +96,87 @@
 
 \tableofcontents
 \newpage
+
+\section{本讲总框架：从性能现象到可执行优化}
+
+这节课的核心不是“学一个新 API”，而是学会把一个 GPU 程序拆成可以测、可以看、可以改的几个层次。你可以把整讲内容压成五个问题：
+\begin{enumerate}
+    \item \textbf{定义}：什么叫 benchmark、profile、kernel、fusion、PTX？
+    \item \textbf{直觉}：为什么很多操作慢，不是算得慢，而是搬运太多？
+    \item \textbf{机制}：GPU、CUDA、Triton、torch.compile 在底层分别做了什么？
+    \item \textbf{应用}：GeLU、Softmax、MLP、MatMul 分别怎么优化？
+    \item \textbf{局限}：什么时候理论不够，必须回到真实硬件上测？
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.95cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=3.1cm, minimum height=0.8cm] (a) {benchmark};
+\node[draw, rounded corners, fill=blue!18, right=1.2cm of a, minimum width=3.1cm, minimum height=0.8cm] (b) {profile};
+\node[draw, rounded corners, fill=blue!26, right=1.2cm of b, minimum width=3.1cm, minimum height=0.8cm] (c) {kernel};
+\node[draw, rounded corners, fill=blue!34, right=1.2cm of c, minimum width=3.1cm, minimum height=0.8cm] (d) {fuse};
+\draw[-{Latex[length=3mm]}, thick] (a) -- (b);
+\draw[-{Latex[length=3mm]}, thick] (b) -- (c);
+\draw[-{Latex[length=3mm]}, thick] (c) -- (d);
+\end{tikzpicture}
+\caption{本讲的工作流：先测时间，再找瓶颈，再读内核，再决定要不要融合}
+\end{figure}
+
+\begin{knowledgebox}{这讲最重要的结论}
+不要先凭感觉优化。先 benchmark，再 profile，再决定是该用 PyTorch、Triton、CUDA，还是干脆交给 \texttt{torch.compile}。
+\end{knowledgebox}
+
+\subsection{定义}
+
+Benchmark 是端到端计时。Profile 是看时间花在哪。Kernel 是 GPU 上的执行单元。Fusion 是把多个算子合并成一个内核，减少中间结果读写。PTX 是 Triton/CUDA 最终落到 GPU 之前的中间汇编视图。
+
+\begin{importantbox}{如果只记一个定义}
+benchmark 回答“多快”，profile 回答“为什么快/慢”，kernel 回答“机器到底执行了什么”。
+\end{importantbox}
+
+\subsection{直觉}
+
+GPU 性能的核心直觉很简单：计算本身往往没那么贵，贵的是把数据从 DRAM 反复搬来搬去。只要你把多个操作分散成多个 kernel，中间写回全局内存的次数就会迅速上升。
+
+\begin{warningbox}{最常见的直觉错误}
+很多人会盯着 FLOPs 看，但在本讲里，真正决定性能的常常是 memory traffic 和 kernel launch 的开销，而不是纯计算量。
+\end{warningbox}
+
+\subsection{机制}
+
+在机制层面，本讲会依次把工具链串起来：
+\begin{itemize}
+    \item PyTorch 负责表达高层算子。
+    \item CUDA 让你直接写线程级内核。
+    \item Triton 让你在 block 级别写 Python 内核。
+    \item \texttt{torch.compile} 把朴素 Python 代码自动编译成更优的底层内核。
+\end{itemize}
+
+\subsection{应用}
+
+GeLU 是最适合讲 fusion 的逐元素案例，Softmax 是最适合讲行归约的案例，MatMul 是最适合讲 tiling 和 shared memory 的案例。三者分别对应三种常见的 GPU 优化思路。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3.2cm}p{3.8cm}p{5.4cm}}
+\toprule
+\textbf{算子} & \textbf{主要瓶颈} & \textbf{课程里的优化手段} \\
+\midrule
+GeLU & 多次逐元素读写 & fusion, compiler-generated kernel \\
+Softmax & 行归约 + 稳定性 & row-wise block, one-pass read/write \\
+MatMul & 数据复用和调度 & tiling, shared memory, L2-friendly ordering \\
+\bottomrule
+\end{tabular}
+\caption{三类算子对应三种不同的优化思路}
+\end{table}
+
+\subsection{局限}
+
+本讲的方法不是“到处写内核”，而是“先让工具帮你做，再在真正的瓶颈上手写”。很多性能问题会随着库版本、硬件和 shape 变化而变化，所以理论分析只能给方向，不能替代实测。
+
+\begin{knowledgebox}{局限也是方法的一部分}
+系统课里最危险的事情不是你不会写内核，而是你以为自己已经知道瓶颈在哪里。这个错误会直接把优化时间浪费掉。
+\end{knowledgebox}
 
 %% ========== Section 1: 引言 ==========
 

@@ -1,0 +1,206 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
+    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
+    captionpos=b, extendedchars=false
+}
+
+\newcommand{\notetitle}{LangChain/LangGraph ReAct 差异与 LangSmith 监控}
+\newcommand{\noteauthors}{五道口纳什 \& Claude}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 17 分钟}
+\newcommand{\videourl}{https://www.bilibili.com/video/BV1n4n7znEDN}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{ReAct 范式回顾}
+
+\subsection{从 CoT 到 ReAct}
+
+ReAct 是 Agent 领域最经典的工作之一（姚顺雨团队，2022 年底 / 2023 年初发表于 NeurIPS，引用量已超 4000）。它的演进脉络如下：
+
+\begin{enumerate}
+    \item \textbf{CoT（Chain of Thought）}：面向回答问题——``Let's think step by step''，启发了后续的 Prompt Engineering。
+    \item \textbf{Act Only}：语言模型可以和环境交互，产生动作（Action），环境返回观察（Observation），但没有显式思考过程。
+    \item \textbf{ReAct = Reasoning + Acting}：在产生动作之前先进行 Reasoning（Thought），降低模型幻觉，更好地 grounding 到合理的动作。
+\end{enumerate}
+
+\begin{importantbox}{ReAct 的核心循环}
+Thought $\rightarrow$ Action $\rightarrow$ Observation $\rightarrow$ Thought $\rightarrow$ ... $\rightarrow$ Final Answer
+
+ReAct 启发了后续 Agent 的设计和开发，也可能启发了 GPT API 中 Function Calling 特性的诞生（2023年6月）。
+\end{importantbox}
+
+\begin{knowledgebox}{关于 Reasoning Model}
+现代的 Reasoning Model 在回答问题之前已经学会了思考，不需要再显式地通过 Prompt 告诉它"你要先思考"。后续介绍 Reasoning Model 时会展开讨论其使用规范和标准。
+\end{knowledgebox}
+
+\subsection{本章小结}
+ReAct 将推理（Reasoning）与行动（Acting）结合，是 Agent 设计的基石。理解其 Thought-Action-Observation 三部曲是理解后续所有 Agent 框架的前提。
+
+\section{LangChain 实现 ReAct Agent}
+
+\subsection{Prompt 模板设计}
+
+LangChain 中 \texttt{create\_react\_agent} 使用了一个标准化的 Prompt 模板，其设计强调\textbf{泛化性和通用性}：
+
+\begin{quote}
+\textit{Answer the following questions as best you can. You have access to the following tools: \{tools\}. Use the following format: Question / Thought / Action / Action Input / Observation / ... / Final Answer. Begin! Question: \{input\} \{agent\_scratchpad\}}
+\end{quote}
+
+模板包含两个动态占位符：
+\begin{itemize}
+    \item \texttt{tools}：可用的工具列表
+    \item \texttt{agent\_scratchpad}：交互过程中动态维护的历史记录
+\end{itemize}
+
+\subsection{三步骤构建流程}
+
+\begin{enumerate}
+    \item 声明语言模型（如 GPT-4.1 Nano）
+    \item 调用 \texttt{create\_react\_agent} 创建 Agent
+    \item 将 Agent 放入 \texttt{AgentExecutor} 中执行
+\end{enumerate}
+
+\subsection{工作机制：基于文本模板的迭代}
+
+LangChain 的 ReAct 实现有一个重要特征——它\textbf{不使用多轮消息（message list）}，而是将所有历史信息不断追加到\textbf{同一个 human 消息}中：
+
+\begin{warningbox}{LangChain ReAct 的历史管理方式}
+每一轮新的交互都是一次新的 LLM 调用。历史信息（Thought、Action、Observation）被追加到 \texttt{agent\_scratchpad} 中，作为单条 human 消息的一部分发送给模型。这意味着没有多轮对话的 message 结构，所有上下文都挤在一个消息里。
+\end{warningbox}
+
+\subsection{本章小结}
+LangChain 的 ReAct 实现基于 Prompt 模板 + 文本追加的方式管理交互历史，结构简单但缺乏多轮消息的清晰组织。
+
+\section{LangGraph 实现 ReAct Agent}
+
+\subsection{基于图的架构}
+
+LangGraph 的 \texttt{create\_react\_agent} 实现更为现代化。只需定义模型和工具即可：
+
+\begin{importantbox}{理解 LangGraph 的关键：虚边（条件边）}
+LangGraph 的 ReAct Agent 包含两个核心节点：
+\begin{itemize}
+    \item \textbf{Agent 节点}：负责产生工具调用请求
+    \item \textbf{Tools 节点}：负责执行工具并返回结果
+\end{itemize}
+Agent 节点上有一条\textbf{条件边}，决策是否要停止调用工具直接输出答案，还是继续调工具。
+\end{importantbox}
+
+\subsection{基于消息列表的管理}
+
+与 LangChain 不同，LangGraph 完全基于\textbf{多轮对话消息}的方式管理交互：
+
+消息流：Human Message $\rightarrow$ AI Message（含 tool\_calls） $\rightarrow$ Tool Message(s) $\rightarrow$ AI Message（最终回答）
+
+\begin{knowledgebox}{并行工具调用}
+LangGraph 支持\textbf{并行工具调用}——AI Message 中的 \texttt{tool\_calls} 是一个列表，可以同时调用多个工具。例如查询"澳网冠军的家乡"时，模型可能并行调用两次搜索工具。
+\end{knowledgebox}
+
+\subsection{本章小结}
+LangGraph 的 ReAct 实现基于图结构和多轮消息列表，架构更清晰，支持并行工具调用。
+
+\section{LangSmith 监控平台}
+
+\subsection{配置与使用}
+
+LangSmith 是一个在线监控平台，用于追踪和调试 Agent 的工作流程。配置方式：
+\begin{enumerate}
+    \item 在 \texttt{.env} 中配置 LangSmith API Key
+    \item 开启 tracing 功能（设置为 true）
+    \item 设置 project 名称
+\end{enumerate}
+
+\subsection{核心调试方法}
+
+\begin{importantbox}{Debug 的核心 Tips}
+通过检查模型的\textbf{输入输出}来理解其工作流程。重点关注每一次语言模型调用（橙色部分）的输入和输出——搞清楚输入输出，就搞清楚了整个工作流程。所有前续步骤都是为了构建这样一个消息列表。
+\end{importantbox}
+
+\subsection{本章小结}
+LangSmith 提供了可视化的 Agent 调试能力，核心方法是通过监控 LLM 调用的输入输出来理解整个工作流程。
+
+\section{LangChain vs LangGraph 对比分析}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{维度} & \textbf{LangChain} & \textbf{LangGraph} \\
+\midrule
+历史管理 & 文本追加到单条消息 & 多轮消息列表 \\
+消息结构 & 单条 human 消息（含 scratchpad） & Human / AI / Tool 消息序列 \\
+工具调用 & 串行（一次一个） & 支持并行（tool\_calls 列表） \\
+架构 & Prompt 模板 + Executor & Graph（节点 + 条件边） \\
+可视化 & 需手动追踪 & 可直接导出 Graph 图 \\
+\bottomrule
+\end{tabular}
+\caption{LangChain 与 LangGraph 的 ReAct 实现对比}
+\end{table}
+
+\subsection{本章小结}
+LangGraph 在架构清晰度、消息管理和并行能力上全面优于 LangChain 的旧版实现。LangChain 的方式更适合理解 ReAct 的原始概念，而 LangGraph 更适合生产环境。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item \textbf{重视基础概念}：越基础的东西越本质，后续所有现代的、强大的 Agent 开发理念都脱胎于经典工作。
+    \item \textbf{理解实现差异}：LangChain 通过模板管理和文本追加，LangGraph 通过多轮消息和图结构——底层机制不同，理解差异有助于选择合适的工具。
+    \item \textbf{善用监控工具}：LangSmith 等平台是理解 Agent 内部工作流程的利器，核心是检查每次 LLM 调用的输入输出。
+\end{enumerate}
+
+\end{document}

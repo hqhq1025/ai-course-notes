@@ -13,7 +13,7 @@
 \usepackage{subcaption}
 \usepackage{float}
 \usepackage{tikz}
-\usetikzlibrary{positioning}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,calc,fit,decorations.pathreplacing}
 \IfFileExists{pgfplots.sty}{
     \usepackage{pgfplots}
     \pgfplotsset{compat=1.18}
@@ -99,293 +99,1075 @@
 
 \section{导言：数据不是从天上掉下来的}
 
-上一讲回顾了训练语言模型时使用的数据集，从早期语料到现代的大规模网络语料，核心结论是：\textbf{高质量数据往往需要主动构造}。真实世界的数据通常先存在于活跃服务里，之后要经历抓取、导出、HTML 转文本、语言过滤、质量过滤、毒性过滤、去重等一系列处理，最后才会成为训练语料。
+上一讲已经把数据来源、抓取和清洗的大图景铺开了。这一讲要回答的不是“数据从哪里来”，而是更具体的三件事：
+\textbf{怎么从海量原始数据里挑出像目标数据的子集，怎么把这套机制复用到不同过滤任务里，以及怎么在近重复规模下保持线性级别的效率。}
 
-\begin{importantbox}{本讲的主线}
+\begin{importantbox}{本讲的判断标准}
 \begin{enumerate}
-    \item 给定少量目标数据 $T$ 和大量原始数据 $R$，如何挑出与 $T$ 相似的子集。
-    \item 如何把同一套过滤机械应用到语言识别、质量过滤和毒性过滤。
-    \item 如何在线性时间内做大规模去重，尤其是近重复检测。
+    \item 结果要足够像目标数据，但不能只是复制目标数据。
+    \item 方法要足够快，能在网页级别数据上跑完。
+    \item 方法要足够粗糙，粗糙到可以规模化，但又不能粗糙到失去控制。
 \end{enumerate}
 \end{importantbox}
 
-从工程角度看，这一讲的关键词不是“最强模型”，而是“足够快、足够便宜、足够稳定”。在数据筛选里，\textbf{粗糙但高吞吐}的办法通常比精细但昂贵的方法更有价值。
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=1.4cm, every node/.style={font=\small}, scale=0.88, transform shape]
+\node[draw, rounded corners, fill=blue!10, minimum width=3cm, minimum height=0.9cm] (live) {live service};
+\node[draw, rounded corners, fill=blue!12, right=of live, minimum width=3cm, minimum height=0.9cm] (crawl) {crawl / dump};
+\node[draw, rounded corners, fill=blue!16, right=of crawl, minimum width=3.2cm, minimum height=0.9cm] (html) {HTML $\to$ text};
+\node[draw, rounded corners, fill=blue!20, right=of html, minimum width=3.3cm, minimum height=0.9cm] (filter) {filter \& dedup};
+\node[draw, rounded corners, fill=blue!24, right=of filter, minimum width=3.4cm, minimum height=0.9cm] (train) {training corpus};
+\draw[-{Latex[length=3mm]}, thick] (live) -- (crawl);
+\draw[-{Latex[length=3mm]}, thick] (crawl) -- (html);
+\draw[-{Latex[length=3mm]}, thick] (html) -- (filter);
+\draw[-{Latex[length=3mm]}, thick] (filter) -- (train);
+\end{tikzpicture}%
+}
+\caption{从活跃服务到训练语料\protect\footnotemark}
+\end{figure}
+\footnotetext{字幕 00:00:05--00:01:25。讲者强调数据来自 live services，之后要经历 crawl/dump、HTML 转文本、过滤与去重。}
 
-\section{过滤算法：从目标数据到可打分的原始数据}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}, scale=0.88, transform shape]
+\node[draw, rounded corners, fill=green!10, minimum width=2.8cm, minimum height=0.95cm] (target) at (0,0) {目标数据 $T$\\少而好};
+\node[draw, rounded corners, fill=orange!14, minimum width=3cm, minimum height=0.95cm] (raw) at (4.4,0) {原始数据 $R$\\多而杂};
+\node[draw, rounded corners, fill=yellow!18, minimum width=3.2cm, minimum height=0.95cm] (score) at (8.9,0) {打分函数 $s(x)$\\perplexity / classifier / weight};
+\node[draw, rounded corners, fill=blue!14, minimum width=3.3cm, minimum height=0.95cm] (subset) at (13.5,0) {子集 $R'$\\保留或重采样};
+\draw[-{Latex[length=3mm]}, thick] (target) -- (score);
+\draw[-{Latex[length=3mm]}, thick] (raw) -- (score);
+\draw[-{Latex[length=3mm]}, thick] (score) -- (subset);
+\end{tikzpicture}
+\caption{过滤问题的抽象：从少量目标数据和大量原始数据里学出一个可打分的选择器}
+\end{figure}
 
-\subsection{问题抽象}
-
-可以把过滤写成一个非常抽象的任务：给定目标数据 $T$ 和大量原始数据 $R$，希望找到一个子集 $T' \subset R$，使得 $T'$ 和 $T$ “相似”，但又不是简单复制 $T$。
-
-\begin{knowledgebox}{过滤算法应该满足什么}
-\begin{itemize}
-    \item \textbf{能泛化}：不能只是记住 $T$，而是要学到“像 $T$ 的东西”。
-    \item \textbf{足够快}：要能跑在整个网页级别的数据上。
-    \item \textbf{可打分}：最好把每个样本映射成一个分数，然后按阈值保留或重采样。
-\end{itemize}
+\begin{knowledgebox}{为什么这个抽象很通用}
+KenLM、fastText、DSIR、语言识别、质量过滤、毒性过滤、近重复召回，本质上都可以塞进同一个框架：先学一个粗糙但快的打分器，再根据分数决定保留哪些样本。
 \end{knowledgebox}
 
-这类任务的共同模式非常稳定：先从目标数据估计一个模型或打分函数，再在原始数据上计算分数，最后根据分数做筛选。
+\section{过滤：粗糙但高吞吐的打分器}
 
-\subsection{三种代表性实现}
+\subsection{问题的本质}
+
+把过滤写成一个公式化问题并不复杂。给定目标数据 $T$ 和原始数据 $R$，我们想要一个子集 $R' \subset R$，让它在某个意义下更接近 $T$。关键不在于“精确拟合”，而在于：
+
+\begin{itemize}
+    \item 你要学会对样本打分；
+    \item 你要把高分样本留住；
+    \item 你要在超大规模数据上完成这个动作。
+\end{itemize}
+
+\begin{warningbox}{为什么不能直接上大模型}
+如果过滤器本身和训练模型差不多重，那么你在筛掉 99\% 数据之前，就已经为这 99\% 数据付出了接近训练级别的算力。那样做通常不划算。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.1cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=red!8, minimum width=2.7cm, minimum height=0.8cm] (bad) {低分样本};
+\node[draw, rounded corners, fill=yellow!14, right=1.7cm of bad, minimum width=2.7cm, minimum height=0.8cm] (mid) {边界样本};
+\node[draw, rounded corners, fill=green!14, right=1.7cm of mid, minimum width=2.7cm, minimum height=0.8cm] (good) {高分样本};
+\draw[-{Latex[length=3mm]}, thick] (bad) -- (mid);
+\draw[-{Latex[length=3mm]}, thick] (mid) -- (good);
+\node[below=0.8cm of mid, align=center] {阈值越高，保留越少\\但质量通常越高};
+\end{tikzpicture}
+\caption{过滤的核心动作是阈值化或重采样：把连续分数转成是否保留的决定}
+\end{figure}
+
+\subsection{通用过滤模板}
+
+\begin{lstlisting}[language=Python, caption={一个极简的过滤模板}]
+model = fit(target_data)
+scores = [model.score(x) for x in raw_data]
+keep = [x for x, s in zip(raw_data, scores) if s >= threshold]
+\end{lstlisting}
+
+这个模板几乎就是本讲所有方法的共同骨架。
+
+差异只在于打分函数 \texttt{score(x)} 是什么，以及 \texttt{fit(target\_data)} 用什么模型来实现。
+
+\subsection{分数、阈值和重采样}
+
+同一个分数，在工程里可以有三种常见用法。
 
 \begin{table}[H]
 \centering
-\begin{tabular}{llll}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.2cm}p{4.3cm}p{4.1cm}p{3.1cm}}
 \toprule
-\textbf{方法} & \textbf{打分方式} & \textbf{优点} & \textbf{局限} \\
+\textbf{用法} & \textbf{动作} & \textbf{适合场景} & \textbf{代价} \\
 \midrule
-KenLM / n-gram & $p_T(x)$ 或 perplexity & 极快，简单 & 粗糙，局部上下文 \\
-fastText & $p(T \mid x)$ & 训练和推理都快 & 仍然偏判别式 \\
-DSIR & $p_T(x)/p_R(x)$ & 更接近分布匹配 & 仍依赖简化建模 \\
+threshold & 高于阈值就保留 & 噪声过滤、毒性过滤 & 容易受校准影响 \\
+ranking & 取 top-$k$ 或 top-$p$\% & CCNet 风格排序、预算固定 & 结果依赖样本总量 \\
+resampling & 按权重重采样 & DSIR、分布匹配 & 统计波动更大 \\
 \bottomrule
 \end{tabular}
-\caption{三类过滤方法都在做“先建模，再打分，再筛选”}
+\caption{同一个分数函数，可以驱动三种不同的数据选择动作}
 \end{table}
 
-\subsection{KenLM 与 n-gram 语言模型}
+\begin{importantbox}{为什么要区分这三种动作}
+阈值适合“要还是不要”的粗过滤；排序适合固定预算下的高质量截断；重采样适合想让样本整体分布更像目标分布的场景。把它们混在一起，往往会导致目标不清晰。
+\end{importantbox}
 
-n-gram 语言模型是最经典的过滤基线。对于三元模型，最大似然估计写成
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.0cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=2.8cm, minimum height=0.8cm] (score) {score all samples};
+\node[draw, rounded corners, fill=yellow!16, below left=1.0cm and 1.2cm of score, minimum width=2.8cm, minimum height=0.8cm] (thr) {threshold};
+\node[draw, rounded corners, fill=orange!14, below=1.0cm of score, minimum width=2.8cm, minimum height=0.8cm] (rank) {rank and keep top-$k$};
+\node[draw, rounded corners, fill=green!14, below right=1.0cm and 1.2cm of score, minimum width=2.8cm, minimum height=0.8cm] (res) {weighted resample};
+\draw[-{Latex[length=3mm]}, thick] (score) -- (thr);
+\draw[-{Latex[length=3mm]}, thick] (score) -- (rank);
+\draw[-{Latex[length=3mm]}, thick] (score) -- (res);
+\end{tikzpicture}
+\caption{同一组分数可以派生出三种选择策略：阈值、排序和重采样}
+\end{figure}
+
+\section{KenLM：用语言概率筛数据}
+
+\subsection{n-gram 语言模型}
+
+KenLM 在数据过滤里的作用是一个很典型的例子：它并不追求最聪明，但它足够快。对一个三元模型，最大似然估计可以写成
 \[
-p(w_i \mid w_{i-2}, w_{i-1}) = \frac{\mathrm{count}(w_{i-2}, w_{i-1}, w_i)}{\mathrm{count}(w_{i-2}, w_{i-1})}.
+p(w_i\mid w_{i-2},w_{i-1})=\frac{\mathrm{count}(w_{i-2},w_{i-1},w_i)}{\mathrm{count}(w_{i-2},w_{i-1})}.
 \]
+这就是“计数再归一化”。思想简单，工程上也容易并行化。
 
-它的优点很直接：\textbf{就是计数再归一化}。真正麻烦的是稀疏性。随着 $n$ 变大，许多合理的 n-gram 根本从未在语料中出现，于是就需要平滑。课程里提到的 Kneser-Ney smoothing 就是处理“没见过的 n-gram”最常见的办法之一。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.2cm, every node/.style={font=\small}]
+\node[draw, rounded corners, fill=blue!12, minimum width=1.9cm, minimum height=0.8cm] (w1) {the};
+\node[draw, rounded corners, fill=blue!12, right=of w1, minimum width=1.9cm, minimum height=0.8cm] (w2) {cat};
+\node[draw, rounded corners, fill=blue!12, right=of w2, minimum width=1.9cm, minimum height=0.8cm] (w3) {in};
+\node[draw, rounded corners, fill=blue!12, right=of w3, minimum width=1.9cm, minimum height=0.8cm] (w4) {the};
+\node[draw, rounded corners, fill=blue!12, right=of w4, minimum width=1.9cm, minimum height=0.8cm] (w5) {hat};
+\draw[-{Latex[length=3mm]}, thick] (w1) -- (w2);
+\draw[-{Latex[length=3mm]}, thick] (w2) -- (w3);
+\draw[-{Latex[length=3mm]}, thick] (w3) -- (w4);
+\draw[-{Latex[length=3mm]}, thick] (w4) -- (w5);
+\node[below=0.7cm of w3, align=center] {条件概率由前两个词决定\\n-gram 就是在数这种局部上下文};
+\end{tikzpicture}
+\caption{n-gram 的直觉：用有限窗口的上下文预测下一个词}
+\end{figure}
 
-\begin{knowledgebox}{Kneser-Ney 平滑的直觉}
-如果高阶上下文计数不够，就回退到低阶上下文；如果低阶也不可靠，就继续 back off。它的核心不是“凭空发明概率”，而是把统计信心不足的部分交给更短的上下文。
+\begin{knowledgebox}{Kneser-Ney 的作用}
+当高阶上下文稀疏到不可信时，就回退到更短的上下文。它不是“凭空补概率”，而是在统计证据不足时，把判断交给更稳的低阶模型。
 \end{knowledgebox}
 
-KenLM 是一种常用的高性能实现。它原本常见于机器翻译，但在数据过滤中也很流行，因为它足够快，能把大规模文本打成一个粗糙但有用的分数。课堂里的 CCNet 例子就是把段落按 perplexity 排序，保留前 1/3，用来构造后来的 LLaMA 数据集。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.1cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=yellow!10, minimum width=2.8cm, minimum height=0.8cm] (h3) {3-gram};
+\node[draw, rounded corners, fill=yellow!16, below=of h3, minimum width=2.8cm, minimum height=0.8cm] (h2) {2-gram};
+\node[draw, rounded corners, fill=yellow!22, below=of h2, minimum width=2.8cm, minimum height=0.8cm] (h1) {1-gram};
+\draw[-{Latex[length=3mm]}, thick] (h3) -- (h2);
+\draw[-{Latex[length=3mm]}, thick] (h2) -- (h1);
+\node[right=1.5cm of h2, align=left] {sparse counts\\$\to$ backoff\\$\to$ interpolation};
+\end{tikzpicture}
+\caption{Kneser-Ney 的核心直觉：高阶不可靠就回退，短上下文提供更稳定的统计支撑}
+\end{figure}
 
-\begin{warningbox}{n-gram 模型的边界}
-它能很好地抓住“像不像自然文本”，但很难理解长程语义、篇章结构或事实正确性。换句话说，它更适合过滤“明显不像人话”的内容，而不是判断一篇文章是否真的高质量。
+\subsection{Perplexity 作为打分}
+
+对于一段文本 $x = w_1,\dots,w_n$，perplexity 的形式常写成
+\[
+\mathrm{ppl}(x)=\exp\!\left(-\frac{1}{n}\sum_{i=1}^n \log p(w_i\mid w_{<i})\right).
+\]
+它越低，说明文本越像训练出来的语言模型认为“自然”的文本。KenLM 用它过滤网页时，目标不是判断这段话是否“有价值”，而是先剔除那些明显不像自然语言的垃圾片段。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.4cm, minimum height=0.9cm] (wiki) at (0,0) {Wikipedia sentence\\low perplexity};
+\node[draw, rounded corners, fill=yellow!14, minimum width=3.6cm, minimum height=0.9cm] (cs) at (5.0,0) {CS336 course page\\medium perplexity};
+\node[draw, rounded corners, fill=red!12, minimum width=3.6cm, minimum height=0.9cm] (gib) at (10.0,0) {gibberish\\high perplexity};
+\draw[-{Latex[length=3mm]}, thick] (wiki) -- (cs);
+\draw[-{Latex[length=3mm]}, thick] (cs) -- (gib);
+\node[below=0.8cm of cs] {perplexity 上升意味着“更不像训练语料”};
+\end{tikzpicture}
+\caption{perplexity 的过滤意义：不是审美判断，而是“像不像自然文本”的粗粒度度量}
+\end{figure}
+
+\begin{warningbox}{KenLM 的边界}
+它擅长抓“明显不像人话”的内容，但不擅长判断逻辑、事实、长程一致性和内容价值。它更像一个廉价的门卫，而不是一个老师。
 \end{warningbox}
 
-\subsection{fastText 分类器}
+\subsection{Kneser-Ney 的具体形式}
 
-fastText 的核心思路是把文本表示成词袋或 n-gram 词袋，再做线性分类。它之所以常见，是因为它把一个高维稀疏问题压缩成了一个非常轻量的模型。
+如果把回退写得更具体一点，常见形式是
+\[
+p_{\mathrm{KN}}(w_i\mid h)=\frac{\max(c(h,w_i)-d,0)}{c(h)}+\lambda(h)\,p_{\mathrm{KN}}(w_i\mid h'),
+\]
+其中 $h$ 是当前上下文，$h'$ 是更短的回退上下文，$d$ 是折扣项。前一项保留显式计数，后一项把剩余概率质量交给低阶模型。
 
-如果直接做词袋分类，参数规模可能接近 $V \times K$。fastText 通过“词嵌入平均 + 线性头”的方式把参数量降到 $H(V+K)$ 左右，其中 $H \ll V$。
+\begin{importantbox}{为什么折扣项重要}
+如果不折扣，高阶计数会把概率全吃光；如果折扣过大，高阶上下文又失去区分力。Kneser-Ney 的价值就在于：它用一个明确的概率守恒机制，把“高阶证据”和“低阶稳健性”拼起来。
+\end{importantbox}
+
+\subsection{句子级和文档级}
+
+实践里，KenLM 可以给句子打分，也可以给整篇文档打分。前者更容易发现局部乱码和拼接噪声，后者更适合做网页级排序。很多系统会把两者组合起来：先删掉单句极端异常的段落，再在文档层面做聚合。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.4cm}p{4.2cm}p{4.2cm}p{3.0cm}}
+\toprule
+\textbf{粒度} & \textbf{优点} & \textbf{缺点} & \textbf{典型用法} \\
+\midrule
+sentence & 能抓局部异常 & 容易受短句波动影响 & 先做粗清洗 \\
+paragraph & 能保留局部上下文 & 需要更长文本 & CCNet 风格排序 \\
+document & 更适合网页级管线 & 可能掩盖局部噪声 & 终局保留决策 \\
+\bottomrule
+\end{tabular}
+\caption{KenLM 不同打分粒度的取舍}
+\end{table}
+
+\subsection{阈值怎么定}
+
+KenLM 的阈值通常不靠“感觉”拍脑袋，而是看一小批人工检查样本上的分布差异。最常见的做法是先看目标数据和噪声数据的 score 分布，再选择能把两者拉开的 operating point。
+
+\begin{warningbox}{阈值的一个常见误区}
+如果你只看一个绝对阈值，而不看不同域的分数分布，那么阈值会严重迁移失配。网页、书籍、代码、聊天记录的 perplexity 尺度都可能不一样。
+\end{warningbox}
+
+\subsection{CCNet 的经验}
+
+课程里提到的 CCNet 做法很朴素：以段落为单位，按 perplexity 排序，保留前 1/3。这个规则有点粗暴，但它能以极低成本把大批低质量网页剔除。后来 LLaMA 的数据管线也受到了这种思路的影响。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!8, minimum width=3cm, minimum height=0.85cm] (p1) at (0,2.0) {paragraph 1\\ppl = 12};
+\node[draw, rounded corners, fill=blue!10, minimum width=3cm, minimum height=0.85cm] (p2) at (0,0.7) {paragraph 2\\ppl = 18};
+\node[draw, rounded corners, fill=blue!14, minimum width=3cm, minimum height=0.85cm] (p3) at (0,-0.6) {paragraph 3\\ppl = 41};
+\node[draw, rounded corners, fill=blue!18, minimum width=3cm, minimum height=0.85cm] (p4) at (0,-1.9) {paragraph 4\\ppl = 80};
+\node[right=3.7cm of p2, draw, rounded corners, fill=green!12, minimum width=3.4cm, minimum height=1.2cm] (keep) {keep top 1/3\\discard the rest};
+\draw[-{Latex[length=3mm]}, thick] (p1) -- (keep);
+\draw[-{Latex[length=3mm]}, thick] (p2) -- (keep);
+\draw[-{Latex[length=3mm]}, thick] (p3) -- (keep);
+\draw[-{Latex[length=3mm]}, thick] (p4) -- (keep);
+\end{tikzpicture}
+\caption{CCNet 风格的排序筛选：把段落按 perplexity 排序，然后保留最像自然文本的一部分}
+\end{figure}
+
+\subsection{排序筛选的实际含义}
+
+排序和阈值的差别不只是形式。阈值问的是“这条样本够不够好”，排序问的是“在预算有限时，哪一批最好”。后者对大规模语料更常见，因为你常常已经知道总预算，真正的问题是如何在预算内把质量最大化。
+
+\begin{knowledgebox}{排序筛选什么时候更稳}
+当 score 的绝对值校准不稳定，但相对次序还算可靠时，排序通常比硬阈值更稳。CCNet 一类方法之所以常见，就是因为它们更多依赖相对顺序，而不是绝对概率值。
+\end{knowledgebox}
+
+\section{fastText：用轻量分类器做过滤}
+
+\subsection{bag-of-words 的参数问题}
+
+如果把文本直接做 bag-of-words 分类，参数量会非常大。假设词表大小为 $V$，类别数为 $K$，那么一个朴素线性分类器的权重矩阵就可能接近 $V \times K$。对大词表来说，这很快就变成稀疏且昂贵的系统。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=red!10, minimum width=3cm, minimum height=1cm] (bo) at (0,0) {bag of words\\$V \times K$};
+\node[draw, rounded corners, fill=yellow!14, minimum width=3.2cm, minimum height=1cm] (ft) at (5,0) {fastText\\embedding avg + linear head};
+\node[draw, rounded corners, fill=green!14, minimum width=3.2cm, minimum height=1cm] (comp) at (10,0) {parameter reduction\\$H(V+K)$};
+\draw[-{Latex[length=3mm]}, thick] (bo) -- (ft);
+\draw[-{Latex[length=3mm]}, thick] (ft) -- (comp);
+\end{tikzpicture}
+\caption{fastText 的核心：把高维稀疏问题压缩成低维表示，再用线性头做分类}
+\end{figure}
 
 \begin{knowledgebox}{fastText 为什么适合过滤}
 \begin{itemize}
     \item 推理快，适合扫描海量网页。
-    \item 训练也快，适合快速迭代规则和阈值。
-    \item 对二分类过滤尤其自然：好/坏、目标/非目标、英语/非英语。
+    \item 训练快，适合快速迭代阈值。
+    \item 线性结构足够稳，适合二分类过滤。
 \end{itemize}
 \end{knowledgebox}
 
-它还支持 bag of n-grams，并使用 hashing trick 避免 n-gram 维度爆炸。代价是哈希冲突，但在粗粒度过滤里这通常是可以接受的。
+\subsection{词嵌入平均}
 
-\subsection{DSIR：Importance Resampling}
+fastText 的关键就是把词表示成低维 embedding，然后把一个句子的 embedding 做平均，最后接线性分类器。表面看起来简单，实则把“词表巨大”这个问题变成了“维度可控”的问题。
 
-DSIR 的思路更接近“分布匹配”。设目标分布为 $p$，原始分布为 $q$，则重要性权重是
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.9cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=1.8cm, minimum height=0.8cm] (w1) {word 1};
+\node[draw, rounded corners, fill=blue!10, right=of w1, minimum width=1.8cm, minimum height=0.8cm] (w2) {word 2};
+\node[draw, rounded corners, fill=blue!10, right=of w2, minimum width=1.8cm, minimum height=0.8cm] (w3) {word 3};
+\node[draw, rounded corners, fill=yellow!14, below=1.2cm of w2, minimum width=3.6cm, minimum height=0.8cm] (avg) {average embedding};
+\node[draw, rounded corners, fill=green!14, below=of avg, minimum width=3.6cm, minimum height=0.8cm] (cls) {linear classifier};
+\draw[-{Latex[length=3mm]}, thick] (w1) -- (avg);
+\draw[-{Latex[length=3mm]}, thick] (w2) -- (avg);
+\draw[-{Latex[length=3mm]}, thick] (w3) -- (avg);
+\draw[-{Latex[length=3mm]}, thick] (avg) -- (cls);
+\end{tikzpicture}
+\caption{fastText 的前向路径：词嵌入平均后直接线性分类，没有复杂非线性}
+\end{figure}
+
+\subsection{ngram 和 hashing trick}
+
+为了捕捉局部短语信息，fastText 还会加入 bigram、trigram 等 n-gram 特征。问题是 n-gram 维度会爆炸，所以要用 hashing trick 把无限词组压进有限桶里。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!8, minimum width=2.4cm, minimum height=0.8cm] (b1) at (0,1.6) {the cat};
+\node[draw, rounded corners, fill=blue!8, minimum width=2.4cm, minimum height=0.8cm] (b2) at (0,0.4) {cat in};
+\node[draw, rounded corners, fill=blue!8, minimum width=2.4cm, minimum height=0.8cm] (b3) at (0,-0.8) {in the};
+\node[draw, rounded corners, fill=blue!8, minimum width=2.4cm, minimum height=0.8cm] (b4) at (0,-2.0) {the hat};
+\node[draw, rounded corners, fill=yellow!16, minimum width=2.6cm, minimum height=1.0cm] (bin1) at (5,0.8) {bin 1};
+\node[draw, rounded corners, fill=yellow!16, minimum width=2.6cm, minimum height=1.0cm] (bin2) at (5,-0.8) {bin 2};
+\node[draw, rounded corners, fill=yellow!16, minimum width=2.6cm, minimum height=1.0cm] (bin3) at (5,-2.4) {bin 3};
+\draw[-{Latex[length=3mm]}, thick] (b1) -- (bin2);
+\draw[-{Latex[length=3mm]}, thick] (b2) -- (bin1);
+\draw[-{Latex[length=3mm]}, thick] (b3) -- (bin2);
+\draw[-{Latex[length=3mm]}, thick] (b4) -- (bin3);
+\node[right=1.6cm of bin2] {hash collisions are tolerated};
+\end{tikzpicture}
+\caption{hashing trick 的作用：把不受控的 n-gram 空间压缩到固定桶数里}
+\end{figure}
+
+\begin{warningbox}{fastText 的现实限制}
+它本质上仍是一个线性模型。它能快地做“像不像目标类”的判断，但不会自动理解篇章结构、逻辑严密性或事实正确性。
+\end{warningbox}
+
+\subsection{在过滤里的角色}
+
+如果 KenLM 更像“语言门卫”，fastText 就更像“轻量分类器门卫”。前者用语言模型分数过滤，后者直接预测文档是否属于目标类。比如语言识别、数学文本过滤、毒性识别，都可以用这个思路。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.2cm, minimum height=0.85cm] (yes) at (0,0) {positive / keep};
+\node[draw, rounded corners, fill=red!10, minimum width=3.2cm, minimum height=0.85cm] (no) at (5,0) {negative / drop};
+\node[draw, rounded corners, fill=yellow!14, minimum width=3.8cm, minimum height=0.85cm] (binary) at (10.4,0) {for filtering, often just $K=2$};
+\draw[-{Latex[length=3mm]}, thick] (yes) -- (binary);
+\draw[-{Latex[length=3mm]}, thick] (no) -- (binary);
+\end{tikzpicture}
+\caption{在过滤任务中，fastText 经常退化成二分类器：保留还是丢弃}
+\end{figure}
+
+\subsection{训练目标与概率校准}
+
+fastText 通常优化的是交叉熵：
 \[
-w(x) \propto \frac{p(x)}{q(x)}.
+\mathcal{L}=-\sum_{(x,y)} \log p_\theta(y\mid x).
 \]
-先从 $q$ 中采样，再按权重重采样，最后得到更接近 $p$ 的样本集合。
-
-这里的障碍在于：目标数据通常太少，没法直接拟合一个复杂分布。所以 DSIR 采用 hash n-gram 的方式，把文本映射到低维离散特征空间，然后估计一个简化版的分布。
-
-\begin{importantbox}{DSIR 的意义}
-和“只做分类”相比，显式建模 $p/q$ 更接近“我要什么数据”的原始目标，因此在多样性和覆盖性上通常更自然。
-\end{importantbox}
-
-\section{同一套机械的三种用途}
-
-\subsection{语言识别}
-
-语言识别的目标很直接：给定文本，判断它是不是目标语言，例如英语。这里的关键不是“是否能分多语言”，而是“是否能高效地筛掉非目标语言”。
-
-为什么不直接做一个巨型多语种模型？因为在 compute 限制下，若你把很多算力花在不关心的语言上，目标语言的质量可能会被稀释。BLOOM 只有约 30\% 英语训练比例就是一个典型例子。
-
-\begin{knowledgebox}{语言识别的常见困难}
-\begin{itemize}
-    \item 短文本信息不足。
-    \item 低资源语言训练数据少。
-    \item 方言和变体容易被误杀。
-    \item 相近语言之间容易混淆。
-    \item code-switching 的“真值”本身就不稳定。
-\end{itemize}
-\end{knowledgebox}
-
-课程里提到的 fastText 语言识别模型支持 176 种语言。Dolma 的做法很朴素：保留英语概率足够高的网页。OpenMathText 则更进一步，把规则过滤、KenLM perplexity、fastText 数学写作分类器组合起来，最终构造出一个高质量的数学语料库。
-
-\subsection{质量过滤}
-
-质量过滤是一个更模糊的概念。它并不只是“语言通顺”这么简单，但在大规模网络语料里，它往往首先意味着：去掉垃圾页、模板页、明显重复内容、低信息密度内容。
+如果类别不平衡，单纯看准确率没有意义。过滤场景更关心的是 precision、recall 和阈值后剩余样本的质量。换句话说，\emph{你不是在做考试排名，而是在决定哪些数据值得保留。}
 
 \begin{table}[H]
 \centering
-\begin{tabular}{lll}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.3cm}p{4.2cm}p{4.1cm}p{3.0cm}}
 \toprule
-\textbf{代表工作} & \textbf{正样本} & \textbf{负样本} \\
+\textbf{指标} & \textbf{说明} & \textbf{过滤里的作用} & \textbf{注意点} \\
 \midrule
-GPT-3 & Wikipedia / WebText2 / Books & CommonCrawl \\
-LLaMA / RedPajama & Wikipedia 引用页面 & CommonCrawl \\
-phi-1 & 教材 + GPT 生成的高价值代码样本 & 低价值代码样本 \\
+accuracy & 整体预测对不对 & 不够敏感 & 类别不平衡时失真 \\
+precision & 保留下来的样本有多干净 & 很重要 & 常和阈值联动 \\
+recall & 目标样本保住了多少 & 防止过度过滤 & 不能只追高 precision \\
+calibration & 概率是否可信 & 用于阈值选择 & 域外常会漂移 \\
 \bottomrule
 \end{tabular}
-\caption{几种常见的质量过滤思路}
+\caption{fastText 过滤任务里真正有用的指标，不是单纯 accuracy}
 \end{table}
 
-GPT-3 的做法是训练线性分类器，再根据分数进行随机保留。LLaMA 和 RedPajama 更强调“被维基百科引用的页面更可靠”。phi-1 则把“教育价值”当成过滤目标，用少量高质量样本去筛大规模代码数据。
+\subsection{一个过滤器的工作方式}
+
+你可以把 fastText 当成一个“快速排序器”。它不会替你理解文本，而是把一堆样本按一个近似相关的分数排好，然后让你在高分区间做保留决策。
+
+\begin{enumerate}
+    \item 先准备少量标注数据，定义什么叫正样本、负样本。
+    \item 训练一个轻量线性分类器，让它学会粗略区分两类文本。
+    \item 把模型跑在海量网页上，得到每个样本的置信度。
+    \item 在验证集上挑阈值，决定保留多少数据、牺牲多少召回。
+\end{enumerate}
+
+\begin{importantbox}{为什么这个流程很稳}
+它把“建模”拆成了两个层次：一个是轻量预测器，另一个是阈值控制器。预测器解决次序问题，阈值控制器解决预算问题。两者分开以后，调参会比把所有东西揉成一个大模型更清楚。
+\end{importantbox}
+
+\subsection{为什么小模型就够}
+
+fastText 在这里不是为了“理解文本”，而是为了在海量样本上快速给出一个稳定的秩序。只要排序足够好，很多过滤决策就已经足够用了。再往上堆复杂模型，收益往往不如增加标注、调整阈值和清理输入稳定。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.5cm}p{4.2cm}p{4.0cm}p{3.0cm}}
+\toprule
+\textbf{模型复杂度} & \textbf{好处} & \textbf{坏处} & \textbf{在过滤里的建议} \\
+\midrule
+线性/fastText & 便宜、快、稳定 & 表达能力有限 & 优先考虑 \\
+小型 Transformer & 更强上下文建模 & 推理成本高 & 只在高价值子任务用 \\
+大模型打分器 & 语义强、泛化强 & 很贵、很慢 & 通常不划算 \\
+\bottomrule
+\end{tabular}
+\caption{过滤任务中，模型越强不一定越合适}
+\end{table}
+
+\begin{knowledgebox}{fastText 常见的工程优势}
+\begin{itemize}
+    \item 推理快，适合扫描海量网页。
+    \item 训练快，适合快速迭代阈值。
+    \item 线性结构足够稳，适合二分类过滤。
+    \item 可以用少量标注快速建立基线。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{误差结构怎么读}
+
+在过滤场景里，fastText 的假阳性和假阴性都有明确代价。假阳性意味着把坏样本留进来了，假阴性意味着把好样本扔掉了。前者污染训练集，后者降低数据效率。实际系统通常会在这两者之间做偏向性的取舍。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.7cm}p{4.1cm}p{4.1cm}p{2.8cm}}
+\toprule
+\textbf{错误类型} & \textbf{含义} & \textbf{后果} & \textbf{常见应对} \\
+\midrule
+false positive & 坏数据被保留 & 污染训练集 & 提高阈值 \\
+false negative & 好数据被丢掉 & 数据利用率下降 & 降低阈值 / 二阶段过滤 \\
+calibration drift & 概率不再可信 & 阈值失效 & 重新校准 \\
+\bottomrule
+\end{tabular}
+\caption{fastText 过滤里的三类典型错误与应对}
+\end{table}
+
+\begin{warningbox}{过滤任务里的“好”不是绝对的}
+一个分类器如果在测试集上看起来很准，但把你真正想保留的长尾样本大量过滤掉，那它在数据工程里依然可能是坏的。过滤的目标不是分类正确率，而是训练集收益。
+\end{warningbox}
+
+\section{DSIR：importance resampling}
+
+\subsection{重要性采样复习}
+
+DSIR 的关键直觉来自重要性采样。假设你想从目标分布 $p$ 采样，但你只能从 proposal 分布 $q$ 采样，那么你先从 $q$ 抽样，再用权重
+\[
+w(x)\propto \frac{p(x)}{q(x)}
+\]
+重新加权，最后再按权重重采样。这样得到的样本集合会更接近 $p$。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=orange!12, minimum width=2.9cm, minimum height=0.9cm] (q) at (0,0) {proposal $q$\\easy to sample};
+\node[draw, rounded corners, fill=yellow!16, minimum width=3.0cm, minimum height=0.9cm] (w) at (4.4,0) {weights $p/q$\\reweight};
+\node[draw, rounded corners, fill=green!14, minimum width=3.1cm, minimum height=0.9cm] (p) at (8.9,0) {resample $p$\\desired distribution};
+\draw[-{Latex[length=3mm]}, thick] (q) -- (w);
+\draw[-{Latex[length=3mm]}, thick] (w) -- (p);
+\end{tikzpicture}
+\caption{importance resampling 的基本三步：先采样，再重权重，最后重采样}
+\end{figure}
+
+\begin{importantbox}{DSIR 的价值}
+和只做二分类相比，显式估计 $p/q$ 更接近“我到底想要什么数据”的原始目标。它会更自然地兼顾多样性与覆盖性，而不仅仅是挑出最像的那批。
+\end{importantbox}
+
+\subsection{为什么重要性采样是对的}
+
+如果你关心的不是单个样本，而是某个函数 $f(x)$ 在目标分布下的期望，那么重要性采样给出的是
+\[
+\mathbb{E}_{p}[f(x)] = \frac{\mathbb{E}_{q}[w(x)f(x)]}{\mathbb{E}_{q}[w(x)]}.
+\]
+这条式子说明：只要权重 $w(x)$ 估得够好，你就可以从 proposal 分布的样本上，近似恢复目标分布的统计量。
+
+\begin{knowledgebox}{这和过滤的关系}
+过滤不是必须严格“采样到目标分布”，但如果你能让保留的数据在统计上更接近目标分布，那么后续训练通常会更稳。DSIR 的价值就在于它把“像不像”升级成了“分布像不像”。
+\end{knowledgebox}
+
+\subsection{从分布到文档}
+
+真正的数据选择不是在理想分布上抽象地采样，而是在小目标数据集 $D_p$ 和大原始数据集 $D_q$ 上落地。DSIR 的难点也在这里：$D_p$ 太小，没法直接训练复杂分布模型。所以课程里给出的办法是把文本先做 hash n-gram，再估计低维分布。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.3cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.0cm, minimum height=0.85cm] (dp) {small target set $D_p$};
+\node[draw, rounded corners, fill=orange!12, right=of dp, minimum width=3.0cm, minimum height=0.85cm] (dq) {large raw set $D_q$};
+\node[draw, rounded corners, fill=yellow!16, below=of dq, minimum width=3.4cm, minimum height=0.85cm] (hash) {hash n-grams};
+\node[draw, rounded corners, fill=blue!14, below=of hash, minimum width=3.4cm, minimum height=0.85cm] (res) {estimate weights / resample};
+\draw[-{Latex[length=3mm]}, thick] (dp) -- (hash);
+\draw[-{Latex[length=3mm]}, thick] (dq) -- (hash);
+\draw[-{Latex[length=3mm]}, thick] (hash) -- (res);
+\end{tikzpicture}
+\caption{DSIR 的工程落点：把难以建模的文本分布，压缩到 hash n-gram 空间里估权重}
+\end{figure}
+
+\begin{warningbox}{DSIR 不是银弹}
+它仍然依赖简化表示。如果 hash n-gram 太粗，权重就会失真；如果特征太细，目标数据又会不够支撑估计。它只是把“更原则化”的问题变成一个更可控的近似。
+\end{warningbox}
+
+\subsection{为什么它有时优于 heuristic classifier}
+
+fastText 的做法很像“判定这个样本像不像目标类”，而 DSIR 更像“让样本集整体更接近目标分布”。后者在多样性和覆盖性上通常更自然，也更适合用于构造更均衡的数据子集。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.82\textwidth,
+    height=5cm,
+    xlabel={sample index},
+    ylabel={weight},
+    ymin=0, ymax=1.05,
+    xmin=0, xmax=10,
+    xtick={1,2,3,4,5,6,7,8,9,10},
+    ytick={0,0.25,0.5,0.75,1.0},
+    grid=both,
+]
+\addplot[ybar, fill=blue!45] coordinates {(1,0.2) (2,0.3) (3,0.1) (4,0.4) (5,0.9) (6,0.7) (7,0.5) (8,0.8) (9,0.2) (10,0.6)};
+\end{axis}
+\end{tikzpicture}
+\caption{importance weight 的直观含义：proposal 里抽到的样本并不均匀，需要按权重修正}
+\end{figure}
+
+\subsection{实现时要小心什么}
+
+实做 DSIR 时，最容易出问题的是权重极端不均匀。少数样本权重特别大，会导致重采样几乎只剩它们，结果失去多样性。常见做法包括权重截断、归一化、平滑和分桶。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{3.0cm}p{4.2cm}p{4.2cm}}
+\toprule
+\textbf{问题} & \textbf{现象} & \textbf{常见处理} \\
+\midrule
+权重过尖 & 少数样本统治结果 & clipping / smoothing \\
+特征过稀 & 估计方差很大 & 降维 / hash / 合并桶 \\
+目标集太小 & 权重不稳定 & 先做粗过滤再 DSIR \\
+\bottomrule
+\end{tabular}
+\caption{DSIR 的几个典型失败模式和应对方式}
+\end{table}
+
+\subsection{和 heuristic filter 的取舍}
+
+如果你只想快速删掉一大批明显不相关的网页，heuristic classifier 往往够了。但如果你要认真控制保留下来的数据分布，比如想让某个主题、体裁或领域的比例更合理，DSIR 通常更符合目标。
+
+\section{三类应用：语言、质量与毒性}
+
+\subsection{语言识别}
+
+语言识别的目标非常实用：先把非目标语言筛掉，再把算力留给真正关心的语言。对很多网页语料工程来说，这一步比“更聪明的模型”更重要，因为语料分散在多种语言、方言和代码混排里。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!12, minimum width=2.6cm, minimum height=0.9cm] (eng) at (0,0) {English};
+\node[draw, rounded corners, fill=yellow!16, minimum width=2.8cm, minimum height=0.9cm] (mix) at (4,0) {code-switching};
+\node[draw, rounded corners, fill=red!10, minimum width=2.6cm, minimum height=0.9cm] (other) at (8,0) {other language};
+\draw[-{Latex[length=3mm]}, thick] (eng) -- (mix);
+\draw[-{Latex[length=3mm]}, thick] (mix) -- (other);
+\node[below=0.9cm of mix] {语言识别在边界处最难};
+\end{tikzpicture}
+\caption{语言识别的难点不是单语句子的“标准英语”，而是边界处的混合文本和低资源变体}
+\end{figure}
+
+\begin{knowledgebox}{语言识别的现实难题}
+\begin{itemize}
+    \item 短文本缺少上下文。
+    \item 低资源语言样本少。
+    \item code-switching 的语言边界并不稳定。
+    \item 相近语言和方言容易互相混淆。
+\end{itemize}
+\end{knowledgebox}
+
+课程里提到 fastText 语言识别支持 176 种语言，Dolma 则用 \texttt{p(English)} 作为一个简单门槛。这个门槛不一定很“科学”，但它够快，能把大批明显不是英语的页面先去掉。
+
+\subsection{质量过滤}
+
+质量过滤并不等于“语法正确”，它更像是在判断一页文本是否值得进入训练集。常见被剔除的对象包括模板页、广告页、低信息密度页、重复页、乱码页和明显的拼接页。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.1cm, minimum height=0.95cm] (good) at (0,0) {high-quality\\Wikipedia / books};
+\node[draw, rounded corners, fill=yellow!16, minimum width=3.1cm, minimum height=0.95cm] (mid) at (4.4,0) {mixed quality\\forums / blogs};
+\node[draw, rounded corners, fill=red!10, minimum width=3.1cm, minimum height=0.95cm] (bad) at (8.8,0) {low quality\\spam / boilerplate};
+\draw[-{Latex[length=3mm]}, thick] (good) -- (mid);
+\draw[-{Latex[length=3mm]}, thick] (mid) -- (bad);
+\end{tikzpicture}
+\caption{质量过滤是沿着“信息密度”而不是“语法正确性”做粗粒度排序}
+\end{figure}
 
 \begin{importantbox}{质量过滤的本质}
-它不是在定义“完美文档”，而是在建模“哪些数据更值得被训练”。因此，哪怕模型很粗，只要能持续过滤掉最差的那一部分，收益就可能很大。
+它不是定义“完美文档”，而是决定“哪些数据更值得被训练”。只要能持续过滤掉最差的那一截，收益通常就会很明显。
 \end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.85\textwidth,
+    height=5cm,
+    xlabel={quality score},
+    ylabel={keep probability},
+    ymin=0, ymax=1.05,
+    xmin=0, xmax=1,
+    grid=both,
+]
+\addplot[blue, thick, domain=0:1, samples=100] {x^2};
+\addplot[red, dashed, domain=0:1, samples=100] {x^4};
+\legend{$s^2$, $s^4$}
+\end{axis}
+\end{tikzpicture}
+\caption{像 GPT-3 这样的随机保留策略，可以用更陡的曲线把高分样本保留下来、低分样本快速压下去}
+\end{figure}
+
+GPT-3、LLaMA/RedPajama、phi-1 的差异在于正负样本选择不同，但骨架是一样的：先训练一个轻量分类器或打分器，再按分数筛选。phi-1 的有趣之处在于，它把“教育价值”作为过滤准则，用教材和高质量合成样本去筛大规模代码数据。
 
 \subsection{毒性过滤}
 
-毒性过滤通常在数据集清洗里承担更直接的治理角色。课程里提到的 Dolma 使用了 Jigsaw Toxic Comments 数据集训练分类器，把评论分成诸如 toxic、severe\_toxic、obscene、threat、insult、identity\_hate 等类别。
+毒性过滤是更直接的治理场景。Dolma 使用 Jigsaw Toxic Comments 数据训练轻量分类器，把评论分成 toxic、severe\_toxic、obscene、threat、insult、identity\_hate 等类，再按需求过滤或标记。
 
-在工程上，这类模型常常是 fastText 级别的轻量分类器，因为它要跑在大规模网页上。课程里还提到对 hate 和 NSFW 分别训练分类器，然后用它们做过滤或标记。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.2cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.1cm, minimum height=0.85cm] (train) {labeled toxic comments};
+\node[draw, rounded corners, fill=yellow!16, below=of train, minimum width=3.1cm, minimum height=0.85cm] (clf) {train fastText classifier};
+\node[draw, rounded corners, fill=blue!14, below=of clf, minimum width=3.1cm, minimum height=0.85cm] (pred) {predict on web crawl};
+\node[draw, rounded corners, fill=red!10, below=of pred, minimum width=3.1cm, minimum height=0.85cm] (act) {filter / flag / downweight};
+\draw[-{Latex[length=3mm]}, thick] (train) -- (clf);
+\draw[-{Latex[length=3mm]}, thick] (clf) -- (pred);
+\draw[-{Latex[length=3mm]}, thick] (pred) -- (act);
+\end{tikzpicture}
+\caption{毒性过滤的典型管线：用带标签数据训练轻量分类器，再把它应用到网页级数据上}
+\end{figure}
 
-\begin{warningbox}{毒性过滤的注意点}
-它和质量过滤一样，都会遇到误杀问题。对于短文本、俚语、引号引用、讽刺、代码混排等情形，分类器很容易把“上下文不完整”误认为“有毒”。
+\begin{warningbox}{毒性过滤的坑}
+误杀经常出现在短文本、引号引用、讽刺、代码混排和方言里。一个看似“更严格”的分类器，可能只是把更多正常内容误删掉。
 \end{warningbox}
 
 \section{去重：从精确重复到近重复}
 
-\subsection{两类重复}
+\subsection{为什么去重要单独讲}
 
-去重通常分成两种：
+过滤解决的是“留下什么”，去重解决的是“别重复留下什么”。它特别重要，因为重复数据会导致训练效率下降、记忆化上升，甚至引入版权和隐私问题。课程里把去重分成精确重复和近重复两类，这个划分非常关键。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.0cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3cm, minimum height=0.85cm] (exact) {exact duplicate};
+\node[draw, rounded corners, fill=yellow!16, below=of exact, minimum width=3cm, minimum height=0.85cm] (near) {near duplicate};
+\node[draw, rounded corners, fill=red!10, below=of near, minimum width=3cm, minimum height=0.85cm] (hard) {hard at scale};
+\draw[-{Latex[length=3mm]}, thick] (exact) -- (near);
+\draw[-{Latex[length=3mm]}, thick] (near) -- (hard);
+\end{tikzpicture}
+\caption{去重从精确重复走向近重复后，问题会迅速从“简单 hash”升级为“可扩展的相似度检索”}
+\end{figure}
+
+\subsection{精确重复}
+
+精确重复最简单：按 hash 分组，每组留一个。MapReduce 风格天然适合这个任务，因为你可以先局部 hash，再全局 merge。C4 常见的做法是以 3-sentence span 为单位做精确去重，简单但有效。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=2.8cm, minimum height=0.85cm] (a) at (0,2.0) {A: hello};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.8cm, minimum height=0.85cm] (b) at (0,0.6) {B: hello};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.8cm, minimum height=0.85cm] (c) at (0,-0.8) {C: hi};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.8cm, minimum height=0.85cm] (d) at (0,-2.2) {D: bye};
+\node[draw, rounded corners, fill=yellow!16, right=4.0cm of b, minimum width=3.4cm, minimum height=1.1cm] (bucket) {hash bucket\\{A,B} \; \{C\} \; \{D\}};
+\draw[-{Latex[length=3mm]}, thick] (a) -- (bucket);
+\draw[-{Latex[length=3mm]}, thick] (b) -- (bucket);
+\draw[-{Latex[length=3mm]}, thick] (c) -- (bucket);
+\draw[-{Latex[length=3mm]}, thick] (d) -- (bucket);
+\end{tikzpicture}
+\caption{精确去重的最小原型：把 hash 一样的样本分到同一桶里，每桶保留一个}
+\end{figure}
+
+\begin{importantbox}{精确去重的优点}
 \begin{itemize}
-    \item \textbf{精确重复}：完全一样，常见于镜像站、GitHub fork、重复抓取。
-    \item \textbf{近重复}：只差少量 token，例如模板化文本、条款、轻微排版差异。
-\end{itemize}
-
-这两个问题看起来简单，但规模一大就会变成“比较所有和所有”的二次方灾难。所以去重的核心诉求是：\textbf{线性时间或近线性时间}。
-
-\subsection{哈希函数}
-
-哈希函数把大的 item 映射到更小的值。它的好处是快、占用空间小，但也会碰撞。对去重而言，这通常足够了，因为我们不是在做密码学，而是在做大规模工程筛选。
-
-\begin{knowledgebox}{常见哈希选择}
-\begin{itemize}
-    \item SHA-256：抗碰撞强，但慢。
-    \item DJB2 / MurmurHash / CityHash：快，但不追求密码学抗碰撞。
-\end{itemize}
-\end{knowledgebox}
-
-课程里统一使用 MurmurHash。原因也很朴素：够快、够常见、足够适合哈希表和近似集合运算。
-
-\subsection{精确去重}
-
-精确去重可以直接按 hash 分组，然后每组保留一个样本。用 MapReduce 风格写，会非常容易并行化。
-
-对于 C4 这样的语料，常见做法是按 3-sentence span 做精确去重。这样做的好处是简单直接，但代价是可能把文档中间的一段删掉，导致剩余文档不连贯。
-
-\begin{importantbox}{精确去重的优缺点}
-\begin{itemize}
-    \item 优点：简单、清晰、高精度。
-    \item 缺点：无法处理只差几个 token 的近重复。
+    \item 语义清楚。
+    \item 高精度。
+    \item 非常容易并行化。
 \end{itemize}
 \end{importantbox}
 
-\subsection{Bloom Filter}
-
-Bloom filter 是一个近似集合成员查询结构，适合“有没有见过这个 item”这类问题。它的特性是：
-\begin{itemize}
-    \item 很省内存；
-    \item 可以插入，但不方便删除；
-    \item 返回“没有”时一定没有；
-    \item 返回“有”时通常是有，但可能是假阳性。
-\end{itemize}
-
-如果用 $m$ 个桶、$k$ 个哈希函数、插入 $n$ 个元素，假阳性率常写成近似：
-\[
-f \approx \left(1 - e^{-kn/m}\right)^k.
-\]
-在固定 $m/n$ 比例下，最优的哈希函数数目大约是
-\[
-k \approx \frac{m}{n}\ln 2.
-\]
-
-\begin{warningbox}{Bloom filter 的本质}
-它用“少量误报”换“极大的空间节省”。对于网页级去重，这通常是合理交易，因为它比存完整集合便宜太多。
+\begin{warningbox}{精确去重的缺点}
+它抓不住只差几个 token 的近重复，也可能把文档中间的一段切掉，导致剩余上下文不连贯。
 \end{warningbox}
 
-\subsection{Jaccard 相似度}
+\subsection{Bloom filter}
 
-近重复检测通常先要定义一个相似度。最常见的是 Jaccard：
+Bloom filter 是一个典型的工程妥协：它用少量误报换大量空间节省。它适合快速判断“这个 item 有没有出现过”，但不适合精确删除。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small}]
+\foreach \x in {0,...,7} {
+  \draw (\x,0) rectangle ++(0.8,0.8);
+}
+\node at (0.4,1.1) {0};
+\node at (1.2,1.1) {1};
+\node at (2.0,1.1) {0};
+\node at (2.8,1.1) {1};
+\node at (3.6,1.1) {0};
+\node at (4.4,1.1) {1};
+\node at (5.2,1.1) {0};
+\node at (6.0,1.1) {0};
+\node at (4.0,-0.55) {bit array};
+\draw[->, thick] (0.2,-0.6) -- (1.0,-0.1);
+\draw[->, thick] (2.2,-0.6) -- (2.8,-0.1);
+\draw[->, thick] (4.1,-0.6) -- (4.0,-0.1);
+\node[align=center] at (4,-1.2) {multiple hashes\\set bits to 1};
+\end{tikzpicture}
+\caption{Bloom filter 的基本结构：若干哈希把元素映射到 bit array 上的多个位置}
+\end{figure}
+
+如果用 $m$ 个桶、$k$ 个哈希函数、插入 $n$ 个元素，假阳性率近似为
+\[
+f\approx \left(1-e^{-kn/m}\right)^k.
+\]
+在固定 $m/n$ 下，最优的 $k$ 大约是
+\[
+k\approx \frac{m}{n}\ln 2.
+\]
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.82\textwidth,
+    height=5cm,
+    xlabel={$k$},
+    ylabel={false positive rate},
+    ymin=0, ymax=1,
+    xmin=0, xmax=16,
+    grid=both,
+]
+\addplot[blue, thick, domain=1:16, samples=200] { (1 - exp(-10*x/1000))^x };
+\end{axis}
+\end{tikzpicture}
+\caption{Bloom filter 的参数权衡：哈希函数越多，误报率先降后升，存在一个最优点}
+\end{figure}
+
+\begin{warningbox}{Bloom filter 的本质}
+它不是要“绝对正确”，而是用少量误报换极低内存占用。对网页级去重来说，这通常是合理的。
+\end{warningbox}
+
+\subsection{Jaccard 和 MinHash}
+
+近重复检测通常要先定义相似度。最常见的是 Jaccard：
 \[
 \mathrm{Jaccard}(A,B)=\frac{|A\cap B|}{|A\cup B|}.
 \]
+如果两个文档的 Jaccard 足够高，就可以把它们看成近重复候选。但难点在于：怎么不做全量两两比较。
 
-如果两个文档的 Jaccard 相似度超过阈值，就可以视为近重复。困难在于如何在线性时间内找到这些候选对，而不是对所有文档两两比较。
-
-\subsection{MinHash}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=1]
+\draw[fill=blue!10, draw=blue!60] (0,0) circle (1.5);
+\draw[fill=orange!12, draw=orange!70] (1.4,0) circle (1.5);
+\node at (-0.6,0.9) {$A$};
+\node at (2.0,0.9) {$B$};
+\node at (0.7,0) {$A\cap B$};
+\node at (-1.0,-1.3) {$|A\cap B|$};
+\node at (2.4,-1.3) {$|A\cup B|$};
+\end{tikzpicture}
+\caption{Jaccard 的直觉：看两个集合的重叠程度，而不是单独看每个集合有多大}
+\end{figure}
 
 MinHash 的关键性质是：对于随机哈希函数 $h$，
 \[
 \Pr[h(A)=h(B)] = \mathrm{Jaccard}(A,B).
 \]
+这意味着你不用显式算所有集合相似度，只要看“是否碰撞”就能估计近重复关系。
 
-直觉上，它像是在对集合做随机排列，然后比较哪个元素最先出现。相似集合更容易在同一个位置上“先到达”，所以碰撞概率和 Jaccard 正相关。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.0cm, every node/.style={font=\small}]
+\node[draw, rounded corners, fill=green!10, minimum width=2.2cm, minimum height=0.8cm] (s1) {set A};
+\node[draw, rounded corners, fill=green!10, right=of s1, minimum width=2.2cm, minimum height=0.8cm] (s2) {set B};
+\node[draw, rounded corners, fill=yellow!16, below=of s1, minimum width=2.2cm, minimum height=0.8cm] (perm) {random permutation};
+\node[draw, rounded corners, fill=blue!14, below=of s2, minimum width=2.2cm, minimum height=0.8cm] (min) {first seen item};
+\draw[-{Latex[length=3mm]}, thick] (s1) -- (perm);
+\draw[-{Latex[length=3mm]}, thick] (s2) -- (perm);
+\draw[-{Latex[length=3mm]}, thick] (perm) -- (min);
+\node[below=0.8cm of perm, align=center] {相似集合更容易在同一位置“先出现”};
+\end{tikzpicture}
+\caption{MinHash 的直觉：把集合做随机排列，再看最先出现的元素是否一致}
+\end{figure}
 
 \begin{importantbox}{MinHash 的作用}
-它不是直接告诉你“相似不相似”，而是把相似度变成“碰撞概率”。这个概率就可以拿去做大规模近重复索引。
+它把相似度问题变成了“碰撞概率”问题。概率一旦可估计，就能进一步用来做大规模索引和候选召回。
 \end{importantbox}
 
-\subsection{Locality Sensitive Hashing}
+\subsection{LSH：把概率差异放大成阈值效应}
 
-LSH 的目标是把 MinHash 里的“概率相关”再放大一些，让高相似度对更容易碰撞，低相似度对更不容易碰撞。最经典的方法是把 $n$ 个 hash 切成 $b$ 个 band，每个 band 有 $r$ 个 hash，满足 $n = br$。
-
-如果文档相似度为 $s$，那么：
+LSH 的核心是 banding。把 $n$ 个 hash 分成 $b$ 个 band，每个 band 有 $r$ 个 hash，满足 $n=br$。若相似度为 $s$，那么某个 band 匹配的概率是 $s^r$，至少有一个 band 匹配的概率是
 \[
-\Pr[\text{某个 band 匹配}] = s^r,
-\qquad
-\Pr[\text{至少一个 band 匹配}] = 1 - (1 - s^r)^b.
+1-(1-s^r)^b.
 \]
 
-这就是 LSH 的阈值效应来源：当 $r$ 变大时，曲线更陡，匹配更难；当 $b$ 变大时，曲线向左移动，更容易匹配。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\foreach \i in {0,...,7} {
+  \draw (0,-0.8*\i) rectangle ++(2.8,0.55);
+}
+\draw[decorate, decoration={brace, amplitude=5pt}] (3.0,0) -- (3.0,-1.65);
+\node[right=0.4cm of {$(3.0,-0.8)$}] {band 1};
+\draw[decorate, decoration={brace, amplitude=5pt}] (3.0,-2.0) -- (3.0,-3.65);
+\node[right=0.4cm of {$(3.0,-2.8)$}] {band 2};
+\draw[decorate, decoration={brace, amplitude=5pt}] (3.0,-4.0) -- (3.0,-5.65);
+\node[right=0.4cm of {$(3.0,-4.8)$}] {band 3};
+\end{tikzpicture}
+\caption{LSH 的 banding 思路：把多个 hash 分块，任何一块完全相同都能触发候选对}
+\end{figure}
 
-\begin{knowledgebox}{LSH 的工程含义}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.82\textwidth,
+    height=5cm,
+    xlabel={similarity $s$},
+    ylabel={match probability},
+    ymin=0, ymax=1.05,
+    xmin=0, xmax=1,
+    grid=both,
+]
+\addplot[blue, thick, domain=0:1, samples=120] {1 - (1 - x^4)^8};
+\addplot[red, dashed, domain=0:1, samples=120] {1 - (1 - x^2)^16};
+\addlegendentry{$r=4,b=8$}
+\addlegendentry{$r=2,b=16$}
+\end{axis}
+\end{tikzpicture}
+\caption{LSH 的阈值效应：不同 banding 参数会让曲线在不同相似度位置陡然上升}
+\end{figure}
+
+\begin{knowledgebox}{LSH 的工程意义}
 \begin{itemize}
-    \item 它让近重复候选对的搜索变成“先哈希分桶，再局部比较”。
-    \item 它把原本连续的相似度问题，变成了有明显阈值的碰撞问题。
-    \item 它适合大规模语料中的去重索引和候选召回。
+    \item 先哈希分桶，再做局部比较。
+    \item 把连续相似度问题变成碰撞问题。
+    \item 对大规模近重复召回非常合适。
 \end{itemize}
 \end{knowledgebox}
 
-\section{把这一切统一起来}
+\subsection{shingle 选择与归一化}
 
-这一讲的核心不是某一个具体模型，而是一个非常稳定的工程模式：\textbf{先学一个粗糙但足够快的打分器，再用它筛掉不想要的数据。}
+MinHash 和 LSH 并不是直接对原始字符串做，而通常是先把文本切成 word shingles 或 character shingles，再做集合化表示。选择多少 token 一组，不是纯数学问题，而是对语言形态、编辑差异和噪声类型的折中。
 
-\begin{importantbox}{统一框架}
-\begin{enumerate}
-    \item 用目标数据估计一个模型、分类器或权重函数。
-    \item 在原始数据上对每个样本打分。
-    \item 按阈值、重采样或分桶规则保留样本。
-\end{enumerate}
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.8cm}p{4.4cm}p{4.0cm}}
+\toprule
+\textbf{shingle 类型} & \textbf{优点} & \textbf{缺点} \\
+\midrule
+word shingles & 更符合语义块 & 对标点和分词敏感 \\
+char shingles & 对拼写和局部改写更稳 & 可能太细、噪声更多 \\
+sentence spans & 适合整段去重 & 切分误差会放大 \\
+\bottomrule
+\end{tabular}
+\caption{近重复检测里最先要想清楚的，不是算法，而是 shingle 怎么定义}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=3.5cm, minimum height=0.9cm] (a) {the cat sat on the mat};
+\node[draw, rounded corners, fill=blue!10, below=of a, minimum width=3.5cm, minimum height=0.9cm] (b) {the cat sat on a mat};
+\node[draw, rounded corners, fill=yellow!16, right=3.8cm of a, minimum width=3.6cm, minimum height=1.1cm] (sh) {shared shingles\\the cat / cat sat / sat on};
+\draw[-{Latex[length=3mm]}, thick] (a) -- (sh);
+\draw[-{Latex[length=3mm]}, thick] (b) -- (sh);
+\node[below=0.8cm of b, align=center] {轻微改写后仍保留大量共享 shingle};
+\end{tikzpicture}
+\caption{近重复检测的直觉例子：只改一个词，仍然会留下足够多的共享片段}
+\end{figure}
+
+\subsection{LSH 参数怎么选}
+
+LSH 的参数本质上在调召回和精度的分界线。$r$ 越大，单个 band 越严格；$b$ 越大，触发候选的机会越多。它们共同决定曲线在什么相似度附近拐起来。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.4cm}p{4.1cm}p{4.0cm}p{3.0cm}}
+\toprule
+\textbf{参数变化} & \textbf{效果} & \textbf{代价} & \textbf{适合场景} \\
+\midrule
+增大 $r$ & 更严格，更少误报 & 容易漏掉近重复 & 候选太多时 \\
+增大 $b$ & 更容易触发候选 & 召回更高但更吵 & 不想漏掉时 \\
+减小 $r$ & 更宽松，更多召回 & 候选数上升 & 高价值近重复 \\
+\bottomrule
+\end{tabular}
+\caption{LSH 选参时，$r$ 和 $b$ 共同决定候选召回曲线}
+\end{table}
+
+\begin{importantbox}{实际选参思路}
+如果你更怕漏掉近重复，就加大 $b$ 或减小 $r$；如果你更怕候选太多，就提高 $r$。这个选择通常和数据规模、可接受的候选对数量直接相关。
 \end{importantbox}
 
-如果你回看前面的例子，会发现它们几乎是同一个模板的不同实例：
-\begin{itemize}
-    \item KenLM 用 $p_T(x)$ 或 perplexity 过滤；
-    \item fastText 用 $p(T\mid x)$ 过滤；
-    \item DSIR 用 $p_T(x)/p_R(x)$ 重采样；
-    \item 语言识别、质量过滤、毒性过滤只是不同的目标定义；
-    \item Bloom filter、MinHash、LSH 则是去重问题里的对应实现。
-\end{itemize}
+\subsection{去重与过滤的顺序}
+
+过滤和去重经常串联，但顺序并不总是固定。一般来说，先做语言识别和明显质量过滤，再做去重，会更省算力；但如果你有很强的重复污染，先做粗去重也可能更稳。真正合理的答案不是“一刀切”，而是看你的数据源结构和预算。
+
+\begin{warningbox}{一个常见误区}
+不要把“去重”理解成简单删掉重复句子。对于网页和文档，重复结构常常是局部的、分散的、跨段落的。真正有效的近重复检测必须配合 shingle、banding 和候选召回一起看。
+\end{warningbox}
+
+\section{把这一切统一起来}
+
+\subsection{一个稳定的工程模式}
+
+KenLM、fastText、DSIR、Bloom filter、MinHash、LSH，看起来像不同主题，实际上都在复用同一类工程模板：先用便宜的统计量压缩问题，再把大规模搜索变成分桶、排序、阈值判断或者重采样。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.2cm, every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3cm, minimum height=0.85cm] (fit) {fit score model};
+\node[draw, rounded corners, fill=yellow!16, below=of fit, minimum width=3cm, minimum height=0.85cm] (score) {score raw data};
+\node[draw, rounded corners, fill=blue!14, below=of score, minimum width=3cm, minimum height=0.85cm] (act) {keep / resample / bucket};
+\node[draw, rounded corners, fill=red!10, below=of act, minimum width=3cm, minimum height=0.85cm] (done) {better corpus};
+\draw[-{Latex[length=3mm]}, thick] (fit) -- (score);
+\draw[-{Latex[length=3mm]}, thick] (score) -- (act);
+\draw[-{Latex[length=3mm]}, thick] (act) -- (done);
+\end{tikzpicture}
+\caption{统一框架：先训练一个粗糙但快的打分器，再把它应用到大规模原始数据上}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.2cm}p{4.1cm}p{4.0cm}p{3.3cm}}
+\toprule
+\textbf{方法} & \textbf{score} & \textbf{action} & \textbf{典型用途} \\
+\midrule
+KenLM & $p_T(x)$ / perplexity & threshold / sort & language / quality filtering \\
+fastText & $p(T\mid x)$ & threshold / classify & language / toxicity / quality \\
+DSIR & $p_T(x)/p_R(x)$ & weighted resampling & more principled data selection \\
+Bloom filter & membership bits & approximate reject & exact dedup \\
+MinHash + LSH & collision probability & candidate recall & near dedup \\
+\bottomrule
+\end{tabular}
+\caption{同一套机制在不同任务里的落点}
+\end{table}
 
 \begin{warningbox}{最重要的现实约束}
-这些方法的共同限制不是“数学不优雅”，而是它们都在和算力、数据规模、误杀率做权衡。工程上能跑、能扩展、能稳定复现，往往比模型是否足够精巧更重要。
+这些方法不是在追求“数学上最优”，而是在追求“算得起、筛得动、错得起”。大规模数据处理的核心，就是在 compute、memory、误杀率之间做足够清楚的取舍。
 \end{warningbox}
+
+\section{实战选型：如果你来搭管线}
+
+把前面的内容收束成一个更实用的问题：面对一批新语料，你到底该先上什么、后上什么、谁负责做主决策？下面这张表是一个很粗但好用的起点。
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{2.7cm}p{4.0cm}p{4.0cm}p{3.2cm}}
+\toprule
+\textbf{目标} & \textbf{优先方法} & \textbf{为什么} & \textbf{常见补充} \\
+\midrule
+语言识别 & fastText / 轻量分类器 & 直接预测类别，速度快 & KenLM 做二次筛 \\
+低质量网页剔除 & KenLM / sorting & 对自然语言程度敏感 & 规则过滤 + 黑名单 \\
+毒性过滤 & fastText / classifier & 有标签数据时最直接 & 人工审查高风险样本 \\
+分布匹配 & DSIR & 更接近目标分布 & 先粗过滤再重采样 \\
+精确重复 & hash / Bloom filter & 便宜、可并行 & 按 span / block 做 \\
+近重复 & MinHash + LSH & 可扩展到海量数据 & 结合归一化与切块 \\
+\bottomrule
+\end{tabular}
+\caption{如果要快速搭一条数据管线，可以先从这个选型表开始}
+\end{table}
+
+\subsection{一个示意性的生产管线}
+
+下面是一个示意性的数值例子，不是课程里的硬统计，而是为了说明各个模块如何把规模一层层压下去。假设你从 1 亿条网页文本开始：
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{3.0cm}p{2.8cm}p{4.5cm}p{2.7cm}}
+\toprule
+\textbf{阶段} & \textbf{剩余量} & \textbf{主要作用} & \textbf{为什么有用} \\
+\midrule
+raw crawl & 100M & 原始网页抓取 & 噪声最大 \\
+language ID & 45M & 去掉非目标语言 & 先砍掉明显无关数据 \\
+quality filter & 18M & 去掉低信息密度页 & 保住真正能学的文本 \\
+toxicity filter & 15M & 去掉风险内容 & 降低治理成本 \\
+exact dedup & 12M & 去掉完全重复内容 & 降低记忆化 \\
+near dedup & 9M & 去掉近重复模板页 & 降低结构性冗余 \\
+\bottomrule
+\end{tabular}
+\caption{一个示意性的多阶段清洗管线：每一步都在把“大而脏”压成“小而干净”}
+\end{table}
+
+\begin{importantbox}{为什么这种分层通常更合理}
+因为每一级做的事情都不同。语言识别要的是类别；质量过滤要的是信息密度；毒性过滤要的是风险；去重要的是冗余。把不同目标分开，既更清楚，也更容易调参。
+\end{importantbox}
+
+\subsection{最常见的失败模式}
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{3.0cm}p{4.2cm}p{4.0cm}}
+\toprule
+\textbf{失败模式} & \textbf{现象} & \textbf{补救方法} \\
+\midrule
+过度过滤 & 数据变少但质量并没明显变好 & 降低阈值，检查误杀样本 \\
+校准漂移 & 训练时好用，换域后失效 & 重新校准或改用排序 \\
+重复污染 & 训练损失很快下降但泛化差 & 加强 exact / near dedup \\
+候选爆炸 & LSH 候选对太多 & 提高 $r$ 或先做粗过滤 \\
+\bottomrule
+\end{tabular}
+\caption{数据管线里最常见的几类失败模式}
+\end{table}
+
+\begin{warningbox}{不要把所有事情交给一个模型}
+一条成熟的数据管线通常是多级的。每一级都只解决一个问题，而且只做它最擅长、最便宜的那部分。把语言识别、质量判断、毒性、去重全压到一个模型里，通常只会得到一个又贵又不稳的系统。
+\end{warningbox}
+
+\subsection{如果把整条管线串起来}
+
+真正的生产系统通常会把这些模块串在一起：先做语言识别，再做质量过滤，再做毒性过滤，再做精确和近重复去重。每一步都不需要完美，但每一步都得足够便宜。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.8cm, every node/.style={font=\scriptsize, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=2.4cm, minimum height=0.8cm] (a) {language ID};
+\node[draw, rounded corners, fill=blue!14, right=of a, minimum width=2.4cm, minimum height=0.8cm] (b) {quality filter};
+\node[draw, rounded corners, fill=blue!18, right=of b, minimum width=2.4cm, minimum height=0.8cm] (c) {toxicity filter};
+\node[draw, rounded corners, fill=blue!22, right=of c, minimum width=2.4cm, minimum height=0.8cm] (d) {dedup};
+\node[draw, rounded corners, fill=green!14, right=of d, minimum width=2.6cm, minimum height=0.8cm] (e) {training corpus};
+\draw[-{Latex[length=3mm]}, thick] (a) -- (b);
+\draw[-{Latex[length=3mm]}, thick] (b) -- (c);
+\draw[-{Latex[length=3mm]}, thick] (c) -- (d);
+\draw[-{Latex[length=3mm]}, thick] (d) -- (e);
+\end{tikzpicture}
+\caption{端到端数据清洗管线}
+\end{figure}
 
 \section{本章小结}
 
-这一讲的主旨是：\textbf{数据处理本身就是建模问题}。只不过这里的模型不一定追求高精度，而是追求大规模、低成本、可解释和可操作。
+这一讲的结论可以压成一句话：\textbf{数据处理本身就是建模问题，只不过这里的模型要优先考虑吞吐、空间和误差边界，而不是单纯追求精度。}
 
-\begin{itemize}
-    \item 过滤的本质是从原始数据中挑出更像目标数据的子集。
-    \item KenLM、fastText 和 DSIR 是三种不同风格的实现，但都遵循“先打分，再筛选”的范式。
-    \item 语言识别、质量过滤和毒性过滤都可以复用同一套机制。
-    \item 去重从精确重复走到近重复后，Bloom filter、MinHash 和 LSH 就成了关键工具。
-\end{itemize}
+\begin{importantbox}{三条最终 takeaway}
+\begin{enumerate}
+    \item KenLM、fastText、DSIR 共享同一类“先打分，再筛选”的过滤范式。
+    \item 语言识别、质量过滤、毒性过滤，本质上都是为训练集挑选更合适的样本。
+    \item 精确去重、Bloom filter、MinHash 和 LSH 共同构成了大规模语料去重的工具箱。
+\end{enumerate}
+\end{importantbox}
 
-一句话总结：\textbf{模型越大不一定越好，能把数据处理做得又快又准，往往更能决定最终训练效果。}
+\begin{knowledgebox}{真正值得记住的不是某个实现}
+真正值得记住的是这条线：\textbf{先用粗糙模型估计样本值得不值得留下，再用可扩展的近似算法把这个判断做成百万、亿级数据都能跑完的系统。}
+\end{knowledgebox}
 
 \end{document}

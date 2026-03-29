@@ -1,0 +1,147 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{结构化输出与工具调用：LangChain / OpenAI API}
+\newcommand{\noteauthors}{五道口纳什 \& Claude}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 9 分钟}
+\newcommand{\videourl}{https://www.bilibili.com/video/BV1uiUnBFED4}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents\newpage
+
+\section{结构化输出与工具调用的本质}
+
+\subsection{为什么需要结构化输出}
+
+在构建复杂 Agent Workflow 时，模块之间需要明确的\textbf{接口约定}——一个环节的输出是另一个环节的输入。结构化输出解决了三个核心问题：
+
+\begin{enumerate}
+    \item 不需要在 Prompt 层面约定 Output Format
+    \item 不需要手动解析复杂的 JSON
+    \item Function / Tools 信息也不需要显式放入 Prompt
+\end{enumerate}
+
+\begin{importantbox}{结构化输出 = 弱版 SDD}
+结构化输出某种意义上实现了一种\textbf{弱版的 Specification Driven Development}——通过定义 Module 之间的输入输出格式，极大简化了解析和适配工作。其底层原因在于现代大语言模型在结构化输出方面已经训练得非常好。
+\end{importantbox}
+
+\subsection{本章小结}
+
+结构化输出和工具调用是 Agent 开发的基础设施——通过 API 层面的格式约定，省略了大量手工的 Prompt 设计和输出解析工作。
+
+\section{OpenAI API 层面的实现}
+
+\subsection{Structured Output：response\_format 字段}
+
+通过 \texttt{response\_format} 字段传入 Pydantic Model 的 JSON Schema：
+
+\begin{itemize}
+    \item 定义 Pydantic Model（如包含 title 和 year 字段）
+    \item 通过 \texttt{model.json\_schema()} 将其序列化为 JSON Schema
+    \item 放入 HTTP 请求的 \texttt{response\_format} 字段
+    \item 模型输出自动符合该 Schema，可直接反序列化为对象
+\end{itemize}
+
+\subsection{Function Calling：tools 字段}
+
+通过 \texttt{tools} 字段注入工具信息：
+
+\begin{itemize}
+    \item 使用 LangChain 的 \texttt{@tool} 装饰器注册 Python 函数
+    \item 通过 \texttt{convert\_to\_openai\_tool()} 转换为 OpenAI API 要求的格式
+    \item 放入 HTTP 请求的 \texttt{tools} 字段
+    \item 模型返回中包含 \texttt{function\_call} 的实例化内容
+\end{itemize}
+
+\begin{knowledgebox}{HTTP 抓包分析}
+通过 HTTP 抓包可以清晰看到：
+\begin{itemize}
+    \item \textbf{Structured Output} 走 \texttt{response\_format} 字段
+    \item \textbf{Function Calling / Bound Tools} 走 \texttt{tools} 字段
+\end{itemize}
+两者在 HTTP 请求层面是不同的字段，但目的都是约定输入输出格式。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+在 OpenAI API 的 HTTP 请求层面，结构化输出通过 response\_format 实现，工具调用通过 tools 实现——理解底层机制有助于 debug 和优化。
+
+\section{LangChain 层面的封装}
+
+\subsection{with\_structured\_output}
+
+LangChain 的 \texttt{with\_structured\_output} 方法进一步简化了使用：
+
+\begin{itemize}
+    \item 直接传入 Pydantic Model
+    \item 底层自动转换为 JSON Schema 并放入 response\_format
+    \item 返回的结果直接是实例化的对象（比 OpenAI API 多了一步自动反序列化）
+\end{itemize}
+
+\begin{warningbox}{两种路径的区别}
+\begin{itemize}
+    \item \texttt{with\_structured\_output} $\rightarrow$ 走 \texttt{response\_format}（JSON Schema 对齐到字段语义）
+    \item \texttt{bind\_tools} $\rightarrow$ 走 \texttt{tools}（Function Calling 语义）
+\end{itemize}
+Pydantic Model 本质上也是一种 Function（实例化类 $\approx$ 调用构造函数），所以 LangChain 的 bind\_tools 也可以接受 Pydantic Model。
+\end{warningbox}
+
+\subsection{本章小结}
+
+LangChain 在 OpenAI API 的基础上做了进一步封装——自动序列化、自动反序列化，使用体验更简洁。
+
+\section{实用技巧：结构化输出实现 CoT}
+
+\begin{importantbox}{通过结构化输出实现 Chain of Thought}
+可以将思考过程封装为一个 Pydantic 结构化输出对象，例如：
+\begin{itemize}
+    \item \texttt{steps}：{[}\texttt{Step(explanation=..., output=...)}{]}
+    \item 每个 Step 包含解释和输出
+\end{itemize}
+通过这种方式约定实现 CoT 效果，自然可以比较大地提升模型表现。这是一个非常实用的语言模型使用技巧。
+\end{importantbox}
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item \textbf{结构化输出和工具调用是 Agent 开发的基础设施}：它们在 API 层面实现了模块间的接口约定。
+    \item \textbf{理解底层 HTTP 请求}有助于 debug：response\_format vs. tools 是两个不同的字段。
+    \item \textbf{LangChain 提供了更高层的封装}：自动序列化/反序列化，但底层仍然是 OpenAI API。
+    \item \textbf{结构化输出可以实现 CoT}：将思考过程结构化，是一个实用的性能提升技巧。
+    \item \textbf{现代 LLM 的结构化输出能力已经很强}：可以省略大量手工的 Prompt 格式约定和输出解析。
+\end{enumerate}
+
+\end{document}

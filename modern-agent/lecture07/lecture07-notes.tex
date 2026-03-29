@@ -1,0 +1,210 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{LightRAG 知识图谱双层检索与 LangFuse}
+\newcommand{\noteauthors}{五道口纳什 \& Claude}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 19 分钟}
+\newcommand{\videourl}{https://www.bilibili.com/video/BV1TkmqBKEid}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents\newpage
+
+\section{如何快速上手一个 Agent 项目}
+
+\subsection{方法论总结}
+
+作者总结了快速理解和上手一个 Agent 项目的三步路径：
+
+\begin{enumerate}
+    \item \textbf{理解基本概念}：读论文或项目框架介绍，理解 Workflow / Pipeline 设计
+    \item \textbf{理解 Prompt}：Agent 项目中大量子环节都由 LLM 扮演——理解了 Prompt 就理解了各环节的输入、输出和处理逻辑
+    \item \textbf{使用监控工具}：通过 LangFuse 等工具 trace 所有 API 调用，可视化理解整个流程
+\end{enumerate}
+
+\begin{knowledgebox}{Prompt 是理解 Agent 项目的钥匙}
+对于一个 Agent 的 Workflow，很多子环节都是 LLM 来扮演的。将每个环节理解为 $F(X; \text{Prompt})$ ——$F$ 是 LLM，$X$ 是 Query，Prompt 是 System/User Prompt。理解了 Prompt，就理解了各环节的处理逻辑。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+概念 $\rightarrow$ Prompt $\rightarrow$ 监控工具，这是一条高效的 Agent 项目理解路径。
+
+\section{LightRAG 原理}
+
+\subsection{概述}
+
+LightRAG 是一篇 EMNLP 2025 的学术论文，也是 Paper2Slides 作者的另一个项目。它是一个基于\textbf{知识图谱}的 RAG 系统，相比传统向量 RAG 具有更强的语义理解能力。
+
+\begin{importantbox}{LightRAG 的核心特性}
+\begin{itemize}
+    \item 基于 \textbf{Knowledge Graph} 的索引（而非纯向量索引）
+    \item \textbf{双层检索}：Low-Level（局部，特定实体）+ High-Level（全局，主题和概念）
+    \item \textbf{增量更新}：新文档无需重建整个 Graph，只需执行提取步骤并合并
+\end{itemize}
+\end{importantbox}
+
+\subsection{Indexing 流程：构建知识图谱}
+
+对每个文档执行以下步骤：
+
+\begin{enumerate}
+    \item \textbf{Chunking}：将文档分块
+    \item \textbf{Entity \& Relationship Extraction}：基于 LLM 从每个 Chunk 提取实体和关系
+    \item \textbf{Profiling}：基于 LLM 对实体和关系生成文本描述
+    \item \textbf{Deduplication}：对整个知识图谱做去重合并
+    \item \textbf{Embedding}：对所有实体和关系的 Key 构建 Embedding Vector
+\end{enumerate}
+
+知识图谱中的数据结构：
+\begin{itemize}
+    \item \textbf{Entity}：名字、类型、描述（Profiling 生成）、原始 Chunk ID
+    \item \textbf{Edge}：Source、Target、关键词、描述、原始 Chunk ID
+\end{itemize}
+
+\begin{knowledgebox}{LightRAG vs. GraphRAG}
+LightRAG 相比 GraphRAG 的一个重要优势是\textbf{增量更新}——新文档只需执行相同的提取步骤，合并实体和边即可。而 GraphRAG 需要重新进行社区发现，代价高昂。
+\end{knowledgebox}
+
+\subsection{Retrieval 流程：双层检索}
+
+\begin{enumerate}
+    \item 基于 Query，LLM 生成 \textbf{Low-Level Keywords}（特定实体）和 \textbf{High-Level Keywords}（主题/概念）
+    \item 基于 Embedding 相似度在知识图谱中匹配相关节点
+    \item 通过\textbf{一跳邻居}拓展 Subgraph
+    \item 获取三种类型的 Context：实体、关系、原始 Chunk
+    \item Context + Query $\rightarrow$ LLM 生成最终回答
+\end{enumerate}
+
+\subsection{本章小结}
+
+LightRAG 通过知识图谱索引 + 双层检索实现了比纯向量 RAG 更强的语义理解能力，且支持增量更新。
+
+\section{LangFuse：本地部署的 API 监控工具}
+
+\subsection{LangFuse 简介}
+
+LangFuse 是一个可本地部署的 LLM API 监控工具，用于 trace 所有的模型调用过程。
+
+\subsection{部署与配置}
+
+\begin{enumerate}
+    \item 下载 Docker Compose 文件并启动服务
+    \item 本地访问 \texttt{localhost:3000}
+    \item 创建组织和项目
+    \item 获取 Public Key、Secret Key 和 Base URL
+    \item 在 \texttt{.env} 中配置以上信息
+\end{enumerate}
+
+LightRAG \textbf{原生集成}了 LangFuse——只要检测到环境变量，就会自动将 OpenAI Client 替换为 LangFuse Client，在后台记录完整的 traces。
+
+\subsection{通过 Traces 理解 Workflow}
+
+在 LangFuse 的 Traces 面板中，可以看到 LightRAG 的所有 API 调用：
+
+\textbf{Insert（Indexing）阶段}：
+\begin{enumerate}
+    \item 对文档创建 Embedding
+    \item 第一次 Generation：提取实体和关系（Entity Extraction System/User Prompt）
+    \item 第二次 Generation：Self Correction（继续提取遗漏的或格式不正确的内容）
+    \item 大量 Embedding 调用：对节点和边创建 Embedding
+\end{enumerate}
+
+\textbf{Query（Retrieval）阶段}：
+\begin{enumerate}
+    \item Generation：提取 High-Level 和 Low-Level 关键词（Keywords Extraction Prompt）
+    \item Embedding Search：基于关键词匹配实体和关系
+    \item 图遍历：找到相关实体的邻居节点
+    \item Generation：基于 Context + Query 生成最终回答（RAG Response Prompt）
+\end{enumerate}
+
+\begin{warningbox}{Response Cache}
+LightRAG 默认启用 Response Cache——如果重复执行相同的 Query，不会再次调用 API。这在开发调试时需要注意。
+\end{warningbox}
+
+\subsection{本章小结}
+
+LangFuse 提供了强大的可视化 trace 能力，是理解 Agent 项目内部工作机制的利器。
+
+\section{LightRAG 核心 Prompt 解析}
+
+\subsection{Entity Extraction System Prompt}
+
+负责从 Chunk 中提取实体和关系，包含 Few-Shot 示例。
+
+\subsection{Continue Extraction User Prompt}
+
+基于第一次提取的结果，做 Self Correction——识别和提取遗漏的或格式不正确的内容。
+
+\subsection{Keywords Extraction Prompt}
+
+负责从 Query 中提取 High-Level 和 Low-Level 关键词，用于后续的向量搜索。
+
+\subsection{RAG Response Prompt}
+
+基于检索到的 Context（实体、关系、Chunk）和用户 Query，生成最终回答。
+
+\subsection{本章小结}
+
+LightRAG 的核心 Prompt 包括：实体关系提取、Self Correction、关键词提取、RAG 回答生成——每一个都对应 Workflow 中的一个关键环节。
+
+\section{LightRAG 本地存储结构}
+
+运行 LightRAG 后，在工作目录下会生成以下文件：
+
+\begin{itemize}
+    \item \texttt{graph.graphml}：XML 格式的知识图谱（实体 + 关系）
+    \item \texttt{kv\_store\_*}：键值存储（Chunk、Entity、Relation 的 K-V 对）
+    \item \texttt{vdb\_*}：向量数据库（默认使用 Nano Vector DB）
+    \begin{itemize}
+        \item \texttt{vdb\_chunks}：Chunk 的 Embedding
+        \item \texttt{vdb\_entities}：Entity 的 Embedding
+        \item \texttt{vdb\_relationships}：Relation 的 Embedding
+    \end{itemize}
+\end{itemize}
+
+检索时的数据流：关键词 $\rightarrow$ Embedding Search（VDB） $\rightarrow$ 图遍历（GraphML） $\rightarrow$ 补充原始文档（KV Store） $\rightarrow$ 组装 Context $\rightarrow$ LLM 生成回答。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item \textbf{快速上手 Agent 项目的路径}：概念 $\rightarrow$ Prompt $\rightarrow$ 监控工具（LangFuse）。
+    \item \textbf{LightRAG 是一个基于知识图谱的 RAG 方案}，相比纯向量 RAG 具有更强的语义理解和增量更新能力。
+    \item \textbf{双层检索}（Low-Level + High-Level）复用了 GraphRAG 中 Local 和 Global 检索的思想，但实现更轻量。
+    \item \textbf{LangFuse 是理解 Agent 内部机制的利器}：通过 trace 所有 API 调用，可以清晰看到每个环节的输入输出。
+    \item \textbf{核心 API}：\texttt{ainsert}（增量索引）和 \texttt{aquery}（检索回答）——对应 Indexing 和 Retrieval 两大流程。
+\end{enumerate}
+
+\end{document}

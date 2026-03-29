@@ -1,0 +1,369 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{多模态 Visual Prompting：SAM 1/2/3 与 Grounding DINO}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 19 分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{Visual Prompting：概念与动机}
+
+\subsection{什么是 Visual Prompting}
+
+Visual Prompting（视觉提示）是一种在多模态视觉-语言模型（VLM）交互中，通过在原始图片上叠加视觉标记（如编号、箭头、掩码区域、边界框等），来辅助模型更好地进行视觉推理与定位的技巧。
+
+\begin{importantbox}{Visual Prompting 的核心思想}
+Visual Prompting 的本质是：在送给 VLM 之前，先用 CV 模块对原始图片做预处理（分割、检测、标注编号），再将增强后的图片送给 VLM 做推理。这样做将"直接生成坐标"的回归问题，转化为"选择编号"的分类问题，大幅降低了模型推理难度。
+\end{importantbox}
+
+以 Set-of-Mark（SoM）为例：给定一张原始图片和一个文本问题，SoM 首先用分割模型对图片做全图实例分割，然后为每个分割区域在其中心位置打上数字编号标签，最终将这张带编号的新图片连同文本问题一起交给 VLM 进行问答。
+
+\begin{knowledgebox}{为什么 Visual Prompting 有效}
+GPT-4V 等 VLM 在预训练阶段包含了大量带有标注的图表（labelled figures）、教科书插图（charts, textbooks）等图文对数据。这些训练数据中的图片本身就包含箭头、编号、分割区域等视觉标记。因此，当我们人为地在图片上添加类似标记时，能很自然地激活模型内部对这类标注的注意力机制，从而提升推理准确率。类似于数学几何题中的标注——编号、箭头、方向标记，都能帮助模型聚焦关键信息。
+\end{knowledgebox}
+
+\subsection{回归问题变分类问题}
+
+Visual Prompting 最关键的优势在于降低推理难度：
+
+\begin{itemize}
+    \item \textbf{常规方式}：VLM 需要直接输出目标物体的精确坐标 $(x, y)$ 或边界框 $(x_1, y_1, x_2, y_2)$，这是一个回归问题
+    \item \textbf{Visual Prompting 方式}：图片已经被分割并打上编号，VLM 只需选择正确的编号即可，这变成了一个分类/选择问题
+\end{itemize}
+
+\begin{warningbox}{Visual Prompting 并非万能}
+随着现代 VLM（如 GPT-4o、Gemini 2.5 等）的视觉能力越来越强，部分场景下模型已经能直接准确输出坐标。但在复杂场景（多物体、遮挡、方位描述等）中，Visual Prompting 仍然是非常实用的辅助技巧。它通过帮助模型聚焦注意力并稳定推理过程，显著提升定位准确率。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Visual Prompting 是一种在原始图片上叠加 CV 预处理结果（分割掩码、数字编号、边界框等）的技巧，能将物体定位的回归问题转化为选择问题，降低 VLM 推理难度，提升准确率。其有效性源于 VLM 训练数据中天然包含大量带标注图片。
+
+
+\section{SAM 系列：从实例分割到语义分割}
+
+\subsection{SAM 1 与 SAM 2：实例级分割}
+
+SAM（Segment Anything Model）是 Meta 推出的通用分割模型系列。SAM 1 和 SAM 2 都支持实例级别的分割，主要输入方式包括：
+
+\begin{itemize}
+    \item \textbf{Point Prompt}：在图片中指定一个点，分割该点所在的主体（如鲸鱼身体中心的点，分割出整条鲸鱼）
+    \item \textbf{Bounding Box Prompt}：给定一个边界框，分割框内的主体
+    \item \textbf{Automatic Mask Generation}：不需要任何输入提示，自动对整张图片进行全图实例分割
+\end{itemize}
+
+\begin{knowledgebox}{SAM 的 Point/Box 输入本身就是 Visual Prompting}
+从广义上看，SAM 接受的 Point 和 Bounding Box 输入，本身就是一种 Visual Prompting——在原始图片中指定具体的视觉位置信息，引导模型进行分割。这种设计使得 SAM 可以灵活地与其他模型组合使用。
+\end{knowledgebox}
+
+SAM 1 和 SAM 2 的自动分割功能（Automatic Segmentation）不需要任何人工输入，只接收原始图片，就能对全图所有实例进行分割。这一功能是 Set-of-Mark 等 Visual Prompting 方法的基础组件。
+
+\subsection{SAM 3：语义级可提示分割}
+
+SAM 3 相比前代有了质的飞跃，支持语义级别的分割，且是 promptable（可提示）的：
+
+\begin{importantbox}{SAM 3 的多模态输入}
+SAM 3 支持以下多种输入方式：
+\begin{itemize}
+    \item \textbf{文本输入}：输入一个简单的名词短语（如 ``cat''），分割出图中所有的猫
+    \item \textbf{Point/Box 输入}：继承自 SAM 1/2 的经典交互方式
+    \item \textbf{示例图输入}：提供正样本和负样本图片，向正样本靠近、远离负样本
+\end{itemize}
+\end{importantbox}
+
+\begin{warningbox}{SAM 3 的文本输入限制}
+SAM 3 的文本输入只支持简单的名词短语（noun phrase），\textbf{不支持方位词}（如"左边的猫"、"最上面的杯子"等包含空间关系的描述）。如果需要处理包含方位描述的复杂查询，需要借助 VLM 先将复杂描述简化为名词短语，再交给 SAM 3。
+\end{warningbox}
+
+\subsection{VLM + SAM 3 Agent 组合}
+
+由于 SAM 3 不支持方位词，可以构建一个 VLM + SAM 3 的 Agent Pipeline 来处理复杂的物体定位任务：
+
+\begin{enumerate}
+    \item \textbf{用户输入复杂查询}：如"穿蓝色马甲的最左侧的孩子"
+    \item \textbf{VLM 简化查询}：将复杂描述转化为简单名词短语——"child in blue vest"
+    \item \textbf{SAM 3 分割}：基于简化后的文本，分割出所有穿蓝色马甲的孩子
+    \item \textbf{打上编号}：对分割结果打上数字编号
+    \item \textbf{VLM 二次推理}：基于带编号的分割图，VLM 可以准确定位"最左侧的"那个孩子
+\end{enumerate}
+
+这种 Pipeline 的核心思想是：VLM 负责语言理解和推理，SAM 3 负责视觉分割，两者各司其职，协同完成单一模型难以完成的复杂定位任务。
+
+\subsection{本章小结}
+
+SAM 系列从 SAM 1/2 的实例分割，演进到 SAM 3 的语义级可提示分割。SAM 3 支持文本、点、框、示例图等多模态输入，但文本仅限简单名词短语。通过 VLM + SAM 3 的 Agent 组合，可以处理包含方位词的复杂定位任务。
+
+
+\section{Grounding DINO 与检测-分割 Pipeline}
+
+\subsection{Grounding DINO：开放词汇目标检测}
+
+Grounding DINO 是一个开放词汇（open-vocabulary）的目标检测模型，能根据自然语言描述在图片中定位目标物体，输出边界框（bounding box）。
+
+\begin{importantbox}{检测→分割的标准 Pipeline}
+在实际应用中，通常将检测与分割组合使用：
+\begin{enumerate}
+    \item 用 Grounding DINO 根据文本描述检测目标，得到边界框
+    \item 计算边界框的中心点
+    \item 将边界框或中心点作为 Prompt 输入给 SAM，对目标物体做像素级分割
+\end{enumerate}
+这样就从粗粒度的框定位，精细化为像素级的不规则多边形分割区域。
+\end{importantbox}
+
+以自动驾驶场景为例：用户描述"红色跑车"，Grounding DINO 先在图中框出红色跑车的边界框，然后 SAM 基于这个框做精确的像素级分割，得到不规则多边形区域。
+
+\subsection{Grounding SAM 2：视频级物体追踪}
+
+Grounding SAM 2 将 Grounding DINO 与 SAM 2 的视频追踪能力相结合，用于视频级别的物体追踪（tracking）：
+
+\begin{enumerate}
+    \item \textbf{选取关键帧}：从视频中取出一个典型帧
+    \item \textbf{检测目标}：用 Grounding DINO 检测目标物体（如"little girl"），得到边界框
+    \item \textbf{初始分割}：将边界框作为 Box Prompt 输入 SAM 2，分割出目标
+    \item \textbf{视频追踪}：用 SAM 2 的 Tracking 模块，在整个视频的所有帧中持续追踪并分割该目标
+\end{enumerate}
+
+追踪阶段可以使用多种提示信息：
+\begin{itemize}
+    \item 原始的边界框
+    \item 分割区域中采样的点（Point Prompt）
+    \item 分割得到的 Mask 区域
+\end{itemize}
+
+\subsection{本章小结}
+
+Grounding DINO 提供开放词汇检测能力，与 SAM 系列结合形成检测→分割的标准 Pipeline。Grounding SAM 2 进一步将其扩展到视频追踪场景，实现单帧检测+全视频追踪的端到端流程。
+
+
+\section{Set-of-Mark：全图编号辅助定位}
+
+\subsection{方法原理}
+
+Set-of-Mark（SoM）是 Visual Prompting 的代表性工作，方法极其简单但非常有效：
+
+\begin{enumerate}
+    \item 对原始图片做全图实例分割（使用 SAM 的自动分割功能）
+    \item 在每个分割区域的中心点打上数字编号
+    \item 将带编号的新图片连同文本问题一起输入 VLM
+    \item VLM 通过选择编号来回答定位问题
+\end{enumerate}
+
+\begin{importantbox}{SoM 的设计假设}
+SoM 的有效性基于一个关键假设：VLM 在预训练阶段已经接触了大量带标注的 labelled figures、charts 和 textbooks。这些数据中天然包含编号、箭头等标记，因此 VLM 对这类视觉标记有很强的理解能力。SoM 利用这种能力，将图像分割为语义区域，赋予每个区域可读的 ID，让 VLM 能够"看图说话"。
+\end{importantbox}
+
+\subsection{优势分析}
+
+SoM 的两大核心优势：
+
+\begin{enumerate}
+    \item \textbf{降低推理难度}：将直接生成坐标的回归问题变为选编号的分类问题
+    \item \textbf{辅助注意力聚焦}：分割后的编号标记帮助模型聚焦到具体区域，稳定推理过程中的注意力
+\end{enumerate}
+
+\subsection{本章小结}
+
+SoM 通过全图分割+编号标注的简单策略，将物体定位问题转化为选择题，显著降低 VLM 的推理难度，是 Visual Prompting 的经典范例。
+
+
+\section{FreeGrasp：机器人抓取中的 Visual Prompting}
+
+\subsection{问题设定}
+
+FreeGrasp 解决的是机器人自由形式抓取（free-form grasping）问题：用户用自然语言给出模糊的抓取指令（如"抓底部的红色玩具车"），机器人需要理解指令、定位目标物体、处理遮挡，最终完成抓取。
+
+\begin{knowledgebox}{遮挡处理是关键挑战}
+在真实抓取场景中，目标物体常被其他物体遮挡。FreeGrasp 设计了一个完整的 Pipeline 来处理遮挡：先识别目标→判断是否被遮挡→移开遮挡物→再抓取目标。这个过程需要 VLM 具备多步推理能力。
+\end{knowledgebox}
+
+\subsection{Pipeline 设计}
+
+FreeGrasp 的处理流程：
+
+\begin{enumerate}
+    \item \textbf{输入}：RGBD 图像（RGB 用于视觉推理，Depth 用于机械臂执行）+ 自然语言指令
+    \item \textbf{全图检测}：用预训练的 CV 模型检测全图所有物体，获取每个物体的中心点
+    \item \textbf{Visual Marking}：在中心点位置标注数字编号
+    \item \textbf{VLM 推理}：使用结构化 Prompt，让 VLM 基于带编号的图片进行多步推理：
+    \begin{itemize}
+        \item 识别目标物体（哪个编号是目标？）
+        \item 判断是否被遮挡（哪些物体遮挡了目标？）
+        \item 规划移除遮挡物的顺序
+    \end{itemize}
+    \item \textbf{分割与抓取}：对目标物体做分割，传统算法估计抓取姿态，机械臂执行
+\end{enumerate}
+
+\begin{importantbox}{Free-form 的含义}
+FreeGrasp 中"Free"指的是用户输入的自由度——可以用任意自然语言描述抓取目标，无需结构化的指令格式。这得益于 VLM 强大的自然语言理解能力。
+\end{importantbox}
+
+\subsection{本章小结}
+
+FreeGrasp 将 Visual Prompting 技术应用于机器人抓取领域，通过检测→编号→VLM 推理→分割→执行的 Pipeline，实现了基于自由形式自然语言指令的物体抓取，其中遮挡检测与处理是核心创新。
+
+
+\section{Pivot：机器人导航中的迭代式 Visual Prompting}
+
+\subsection{问题设定与方法}
+
+Pivot 解决的是机器人视觉导航问题：机器人需要根据指令（如"找到木质长凳"）在环境中导航移动。
+
+\begin{importantbox}{Pivot 的迭代式优化}
+Pivot 采用迭代式的 Visual Prompting 策略：
+\begin{enumerate}
+    \item 从动作空间中采样一组候选方向
+    \item 将候选动作映射到图片空间（在图片上标记方向箭头/编号）
+    \item 让 VLM 基于带标记的图片推理最佳的几个候选方向
+    \item 在选出的子空间中重新采样，重复以上过程
+    \item 迭代若干轮后输出最终动作
+\end{enumerate}
+\end{importantbox}
+
+算法的核心输入：
+\begin{itemize}
+    \item 原始 RGB 图片
+    \item 导航指令
+    \item 动作空间定义
+    \item 最大迭代次数 $T$
+    \item 每轮采样数量 $K$
+\end{itemize}
+
+在每次迭代中，从概率化的动作策略 $\pi$ 中采样 $K$ 个动作，映射到图像空间后让 VLM 选择最优的几个候选，然后拟合新的动作分布，循环直到达到最大迭代次数。这本质上是一种采样-选择-细化的优化过程。
+
+\subsection{Visual Prompting 在导航中的价值}
+
+在导航任务中，Visual Prompting 的价值在于：将抽象的动作选择（前进、左转 30 度、右转 15 度等）转化为直观的视觉选择——在图片上标出候选方向的编号，让 VLM 基于视觉信息选择最合理的方向。
+
+\begin{warningbox}{导航场景的特殊性}
+与物体定位不同，导航需要的不是"图中哪个物体"的选择，而是"往哪个方向移动"的决策。Visual Prompting 在这里的作用是将连续的方向空间离散化为有限的标记选项，降低 VLM 的决策难度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Pivot 展示了 Visual Prompting 在机器人导航中的应用，通过迭代式的采样→标记→VLM 推理→细化流程，实现了基于视觉的导航决策，是 Visual Prompting 从静态定位扩展到动态决策的代表性工作。
+
+
+\section{总结与延伸}
+
+\subsection{Visual Prompting 的统一范式}
+
+本期介绍的所有工作——SoM、FreeGrasp、Pivot、VLM+SAM Agent——都遵循一个统一的范式：
+
+\begin{importantbox}{Visual Prompting 统一范式}
+\begin{enumerate}
+    \item 使用经典 CV 模块（分割、检测、采样等）对原始图片做预处理
+    \item 在预处理结果上叠加视觉标记（编号、箭头、掩码等）
+    \item 将增强后的图片交给 VLM 做高层推理与决策
+\end{enumerate}
+这种"CV 预处理 + VLM 推理"的组合，充分利用了两者的互补优势。
+\end{importantbox}
+
+\subsection{技术演化方向}
+
+\begin{itemize}
+    \item \textbf{模型能力增强}：随着 VLM 视觉理解能力的提升，部分 Visual Prompting 场景可能不再必要，但在复杂场景中仍有价值
+    \item \textbf{端到端整合}：未来可能出现将 CV 预处理与 VLM 推理端到端整合的统一模型
+    \item \textbf{更多应用场景}：从物体定位、机器人抓取、导航，到自动驾驶、医学影像等更多领域
+    \item \textbf{动态视频处理}：结合 SAM 2 的视频追踪能力，Visual Prompting 可以扩展到视频理解与交互
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Set-of-Mark Visual Prompting for GPT-4V（SoM 原论文）
+    \item Segment Anything Model（SAM 1/2/3）系列论文
+    \item Grounding DINO：开放词汇目标检测
+    \item FreeGrasp：机器人自由形式抓取
+    \item Pivot：迭代式 Visual Prompting 导航
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

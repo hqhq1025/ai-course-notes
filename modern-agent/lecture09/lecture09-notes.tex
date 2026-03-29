@@ -1,0 +1,300 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{LightRAG 进阶：KG-based RAG 与知识图谱可视化}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 12 分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言}
+
+本期是 LightRAG 的进阶篇，紧接上期内容，深入介绍 LightRAG 的源码细节和工作机制。主要覆盖四个方面：
+
+\begin{enumerate}
+    \item 为什么要引入 Knowledge Graph Base 的 RAG
+    \item LightRAG 的增量索引（Mode）过程
+    \item Knowledge Graph 的可视化
+    \item Hybrid/Mix 检索模式详解
+\end{enumerate}
+
+
+\section{为什么需要 KG-based RAG}
+
+\subsection{Naive RAG 的局限}
+
+传统的 Chunk-based（Naive）RAG 存在两个核心局限：
+
+\begin{importantbox}{Naive RAG 的两大痛点}
+\begin{itemize}
+    \item \textbf{多跳推理困难}：当实体关系跨越多个 Chunk（A→B→C→D→E），Naive RAG 只能检索到局部片段，无法串联完整的推理链
+    \item \textbf{全局性查询缺失}：受限于 TopK 检索，如果关键 Chunk 不在 TopK 中，推理就会失败
+\end{itemize}
+\end{importantbox}
+
+\subsection{KG-based RAG 的优势}
+
+Knowledge Graph Base 的 RAG 从数据形态到推理方式都与 Naive RAG 有本质区别：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3cm}p{5cm}p{5cm}}
+\toprule
+\textbf{维度} & \textbf{Naive RAG（Chunk-based）} & \textbf{KG-based RAG} \\
+\midrule
+数据形态 & 点（每个 Chunk 一个 Embedding） & 网（实体 + 关系组成 Graph） \\
+语义丰富度 & 原始文本 & 实体/关系有详细描述和 Embedding \\
+推理方式 & 检索 Chunk → 放入 Context → 碎片化推理 & 图结构游走 + 关联发现 → 结构化聚合 \\
+全局性 & 受限于 TopK & 通过图游走实现全局搜索 \\
+可解释性 & 较低 & 高（路径可追溯） \\
+\bottomrule
+\end{tabular}
+\caption{Naive RAG 与 KG-based RAG 的核心对比}
+\end{table}
+
+\begin{knowledgebox}{KG 的构建完全依赖语言模型}
+LightRAG 中的实体/关系提取和描述生成（Profiling）全部基于语言模型的 Prompt 完成。这意味着 KG 的质量直接取决于 LLM 的能力。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+KG-based RAG 通过将文档转化为结构化的知识图谱，实现了多跳推理和全局性查询，弥补了传统 Chunk-based RAG 在复杂推理场景下的不足。
+
+
+\section{增量索引（Mode）过程}
+
+\subsection{新文档的处理流程}
+
+LightRAG 支持动态新增文档，其 Mode（Upsert = Update + Insert）过程如下：
+
+\begin{enumerate}
+    \item \textbf{实体关系提取}：基于语言模型从新文档中提取实体（Entity）和关系（Edge）
+    \item \textbf{Profiling}：为实体和关系生成详细的文本描述
+    \item \textbf{Embedding}：为实体描述、关系描述和 Chunk 文本建立向量索引
+    \item \textbf{子图合并}：将新文档的子图合并到全局知识图谱中
+\end{enumerate}
+
+\subsection{实体对齐与命名一致性}
+
+\begin{warningbox}{实体命名一致性是关键}
+不同 Chunk 中可能用不同方式提到同一个实体。LightRAG 在 Entity Extraction System Prompt 中明确规定：
+\begin{itemize}
+    \item 实体名称\textbf{大小写不敏感}
+    \item 每个有意义的单词要大写（如 "Knowledge Graph" 而非 "knowledge graph"）
+    \item 确保一致性命名（相同实体使用相同名称）
+\end{itemize}
+实体对齐主要依赖语言模型生成时的一致性，而非后处理匹配。
+\end{warningbox}
+
+\subsection{描述合并策略：MapReduce}
+
+当同一实体或关系出现在多个 Chunk 中时，每个 Chunk 贡献了该实体/关系的一个\textbf{侧面描述}。合并策略采用 MapReduce 模式：
+
+\begin{enumerate}
+    \item \textbf{收集}：将所有 Chunk 中提取到的描述汇总
+    \item \textbf{判断长度}：
+    \begin{itemize}
+        \item 描述较短 $\rightarrow$ 用分隔符直接拼接
+        \item 描述较长 $\rightarrow$ 基于语言模型做语义压缩（Summarization）
+    \end{itemize}
+    \item \textbf{同步更新}：\texttt{src\_id} 也做 concatenation，记录描述来源
+\end{enumerate}
+
+\begin{importantbox}{语义压缩 Prompt}
+LightRAG 的 \texttt{prompts.py} 中定义了 \texttt{summarize\_entity\_descriptions} 这一 Prompt，专门用于将过长的实体/关系描述压缩为更精练的摘要，同时保留核心信息。
+\end{importantbox}
+
+\subsection{合并示例}
+
+以两个 Chunk 为例：
+\begin{itemize}
+    \item \textbf{Chunk 1}：提取出实体 Alex（描述A）、Bob（描述A）以及关系 Alex→Bob = "同事"
+    \item \textbf{Chunk 2}：提取出实体 Alex（描述B）以及关系 Alex→Bob = "朋友"
+\end{itemize}
+
+合并后：
+\begin{itemize}
+    \item Alex 的描述 = 描述A \texttt{<sep>} 描述B（侧面叠加）
+    \item Alex→Bob 的关系描述 = "同事" \texttt{<sep>} "朋友"
+    \item 如果描述总长度超过阈值，触发语义压缩
+\end{itemize}
+
+\subsection{本章小结}
+
+LightRAG 的增量索引通过实体对齐、描述合并（MapReduce）和语义压缩三步，实现了新文档的无缝融入。整个过程高度依赖语言模型的能力。
+
+
+\section{知识图谱可视化}
+
+LightRAG 在索引过程中会生成一个 GraphML 格式的图谱文件。项目提供了基于 \texttt{pyvis} 库的可视化代码：
+
+\begin{itemize}
+    \item 点击节点可查看实体的详细描述
+    \item 边上展示关系的描述信息
+    \item 适合用于调试和理解 KG 的结构
+\end{itemize}
+
+\begin{knowledgebox}{GraphML 格式}
+GraphML 是一种基于 XML 的图结构描述格式，被广泛用于知识图谱的存储和交换。LightRAG 在 Index 阶段自动生成此文件，无需额外配置。
+\end{knowledgebox}
+
+
+\section{检索模式详解：Naive、Hybrid、Mixed}
+
+\subsection{三种检索模式}
+
+LightRAG 支持三种检索模式（Query Mode），各有适用场景：
+
+\begin{importantbox}{三种检索模式对比}
+\begin{itemize}
+    \item \textbf{Naive}：仅基于 Vector 检索——对 Query 做 Embedding，与 Chunk Embedding 计算 Cosine Similarity，返回 TopK
+    \item \textbf{Hybrid}：纯粹基于知识图谱——结合 Local Search（实体邻域）和 Global Search（关系匹配），不直接查向量库中的原始文本块
+    \item \textbf{Mixed}：Hybrid + Naive——既有 KG 的全局推理，又有传统向量检索获取原始文本块
+\end{itemize}
+\end{importantbox}
+
+\subsection{关键词提取：Low-Level 与 High-Level}
+
+LightRAG 的检索首先从用户 Query 中提取两类关键词：
+
+\begin{itemize}
+    \item \textbf{Low-Level 关键词}：具体的实体名称（如人名、产品名），用于 Local Search
+    \item \textbf{High-Level 关键词}：宏观主题、抽象概念，用于 Global Search
+\end{itemize}
+
+这一步同样由语言模型完成，可通过 LangFuse 的 Trace 监控其输入输出。
+
+\subsection{Local Search（局部搜索）}
+
+\begin{enumerate}
+    \item 使用 Low-Level 关键词在实体向量库中做 Vector Search
+    \item 检索到对应的实体节点
+    \item 在 Graph 中做一跳遍历（Traverse），获取直接关联的邻居实体
+    \item 返回一跳范围内的实体和关系信息作为 Context
+\end{enumerate}
+
+Local Search 以实体为中心，适合回答关于特定实体的详细问题。
+
+\subsection{Global Search（全局搜索）}
+
+\begin{enumerate}
+    \item 使用 High-Level 关键词在关系向量库中做 Vector Search
+    \item 检索到对应的关系（边）
+    \item 返回这些关系及其关联的实体作为 Context
+\end{enumerate}
+
+Global Search 以关系为中心，关注宏观主题，适合回答跨领域、跨文档的综合性问题。
+
+\subsection{本章小结}
+
+LightRAG 通过 Low-Level/High-Level 关键词分离和 Local/Global 双重搜索，实现了从具体实体到宏观主题的多层次检索。Mixed 模式则在此基础上补充原始文本块，提供最全面的信息覆盖。
+
+
+\section{总结与延伸}
+
+本期深入剖析了 LightRAG 的四个核心技术细节：
+
+\begin{enumerate}
+    \item \textbf{KG-based RAG 的必要性}：解决了 Naive RAG 在多跳推理和全局查询上的根本局限
+    \item \textbf{增量索引机制}：通过 MapReduce 式的描述合并和语义压缩，支持动态新增文档
+    \item \textbf{KG 可视化}：基于 pyvis 提供直观的图谱浏览工具
+    \item \textbf{多模式检索}：Naive/Hybrid/Mixed 三种模式覆盖不同的查询需求
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item LightRAG 源码中的 \texttt{prompts.py}：包含所有关键 Prompt（Entity Extraction、Summarization 等）
+    \item LangFuse 本地部署：用于监控 LightRAG 所有 API 调用的输入输出
+    \item Microsoft GraphRAG：与 LightRAG 类似的 KG-based RAG 方案，可做对比研究
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

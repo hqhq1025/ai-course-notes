@@ -1,0 +1,343 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{Gemini Agentic Vision：模型基础能力与 Post-Training}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 16 分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：Agentic Vision 的启发意义}
+
+本期介绍 Google 最新发布的 Gemini 2.5 Flash Agentic Vision 功能。这项工作将视觉推理与代码执行相结合，让模型能够主动"调查"图像——而非被动地"看一眼就猜"。
+
+\begin{knowledgebox}{Modern Agents 与 Agentic RL Training 的关系}
+讲者将两个系列做了明确定位：
+\begin{itemize}
+    \item \textbf{Modern Agents}：侧重推理、多轮工具调用、Novel Prompting 技巧
+    \item \textbf{Agentic RL Training}：侧重算法、系统架构、Post-Training
+\end{itemize}
+Agentic Vision 恰好连接了两者——它展示的多轮推理效果，启发了如何通过 Post-Training 来强化和激励模型的基础能力。
+\end{knowledgebox}
+
+
+\section{Agentic Vision 的核心机制}
+
+\subsection{从"静态观察"到"主动调查"}
+
+传统 VLM 以\textbf{单一静态视角}处理视觉输入——如果遗漏了细微细节，只能被迫猜测。Agentic Vision 将图像理解从静态行为转变为\textbf{智能体过程}：
+
+\begin{importantbox}{Agentic Vision 的三大创新}
+\begin{itemize}
+    \item \textbf{视觉推理 + 代码执行}：模型通过写 Python 代码来操作图像
+    \item \textbf{多轮 Tool Call}：Think → Act → Observe 的 ReAct 循环
+    \item \textbf{视觉草图（Visual Scratchpad）}：模型自主生成标注图来辅助推理
+\end{itemize}
+\end{importantbox}
+
+\subsection{唯一的 Tool：Code Execution}
+
+Agentic Vision 的 Tool 设计极其简洁——只有一个\textbf{代码执行工具}（Code Execution on Images）。通过写代码，模型可以实现：
+
+\begin{itemize}
+    \item \textbf{Bounding Box}：画检测框
+    \item \textbf{Crop}：裁切图像区域
+    \item \textbf{Rotate/Zoom}：旋转和放大
+    \item \textbf{Annotate}：在图上打标注（文字、箭头、编号）
+    \item \textbf{Draw}：绘制辅助线条
+    \item \textbf{Save}：保存处理后的图像
+\end{itemize}
+
+\begin{warningbox}{关键洞察：BBox 不是外部 CV 模型产生的}
+Agentic Vision 中的 Bounding Box 坐标是 \textbf{Gemini 2.5 Flash 自己产生的}——它在写代码时直接把 BBox 坐标传进去。这是模型\textbf{原生的基础视觉能力}（检测、分割、识别），而非依赖外部的目标检测模型。
+\end{warningbox}
+
+\subsection{ReAct 循环：Think → Act → Observe}
+
+Agentic Vision 的工作流程是一个标准的 ReAct（Reasoning + Acting）过程：
+
+\begin{enumerate}
+    \item \textbf{Think}：分析用户问题，规划视觉操作步骤
+    \item \textbf{Act}：生成 Python 代码，调用 Code Execution Tool
+    \item \textbf{Observe}：查看代码执行结果（处理后的图像），决定是否需要进一步操作
+    \item 循环直到得出最终答案
+\end{enumerate}
+
+\begin{knowledgebox}{这是 Post-Training 激励出来的}
+ReAct 循环不是通过外部框架硬编码的，而是通过 Post-Training（强化学习）激励模型自发形成的多轮工具调用行为。模型学会了在什么时候该 zoom in、该 crop、该 annotate。
+\end{knowledgebox}
+
+
+\section{与 SAM3 Agent 的对比}
+
+\subsection{显式构建 vs. 自主涌现}
+
+上一期介绍的 SAM3 Agent 也实现了 Visual Prompting，但方式截然不同：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3cm}p{5cm}p{5cm}}
+\toprule
+\textbf{维度} & \textbf{SAM3 + VLM} & \textbf{Gemini Agentic Vision} \\
+\midrule
+视觉工具 & SAM3（专用分割模型） & Code Execution（通用） \\
+架构 & 显式构建的 Agent Pipeline & Post-Training 激励出的行为 \\
+视觉草图 & 由 SAM3 生成 Mask 叠加图 & 模型自主写代码生成 \\
+BBox 来源 & 外部模型/工具 & 模型原生能力 \\
+灵活性 & 受限于定义的 Tool & 理论上可完成任意图像操作 \\
+\bottomrule
+\end{tabular}
+\caption{SAM3 Agent 与 Gemini Agentic Vision 对比}
+\end{table}
+
+\subsection{Visual Prompting 的演进}
+
+两种方案都产生了"视觉草图"（Visual Scratchpad），但来源不同：
+
+\begin{itemize}
+    \item SAM3 Agent：人类\textbf{显式设计}了分割→标注→返回 VLM 的流程
+    \item Agentic Vision：模型\textbf{自主决定}需要什么样的视觉草图来辅助推理
+\end{itemize}
+
+\subsection{本章小结}
+
+从显式构建到自主涌现，Agentic Vision 代表了 Visual Prompting 技术的进化方向——让模型自己决定如何"看"图，而非人类预设好观察方式。
+
+
+\section{基础能力与 Post-Training 的关系}
+
+\subsection{两阶段范式}
+
+Agentic Vision 揭示了一个重要的训练范式：
+
+\begin{importantbox}{基础能力 + Post-Training 释放}
+\begin{enumerate}
+    \item \textbf{预训练阶段}：训练模型的\textbf{基础视觉能力}——检测、分割、识别。这些能力是"沉睡"的，模型已经知道如何做，但不知道何时做、如何组合。
+    \item \textbf{Post-Training 阶段}：封装 Tool（如 Code Execution），通过强化学习激励模型形成\textbf{多轮工具调用}的行为模式，将基础能力"释放"出来。
+\end{enumerate}
+\end{importantbox}
+
+这一范式对 AI Agent Research 有两层启发：
+
+\begin{enumerate}
+    \item \textbf{对 Prompting/Agent 设计者}：通过巧妙的 Visual Prompting 和 Tool 设计，可以在不改变模型参数的情况下，让之前不可行的任务变得可行
+    \item \textbf{对模型训练者}：基础能力的质量决定了 Post-Training 后 Agent 的上限
+\end{enumerate}
+
+\subsection{Trigger Prompt 的角色}
+
+在 Gemini 的官方 Demo 中，Prompt 中包含一些"触发词"来激发 Agentic Vision 能力：
+
+\begin{itemize}
+    \item "crop out all ..."
+    \item "zoom in to see ..."
+    \item "annotate on the image ..."
+\end{itemize}
+
+\begin{knowledgebox}{Trigger Prompt 是过渡性设计}
+如果模型训练足够好，理论上不需要这些 Trigger Prompt——模型应该能够自主判断何时需要 zoom in、何时需要 annotate。Trigger Prompt 的存在说明当前模型的 Post-Training 还有优化空间。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Agentic Vision 的核心启示是：Agent 的能力上限由模型的基础能力决定，Post-Training 的作用是将这些基础能力组合、释放为完整的多轮推理行为。
+
+
+\section{典型应用场景分析}
+
+\subsection{场景一：精确计数（手指/踏板）}
+
+\textbf{任务}：数一幅图中有多少根手指/踏板。
+
+\textbf{Agentic Vision 的做法}：
+\begin{enumerate}
+    \item 模型识别出所有目标，生成每个目标的 BBox 坐标（原生能力）
+    \item 写代码在图上画出编号标注框，形成视觉草图
+    \item 基于标注后的图，确认数量
+\end{enumerate}
+
+\begin{warningbox}{关于"Tricky"的讨论}
+讲者指出这个示例有些"tricky"——模型在输出 BBox 时其实已经知道了目标数量（BBox 数 = 手指数）。标注和二次确认更多是一种"视觉验证"而非真正的推理突破。
+\end{warningbox}
+
+\subsection{场景二：高密度表格解析 + 计算}
+
+\textbf{任务}：解析图中的表格数据，进行归一化计算并可视化。
+
+\textbf{传统模型的问题}：VLM 在多步视觉算术中经常出现幻觉（hallucination），尤其是浮点数运算。
+
+\textbf{Agentic Vision 的解决方案}：
+\begin{enumerate}
+    \item 使用原生图表理解能力提取表格数据
+    \item \textbf{将计算"下载"到确定性的 Python 环境}——在代码中完成归一化等数学运算
+    \item 在 Python 中完成 Matplotlib 可视化
+\end{enumerate}
+
+\begin{importantbox}{计算卸载（Computation Offloading）}
+Agentic Vision 的一个重要设计模式是\textbf{将精确计算从模型推理中卸载到代码执行环境}。模型负责理解和规划，Python 负责精确计算。这有效规避了 LLM 固有的数值计算不稳定性。
+\end{importantbox}
+
+\subsection{场景三：物品分类与标注}
+
+\textbf{任务}：将图中的不同物品分类，用不同颜色的箭头标注到对应的容器中。
+
+这是一个综合性任务，需要模型同时具备：
+\begin{itemize}
+    \item 物体识别（知道这是什么）
+    \item 分类推理（应该放到哪个类别）
+    \item 视觉标注（画箭头连接物品和容器）
+\end{itemize}
+
+讲者测试发现，模型在分类逻辑上仍有瑕疵（如将某些物品错误分类），但整体的视觉交互能力令人印象深刻。
+
+\subsection{场景四：动物生命周期图表}
+
+\textbf{任务}：从图中裁切出所有动物，以它们的图片作为 icon，在 Matplotlib 图表中按生命周期长度排序展示。
+
+这个案例涉及\textbf{非常多轮的工具调用}——裁切、排序、绘图等步骤需要多次 Think-Act-Observe 循环。最终生成的图表兼具信息性和美观性。
+
+\subsection{本章小结}
+
+Agentic Vision 的应用场景涵盖了精确计数、表格解析、物品分类、图表生成等多种任务。其核心模式是"模型负责理解与规划 + 代码负责精确执行"。
+
+
+\section{抓包分析：API 层面的理解}
+
+讲者通过 HTTP 请求/响应的 Hook 对 Gemini API 进行了抓包分析：
+
+\begin{itemize}
+    \item \textbf{Request Body}：包含 Tools 定义（Code Execution）和用户输入（图片 + 文本）
+    \item \textbf{Response Body}：包含多个 Parts，每个 Part 可能是：
+    \begin{itemize}
+        \item \texttt{executable\_code}：模型生成的 Python 代码
+        \item \texttt{code\_execution\_result}：代码执行的结果（包括生成的图片）
+        \item \texttt{text}：模型的文本推理输出
+    \end{itemize}
+    \item 前端展示的每一步过程，本质上就是在可视化这些 Parts
+\end{itemize}
+
+\begin{knowledgebox}{Gemini App vs AI Studio}
+截至视频录制时，Gemini App（消费者版本）尚未提供 Code Execution Tool。要体验 Agentic Vision，需要使用 AI Studio（开发者工具）。
+\end{knowledgebox}
+
+
+\section{对 Agent Research 的启示}
+
+讲者分享了对 AI Agent 研究方向的个人思考：
+
+\begin{enumerate}
+    \item \textbf{纯 Scaffold Agent 的意义在下降}：做一个通用的 Agent 表现（solid performance）来发论文，意义越来越小
+    \item \textbf{聚焦特定 Task/Tool}：更有价值的研究方向是——针对某个具体任务或工具，通过 Agent/Prompting 设计让\textbf{之前不可行的变得可行、之前有效果的大幅提升}
+    \item \textbf{Visual Prompting 是一个好方向}：它将视觉信息编码为 Agent 可利用的形式，是连接视觉模型和语言模型的桥梁
+    \item \textbf{Agentic RL Training}：在预训练中建立基础能力，在 Post-Training 中通过强化学习激励多轮工具调用，释放基础能力
+\end{enumerate}
+
+
+\section{总结与延伸}
+
+Gemini Agentic Vision 是一项将模型基础视觉能力与 Agentic 多轮推理结合的创新工作。它的核心贡献不仅在于功能本身，更在于揭示了一条清晰的技术路线：
+
+\begin{enumerate}
+    \item \textbf{模型层}：预训练获得基础视觉能力（检测、分割、识别）+ Open World Knowledge
+    \item \textbf{工具层}：封装通用的 Code Execution Tool
+    \item \textbf{行为层}：通过 Post-Training 激励 ReAct 式的多轮工具调用
+    \item \textbf{应用层}：模型自主生成 Visual Scratchpad，基于视觉证据做推理
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Gemini Agentic Vision 官方 Blog 及 12 个示例 Demo
+    \item AI Studio：可在线体验 Code Execution Tool
+    \item ReAct 论文（Yao et al., 2023）：Reasoning + Acting 的理论基础
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

@@ -1,0 +1,147 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{LlamaIndex RAG 原理及源码分析}
+\newcommand{\noteauthors}{五道口纳什 \& Claude}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 22 分钟}
+\newcommand{\videourl}{https://www.bilibili.com/video/BV1Vm42157PL}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents\newpage
+
+\section{RAG 基本概念}
+
+\subsection{RAG 整体框架}
+
+RAG（Retrieval-Augmented Generation）是一个非常实用、非常基础的现代框架，无论工程还是科研都极为必要。
+
+\begin{importantbox}{RAG 核心流程}
+\begin{enumerate}
+    \item 用户发出一个 \textbf{Query}（问题）
+    \item Query 与外部数据的 \textbf{Index} 进行匹配——外部数据指非语言模型之外的、存在硬盘上的数据（结构化数据库、非结构化文档等）
+    \item 对外部数据进行 \textbf{Chunking}（分块），每个 Chunk 创建一个 \textbf{Embedding Vector}
+    \item 对 Query 也创建 Embedding Vector
+    \item 计算 Query 与各 Chunk 之间的\textbf{相似度}（点积/余弦），取 Top-K 最相关的 Chunk
+    \item 将相关 Chunk 作为 Context，与 Query 一起送入 LLM，生成回答
+\end{enumerate}
+\end{importantbox}
+
+\subsection{两个核心 Model}
+
+RAG 系统中需要两个模型：
+\begin{enumerate}
+    \item \textbf{Embedding Model}：将文本转换为向量表示（默认 text-embedding-ada-002，1536 维）
+    \item \textbf{Language Model}：基于 Context 生成回答（默认 GPT-3.5 Turbo）
+\end{enumerate}
+
+\begin{knowledgebox}{RAG 的核心价值}
+RAG 要求 LLM 仅基于检索出的 Context Information 回答问题，而非使用模型自身已有的知识——降低幻觉，提高对事实性要求高的场景的可靠性。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+RAG 的本质是"检索增强生成"：先从外部数据中检索最相关的信息，再让 LLM 基于这些信息回答问题，从而减少幻觉、提高准确性。
+
+\section{LlamaIndex 源码分析：Indexing 流程}
+
+\subsection{文档加载与 Chunking}
+
+\begin{enumerate}
+    \item 从 Data 目录加载所有文档（返回 Document 列表）
+    \item 对每个文档进行 \textbf{Split}——Chunk Size 为 1024（实际约 997，减去文档路径的 token 数），Overlap 为 200
+    \item Split 过程先按自身规则切分（产生约 759 个 split），再进行 \textbf{Merge} 合并为最终的 Chunk（约 22 个）
+\end{enumerate}
+
+\subsection{Node 创建与 Embedding}
+
+\begin{enumerate}
+    \item 每个 Chunk 创建一个 \textbf{Node}（具有唯一 node\_id 和对应的文本内容）
+    \item 使用 Embedding Model（text-embedding-ada-002，Batch Size 2048）为每个 Node 计算 Embedding Vector
+    \item 最终得到 22 个 Node，每个 Node 有一个 1536 维的 Embedding Vector（$512 \times 3$）
+\end{enumerate}
+
+\subsection{本章小结}
+
+Indexing 流程：文档 $\rightarrow$ Split $\rightarrow$ Merge $\rightarrow$ Chunk $\rightarrow$ Node $\rightarrow$ Embedding Vector。每一步都在源码中有清晰的实现。
+
+\section{LlamaIndex 源码分析：Query 流程}
+
+\subsection{检索过程}
+
+\begin{enumerate}
+    \item 对用户 Query 计算 Embedding Vector（同样 1536 维）
+    \item 计算 Query Embedding 与所有 Node Embedding 的相似度
+    \item 默认取 \textbf{Top-2} 最相关的 Node
+\end{enumerate}
+
+相似度计算支持多种度量：欧式距离、点积、余弦相似度等。
+
+\subsection{Prompt Template}
+
+\begin{importantbox}{QA Template（源码中提取）}
+核心模板：
+\begin{quote}
+\textit{Context information is below. \{context\} Given the context information and not prior knowledge, answer the query. Query: \{query\}}
+\end{quote}
+关键约束：\textbf{仅基于 Context Information 回答，不使用模型已有知识。}
+\end{importantbox}
+
+此外还有 Refine Template（基于新 Context 优化已有答案）和 Summarize Template 等。
+
+\subsection{消息构建与 API 调用}
+
+最终构建的消息包含：
+\begin{enumerate}
+    \item \textbf{System Message}：角色设定——"你是一个值得信赖的 QA 专家，永远基于 Context Information 回答，不使用已有知识"
+    \item \textbf{User Message}：包含 Context Information（Top-K 相关文档）+ Query
+\end{enumerate}
+
+默认 Response Mode 为 Compact（紧凑型）。
+
+\subsection{本章小结}
+
+Query 流程：Query Embedding $\rightarrow$ 相似度匹配 $\rightarrow$ Top-K Node $\rightarrow$ Prompt Template 组装 $\rightarrow$ LLM 生成回答。整个过程只有约五行框架代码，但内部源码非常精细。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item \textbf{RAG 是一个非常基础且实用的技术}，LlamaIndex 提供了高度封装的实现，框架层面仅需约五行代码即可完成全流程。
+    \item \textbf{理解源码是掌握框架的关键}：LlamaIndex 封装得非常高级，但理解内部的 Split/Merge/Node/Embedding/Retrieve/Template 流程才能真正掌握。
+    \item \textbf{核心组件}：Embedding Model 负责向量化，Language Model 负责生成，Prompt Template 负责组织输入，相似度计算负责检索。
+    \item \textbf{可扩展方向}：自定义 Embedding Model、调整 Chunk Size 和 Overlap、修改 Response Mode、引入更复杂的 Retrieval 策略等。
+\end{enumerate}
+
+\end{document}

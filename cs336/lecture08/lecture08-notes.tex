@@ -96,309 +96,1321 @@
 \tableofcontents
 \newpage
 
-\section{引言：把计算尽量放到离数据最近的地方}
+\section{导言：多 GPU 训练到底在和什么作战}
 
-这节课延续上一讲关于单 GPU 内部并行的讨论，主题转向 \textbf{多 GPU / 多节点} 场景。核心问题并没有变：\textbf{计算单元离输入输出总是很远}，而性能优化的关键，就是想办法减少数据搬运，把工作组织成更高的算术强度。
+这节课的主题不是“多开几张卡”，而是更根本的问题：\textbf{当模型、batch、状态和激活都在膨胀时，如何把训练系统重新切分成多个设备可以协同执行的形状。} 讲者一开始就把核心矛盾说得很直白：计算离数据总是有距离，而性能优化的关键，就是尽量减少数据搬运，把大部分工作放在离数据最近的地方完成。\footnote{根据字幕 00:00:05--00:02:04，讲者用“上一讲单 GPU 内并行”过渡到“这一讲多 GPU / 多节点并行”，并明确强调避免 data transfer bottlenecks。}
 
 \begin{importantbox}{本讲的统一主题}
 \begin{enumerate}
-    \item 上一讲在单 GPU 内通过 fusion 和 tiling 减少对 HBM 的访问。
-    \item 这一讲在多 GPU / 多节点内通过 replication、sharding 和通信原语减少跨设备传输。
-    \item 所有方法的目标都一样：让计算尽量“就地完成”，避免把数据来回搬。
+    \item 上一讲在单 GPU 内通过 fusion 和 tiling 减少 HBM 往返。
+    \item 这一讲在多 GPU / 多节点内通过 replication、sharding 和 collective 减少跨设备搬运。
+    \item 两讲本质相同：都在想办法提高算术强度，避免让搬数据压倒算数据。
 \end{enumerate}
 \end{importantbox}
 
-可以把整套系统抽象成一个从 \textbf{小而快} 到 \textbf{大而慢} 的层次结构：
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!8, minimum width=3cm, minimum height=1cm] (l1) at (0,0) {L1 / shared memory\\极快、容量小};
+\node[draw, rounded corners, fill=blue!14, minimum width=3cm, minimum height=1cm] (hbm) at (4.0,0) {HBM / DRAM\\容量大、仍然偏慢};
+\node[draw, rounded corners, fill=blue!20, minimum width=3cm, minimum height=1cm] (nvlink) at (8.0,0) {NVLink\\同节点 GPU 互联};
+\node[draw, rounded corners, fill=blue!26, minimum width=3cm, minimum height=1cm] (nvswitch) at (12.0,0) {NVSwitch\\更大规模互联};
+\draw[->, thick] (l1) -- (hbm);
+\draw[->, thick] (hbm) -- (nvlink);
+\draw[->, thick] (nvlink) -- (nvswitch);
+\node[draw, rounded corners, fill=yellow!10, minimum width=11.0cm, minimum height=1cm, below=1.1cm of hbm] (msg) {越靠近算子执行位置，越快；越依赖主机中转，越慢。};
+\end{tikzpicture}
+\caption{从单机层次到跨设备层次：多 GPU 训练只是把内存层次扩展到了更远的通信层次}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=5cm, minimum height=1cm] (last) at (0,0) {上一讲\\单 GPU 内部并行\\fusion / tiling / locality};
+\node[draw, rounded corners, fill=orange!14, minimum width=5cm, minimum height=1cm] (this) at (6,0) {这一讲\\多 GPU / 多节点并行\\collective / sharding / replication};
+\draw[->, thick] (last) -- (this);
+\end{tikzpicture}
+\caption{从单卡局部优化过渡到跨设备全局优化}
+\end{figure}
+
+\begin{knowledgebox}{一句话记忆}
+如果数据已经在本地缓存里，计算就快；如果数据要穿过别的 GPU 或别的节点，通信就会成为瓶颈。分布式训练的核心，不是“多加机器”，而是“让每次通信都物有所值”。
+\end{knowledgebox}
 
 \begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
-\textbf{层次} & \textbf{典型位置} & \textbf{特征} \\
+\textbf{层次} & \textbf{典型位置} & \textbf{主要矛盾} \\
 \midrule
-L1 cache / shared memory & 单 GPU 内部 & 极快，但容量很小 \\
-HBM / DRAM & 单 GPU 内部 & 容量大很多，但仍然比片上存储慢 \\
-NVLink & 同一节点内多 GPU & GPU 之间直接互联 \\
-NVSwitch & 多节点多 GPU & 更大规模互联与路由 \\
+L1 / shared memory & 单 GPU 内部 & 容量小但速度快 \\
+HBM / DRAM & 单 GPU 内部 & 容量大但比片上慢 \\
+NVLink / NVSwitch & 多 GPU / 多节点 & 带宽高，但仍然稀缺 \\
+Ethernet / 主机中转 & 跨节点 & 延迟和带宽都不理想 \\
 \bottomrule
 \end{tabular}
-\caption{从小快到大慢的层次视角}
+\caption{分布式系统里的层次矛盾：越远越慢，越慢越要避免频繁访问}
 \end{table}
-
-\begin{knowledgebox}{一句话记忆}
-如果数据已经在本地缓存里，计算就很快；如果数据在别的 GPU 上，通信就会成为瓶颈。多 GPU 训练的核心任务，就是重新安排计算和存储，使这个瓶颈尽量晚出现。
-\end{knowledgebox}
 
 \section{集合通信：分布式编程的基本积木}
 
-在分布式训练里，最基础的抽象不是“GPU”本身，而是 \textbf{collective operations}。它们描述的是一组 rank 之间的标准通信模式，比手工管理点对点通信更稳定，也更容易优化。
+在分布式训练里，最小的抽象不是“GPU”，而是 \textbf{collective operations}。它们描述的是一组 rank 之间的标准通信模式，比手工点对点通信更清晰，也更容易被 NCCL 和 PyTorch 优化。
 
-\subsection{术语}
+\subsection{术语和直觉}
 
 \begin{itemize}
     \item \textbf{World size}：参与通信的设备数量。
     \item \textbf{Rank}：某一台设备的编号，通常从 0 开始。
+    \item \textbf{Collective}：所有 rank 必须配合完成的一次通信动作。
 \end{itemize}
+
+\begin{knowledgebox}{为什么“collective”这个词重要}
+它强调的不是“发一条消息”，而是“大家一起完成一个固定协议”。这也是为什么分布式程序最怕漏掉一个 rank：不是少传了一条消息，而是整套协议卡住了。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, circle, minimum size=0.9cm] (r0) at (0,0) {0};
+\node[draw, circle, minimum size=0.9cm] (r1) at (2,0) {1};
+\node[draw, circle, minimum size=0.9cm] (r2) at (4,0) {2};
+\node[draw, circle, minimum size=0.9cm] (r3) at (6,0) {3};
+\draw[<->, thick] (r0) -- (r1);
+\draw[<->, thick] (r1) -- (r2);
+\draw[<->, thick] (r2) -- (r3);
+\draw[<->, thick] (r3) -- (r0);
+\node[draw, rounded corners, fill=red!8, minimum width=8cm, minimum height=1cm, below=1cm of r1] (sync) {collective 是全局协议：少一个 rank，大家都会等。};
+\end{tikzpicture}
+\caption{collective 不是局部动作，而是全局协议}
+\end{figure}
 
 \subsection{常见原语}
 
 \begin{table}[H]
 \centering
+\small
 \begin{tabular}{lll}
 \toprule
 \textbf{原语} & \textbf{直觉} & \textbf{用途} \\
 \midrule
-broadcast & 一份数据发给所有 rank & 模型参数同步、配置下发 \\
-scatter & 一份输入切成多份分给不同 rank & 数据切片 \\
-gather & 不同 rank 的数据收集到一个 rank & 汇总输出 \\
-reduce & 对多个值做 sum/min/max 等归约 & 梯度聚合、统计量合并 \\
+broadcast & 一份数据发给所有 rank & 参数同步、配置下发 \\
+scatter & 一份输入切成多份分发 & 数据切片 \\
+gather & 多份数据收集到一个 rank & 汇总输出 \\
+reduce & 对多个值做 sum/min/max 等归约 & 梯度聚合、统计合并 \\
 all-gather & 每个 rank 都拿到完整拼接结果 & 张量并行中的激活恢复 \\
-reduce-scatter & 先归约，再切片分发 & all-reduce 的一半 \\
+reduce-scatter & 先归约，再切片分发 & all-reduce 的组成部分 \\
 all-reduce & 所有 rank 最终都拿到归约结果 & DDP 梯度同步 \\
 \bottomrule
 \end{tabular}
-\caption{本讲使用的集合通信原语}
+\caption{常见集合通信原语}
 \end{table}
 
 \begin{importantbox}{三个容易混淆的点}
 \begin{enumerate}
-    \item \textbf{reduce} 不是任意操作，而是需要可结合、可交换的归约，如 sum、min、max、average。
-    \item \textbf{all} 的意思是“所有 rank 都得到结果”。
-    \item \textbf{all-reduce} 可以拆成 \textbf{reduce-scatter + all-gather}，这也是很多底层实现的思路。
+    \item \textbf{reduce} 不是任意函数，而通常要求可结合、可交换，例如 sum、min、max。
+    \item \textbf{all} 的意思是”所有 rank 都得到结果”。
+    \item \textbf{all-reduce} 常被实现为 \textbf{reduce-scatter + all-gather}，这也是很多底层优化的切入点。
 \end{enumerate}
 \end{importantbox}
 
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.4cm}p{3.0cm}p{3.0cm}p{2.8cm}p{4.0cm}}
+\toprule
+\textbf{原语} & \textbf{输入形状} & \textbf{输出形状} & \textbf{每 rank 发送量} & \textbf{典型用途} \\
+\midrule
+broadcast & rank 0 持有 $S$ & 所有 rank 持有 $S$ & $S$ (root 发出) & 初始化参数同步 \\
+scatter & rank 0 持有 $p \times S$ & 每个 rank 持有 $S$ & $S$ (root 发出) & 数据切片分发 \\
+gather & 每个 rank 持有 $S$ & rank 0 持有 $p \times S$ & $S$ (每 rank 发出) & 汇总输出、收集指标 \\
+reduce & 每个 rank 持有 $S$ & rank 0 持有 $S$ & $S$ (每 rank 发出) & 梯度求和到 root \\
+all-gather & 每个 rank 持有 $S$ & 所有 rank 持有 $p \times S$ & $\frac{p-1}{p} \cdot pS$ & 张量并行中恢复完整激活 \\
+reduce-scatter & 每个 rank 持有 $pS$ & 每个 rank 持有 $S$ & $\frac{p-1}{p} \cdot pS$ & all-reduce 的前半段 \\
+all-reduce & 每个 rank 持有 $S$ & 所有 rank 持有 $S$ & $2 \cdot \frac{p-1}{p} \cdot S$ & DDP 梯度同步（最常用） \\
+\bottomrule
+\end{tabular}
+}
+\caption{集合操作完整总结：$S$ 为单份数据大小（bytes），$p$ 为 rank 数。通信量指 ring 实现下每个 rank 的发送量。}
+\end{table}
+
+\begin{knowledgebox}{如何记忆通信量公式}
+对于 ring 实现，核心因子是 $\frac{p-1}{p}$：每个 rank 在 $p-1$ 步中，每步发送 $\frac{1}{p}$ 的数据。当 $p$ 很大时，$\frac{p-1}{p} \approx 1$，也就是说每个 rank 几乎要把自己持有的全部数据发一遍。all-reduce 之所以有系数 2，是因为它包含 reduce-scatter 和 all-gather 两步，每步各传一次。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=2.3cm, minimum height=0.8cm] (b) at (0,0) {broadcast};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.3cm, minimum height=0.8cm] (s) at (3.0,0) {scatter};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.3cm, minimum height=0.8cm] (g) at (6.0,0) {gather};
+\node[draw, rounded corners, fill=blue!10, minimum width=2.3cm, minimum height=0.8cm] (r) at (9.0,0) {reduce};
+\draw[->] (b) -- (s);
+\draw[->] (s) -- (g);
+\draw[->] (g) -- (r);
+\end{tikzpicture}
+\caption{广播、切分、收集与归约是最基本的通信语义}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=yellow!10, minimum width=4.2cm, minimum height=0.9cm] (rs) at (0,0) {reduce-scatter\\先归约，再切片分发};
+\node[draw, rounded corners, fill=yellow!16, minimum width=4.2cm, minimum height=0.9cm] (ag) at (5.2,0) {all-gather\\把各 rank 片段拼回来};
+\node[draw, rounded corners, fill=yellow!24, minimum width=4.2cm, minimum height=0.9cm] (ar) at (10.4,0) {all-reduce\\两者组合起来};
+\draw[->, thick] (rs) -- (ag);
+\draw[->, thick] (ag) -- (ar);
+\end{tikzpicture}
+\caption{all-reduce 的常见拆法：reduce-scatter 加 all-gather}
+\end{figure}
+
 \subsection{为什么这些原语重要}
 
-这些操作并不只是“通信工具”，它们本身就是分布式训练算法的语言。你可以把很多并行策略理解成：先决定 \textbf{哪一部分数据或模型是本地的}，再决定 \textbf{哪一部分必须通过 collective 交换}。
+collective operations 不是“附加工具”，而是整个分布式训练的语言。你先决定模型或数据如何切分，再决定哪些切片必须通过 collective 对齐。训练策略的区别，本质上就是 \textbf{谁保留本地、谁需要交换、什么时候交换}。
+
+\begin{warningbox}{同步点不是可选项}
+如果某个 rank 少做了一次 collective，其他 rank 就会一直等。训练代码里最容易出现的 bug 之一，就是某个分支上漏掉了一个同步点，程序表面上看像“挂住了”，其实是协议不完整。
+\end{warningbox}
 
 \section{硬件与软件栈}
 
 \subsection{旧式路径和现代路径}
 
-早期常见的结构是：GPU 通过 PCIe 连接到 CPU，再通过主机网络卡和 Ethernet 与别的节点通信。这个路径能工作，但链路长、拷贝多、开销大。
+早期的常见路径是 GPU 经过 PCIe 到 CPU，再经过主机网卡和 Ethernet 去和别的节点通信。这个链路能工作，但太长、太慢、太容易被主机中转拖累。现代 data center 倾向于让 GPU 之间尽量直连，用 NVLink 或 NVSwitch 绕开主机路径。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=red!10, minimum width=3cm, minimum height=0.9cm] (g0) at (0,0) {GPU};
+\node[draw, rounded corners, fill=red!10, minimum width=3cm, minimum height=0.9cm] (cpu) at (3.5,0) {CPU / Host};
+\node[draw, rounded corners, fill=red!10, minimum width=3cm, minimum height=0.9cm] (eth) at (7,0) {Ethernet};
+\node[draw, rounded corners, fill=red!10, minimum width=3cm, minimum height=0.9cm] (g1) at (10.5,0) {GPU};
+\draw[->, thick] (g0) -- (cpu);
+\draw[->, thick] (cpu) -- (eth);
+\draw[->, thick] (eth) -- (g1);
+\node[draw, rounded corners, fill=green!10, minimum width=5.6cm, minimum height=0.9cm, below=1.2cm of cpu] (nv) {NVLink / NVSwitch\\尽量绕开主机中转};
+\end{tikzpicture}
+\caption{通信路径的演化：越依赖主机中转，越容易被搬运成本拖慢}
+\end{figure}
+
+\begin{warningbox}{一个现实约束}
+PCIe、Ethernet、NVLink、NVSwitch 的性能会变，但层次关系不会变：\textbf{越接近算子执行位置，越快；越依赖主机中转，越慢。}
+\end{warningbox}
+
+\subsection{互联带宽对比：NVLink vs PCIe vs InfiniBand}
+
+选择并行策略时，硬件互联的带宽和延迟是最关键的约束之一。下表汇总了当前主流的 GPU 间互联技术：
 
 \begin{table}[H]
 \centering
-\begin{tabular}{p{3.2cm}p{4.6cm}p{4.6cm}}
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{3.2cm}p{2.6cm}p{2.4cm}p{2.2cm}p{4.8cm}}
 \toprule
-\textbf{路径} & \textbf{典型特征} & \textbf{问题} \\
+\textbf{互联技术} & \textbf{单向带宽} & \textbf{典型延迟} & \textbf{作用范围} & \textbf{工程影响} \\
 \midrule
-GPU $\rightarrow$ CPU $\rightarrow$ Ethernet & 通用性强，历史上很常见 & 数据搬运太长，延迟和带宽都不理想 \\
-GPU $\rightarrow$ NVLink $\rightarrow$ GPU & 同节点内直接互联 & 适合高频率的大张量交换 \\
-GPU $\rightarrow$ NVSwitch $\rightarrow$ GPU & 跨节点直接互联 & 适合更大规模的训练集群 \\
+NVLink 4.0 (H100) & 900 GB/s (双向) & $\sim$1--2 $\mu$s & 同节点 GPU & 张量并行的理想链路 \\
+NVSwitch (DGX) & 900 GB/s (全互联) & $\sim$1--5 $\mu$s & 同节点 8 GPU & 8 卡全互联，无需 ring \\
+PCIe 5.0 x16 & 64 GB/s (双向) & $\sim$2--5 $\mu$s & GPU--CPU & 跨 CPU 的 GPU 通信瓶颈 \\
+InfiniBand NDR & 400 Gb/s $\approx$ 50 GB/s & $\sim$1--2 $\mu$s & 跨节点 & 跨节点数据并行的主力 \\
+RoCE / Ethernet 100G & 100 Gb/s $\approx$ 12.5 GB/s & $\sim$5--20 $\mu$s & 跨节点 & 低端集群的折衷方案 \\
 \bottomrule
 \end{tabular}
-\caption{通信路径的演化}
+}
+\caption{主流 GPU 互联技术带宽对比（数值为近似峰值，实际有效带宽通常为峰值的 60\%--85\%）}
 \end{table}
 
-\begin{warningbox}{一个现实约束}
-PCIe、Ethernet、NVLink、NVSwitch 的性能都在变，但层次关系不会变：\textbf{越接近算子执行位置，越快；越依赖主机中转，越慢。}
-\end{warningbox}
+\begin{importantbox}{带宽差异如何影响并行策略选择}
+\begin{itemize}
+    \item \textbf{NVLink 带宽是 InfiniBand 的 $\sim$18 倍}：张量并行每层都要通信，必须放在 NVLink 可达的范围内（同一节点）。跨节点做张量并行几乎不可行。
+    \item \textbf{InfiniBand 带宽是 Ethernet 的 $\sim$4 倍}：数据并行的梯度同步每步只发生一次，用 InfiniBand 跨节点通常可以接受；但用普通 Ethernet 就会明显拖慢训练。
+    \item \textbf{PCIe 是隐藏瓶颈}：即使同一节点，如果 GPU 之间没有 NVLink 而只能走 PCIe $\to$ CPU $\to$ PCIe，带宽会从 900 GB/s 骤降到 64 GB/s。
+\end{itemize}
+\end{importantbox}
+
+\begin{knowledgebox}{一个实际的带宽换算}
+H100 的 NVLink 双向总带宽 900 GB/s。如果要做一次 all-reduce 同步 $26\,\text{GB}$（Llama 2 13B 的梯度），在 ring 实现下每 rank 传输约 $2 \times \frac{p-1}{p} \times 26 \approx 39\,\text{GB}$（8 卡）。用 NVLink 大约 $39/450 \approx 87\,\text{ms}$（取单向有效带宽 450 GB/s）；用 InfiniBand 则需要 $39/40 \approx 975\,\text{ms}$。这就是为什么跨节点做 all-reduce 要谨慎。
+\end{knowledgebox}
 
 \subsection{NCCL 与 \texttt{torch.distributed}}
 
-NVIDIA 提供了 \textbf{NCCL} 来把高层 collective 原语翻译成低层通信包和 CUDA kernel。它会先识别硬件拓扑，再选择合适的传输路径，最后完成数据发送与接收。
+NVIDIA 的 \textbf{NCCL} 负责把高层 collective 翻译成低层通信包和 CUDA kernel。它会先识别硬件拓扑，再决定走哪条链路、哪种调度方式、哪些传输可以并行进行。
 
-在 PyTorch 里，\texttt{torch.distributed} 提供了更高层的接口：
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=3.05cm, minimum height=0.9cm] (hw) at (0,0) {硬件拓扑\\PCIe / NVLink / NVSwitch};
+\node[draw, rounded corners, fill=blue!16, minimum width=3.05cm, minimum height=0.9cm] (nccl) at (3.95,0) {NCCL\\选择路径并发起传输};
+\node[draw, rounded corners, fill=blue!22, minimum width=3.05cm, minimum height=0.9cm] (torch) at (7.9,0) {\texttt{torch.distributed}\\提供高层接口};
+\node[draw, rounded corners, fill=blue!28, minimum width=3.05cm, minimum height=0.9cm] (train) at (11.85,0) {训练代码\\DDP / TP / PP};
+\draw[->, thick] (hw) -- (nccl);
+\draw[->, thick] (nccl) -- (torch);
+\draw[->, thick] (torch) -- (train);
+\end{tikzpicture}
+\caption{从硬件拓扑到训练代码：NCCL 和 PyTorch 分别负责低层调度与高层接口}
+\end{figure}
+
+在 PyTorch 里，\texttt{torch.distributed} 提供了更高层的封装：
 
 \begin{itemize}
     \item \texttt{init\_process\_group} 初始化分布式环境；
-    \item \texttt{all\_reduce} / \texttt{reduce\_scatter\_tensor} / \texttt{all\_gather\_into\_tensor} 等接口直接对应 collective；
+    \item \texttt{all\_reduce}、\texttt{reduce\_scatter\_tensor}、\texttt{all\_gather\_into\_tensor} 对应 collective；
     \item \texttt{send} / \texttt{recv} 用于点对点通信；
     \item \texttt{barrier} 用于显式同步；
-    \item \texttt{destroy\_process\_group} 用于清理进程组。
+    \item \texttt{destroy\_process\_group} 用于清理。
 \end{itemize}
 
-\begin{knowledgebox}{分布式编程里的同步点}
-像 \texttt{all\_reduce} 这样的操作本身就是同步点。某个 rank 少做一次，其他 rank 就可能一直等下去，程序表现为“挂住”。
-\end{knowledgebox}
+\begin{importantbox}{分布式编程里的同步点}
+\texttt{all\_reduce} 这类函数本身就是同步点。少一个 rank，大家都会等。很多分布式 bug 不是算错，而是某个进程没有走到同一个协议位置。
+\end{importantbox}
 
 \subsection{带宽基准的意义}
 
-讲里专门演示了如何用简单的脚本测量 NCCL 带宽。这个动作的意义不只是“看数字”，而是要确认：
+讲里专门演示了如何通过脚本测量 NCCL 带宽。这个动作的意义不只是“看数字”，而是确认硬件拓扑是否合理、collective 是否真正走到了高速链路、以及训练瓶颈究竟在计算还是在通信。
 
-\begin{itemize}
-    \item 硬件拓扑是否符合预期；
-    \item collective 的实现是否真的利用到了高速链路；
-    \item 训练瓶颈究竟在计算还是在通信。
-\end{itemize}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=yellow!10, minimum width=3.05cm, minimum height=0.9cm] (warm) at (0,0) {warmup\\让缓存和内核稳定};
+\node[draw, rounded corners, fill=yellow!16, minimum width=3.05cm, minimum height=0.9cm] (measure) at (3.95,0) {measure\\计时一次 collective};
+\node[draw, rounded corners, fill=yellow!22, minimum width=3.05cm, minimum height=0.9cm] (bw) at (7.9,0) {bandwidth\\bytes / time};
+\node[draw, rounded corners, fill=yellow!28, minimum width=3.05cm, minimum height=0.9cm] (opt) at (11.85,0) {optimize\\看瓶颈到底在哪};
+\draw[->, thick] (warm) -- (measure);
+\draw[->, thick] (measure) -- (bw);
+\draw[->, thick] (bw) -- (opt);
+\end{tikzpicture}
+\caption{带宽测试的工程闭环：先测，再算，再优化}
+\end{figure}
 
-\section{数据并行：按 batch 切分}
-
-数据并行是最直接的思路：\textbf{每个 rank 持有完整模型，但只处理一部分 batch}。前向和反向都在本地完成，然后在反向结束后对梯度做 all-reduce，同步所有 worker 的参数更新。
-
-\subsection{工作方式}
-
-\begin{enumerate}
-    \item 将 batch 沿着 batch 维度切成多份。
-    \item 每个 rank 拿到自己的本地数据片段。
-    \item 每个 rank 维护一份完整的模型副本。
-    \item 本地完成前向、损失和反向。
-    \item 对每一层的 \texttt{param.grad} 做 all-reduce 平均。
-    \item 继续各自的 optimizer step。
-\end{enumerate}
-
-\begin{importantbox}{DDP 的本质}
-数据并行里，\textbf{参数是复制的，数据是切分的，梯度是同步的}。  
-从优化器视角看，很多时候就像做了 \texttt{world size} 份 SGD，但梯度在每步都被强制对齐了。
-\end{importantbox}
-
-\subsection{为什么 loss 可能不同，但参数仍一致}
-
-每个 rank 看到的是不同的本地 batch，所以局部 loss 不必相同。真正保证训练一致性的，是反向结束后对梯度做了同步平均。只要初始化相同、同步相同，参数更新就会保持一致。
-
-\begin{warningbox}{一个需要注意的边界条件}
-如果模型里有依赖整个 batch 统计量的层，比如某些 batch norm 变体，就需要额外考虑跨 rank 的统计同步。讲里提到，在语言模型场景里常见的是 layer norm，所以这个问题一般不会像视觉模型里那么棘手。
-\end{warningbox}
-
-\subsection{你可以把它看成什么}
-
-数据并行其实是在“省通信”和“省复杂度”之间做折中。它的好处是实现简单，缺点是模型仍然必须完整地复制到每个 GPU 上，所以当模型本身太大时，它就不够用了。
-
-\section{张量并行：按宽度切分}
-
-张量并行把模型沿着 \textbf{hidden dimension / width} 切开。每个 rank 只保存每层的一部分参数，但它要频繁和其他 rank 交换激活值，才能把完整的前向算下去。
-
-\subsection{工作方式}
-
-\begin{enumerate}
-    \item 模型参数按列或按隐藏维度切分。
-    \item 每个 rank 只持有每层参数的一部分。
-    \item 本地先算出局部激活。
-    \item 用 all-gather 把局部激活拼回完整表示。
-    \item 进入下一层，重复上述过程。
-\end{enumerate}
-
-\begin{knowledgebox}{张量并行的代价}
-张量并行适合“模型太宽，装不下”的场景，但它的代价是 \textbf{激活通信很多}。  
-所以这类方案通常非常依赖高速互连，否则就会被通信拖死。
+\begin{knowledgebox}{为什么要 benchmark}
+分布式训练里，理想带宽和实际带宽通常不是一回事。拓扑、张量大小、链路拥塞、协议选择都会影响结果。你不测，很多结论都只是猜。
 \end{knowledgebox}
 
-\subsection{和数据并行的差别}
+\subsection{通信复杂度怎么估}
 
-数据并行主要交换 \textbf{梯度}；张量并行主要交换 \textbf{激活}。前者在反向阶段集中通信，后者几乎每一层前向都在通信。
+讲里反复强调的一点是：collective 的性能不是只看“有没有通信”，而是看 \textbf{通信次数}、\textbf{每次传多少}、以及 \textbf{能不能和计算重叠}。一个常见的一阶模型是
+\[
+T_{\text{comm}}(S, p) \approx \alpha \cdot N_{\text{msg}} + \frac{S}{B_{\text{eff}}}
+\]
+其中 $S$ 是总数据量，$p$ 是 rank 数，$\alpha$ 表示单次消息启动开销，$B_{\text{eff}}$ 是有效带宽。
+
+对 ring all-reduce 来说，一个更具体的近似是
+\[
+T_{\text{all-reduce}}(S, p) \approx 2(p-1)\alpha + 2\frac{p-1}{p}\frac{S}{B_{\text{eff}}}.
+\]
+这个式子想表达的不是“精确计时”，而是两个事实：\textbf{rank 越多，启动次数越多；张量越大，带宽项越重要。}
 
 \begin{table}[H]
 \centering
-\begin{tabular}{p{2.8cm}p{4.2cm}p{4.2cm}}
+\small
+\begin{tabular}{p{3.2cm}p{4.3cm}p{4.3cm}}
 \toprule
-\textbf{策略} & \textbf{切分对象} & \textbf{主要通信内容} \\
+\textbf{项} & \textbf{含义} & \textbf{工程直觉} \\
 \midrule
-数据并行 & batch 维度 & 梯度 all-reduce \\
-张量并行 & hidden / width 维度 & 激活 all-gather / 相关变体 \\
-流水线并行 & layer / depth 维度 & 相邻 stage 间 send / recv \\
+$\alpha$ & 启动一次通信的代价 & 小张量时它会主导总时间 \\
+$S / B_{\text{eff}}$ & 真正搬运数据的时间 & 大张量时它决定下限 \\
+$2(p-1)\alpha$ & ring 的多步调度开销 & rank 越多，控制面越重 \\
+$2\frac{p-1}{p}S$ & 每个 rank 需要传输的总字节数 & 比 naive 广播更省带宽 \\
 \bottomrule
 \end{tabular}
-\caption{三种并行策略的对照}
+\caption{all-reduce 复杂度里的两个核心项}
 \end{table}
 
-\subsection{为什么讲里只演示 forward}
+\begin{knowledgebox}{一个 4 卡的量化例子}
+假设需要同步一个 $64\,\text{MiB}$ 的梯度张量，$p=4$，有效带宽按 $50\,\text{GiB/s}$ 估计，启动开销按 $5\,\mu s$ 估计。则
+\[
+T \approx 6\alpha + 1.5\times \frac{64}{50}\,\text{ms} \approx 30\,\mu s + 1.92\,\text{ms}.
+\]
+也就是说，哪怕控制面几乎可以忽略，光带宽项也已经接近 2ms。若单步反向计算本身只有一两毫秒，通信就会立刻变成主瓶颈。
+\end{knowledgebox}
 
-讲里的 toy example 只把前向过程写出来，因为 backward 的 bookkeeping 更复杂。核心思想已经足够清楚：\textbf{每个 rank 只算自己那一片，但为了继续下一层，必须把表示恢复完整。}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, circle, minimum size=0.9cm, fill=blue!10] (a) at (0,0) {0};
+\node[draw, circle, minimum size=0.9cm, fill=blue!10] (b) at (2.6,0) {1};
+\node[draw, circle, minimum size=0.9cm, fill=blue!10] (c) at (5.2,0) {2};
+\node[draw, circle, minimum size=0.9cm, fill=blue!10] (d) at (7.8,0) {3};
+\draw[->, thick] (a) to[bend left=15] node[above] {chunk 1} (b);
+\draw[->, thick] (b) to[bend left=15] node[above] {chunk 2} (c);
+\draw[->, thick] (c) to[bend left=15] node[above] {chunk 3} (d);
+\draw[->, thick] (d) to[bend left=15] node[above] {chunk 4} (a);
+\draw[->, thick] (a) to[bend right=25] node[below] {归约结果回传} (c);
+\end{tikzpicture}
+\caption{ring all-reduce 的直觉：数据沿着环走，归约在传递过程中逐步完成}
+\end{figure}
 
-\section{流水线并行：按深度切分}
+\begin{warningbox}{为什么小张量常常跑不满}
+启动一次 collective 的固定开销并不会因为张量变小而消失。张量越小，\emph{有效带宽}越容易被启动延迟和同步等待吞掉，所以小张量经常看起来“理论上该快，实际上不快”。
+\end{warningbox}
 
-流水线并行把模型按 \textbf{layer / depth} 切开。每个 rank 负责若干层，数据则在各 rank 间像流水线一样流动。
+\subsection{all-reduce 和 reduce-scatter 的关系}
+
+把 all-reduce 拆成 reduce-scatter 和 all-gather，不只是教科书上的形式变换，而是底层实现优化的重要入口。前者把”每个人都拥有完整结果”先缩成”每个人先持有一段结果”，后者再把分段结果拼回去。这样做的好处是，通信模式更接近硬件可以并行执行的方式。
+
+\begin{importantbox}{Ring all-reduce 的带宽最优性}
+Ring all-reduce 的核心性质是：无论有多少个 rank，每个 rank 的总通信量都是 $2 \cdot \frac{p-1}{p} \cdot S$，其中 $S$ 是要同步的张量大小。这意味着：
+\begin{itemize}
+    \item 当 $p \to \infty$ 时，每 rank 通信量趋近 $2S$，\textbf{不随 rank 数线性增长}。
+    \item 这是带宽最优的：理论下界要求每个 rank 至少发送 $\frac{p-1}{p} S$ 和接收 $\frac{p-1}{p} S$，ring 实现恰好达到此下界。
+    \item 拆分为两步后，reduce-scatter 阶段传输 $\frac{p-1}{p} S$，all-gather 阶段再传输 $\frac{p-1}{p} S$，总和恰为 $2 \cdot \frac{p-1}{p} S$。
+\end{itemize}
+这也解释了为什么 NCCL 默认采用 ring-based 算法：它在大张量场景下几乎达到了链路的理论吞吐上限。
+\end{importantbox}
+
+Ring all-reduce 的具体执行分为两个阶段：
+
+\begin{enumerate}
+    \item \textbf{Reduce-scatter 阶段}（$p-1$ 步）：每个 rank 把张量分成 $p$ 个 chunk；在每一步中，每个 rank 向环中的下一个 rank 发送一个 chunk，同时接收上一个 rank 的 chunk 并做归约。$p-1$ 步后，每个 rank 持有完整归约结果的 $\frac{1}{p}$。
+    \item \textbf{All-gather 阶段}（$p-1$ 步）：每个 rank 把自己持有的归约完成的 chunk 沿环传递。$p-1$ 步后，所有 rank 都拥有完整的归约结果。
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3cm}p{4cm}p{4.2cm}}
+\toprule
+\textbf{实现方式} & \textbf{通信模式} & \textbf{常见代价} \\
+\midrule
+直接 all-reduce & 逻辑最简单 & 有时不如分解后容易 overlap \\
+reduce-scatter + all-gather & 先分片再拼回 & 更适合 pipeline 化实现 \\
+树形归约 & 归约深度较小 & 依赖拓扑和实现细节 \\
+\bottomrule
+\end{tabular}
+\caption{同一个语义，不同实现路径的工程取舍}
+\end{table}
+
+\subsection{怎么读一个 all-reduce 的数字}
+
+all-reduce 不是简单的“传一次大包”，而是把 \textbf{归约} 和 \textbf{广播} 合在一起。对于梯度同步来说，它的语义是“每个 rank 都贡献一份梯度，然后大家最终都拿到同一个平均值”。工程上常见的实现会拆成 reduce-scatter 和 all-gather 两步，目的不是换个名字，而是让通信更贴近硬件可以并行的方式。
+
+\begin{importantbox}{带宽数字背后的真正问题}
+如果测出来的数值很低，问题未必在算法本身，可能是：
+\begin{itemize}
+    \item 张量太小，启动开销占比过高；
+    \item 链路没走到预期拓扑；
+    \item 某个 rank 提前阻塞，导致整体被拖慢；
+    \item 计算和通信没有 overlap。
+\end{itemize}
+所以 benchmark 的意义，不是单纯做报表，而是把“慢在哪里”缩小到能解释的粒度。
+\end{importantbox}
+
+\section{数据并行：按 batch 切分}
+
+数据并行是最直接的并行方式：\textbf{每个 rank 都持有完整模型，但只处理一部分 batch。} 前向和反向都在本地完成，然后在反向结束后对梯度做 all-reduce，同步所有 worker 的参数更新。
 
 \subsection{工作方式}
 
 \begin{enumerate}
-    \item 把 batch 切成多个 microbatch。
-    \item rank 0 持有输入数据，后续 rank 持有中间表示。
-    \item 每个 rank 先 recv 上一个 rank 的输出。
-    \item 本地执行自己负责的层。
-    \item 用 send 把结果传给下一 rank。
+    \item 将 batch 沿 batch 维度切成多份。
+    \item 每个 rank 拿到自己的本地数据片段。
+    \item 每个 rank 维护一份完整模型副本。
+    \item 本地完成前向、损失和反向。
+    \item 对每层 \texttt{param.grad} 做 all-reduce 平均。
+    \item 各自执行 optimizer step。
 \end{enumerate}
 
-\begin{importantbox}{流水线并行的直觉}
-你可以把它看成一条装配线：每个工位只负责一段工序，数据逐段往前流。  
-microbatch 的作用，是让工位尽量保持忙碌，减少“空等”的 bubble。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=9cm, minimum height=1cm] (batch) at (0,0) {batch 被切开：rank 0, 1, 2, 3 各自拿到一段};
+\node[draw, rounded corners, fill=green!16, minimum width=9cm, minimum height=1cm, below=0.8cm of batch] (model) {模型完整复制：每个 rank 都有相同的参数副本};
+\draw[->, thick] (-3.5,0) -- (-1.1,0);
+\draw[->, thick] (-1.1,0) -- (1.3,0);
+\draw[->, thick] (1.3,0) -- (3.7,0);
+\draw[->, thick] (3.7,0) -- (6.1,0);
+\end{tikzpicture}
+\caption{数据并行的切分方式：数据分片，模型复制}
+\end{figure}
+
+\begin{importantbox}{DDP 的本质}
+数据并行里，\textbf{参数是复制的，数据是切分的，梯度是同步的。}  
+从优化器视角看，像是每个 rank 都在跑 SGD，但梯度会在每步被强制对齐。
 \end{importantbox}
 
-\subsection{naive 版本的问题}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!8, minimum width=3cm, minimum height=0.8cm] (fwd) at (0,0) {forward\\本地 batch};
+\node[draw, rounded corners, fill=blue!16, minimum width=3cm, minimum height=0.8cm] (bwd) at (4,0) {backward\\本地梯度};
+\node[draw, rounded corners, fill=blue!24, minimum width=3cm, minimum height=0.8cm] (ar) at (8,0) {all-reduce\\梯度平均};
+\node[draw, rounded corners, fill=blue!32, minimum width=3cm, minimum height=0.8cm] (opt) at (12,0) {optimizer\\参数更新};
+\draw[->, thick] (fwd) -- (bwd);
+\draw[->, thick] (bwd) -- (ar);
+\draw[->, thick] (ar) -- (opt);
+\end{tikzpicture}
+\caption{DDP 的关键步骤：本地前向反向之后，只同步梯度}
+\end{figure}
 
-讲里明确指出，最原始的流水线实现还有不少问题：
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=red!10, minimum width=3.6cm, minimum height=0.9cm] (loss) at (0,0) {本地 loss 可能不同\\因为看见的 batch 不同};
+\node[draw, rounded corners, fill=red!16, minimum width=3.6cm, minimum height=0.9cm] (sync) at (5,0) {all-reduce 后梯度一致\\参数更新就一致};
+\node[draw, rounded corners, fill=red!22, minimum width=3.6cm, minimum height=0.9cm] (same) at (10,0) {不同 rank 的模型副本\\会继续保持同形};
+\end{tikzpicture}
+\caption{为什么 loss 可以不同，但参数仍一致}
+\end{figure}
 
-\begin{itemize}
-    \item send / recv 是同步的，不能重叠通信与计算；
-    \item forward 和 backward 的调度还没有展开；
-    \item 真正高性能的实现需要更复杂的时序安排。
-\end{itemize}
+\subsection{DDP 的代价与边界}
 
-\begin{warningbox}{流水线并行的关键瓶颈}
-如果不做异步和交叠，流水线并行会产生 bubble，GPU 不是在算就是在等。  
-因此实际系统里最重要的优化，往往是把“等待通信”尽量藏进“计算中”。
+DDP 的优点是实现简单、计算清晰、适用面广。缺点也很明显：\textbf{模型和优化器状态都要完整复制到每个 GPU 上}。当模型太大时，单纯的数据并行就不够用了。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3cm}p{4.2cm}p{4.2cm}}
+\toprule
+\textbf{优点} & \textbf{缺点} & \textbf{适用场景} \\
+\midrule
+实现最简单，语义最直观 & 参数和 optimizer state 全复制 & 模型能放进单卡，但 batch 很大 \\
+梯度同步只发生一次/step & 模型越大越吃显存 & 先从 DDP 开始最稳妥 \\
+工程生态成熟 & 不解决超大模型的单卡存储问题 & 训练任务比较常规时 \\
+\bottomrule
+\end{tabular}
+\caption{数据并行的工程权衡}
+\end{table}
+
+\begin{warningbox}{一个需要注意的边界条件}
+如果模型里有依赖整个 batch 统计量的层，比如某些 batch norm 变体，就需要额外考虑跨 rank 的统计同步。讲里这门课主要用的是 MLP 和 transformer 语境，所以经常更接近 layer norm，但工程里这个细节仍然要盯住。
 \end{warningbox}
 
-\section{更广义的视角：切分维度与代价}
+\subsection{为什么 DDP 不是“把单卡训练复制四份”就结束}
 
-把三种策略放在一起看，就能发现它们只是对同一问题的不同切分：
+表面上看，DDP 像是每张卡都在独立训练，然后最后把梯度平均一下。但真正的代价还在 \textbf{优化器状态} 和 \textbf{参数副本} 上。以 Adam 为例，除了参数本身，你还要保存一阶、二阶动量；模型一大，这部分显存开销就会很快吃掉空间。
 
-\begin{itemize}
-    \item \textbf{数据并行}：切 batch；
-    \item \textbf{张量并行}：切 width；
-    \item \textbf{流水线并行}：切 depth；
-    \item 讲里还提到，类似的思想也能扩展到 sequence / context length。
-\end{itemize}
-
-\subsection{三种代价}
-
-你最终总会在下面三者之间取舍：
-
-\begin{enumerate}
-    \item \textbf{重算}：省内存，但会多做算力；
-    \item \textbf{存内存}：省算力，但会占空间；
-    \item \textbf{跨 GPU 通信}：能让模型装得下，但会增加链路开销。
-\end{enumerate}
-
-\begin{knowledgebox}{讲里的总括}
-很多并行方法，本质上都在回答同一个问题：到底是把中间结果重新算一遍，还是把它存在更远的地方，再付出通信代价取回来。
+\begin{knowledgebox}{DDP 的隐含成本}
+DDP 省的是“实现复杂度”，不是“模型总内存”。如果参数、梯度、优化器状态加起来已经逼近单卡上限，DDP 只能帮你并行算，不会帮你凭空消失这些状态。
 \end{knowledgebox}
 
-\subsection{为什么这套结构不会消失}
+\subsection{内存账本：DDP 到底在占什么}
 
-即便硬件继续变快，模型也会继续变大、变宽、变深。只要模型规模逼近硬件极限，层次化的存储和通信结构就还会存在。也就是说，\textbf{并行和通信优化不是临时补丁，而是深度学习系统的常态}。
+如果只看参数大小，DDP 似乎很轻松；真正把显存吃掉的，通常是 \textbf{梯度}、\textbf{优化器状态} 和 \textbf{激活}。对于一个参数总量为 $P$ 的模型，在混合精度下一个常见的粗略账本是：
+\[
+M_{\text{DDP}} \approx M_{\text{params}} + M_{\text{grads}} + M_{\text{master}} + M_{\text{Adam}} + M_{\text{act}}.
+\]
+如果参数和梯度用 fp16，各占 $2P$ bytes；master 权重用 fp32，占 $4P$ bytes；Adam 的一阶、二阶动量各用 fp32，占 $8P$ bytes，那么仅静态训练状态就已经接近
+\[
+16P \text{ bytes / parameter}.
+\]
+这也是为什么“模型参数看起来不算离谱”，但一跑训练就爆显存的情况非常常见。
 
-\section{JAX、TPU 与更高层抽象}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.4cm}p{3.6cm}p{4.4cm}}
+\toprule
+\textbf{状态} & \textbf{每参数占用} & \textbf{谁最容易忽略} \\
+\midrule
+fp16 参数 & 2 bytes & 初学者常只看这个 \\
+fp16 梯度 & 2 bytes & 反向之后会短暂同时存在 \\
+fp32 master weight & 4 bytes & 混合精度训练常见 \\
+Adam m / v & 8 bytes & 真正的大头之一 \\
+activation & 依赖 batch 和层数 & 通常随 microbatch 变化 \\
+\bottomrule
+\end{tabular}
+\caption{训练显存的常见账本}
+\end{table}
 
-讲里顺带对比了 PyTorch 和 JAX/TPU 生态。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[font=\small]
+\draw[fill=blue!12] (0,0) rectangle (2.2,0.55) node[midway] {params};
+\draw[fill=blue!22] (0,0.55) rectangle (2.2,1.1) node[midway] {grads};
+\draw[fill=blue!32] (0,1.1) rectangle (2.2,2.2) node[midway] {master};
+\draw[fill=blue!42] (0,2.2) rectangle (2.2,3.3) node[midway] {Adam m/v};
+\node[anchor=west] at (2.55,0.28) {复制到每个 rank};
+\node[anchor=west] at (2.55,0.83) {反向期短暂存在};
+\node[anchor=west] at (2.55,1.65) {混合精度常驻};
+\node[anchor=west] at (2.55,2.75) {最容易吃满显存};
+\end{tikzpicture}
+\caption{DDP 的静态显存构成：看起来是“复制模型”，实际上复制的是整套训练状态}
+\end{figure}
 
-\subsection{PyTorch 的位置}
+\begin{knowledgebox}{为什么激活也不能忘}
+激活的大小通常跟 local batch、sequence length、隐藏宽度成正比。DDP 只是在数据维度上切开 batch，但如果 local batch 仍然不小，激活一样会把显存顶满。
+\end{knowledgebox}
 
-PyTorch 的优势是灵活、透明，适合把底层发生了什么讲清楚。讲里用它来实现 data / tensor / pipeline 并行，就是为了让学生看见原语级别的操作。
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=3.5cm, minimum height=1cm] (p) at (0,0) {参数\\每卡一份};
+\node[draw, rounded corners, fill=blue!18, minimum width=3.5cm, minimum height=1cm] (g) at (4.6,0) {梯度\\每步同步};
+\node[draw, rounded corners, fill=blue!26, minimum width=3.5cm, minimum height=1cm] (o) at (9.2,0) {优化器状态\\通常也要复制};
+\draw[->, thick] (p) -- (g);
+\draw[->, thick] (g) -- (o);
+\end{tikzpicture}
+\caption{DDP 不只是同步梯度，背后还要承担参数和优化器状态的常驻内存}
+\end{figure}
 
-\subsection{JAX 的位置}
+\begin{knowledgebox}{为什么数据并行仍然是默认起点}
+因为它最接近“把单卡训练复制 N 份再同步”的直觉，最容易调试，也最容易验证正确性。很多复杂并行策略最终仍会回到数据并行作为外层骨架。
+\end{knowledgebox}
 
-JAX 的思路更偏声明式：你定义模型，再声明如何切分，编译器去负责剩余部分。这样做的结果是，很多分布式细节可以被隐藏起来，代码也更短。
+\begin{lstlisting}[caption={数据并行的极简理解},label={lst:ddp}]
+x = local_batch
+for W in params:
+    x = gelu(x @ W)
+loss = x.square().mean()
+loss.backward()
+for W in params:
+    dist.all_reduce(W.grad, op=AVG)
+optimizer.step()
+\end{lstlisting}
 
-\begin{importantbox}{JAX 视角的好处}
+\subsection{一个 DDP 的数值化判断}
+
+假设模型总参数量是 $200\,\text{M}$，那么仅静态训练状态大约就是
+\[
+200\,\text{M} \times 16 \text{ bytes} \approx 3.2\,\text{GiB}.
+\]
+如果再加上中间激活、通信缓冲区和框架开销，单卡显存很容易被迅速吃满。这个算式的意义不是精确到最后一位，而是帮助你判断：\textbf{当模型已经接近单卡极限时，DDP 只是把问题复制了多份，并没有把问题消掉。}
+
+\begin{warningbox}{DDP 的一个常见误判}
+很多人会把”每卡只看 local batch”误解成”显存会很省”。实际上 local batch 小了以后，激活会下降，但参数、梯度和 Adam 状态没有因此变少，所以 DDP 的总显存仍然可能很高。
+\end{warningbox}
+
+\subsection{Worked Example：Llama 2 13B 的 DDP 通信开销}
+
+为了建立对真实模型通信代价的直觉，我们用 Llama 2 13B 作为算例：
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{4cm}p{3cm}p{5cm}}
+\toprule
+\textbf{参数} & \textbf{数值} & \textbf{说明} \\
+\midrule
+总参数量 & 13B & 130 亿参数 \\
+参数精度 & fp16 (2 bytes) & 混合精度训练 \\
+梯度大小 & $13\text{B} \times 2 = 26\,\text{GB}$ & 每个参数一个梯度 \\
+GPU 数 & 4 & 同一节点，NVLink 连接 \\
+互联带宽 & 450 GB/s (有效) & NVLink 4.0 单向有效带宽 \\
+\bottomrule
+\end{tabular}
+\caption{Llama 2 13B DDP 通信开销计算的基本参数}
+\end{table}
+
+每步训练需要做一次梯度 all-reduce。Ring all-reduce 下，每个 rank 的通信量为：
+\[
+V_{\text{comm}} = 2 \cdot \frac{p-1}{p} \cdot S = 2 \times \frac{3}{4} \times 26\,\text{GB} = 39\,\text{GB}
+\]
+
+通信耗时估算：
+\[
+T_{\text{comm}} = \frac{V_{\text{comm}}}{B_{\text{eff}}} = \frac{39\,\text{GB}}{450\,\text{GB/s}} \approx 87\,\text{ms}
+\]
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{4.5cm}p{3cm}p{4.5cm}}
+\toprule
+\textbf{项目} & \textbf{估算值} & \textbf{占比分析} \\
+\midrule
+单步前向 + 反向 (A100) & $\sim$200--400 ms & 计算主体 \\
+梯度 all-reduce (NVLink) & $\sim$87 ms & 通信可与反向重叠 \\
+梯度 all-reduce (InfiniBand) & $\sim$975 ms & 跨节点会严重拖慢训练 \\
+梯度 all-reduce (100G Ethernet) & $\sim$3900 ms & 基本不可用 \\
+\bottomrule
+\end{tabular}
+\caption{Llama 2 13B 在不同互联下的通信开销对比}
+\end{table}
+
+\begin{importantbox}{DDP 的通信可以与计算重叠}
+PyTorch DDP 的一个关键优化是：不必等所有层的反向都结束再做 all-reduce。当最后一层的梯度算完，就可以立即开始该层的 all-reduce，同时继续计算倒数第二层的梯度。这种 \textbf{bucket gradient all-reduce} 让通信和计算在时间上重叠，实际的额外延迟远小于 87 ms。但这要求通信带宽足够高——如果通信比计算还慢，重叠也无法完全隐藏延迟。
+\end{importantbox}
+
+\begin{knowledgebox}{DDP 的显存账单}
+Llama 2 13B 在 DDP 下，每张卡需要存储：
+\begin{itemize}
+    \item fp16 参数：$13\text{B} \times 2 = 26\,\text{GB}$
+    \item fp16 梯度：$26\,\text{GB}$
+    \item fp32 master 权重：$13\text{B} \times 4 = 52\,\text{GB}$
+    \item Adam 一阶/二阶动量：$13\text{B} \times 8 = 104\,\text{GB}$
+\end{itemize}
+仅静态状态就需要 $\sim$208 GB，远超单张 A100 (80 GB) 或 H100 (80 GB) 的显存。这就是为什么 13B 及以上模型几乎不可能用纯 DDP 训练——必须引入 ZeRO 或模型并行。
+\end{knowledgebox}
+
+\section{张量并行：按宽度切分}
+
+数据并行解决的是“模型放得下吗”，张量并行解决的是更难的问题：\textbf{如果单层矩阵都太大，怎么把一层内部再切开。} 它的思路是切 hidden dimension，让每个 rank 只持有一部分参数和一部分中间激活。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=orange!10, minimum width=3cm, minimum height=0.9cm] (full) at (0,0) {完整层\\$W \in \mathbb{R}^{d \times d}$};
+\node[draw, rounded corners, fill=orange!18, minimum width=3cm, minimum height=0.9cm] (part1) at (4,0) {rank 0\\$W_0$};
+\node[draw, rounded corners, fill=orange!18, minimum width=3cm, minimum height=0.9cm] (part2) at (8,0) {rank 1\\$W_1$};
+\node[draw, rounded corners, fill=orange!18, minimum width=3cm, minimum height=0.9cm] (part3) at (12,0) {rank 2\\$W_2$};
+\draw[->, thick] (full) -- (part1);
+\draw[->, thick] (full) -- (part2);
+\draw[->, thick] (full) -- (part3);
+\end{tikzpicture}
+\caption{张量并行的核心：把一层里的宽度切成多份}
+\end{figure}
+
+\subsection{工作方式}
+
+在 lecture 的简化 MLP 里，每层都是矩阵乘法加非线性。张量并行的做法是：每个 rank 只算自己的参数切片，算完之后再把激活拼回完整形状。于是，\textbf{参数省了，通信却变多了}。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!10, minimum width=3.1cm, minimum height=0.9cm] (local) at (0,0) {本地切片\\$x @ W_i$};
+\node[draw, rounded corners, fill=blue!18, minimum width=3.1cm, minimum height=0.9cm] (ag) at (4.2,0) {all-gather\\收集所有切片};
+\node[draw, rounded corners, fill=blue!26, minimum width=3.1cm, minimum height=0.9cm] (cat) at (8.4,0) {concat\\恢复完整激活};
+\node[draw, rounded corners, fill=blue!34, minimum width=3.1cm, minimum height=0.9cm] (next) at (12.6,0) {下一层\\继续切分};
+\draw[->, thick] (local) -- (ag);
+\draw[->, thick] (ag) -- (cat);
+\draw[->, thick] (cat) -- (next);
+\end{tikzpicture}
+\caption{张量并行的前向过程：每层都需要把部分结果重新拼回去}
+\end{figure}
+
+\begin{importantbox}{为什么张量并行要求更快的互联}
+因为它往往是“每层都要通信”。如果互联慢，模型虽然被切开了，但中间激活会反复来回搬，最后把计算收益全吃掉。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=yellow!10, minimum width=3.6cm, minimum height=0.9cm] (mem) at (0,0) {每卡参数更少\\更容易放下大模型};
+\node[draw, rounded corners, fill=yellow!16, minimum width=3.6cm, minimum height=0.9cm] (comm) at (4.8,0) {每层都要 all-gather\\通信频率很高};
+\node[draw, rounded corners, fill=yellow!22, minimum width=3.6cm, minimum height=0.9cm] (hw) at (9.6,0) {需要高带宽互联\\否则通信拖死训练};
+\end{tikzpicture}
+\caption{张量并行的三角权衡：更省显存，但更吃互联}
+\end{figure}
+
+\begin{warningbox}{张量并行的脆弱点}
+如果 interconnect 不够快，张量并行会比数据并行更容易被通信拖垮。它适合”单层就已经很大”的模型，但不适合拿来粗暴替代所有其他并行策略。
+\end{warningbox}
+
+\begin{warningbox}{张量并行要求低延迟互联——只适合 NVLink 范围}
+张量并行的通信发生在\textbf{每一层}的前向和反向中，而不是像 DDP 那样每步只做一次。对于一个 40 层的 transformer，张量并行意味着每步至少 $40 \times 2 = 80$ 次 all-gather 或 reduce-scatter（前向 + 反向各一次）。如果互联延迟从 NVLink 的 $\sim$1 $\mu$s 变为 InfiniBand 的 $\sim$5 $\mu$s，80 次调用的累积延迟从 80 $\mu$s 变为 400 $\mu$s——看起来不大，但加上带宽瓶颈，影响会成倍放大。
+
+\textbf{实践准则}：张量并行只在 NVLink 可达的 GPU 之间使用（通常是同一节点的 8 张卡）。跨节点的并行需求应由数据并行或流水线并行承担。
+\end{warningbox}
+
+\subsection{张量并行 vs 数据并行：通信量对比}
+
+把 TP 和 DP 的通信开销放在同一个坐标系里看，能更直观地理解两者的权衡。假设模型有 $L$ 层，每层参数大小为 $W$，激活大小为 $A$：
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.8cm}p{3.5cm}p{3.5cm}p{3.5cm}}
+\toprule
+\textbf{维度} & \textbf{数据并行 (DDP)} & \textbf{张量并行 (TP)} & \textbf{比较} \\
+\midrule
+通信频率 & 每步 1 次 & 每层 2 次（前向+反向） & TP 频率高 $\sim 2L$ 倍 \\
+每次通信量 & $2 \cdot \frac{p-1}{p} \cdot LW$ & $2 \cdot \frac{p-1}{p} \cdot A$ & 取决于 $LW$ vs $A$ \\
+总通信量/步 & $2 \cdot \frac{p-1}{p} \cdot LW$ & $2L \cdot 2 \cdot \frac{p-1}{p} \cdot A$ & DP 通信与参数成正比 \\
+通信类型 & all-reduce（梯度） & all-gather + reduce-scatter & TP 更敏感于延迟 \\
+互联要求 & InfiniBand 可接受 & 必须 NVLink & TP 对硬件更挑剔 \\
+\bottomrule
+\end{tabular}
+}
+\caption{数据并行 vs 张量并行通信量对比}
+\end{table}
+
+\begin{knowledgebox}{一个具体的数字对比}
+以 Llama 2 13B（40 层，$d=5120$，$B=128$，$p=4$，fp16）为例：
+\begin{itemize}
+    \item \textbf{DDP 每步总通信量}：$2 \times \frac{3}{4} \times 26\,\text{GB} = 39\,\text{GB}$，但只需 1 次 all-reduce。
+    \item \textbf{TP 每步总通信量}：每层前向 all-gather 激活 $\approx 128 \times 5120 \times 2 = 1.25\,\text{MB}$，40 层前向+反向共 $\approx 80 \times 1.25\,\text{MB} \times \frac{3}{4} \times 2 \approx 150\,\text{MB}$。
+    \item TP 的总字节数远小于 DDP，但它需要 80 次独立的集合操作，每次都有启动延迟。在 NVLink 上这不是问题，在跨节点互联上就会成为致命瓶颈。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{为什么张量并行的反向传播更难}
+
+前向里，我们还能把一层的输出拆开并在必要时拼回去；但在反向里，梯度流向会反过来，意味着你常常既要知道“每个 shard 自己贡献了什么”，也要知道“所有 shard 一起到底形成了什么”。这就是为什么张量并行经常会配合 \texttt{all\_gather}、\texttt{reduce\_scatter} 或者等价的分片同步原语。
+
+\begin{importantbox}{张量并行的关键不是切片，而是配套的梯度路径}
+只把矩阵切开还不够。前向、反向、参数更新必须共享同一套分片约定，否则每个 rank 看到的只是局部真相，拼不回正确的整体梯度。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=orange!10, minimum width=3.4cm, minimum height=0.9cm] (fw) at (0,0) {前向\\局部矩阵乘};
+\node[draw, rounded corners, fill=orange!18, minimum width=3.4cm, minimum height=0.9cm] (sync) at (4.5,0) {同步\\拼接或分片归约};
+\node[draw, rounded corners, fill=orange!26, minimum width=3.4cm, minimum height=0.9cm] (bw) at (9.0,0) {反向\\梯度沿 shard 回流};
+\draw[->, thick] (fw) -- (sync);
+\draw[->, thick] (sync) -- (bw);
+\end{tikzpicture}
+\caption{张量并行的前后向必须配套设计，否则局部计算无法恢复全局正确性}
+\end{figure}
+
+\begin{lstlisting}[caption={张量并行的极简理解},label={lst:tp}]
+x = full_batch
+for W_local in shard_of_each_layer:
+    y_local = gelu(x @ W_local)
+    all_parts = all_gather(y_local)
+    x = cat(all_parts, dim=-1)
+\end{lstlisting}
+
+\begin{knowledgebox}{张量并行的核心直觉}
+它不是把模型“切碎”就结束，而是每一层之后都要恢复形状。换句话说，张量并行把压力从“显存”转移到了“通信链路”。
+\end{knowledgebox}
+
+\subsection{一个张量并行的数值化例子}
+
+把上面的直觉换成数字会更清楚。假设输入激活大小是 $B \times d$，其中 batch $B=128$，hidden width $d=1024$，采用 fp16，那么单个激活张量的大小大约是
+\[
+128 \times 1024 \times 2 \text{ bytes} = 256 \text{ KiB}.
+\]
+如果把 hidden width 切成 4 份，那么每个 rank 先算自己的 $\frac{1}{4}$ 激活，再通过 all-gather 恢复完整张量。按 ring 近似，每个 rank 一层的通信量大约是
+\[
+2\frac{p-1}{p}A = 1.5A \approx 384 \text{ KiB},
+\]
+其中 $A$ 是完整激活大小。这个数看上去不大，但注意它是 \textbf{每层都要发生}。
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.1cm}p{3.8cm}p{4.2cm}}
+\toprule
+\textbf{量} & \textbf{数值例子} & \textbf{解释} \\
+\midrule
+batch $B$ & 128 & 讲里常见的小批量起点 \\
+hidden $d$ & 1024 & 一个不算夸张的层宽 \\
+激活大小 $A$ & 256 KiB & 单层完整输出 \\
+4 卡 all-gather 代价 & 384 KiB / layer / rank & 频繁发生，所以要快链路 \\
+\bottomrule
+\end{tabular}
+\caption{张量并行的数字直觉}
+\end{table}
+
+\begin{knowledgebox}{为什么张量并行更像“层内系统优化”}
+因为它让通信频率提高到“按层计”，于是单层算得再快，也必须保证通信不会把收益抵消。这和 DDP “按步同步” 的节奏完全不同。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=purple!10, minimum width=3.8cm, minimum height=0.9cm] (shard) at (0,0) {shard width\\切 hidden dimension};
+\node[draw, rounded corners, fill=purple!18, minimum width=3.8cm, minimum height=0.9cm] (comm) at (5.0,0) {per-layer comm\\每层都交换激活};
+\node[draw, rounded corners, fill=purple!26, minimum width=3.8cm, minimum height=0.9cm] (need) at (10.0,0) {fast fabric\\需要高速互联};
+\end{tikzpicture}
+\caption{张量并行的三步逻辑：切宽度、传激活、靠高速互联兜底}
+\end{figure}
+
+\section{流水线并行：按深度切分}
+
+流水线并行的思路是：\textbf{模型太深时，把层切到不同 rank 上。} 这样每个 rank 只负责一段层堆栈，前一个 rank 算完就把激活传给下一个 rank。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=2.7cm, minimum height=0.9cm] (s0) at (0,0) {stage 0\\layers 1--2};
+\node[draw, rounded corners, fill=green!16, minimum width=2.7cm, minimum height=0.9cm] (s1) at (4.2,0) {stage 1\\layers 3--4};
+\node[draw, rounded corners, fill=green!22, minimum width=2.7cm, minimum height=0.9cm] (s2) at (8.4,0) {stage 2\\layers 5--6};
+\node[draw, rounded corners, fill=green!28, minimum width=2.7cm, minimum height=0.9cm] (s3) at (12.6,0) {stage 3\\layers 7--8};
+\draw[->, thick] (s0) -- (s1);
+\draw[->, thick] (s1) -- (s2);
+\draw[->, thick] (s2) -- (s3);
+\end{tikzpicture}
+\caption{流水线并行的切分方式：层分到不同 stage，激活在 stage 之间流动}
+\end{figure}
+
+\subsection{为什么要 microbatch}
+
+如果一个大 batch 整体往前推进，后面的 stage 会空等前面的 stage。这种空闲就是 pipeline bubble。解决方法是把 batch 切成 microbatches，让不同 stage 同时处理不同 microbatch，从而提高利用率。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small}]
+\draw[->] (0,0) -- (11,0) node[right]{time};
+\draw[->] (0,0) -- (0,4.5) node[above]{stage};
+\foreach \x in {1,2,3,4}{
+    \draw[fill=blue!10] (\x,0.5) rectangle ++(0.8,0.8);
+    \draw[fill=blue!10] (\x+1,1.5) rectangle ++(0.8,0.8);
+    \draw[fill=blue!10] (\x+2,2.5) rectangle ++(0.8,0.8);
+}
+\node at (8.5,3.9) {microbatches fill the pipe};
+\end{tikzpicture}
+\caption{microbatch 让流水线不再空转}
+\end{figure}
+
+\begin{knowledgebox}{bubble 的直觉}
+stage 越多，启动和收尾的空档越明显。microbatch 越少，空档越浪费；microbatch 越多，利用率越高，但调度也更复杂。
+\end{knowledgebox}
+
+\subsection{流水线为什么总有空档}
+
+流水线并行的难点不是“能不能传过去”，而是“什么时候能持续传”。当最前面的 stage 刚开始工作时，后面的 stage 还没拿到激活；当最后的 stage 已经快结束时，前面的 stage 也没法继续喂新数据。这种首尾空档是流水线天然会有的。
+
+\begin{importantbox}{microbatch 的作用}
+microbatch 本质上是在增加流水线里的“在途任务数”。在途任务越多，stage 的空转越少；但 microbatch 太碎又会增加调度次数和通信次数，所以这里也不是越多越好。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!10, minimum width=3.5cm, minimum height=0.9cm] (u1) at (0,0) {前几步\\fill pipeline};
+\node[draw, rounded corners, fill=green!18, minimum width=3.5cm, minimum height=0.9cm] (u2) at (4.8,0) {中间阶段\\稳定流动};
+\node[draw, rounded corners, fill=green!26, minimum width=3.5cm, minimum height=0.9cm] (u3) at (9.6,0) {最后几步\\drain pipeline};
+\draw[->, thick] (u1) -- (u2);
+\draw[->, thick] (u2) -- (u3);
+\end{tikzpicture}
+\caption{流水线的三个时期：灌入、稳定、排空}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=red!10, minimum width=3.7cm, minimum height=0.9cm] (bubble1) at (0,0) {没有 microbatch\\stage 之间会空等};
+\node[draw, rounded corners, fill=red!18, minimum width=3.7cm, minimum height=0.9cm] (bubble2) at (4.9,0) {microbatch 增加\\空档被填平};
+\node[draw, rounded corners, fill=red!26, minimum width=3.7cm, minimum height=0.9cm] (bubble3) at (9.8,0) {调度更复杂\\需要更多 bookkeeping};
+\end{tikzpicture}
+\caption{pipeline bubble 的本质：算得太慢不是唯一问题，等得太久也会浪费}
+\end{figure}
+
+\subsection{点对点通信}
+
+流水线并行和前两种策略的一个重要差别是，它更依赖 \texttt{send} / \texttt{recv} 这类点对点通信。rank 之间只传激活，而不是每步都做全局归约。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=purple!10, minimum width=3.6cm, minimum height=0.9cm] (recv) at (0,0) {recv from prev stage};
+\node[draw, rounded corners, fill=purple!18, minimum width=3.6cm, minimum height=0.9cm] (comp) at (4.8,0) {local layers\\compute};
+\node[draw, rounded corners, fill=purple!26, minimum width=3.6cm, minimum height=0.9cm] (send) at (9.6,0) {send to next stage};
+\draw[->, thick] (recv) -- (comp);
+\draw[->, thick] (comp) -- (send);
+\end{tikzpicture}
+\caption{流水线并行的 rank 内循环：先接收，再计算，再发送}
+\end{figure}
+
+\begin{warningbox}{流水线并行的常见问题}
+\begin{itemize}
+    \item stage 负载不均会让最慢的 stage 决定整体速度。
+    \item microbatch 太少，bubble 很大。
+    \item 计算和通信若不能 overlap，效率会明显掉下来。
+\end{itemize}
+\end{warningbox}
+
+\begin{lstlisting}[caption={流水线并行的极简理解},label={lst:pp}]
+for microbatch in chunks(batch):
+    if rank > 0:
+        recv(x)
+    for W in local_layers:
+        x = gelu(x @ W)
+    if rank + 1 < world_size:
+        send(x)
+\end{lstlisting}
+
+\begin{knowledgebox}{流水线并行的核心}
+它把“深模型的一串层”拆成几个 stage，然后让激活像传送带一样往前走。难点不在层本身，而在怎么把 stage 排得尽量均衡。
+\end{knowledgebox}
+
+\subsection{流水线效率的近似公式}
+
+流水线并行不是“把层切开”就自动高效。它的效率常常可以用一个非常粗的近似来理解：
+\[
+\eta_{\text{pipe}} \approx \frac{M}{M + S - 1},
+\]
+其中 $M$ 是 microbatch 数，$S$ 是 stage 数。这个式子直接告诉你：\textbf{stage 越多，空档越大；microbatch 越少，利用率越低。}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{2.3cm}p{2.5cm}p{3.6cm}p{4cm}}
+\toprule
+\textbf{stage 数 $S$} & \textbf{microbatch 数 $M$} & \textbf{近似效率} & \textbf{直觉} \\
+\midrule
+4 & 4 & $4/7 \approx 57\%$ & 空档明显 \\
+4 & 8 & $8/11 \approx 73\%$ & 已开始像流水线 \\
+4 & 16 & $16/19 \approx 84\%$ & 利用率较高 \\
+8 & 8 & $8/15 \approx 53\%$ & stage 多时更容易浪费 \\
+\bottomrule
+\end{tabular}
+\caption{microbatch 数与流水线效率的关系}
+\end{table}
+
+\begin{warningbox}{microbatch 不是越碎越好}
+microbatch 越多，pipeline bubble 越小，但调度、通信和 kernel launch 次数都会上升。实际训练里要在”利用率”和”额外开销”之间找平衡。
+\end{warningbox}
+
+\subsection{Worked Example：流水线 bubble 开销的精确计算}
+
+用一组具体数字来感受 bubble 的代价。假设每个 microbatch 通过一个 stage 的计算时间为 $t_f$（前向）和 $t_b$（反向），且 $t_b \approx 2 t_f$（反向通常比前向慢 $\sim$2 倍）。
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.8cm}p{2.5cm}p{2.5cm}p{3.5cm}}
+\toprule
+\textbf{配置} & \textbf{bubble 时间} & \textbf{有效计算时间} & \textbf{bubble 占比} \\
+\midrule
+$S=4$, $M=4$, $t_f=10$ms & $(S-1) \cdot t_f = 30$ms & $M \cdot (t_f + t_b) = 120$ms & $30/150 = 20\%$ \\
+$S=4$, $M=8$ & $30$ms & $240$ms & $30/270 = 11\%$ \\
+$S=4$, $M=16$ & $30$ms & $480$ms & $30/510 = 5.9\%$ \\
+$S=4$, $M=32$ & $30$ms & $960$ms & $30/990 = 3.0\%$ \\
+$S=8$, $M=8$ & $70$ms & $240$ms & $70/310 = 22.6\%$ \\
+$S=8$, $M=32$ & $70$ms & $960$ms & $70/1030 = 6.8\%$ \\
+\bottomrule
+\end{tabular}
+\caption{不同 stage 数和 microbatch 数下的 bubble 开销。$t_f = 10$ ms, $t_b = 20$ ms。}
+\end{table}
+
+更一般的 bubble 占比公式为：
+$$
+\text{bubble ratio} = \frac{(S - 1) \cdot t_f}{M \cdot (t_f + t_b) + (S-1) \cdot t_f} \approx \frac{S-1}{3M + S - 1}
+$$
+其中假设 $t_b \approx 2t_f$。要把 bubble 控制在 5\% 以内，需要 $M \geq \frac{19(S-1)}{3}$。对 $S=4$，这意味着 $M \geq 19$；对 $S=8$，需要 $M \geq 44$。
+
+\begin{warningbox}{流水线并行的 Bubble 问题与 1F1B 调度}
+上面的分析假设的是最朴素的 GPipe 调度——先做完所有 microbatch 的前向，再做所有 microbatch 的反向。这种调度有两个问题：
 \begin{enumerate}
-    \item 更高层的 sharding 描述；
-    \item 编译器自动生成通信和调度；
-    \item 对大规模 TPU 集群更友好。
+    \item \textbf{Bubble 大}：fill 和 drain 阶段都有空闲 stage。
+    \item \textbf{激活内存高}：所有 microbatch 的中间激活必须同时保留，直到反向计算。
+\end{enumerate}
+
+\textbf{1F1B}（One Forward One Backward）调度通过交替执行前向和反向来缓解这两个问题：
+\begin{itemize}
+    \item 在 steady state 阶段，每个 stage 交替做一次前向、一次反向。
+    \item 激活内存从 $O(M)$ 降低到 $O(S)$——每个 stage 只需保留 $S$ 个 microbatch 的激活。
+    \item Bubble 比例与 GPipe 相同（$\frac{S-1}{M+S-1}$），但内存效率大幅提升。
+\end{itemize}
+更进一步的调度如 \textbf{interleaved 1F1B}（Megatron-LM 使用）可以把 bubble 再减半，代价是每个 rank 需要持有多段不连续的层。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[font=\small]
+\draw[->] (0,0) -- (10.5,0) node[right]{time};
+\draw[->] (0,0) -- (0,4.4) node[above]{stage};
+\foreach \x/\c in {1/blue!12,2/blue!18,3/blue!24,4/blue!30,5/blue!36,6/blue!42}{
+    \draw[fill=\c] (\x,0.5) rectangle ++(0.7,0.55);
+    \draw[fill=\c] (\x+1,1.35) rectangle ++(0.7,0.55);
+    \draw[fill=\c] (\x+2,2.2) rectangle ++(0.7,0.55);
+    \draw[fill=\c] (\x+3,3.05) rectangle ++(0.7,0.55);
+}
+\node[anchor=west] at (7.9,3.9) {中间阶段最忙};
+\node[anchor=west] at (7.9,3.5) {首尾阶段有灌入/排空空档};
+\end{tikzpicture}
+\caption{流水线调度的典型形态：不是每个 stage 都能同时满负载}
+\end{figure}
+
+\subsection{stage 负载不均会怎样}
+
+如果某个 stage 远重于其他 stage，那么整条 pipeline 都会被拖慢。换句话说，流水线的吞吐量大致由最慢的 stage 决定，而不是由平均 stage 决定。这也是为什么切 stage 时不能只按层数平均，还要看每层到底有多少计算量。
+
+\begin{importantbox}{流水线切分的核心准则}
+切 stage 时，不是“每个 rank 分到一样多的层”就够了，而是要尽量让每个 stage 的计算时间接近。否则瓶颈 stage 会把整条流水线的效率压低。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=green!12, minimum width=2.6cm, minimum height=0.9cm] (a) at (0,0) {stage 0\\轻};
+\node[draw, rounded corners, fill=green!24, minimum width=3.5cm, minimum height=0.9cm] (b) at (4.0,0) {stage 1\\重};
+\node[draw, rounded corners, fill=green!12, minimum width=2.6cm, minimum height=0.9cm] (c) at (8.6,0) {stage 2\\轻};
+\node[draw, rounded corners, fill=green!12, minimum width=2.6cm, minimum height=0.9cm] (d) at (12.0,0) {stage 3\\轻};
+\draw[->, thick] (a) -- (b);
+\draw[->, thick] (b) -- (c);
+\draw[->, thick] (c) -- (d);
+\end{tikzpicture}
+\caption{stage 不均衡会把吞吐量拉到最重的那一段上}
+\end{figure}
+
+\section{如何选择并行策略}
+
+\subsection{三种策略的直观对比}
+
+现在可以把三种并行方式放在一起看：
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.6cm}p{3.3cm}p{3.4cm}p{3.4cm}p{3.2cm}}
+\toprule
+\textbf{策略} & \textbf{切分对象} & \textbf{主要通信} & \textbf{主要优点} & \textbf{主要缺点} \\
+\midrule
+数据并行 & batch & 每步梯度 all-reduce & 最简单、最稳 & 模型要能单卡放下 \\
+张量并行 & hidden width & 每层 all-gather / reduce-scatter & 能切更大的层 & 互联要求高 \\
+流水线并行 & depth / layers & stage 间 send / recv & 深模型更自然 & bubble 与调度复杂 \\
+\bottomrule
+\end{tabular}
+}
+\caption{三种并行方式的核心差别}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=blue!8, minimum width=3.5cm, minimum height=0.9cm] (data) at (0,0) {数据并行\\切 batch};
+\node[draw, rounded corners, fill=orange!14, minimum width=3.5cm, minimum height=0.9cm] (tensor) at (5,0) {张量并行\\切 width};
+\node[draw, rounded corners, fill=green!14, minimum width=3.5cm, minimum height=0.9cm] (pipe) at (10,0) {流水线并行\\切 depth};
+\draw[->, thick] (data) -- (tensor);
+\draw[->, thick] (tensor) -- (pipe);
+\end{tikzpicture}
+\caption{三种并行策略分别对应 batch、width、depth 三个维度}
+\end{figure}
+
+\begin{knowledgebox}{为什么经常要组合使用}
+单一策略很少同时解决“显存不够、单层太大、总层数太深”这三个问题。现实训练通常会把数据并行放在外层，再叠加张量并行或流水线并行。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small, align=center}]
+\node[draw, rounded corners, fill=yellow!10, minimum width=3.8cm, minimum height=1cm] (dp) at (0,0) {外层 DDP\\复制模型、切数据};
+\node[draw, rounded corners, fill=yellow!18, minimum width=3.8cm, minimum height=1cm] (tp) at (5,0) {内层 TP\\切宽度};
+\node[draw, rounded corners, fill=yellow!26, minimum width=3.8cm, minimum height=1cm] (pp) at (10,0) {内层 PP\\切深度};
+\draw[->, thick] (dp) -- (tp);
+\draw[->, thick] (tp) -- (pp);
+\end{tikzpicture}
+\caption{常见的组合思路：外层数据并行，内层张量并行或流水线并行}
+\end{figure}
+
+\begin{warningbox}{没有免费午餐}
+切得越细，单卡显存压力越小，但通信和调度复杂度越高。分布式训练不是”让模型免费变大”，而是”把复杂度从显存转移到系统设计上”。
+\end{warningbox}
+
+\subsection{三种并行策略的详细对比}
+
+下面这张表从更多维度对比三种核心并行策略，帮助建立完整的决策框架：
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.5cm}p{2.5cm}p{2.8cm}p{2.5cm}p{2.5cm}p{2.8cm}}
+\toprule
+\textbf{维度} & \textbf{数据并行} & \textbf{张量并行} & \textbf{流水线并行} \\
+\midrule
+切分对象 & batch 维度 & hidden width 维度 & depth（层）维度 \\
+每卡存储 & 完整模型+优化器 & $\frac{1}{p}$ 的参数 & $\frac{1}{p}$ 的层 \\
+通信原语 & all-reduce & all-gather, reduce-scatter & send / recv \\
+通信频率 & 每步 1 次 & 每层 2 次 & 每 stage 边界 1 次 \\
+通信量/步 & $O(\text{params})$ & $O(L \times \text{activation})$ & $O(\text{activation})$ \\
+互联要求 & InfiniBand 够用 & 必须 NVLink & 中等（点对点） \\
+典型 GPU 范围 & 跨节点可用 & 同节点 2--8 卡 & 跨节点可用 \\
+实现复杂度 & 低（DDP 一行代码） & 中高 & 高（调度复杂） \\
+主要开销 & 显存冗余 & 通信延迟 & pipeline bubble \\
+扩展性瓶颈 & 模型必须放进单卡 & 互联带宽 & stage 负载均衡 \\
+\bottomrule
+\end{tabular}
+}
+\caption{三种并行策略的多维度对比。$L$ 为层数，$p$ 为并行度。}
+\end{table}
+
+\subsection{一个实用的决策表}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3.1cm}p{3.8cm}p{4.5cm}}
+\toprule
+\textbf{如果你遇到...} & \textbf{优先考虑} & \textbf{原因} \\
+\midrule
+模型能放下，但 batch 很大 & 数据并行 & 最少改动、最容易扩展 \\
+单层矩阵已经太大 & 张量并行 & 先把层宽切开 \\
+模型很深，stage 很重 & 流水线并行 & 让层分布到不同设备 \\
+三者都很紧张 & 组合方案 & 现实训练通常只能组合解决 \\
+\bottomrule
+\end{tabular}
+\caption{选择并行策略的实用起点}
+\end{table}
+
+\begin{importantbox}{工程上最重要的一句}
+并行策略不是先选“最酷”的，而是先看瓶颈到底在哪里：是模型太大、单层太宽，还是通信太慢。瓶颈不同，切法就不同。
+\end{importantbox}
+
+\begin{knowledgebox}{从教学角度看 MLP 的价值}
+讲里用深 MLP 作为例子，不是因为 MLP 最重要，而是因为它最容易看清楚本质：参数如何复制、数据如何切、激活如何走、梯度如何同步、通信在哪里发生。把这套逻辑看懂，后面再看 transformer 也会更清楚。
+\end{knowledgebox}
+
+\section{一个四卡算例：同一模型的三种切法}
+
+为了把前面的公式落到实处，考虑一个玩具但够用的例子：一个 $12$ 层的 MLP，隐藏宽度 $d=4096$，batch size $B=128$，使用 fp16 训练，设备数 $p=4$。这个例子不是为了模仿某个真实模型，而是为了把 DDP、TP、PP 的代价放在同一个坐标系里。
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.1cm}p{3.7cm}p{4.2cm}}
+\toprule
+\textbf{设定} & \textbf{数值} & \textbf{说明} \\
+\midrule
+层数 & 12 & 便于做 pipeline 划分 \\
+隐藏宽度 & 4096 & 足够大，能看出通信成本 \\
+batch size & 128 & 不算极端的大 batch \\
+GPU 数 & 4 & 便于直接比较三种切法 \\
+\bottomrule
+\end{tabular}
+\caption{四卡算例的基本设定}
+\end{table}
+
+在这个设定下，单层权重矩阵大约有 $4096\times4096 \approx 16.8$M 参数，也就是 fp16 下约 $32$ MiB。12 层总参数量接近 $201$M，静态训练状态在 DDP 里大约是
+\[
+201\text{M} \times 16 \text{ bytes} \approx 3.2\text{ GiB},
+\]
+还没算激活和缓冲区。另一方面，一个 batch 的激活大小约为
+\[
+128 \times 4096 \times 2 \text{ bytes} = 1\text{ MiB}.
+\]
+这意味着：\textbf{DDP 的主要痛点是状态复制，TP 的主要痛点是按层通信，PP 的主要痛点是 bubble。}
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.7cm}p{3.5cm}p{3.9cm}p{3.3cm}p{3.3cm}}
+\toprule
+\textbf{方案} & \textbf{单卡持有内容} & \textbf{每步/每层通信} & \textbf{第一感觉} & \textbf{典型风险} \\
+\midrule
+DDP & 完整模型 + 完整 optimizer state & 每步一次梯度 all-reduce & 最容易跑通 & 状态太大，显存压力高 \\
+TP & 约 $\frac{1}{4}$ 的宽度切片 & 每层 all-gather / reduce-scatter & 模型能切更细 & 互联带宽不够会拖死 \\
+PP & 约 $\frac{1}{4}$ 的层堆栈 & stage 间 send / recv & stage 化更自然 & bubble 和负载不均 \\
+\bottomrule
+\end{tabular}
+}
+\caption{同一个模型在三种切法下的直观代价}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[font=\small, align=center]
+\node[draw, rounded corners, fill=blue!10, minimum width=2.7cm, minimum height=1cm] (a) at (0,0) {DDP\\复制状态};
+\node[draw, rounded corners, fill=orange!14, minimum width=2.7cm, minimum height=1cm] (b) at (4.1,0) {TP\\切宽度};
+\node[draw, rounded corners, fill=green!14, minimum width=2.7cm, minimum height=1cm] (c) at (8.2,0) {PP\\切深度};
+\draw[->, thick] (a) -- node[above]{更省改动} (b);
+\draw[->, thick] (b) -- node[above]{更吃链路} (c);
+\end{tikzpicture}
+\caption{同一模型在不同切分维度上的权衡}
+\end{figure}
+
+\begin{knowledgebox}{这个算例想让你看到什么}
+同一个模型，换一种切法，瓶颈位置就完全变了。DDP 的关键是状态大小，TP 的关键是每层通信，PP 的关键是调度空档。并行策略不是”哪个更高级”，而是”哪个瓶颈更像你的真实约束”。
+\end{knowledgebox}
+
+\section{实际系统中的并行策略}
+
+\subsection{ZeRO：在数据并行中消除冗余}
+
+DDP 的最大问题是每张卡都完整复制了参数、梯度和优化器状态。微软的 \textbf{ZeRO}（Zero Redundancy Optimizer）通过分片来消除这种冗余，分为三个递进的阶段：
+
+\begin{knowledgebox}{ZeRO 的三个阶段}
+\begin{itemize}
+    \item \textbf{ZeRO-1}（优化器状态分片）：每个 rank 只保存 $\frac{1}{p}$ 的 Adam 状态（$m$ 和 $v$）。训练步骤中，每个 rank 只更新自己负责的那部分参数，然后通过 all-gather 广播更新后的参数。\textbf{显存节省}：以 13B 模型为例，Adam 状态从 104 GB/卡降到 26 GB/卡（4 卡）。
+    \item \textbf{ZeRO-2}（+ 梯度分片）：在 ZeRO-1 基础上，梯度也只保留 $\frac{1}{p}$。反向传播时用 reduce-scatter 代替 all-reduce——每个 rank 只保留自己负责参数的归约梯度。\textbf{额外节省}：梯度从 26 GB/卡降到 6.5 GB/卡。
+    \item \textbf{ZeRO-3}（+ 参数分片）：连参数本身也分片。前向和反向需要完整参数时，通过 all-gather 临时收集，用完立即释放。\textbf{极致节省}：每卡只需 $\frac{1}{p}$ 的全部训练状态。
+\end{itemize}
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{2.2cm}p{3cm}p{3cm}p{3.8cm}}
+\toprule
+\textbf{阶段} & \textbf{分片内容} & \textbf{每卡显存} & \textbf{额外通信} \\
+\midrule
+DDP（基线） & 无分片 & $16P$ bytes & 1 次 all-reduce \\
+ZeRO-1 & 优化器状态 & $4P + \frac{12P}{p}$ bytes & 1 次 all-gather（参数） \\
+ZeRO-2 & + 梯度 & $2P + \frac{14P}{p}$ bytes & reduce-scatter + all-gather \\
+ZeRO-3 & + 参数 & $\frac{16P}{p}$ bytes & 前向/反向各 1 次 all-gather \\
+\bottomrule
+\end{tabular}
+\caption{ZeRO 各阶段的显存与通信权衡。$P$ 为参数量，$p$ 为 GPU 数。}
+\end{table}
+
+\begin{warningbox}{ZeRO-3 的隐含代价}
+ZeRO-3 虽然把显存降到最低，但它要求在前向和反向的每一层都做 all-gather 来收集完整参数——这和张量并行的通信频率类似。如果跨节点使用 ZeRO-3，通信开销可能反而比 ZeRO-2 + 流水线并行更大。实践中，ZeRO-2 通常是性价比最高的选择。
+\end{warningbox}
+
+\subsection{实际训练框架的并行策略对比}
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{3.0cm}p{3.0cm}p{3.0cm}p{3.0cm}p{3.0cm}}
+\toprule
+\textbf{维度} & \textbf{Megatron-LM} & \textbf{DeepSpeed ZeRO} & \textbf{PyTorch FSDP} \\
+\midrule
+核心思路 & 3D 并行 & 数据并行 + 状态分片 & 类 ZeRO-3 的参数分片 \\
+张量并行 & 原生支持 & 需配合 Megatron & 不直接支持 \\
+流水线并行 & 原生 (1F1B) & ZeRO + PP & 不直接支持 \\
+数据并行 & 原生 & ZeRO-1/2/3 & 原生（分片式） \\
+典型规模 & 100B+ 参数 & 10B--1T 参数 & 1B--100B 参数 \\
+代码侵入性 & 高（需改模型） & 中（包装优化器） & 中（包装模块） \\
+适用场景 & 超大规模预训练 & 灵活部署 & PyTorch 生态内 \\
+\bottomrule
+\end{tabular}
+}
+\caption{主流分布式训练框架对比}
+\end{table}
+
+\begin{knowledgebox}{Megatron-LM 的 3D 并行}
+Megatron-LM 是 NVIDIA 开发的大模型训练框架，它同时使用三种并行：
+\begin{itemize}
+    \item \textbf{张量并行}（TP）：在同一节点的 8 张 NVLink 连接的 GPU 间切分层宽。
+    \item \textbf{流水线并行}（PP）：跨节点切分层深度，用 interleaved 1F1B 调度。
+    \item \textbf{数据并行}（DP）：在 TP$\times$PP 组之间复制，用 all-reduce 同步梯度。
+\end{itemize}
+例如训练 GPT-3 175B 时，一种典型配置是 TP=8（节点内），PP=8（跨 8 个节点），DP=16（16 组副本），共需 $8 \times 8 \times 16 = 1024$ 张 GPU。
+\end{knowledgebox}
+
+\section{全讲总结}
+
+这一讲其实只想回答一个问题：\textbf{当模型规模和硬件规模一起变大时，训练系统应该怎样分配计算与通信？}
+
+\subsection{本章小结}
+
+\begin{importantbox}{三条最终 takeaway}
+\begin{enumerate}
+    \item \textbf{数据并行} 解决的是 batch 维度扩展，最简单也最常用。
+    \item \textbf{张量并行} 解决的是单层太宽的问题，但它非常吃互联带宽。
+    \item \textbf{流水线并行} 解决的是模型太深的问题，但它要面对 bubble 和调度复杂度。
 \end{enumerate}
 \end{importantbox}
 
-\subsection{为什么课程里仍然选 PyTorch}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.0cm}p{3.5cm}p{3.0cm}p{3.5cm}}
+\toprule
+\textbf{核心概念} & \textbf{一句话解释} & \textbf{关键公式} & \textbf{工程要点} \\
+\midrule
+集合通信 & 多 rank 间的标准协议 & $T = \alpha + S/B$ & NCCL 自动优化路径 \\
+Ring all-reduce & 带宽最优的全局归约 & $2\frac{p-1}{p}S$ & 大张量时接近理论峰值 \\
+数据并行 & 复制模型，切分 batch & 每步 all-reduce $O(P)$ & 先从 DDP 开始 \\
+张量并行 & 切分层宽度 & 每层 all-gather $O(A)$ & 仅限 NVLink 范围 \\
+流水线并行 & 切分层深度 & bubble $\frac{S-1}{M+S-1}$ & microbatch 数要够大 \\
+ZeRO & 分片训练状态 & 每卡 $\frac{16P}{p}$ & ZeRO-2 性价比最高 \\
+\bottomrule
+\end{tabular}
+\caption{全讲核心概念速查表}
+\end{table}
 
-因为这门课想让你理解“系统到底怎么转起来”的内部机制。  
-如果直接用更高层的封装，很多通信和同步细节会被隐藏，你很难知道性能瓶颈和正确性约束从哪里来。
+\subsection{这节课没有覆盖的内容}
 
-\section{本讲总结}
+讲者在最后提到了几个本讲没有深入的主题：
 
 \begin{itemize}
-    \item 多 GPU 训练的本质问题，仍然是 \textbf{如何减少数据搬运}。
-    \item 集合通信是分布式训练的基础积木，尤其是 all-reduce、all-gather、reduce-scatter。
-    \item 数据并行切 batch，张量并行切 width，流水线并行切 depth。
-    \item 数据并行主要同步梯度，张量并行主要同步激活，流水线并行主要在相邻 stage 之间传递中间结果。
-    \item 高性能系统总是在 \textbf{重算、内存和通信} 三者之间找平衡。
-    \item PyTorch 适合展示底层细节，JAX 适合展示更高层的 sharding 抽象。
+    \item \textbf{更通用的模型}：本讲用 MLP 演示，真实 transformer 还有 attention 层需要特殊的分片策略（如 Megatron 的 column/row parallel）。
+    \item \textbf{通信/计算重叠}：DDP 的 bucket gradient all-reduce、1F1B 调度等技术可以让通信隐藏在计算背后，但代码实现复杂度会大幅上升。
+    \item \textbf{序列并行}（Sequence Parallelism）：当序列长度非常长时，可以沿 sequence 维度切分——这是除了 batch、width、depth 之外的第四个维度。
+    \item \textbf{JAX/TPU 的声明式方法}：在 JAX 生态中，用户只需声明分片策略，编译器自动插入通信原语。PyTorch 则要求手动编排，但能看清底层发生了什么。
 \end{itemize}
 
-\begin{warningbox}{最后一句话}
-硬件会持续演进，但“计算离数据很远”这件事不会消失。  
-只要模型继续长大，分层存储、分层通信、分层并行就仍然是深度学习系统设计的核心。
-\end{warningbox}
+\begin{knowledgebox}{最后一句话}
+如果你记住一件事，那就是：多 GPU 训练的本质不是让 GPU 彼此热闹起来，而是让通信次数、通信量和同步频率，恰好配得上模型规模。
+\end{knowledgebox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Megatron-LM 论文：\textit{Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM} (Narayanan et al., 2021)
+    \item ZeRO 论文：\textit{ZeRO: Memory Optimizations Toward Training Trillion Parameter Models} (Rajbhandari et al., 2020)
+    \item PyTorch FSDP 文档：\url{https://pytorch.org/docs/stable/fsdp.html}
+    \item NCCL 性能分析：\url{https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md}
+    \item GPipe 论文：\textit{GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism} (Huang et al., 2019)
+    \item PipeDream 论文（1F1B 调度）：\textit{PipeDream: Generalized Pipeline Parallelism for DNN Training} (Narayanan et al., 2019)
+\end{itemize}
 
 \end{document}
