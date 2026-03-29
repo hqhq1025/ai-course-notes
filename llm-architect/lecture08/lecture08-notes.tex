@@ -1,0 +1,163 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{VLM 多模态架构：Gemini vs Qwen3-VL vs K2.5}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约23分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言}
+
+本期是架构系列的一个特别篇，为后续 K2.5 串讲做铺垫。我们从``原生多模态''（Native Multimodal）的视角，对比三个代表性 VLM：Qwen3-VL、KiMi VL（K2.5 的前身）和 Gemini，回答两个核心问题：
+\begin{enumerate}
+  \item 如何理解``原生多模态''？
+  \item 为什么 Qwen3 分了纯语言和 VL 两个系列，而 K2.5 不分？
+\end{enumerate}
+
+\section{模态之间的鸿沟}
+
+\subsection{不同模态的维度特性}
+
+\begin{table}[H]
+\centering
+\caption{不同模态的数据维度}
+\begin{tabular}{lcc}
+\toprule
+\textbf{模态} & \textbf{维度} & \textbf{特性} \\
+\midrule
+文本 (Text) & 1D & Token Sequence \\
+图像 (Image) & 2D & Spatial \\
+视频 (Video) & 3D & Spatial + Temporal \\
+音频 (Audio) & 1D & Temporal \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warningbox}{当前 VLM 的音频短板}
+Qwen3-VL 和 K2.5 虽然在视觉语言方面做得非常出色，但它们只将视频当作多帧图像序列处理，\textbf{不处理音频信息}。只有 Gemini 等少数模型支持完整的视频+音频输入。
+\end{warningbox}
+
+模态之间是``纯粹鸿沟''的——需要\textbf{对齐}（Alignment）、\textbf{映射}（Mapping）到同一个表示空间中。
+
+\subsection{本章小结}
+
+多模态模型的核心挑战是将不同维度、不同性质的数据映射到统一的表示空间。当前主流 VLM 主要解决了文本+图像（+视频帧），音频处理仍是短板。
+
+\section{理解``原生多模态''}
+
+\subsection{非原生 vs. 原生}
+
+\begin{importantbox}{原生多模态 (Native Multimodal) 的定义}
+模型并非由独立的单模态模型通过简单的胶水层拼接而成，而是从架构设计之初就将多模态理解融入到模型的核心结构中。早期的语言模型加视觉编码器的方案属于``非原生''。
+\end{importantbox}
+
+\textbf{非原生方案}（早期 VLM）：
+\begin{itemize}
+  \item 一个预训练好的视觉编码器（如 ViT）
+  \item 一个预训练好的语言模型（如 LLaMA）
+  \item 一个简单的投影层（MLP projector）连接两者
+  \item 各模块可独立训练，拼接后微调
+\end{itemize}
+
+\textbf{原生方案}：
+\begin{itemize}
+  \item 视觉和语言从一开始就在同一个模型中联合训练
+  \item 或者虽然有独立的编码器，但通过深度融合（如交叉注意力）实现紧密耦合
+\end{itemize}
+
+\subsection{Qwen3 分系列 vs. K2.5 不分}
+
+\begin{knowledgebox}{为什么 Qwen3 分了两个系列？}
+\begin{itemize}
+  \item \textbf{Qwen3}：纯语言模型系列（Dense + MoE）
+  \item \textbf{Qwen3-VL}：视觉语言模型系列
+  \item 两个系列有独立的架构代码、独立的训练流程
+\end{itemize}
+而 KiMi 早期有 KiMi VL 的分离版本，但到 K2.5 已经不再区分纯语言和 VLM，实现了真正的``原生多模态''——一个模型同时具备语言和视觉能力。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+``原生多模态''代表了从``拼接''到``融合''的架构演进。K2.5 不再区分纯语言和 VLM 模型，是这一趋势的体现。
+
+\section{VLM 的一般性架构}
+
+\subsection{三大组件}
+
+标准的 VLM 架构包含三个核心组件：
+
+\begin{enumerate}
+  \item \textbf{视觉编码器}（Vision Encoder）：将图像/视频编码为视觉 token。常用 ViT (Vision Transformer)
+  \item \textbf{投影/对齐模块}（Projector/Adapter）：将视觉 token 映射到语言模型的 embedding 空间
+  \item \textbf{语言模型骨干}（LLM Backbone）：处理混合的文本 + 视觉 token 序列
+\end{enumerate}
+
+\subsection{动态分辨率处理}
+
+现代 VLM 普遍支持动态分辨率输入，不再将所有图像调整到固定大小：
+\begin{itemize}
+  \item 将图像分割成多个 patch
+  \item 每个 patch 编码为若干视觉 token
+  \item 更高分辨率 $\to$ 更多视觉 token $\to$ 更长的序列
+\end{itemize}
+
+\subsection{本章小结}
+
+VLM = 视觉编码器 + 投影模块 + 语言模型。动态分辨率处理是当前的标准做法，使模型能够处理不同大小的图像。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item 模态间存在天然鸿沟，需要对齐映射到统一空间
+  \item ``原生多模态''是架构趋势：从拼接到融合
+  \item 当前 VLM 主要处理文本+图像+视频帧，音频仍是短板
+  \item K2.5 不再区分纯语言和 VLM，实现了原生多模态
+  \item 下一期将完整串讲 K2.5 论文
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Qwen3-VL 技术报告
+  \item KiMi K2.5: Visual Agency Intelligence
+  \item Gemini 技术报告
+  \item KiMi VL（K2.5 的前身）
+\end{itemize}
+
+\end{document}

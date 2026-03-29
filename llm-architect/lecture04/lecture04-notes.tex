@@ -1,0 +1,166 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{Muon Optimizer：梯度白化与 SVD}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约22分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言：为什么需要 Muon？}
+
+Muon 是 K2 训练背后的关键优化器，由 Keller Jordan 提出。它相比 AdamW 或带动量的 SGD 具有更快的训练效率：达到相同 loss 所需的数据量或算力更少。Keller Jordan 正是凭借这篇工作拿到了 OpenAI 的 offer，可见业界对该优化器的高度认可。
+
+\begin{importantbox}{Muon 的核心洞察}
+\begin{itemize}
+  \item 神经网络的 2D 参数矩阵大多具有\textbf{很高的条件数}（低秩）
+  \item 梯度更新被少数主导方向（dominant directions）控制
+  \item 对梯度矩阵进行\textbf{正交化/白化}，可以放大稀有方向的尺度
+  \item 这些稀有方向对学习至关重要
+\end{itemize}
+\end{importantbox}
+
+\section{梯度白化（Gradient Whitening）}
+
+\subsection{问题背景}
+
+在用 SGD 或 AdamW 优化神经网络时，经验观察发现：大部分 2D 参数矩阵（隐藏层权重）的条件数很高，即矩阵是低秩的。这导致梯度更新在少数方向上幅度很大，而在大量``稀有方向''上信号极弱。
+
+\subsection{白化的核心操作}
+
+\begin{importantbox}{Muon 的核心：梯度白化}
+对梯度矩阵进行白化处理，\textbf{抹去梯度的大小/尺度，只保留方向}。这使得：
+\begin{itemize}
+  \item 主导方向的过大影响被抑制
+  \item 稀有方向的微弱信号被放大
+  \item 所有方向获得均等的更新尺度
+\end{itemize}
+\end{importantbox}
+
+白化操作通过 SVD（奇异值分解）实现：
+
+$$
+G = U \Sigma V^T \quad \xrightarrow{\text{白化}} \quad \hat{G} = U V^T
+$$
+
+即去掉奇异值矩阵 $\Sigma$，只保留旋转部分 $U$ 和 $V^T$。
+
+\subsection{SVD 的几何意义}
+
+对于梯度矩阵 $G$：
+\begin{itemize}
+  \item $U$：左奇异向量，表示输出空间的方向
+  \item $\Sigma$：奇异值，表示各方向的``重要程度''（尺度）
+  \item $V^T$：右奇异向量，表示输入空间的方向
+\end{itemize}
+
+去掉 $\Sigma$ 后，$\hat{G} = UV^T$ 是一个\textbf{正交矩阵}，保证了所有方向的更新幅度一致。
+
+\subsection{本章小结}
+
+梯度白化是 Muon 的核心操作：通过 SVD 去掉奇异值，将梯度矩阵正交化。这使得原本被主导方向压制的稀有信号得以放大，加速了模型学习。
+
+\section{Muon 的适用范围}
+
+\subsection{哪些参数用 Muon？}
+
+\begin{warningbox}{Muon 不是全局替代品}
+Muon 只用于优化\textbf{隐藏层的 2D 参数矩阵}。以下参数仍使用标准优化器（AdamW 或带动量的 SGD）：
+\begin{itemize}
+  \item Input Embedding 层
+  \item Output（LM Head）层
+  \item 标量参数（Scalar）
+  \item 一维向量参数（如 RMSNorm 的 $\gamma$）
+\end{itemize}
+\end{warningbox}
+
+实际训练中，Muon 与 AdamW/SGD \textbf{组合使用}：隐藏层矩阵走 Muon，其余走标准优化器。
+
+\subsection{对输出层的特殊考虑}
+
+对于输出层（分类层），我们希望学到的不同特征对最终分类贡献不同的权重。如果对输出层也做白化，会抹掉这种有意义的尺度差异。因此输出层不适用 Muon。
+
+\subsection{本章小结}
+
+Muon 的适用范围严格限定在隐藏层的 2D 矩阵参数上，与标准优化器互补使用。
+
+\section{从条件数理解低秩性}
+
+\subsection{条件数的含义}
+
+矩阵的条件数定义为最大奇异值与最小奇异值之比：
+
+$$
+\kappa(A) = \frac{\sigma_{\max}}{\sigma_{\min}}
+$$
+
+条件数越大，矩阵越``病态''（ill-conditioned），意味着信息集中在少数方向上。
+
+\subsection{对训练的影响}
+
+高条件数导致：
+\begin{itemize}
+  \item 梯度在主导方向上很大，在稀有方向上很小
+  \item 标准优化器（如 SGD）需要很多步才能在稀有方向上积累足够的更新
+  \item 训练效率低下
+\end{itemize}
+
+Muon 通过白化将所有方向的``重要程度''拉平，从而加速收敛。
+
+\subsection{本章小结}
+
+高条件数是神经网络参数矩阵的普遍特征，它导致标准优化器在稀有方向上收敛缓慢。Muon 的白化操作本质上是在解决这个问题。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item Muon 通过梯度白化（SVD 去奇异值）加速神经网络训练
+  \item 核心洞察：隐藏层矩阵高条件数 $\Rightarrow$ 稀有方向信号弱 $\Rightarrow$ 白化放大
+  \item 只用于 2D 隐藏层参数，与 AdamW/SGD 组合使用
+  \item 达到相同 loss 所需的数据/算力显著减少
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Keller Jordan 的 Muon 官方博客
+  \item K2 技术报告中关于优化器的章节
+  \item ``Shampoo'' 优化器：另一种基于矩阵预条件的方法
+\end{itemize}
+
+\end{document}

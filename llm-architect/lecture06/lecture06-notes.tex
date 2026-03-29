@@ -1,0 +1,172 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{RoPE Attention 远程衰减推导}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约17分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言}
+
+上一期从几何视角介绍了 RoPE 的旋转频率与多尺度特性。本期深入推导 RoPE 的 Attention Score 随距离变化的数学表达式，回答一个核心问题：\textbf{为什么 RoPE 可以同时编码短距离和长距离依赖？}
+
+\section{$\theta_j$ 的指数衰减}
+
+回顾 RoPE 的频率参数：
+$$
+\theta_j = \text{base}^{-2j/d}
+$$
+
+对 $\theta_j$ 取 log：
+$$
+\log \theta_j = -\frac{2j}{d} \log(\text{base})
+$$
+
+这是关于 $j$ 的\textbf{线性}函数，斜率为 $-\frac{2\log(\text{base})}{d}$。因此 $\theta_j$ 本身是指数级衰减的。
+
+\section{Attention Score 的推导}
+
+\subsection{Pre-Softmax Score 的展开}
+
+在 RoPE 下，位置 $m$ 的 Query 与位置 $n$ 的 Key 的 attention score（pre-softmax）为：
+
+$$
+s(m,n) = (R_m q)^T (R_n k) = q^T R_m^T R_n k = q^T R_{n-m} k
+$$
+
+将 $R_{n-m}$ 展开到各 2D 子空间，每个子空间 $j$ 的贡献正比于：
+
+$$
+\cos\big((m-n) \cdot \theta_j\big)
+$$
+
+\begin{importantbox}{核心公式}
+Attention score 正比于所有子空间的余弦函数之和：
+$$
+s(m,n) \propto \sum_{j=0}^{d/2-1} \cos\big((m-n) \cdot \theta_j\big)
+$$
+每个子空间贡献一个不同频率的余弦波，频率由 $\theta_j$ 决定。
+\end{importantbox}
+
+\subsection{距离 $\tau = m - n$ 的影响}
+
+令 $\tau = m - n$ 为 token 间距离，分析 $s(\tau)$ 的行为：
+
+\textbf{短距离（$\tau$ 小）}：
+\begin{itemize}
+  \item 所有子空间的 $\cos(\tau \cdot \theta_j) \approx 1$
+  \item 各项正值叠加，score 很高
+  \item 模型高度关注邻近 token
+\end{itemize}
+
+\textbf{长距离（$\tau$ 大）}：
+\begin{itemize}
+  \item 高频子空间（$\theta_j$ 大，$j$ 小）：$\tau \cdot \theta_j$ 变化剧烈，$\cos$ 值快速震荡
+  \item 低频子空间（$\theta_j$ 小，$j$ 大）：$\tau \cdot \theta_j$ 变化缓慢，$\cos$ 值缓慢下降
+  \item 高频部分的剧烈震荡在求和时\textbf{正负抵消}
+\end{itemize}
+
+\subsection{远程衰减的物理图像}
+
+\begin{importantbox}{RoPE 远程衰减的机制}
+RoPE 的长距离衰减是两个效应共同作用的结果：
+\begin{enumerate}
+  \item \textbf{高频维度的完全抵消}：左侧子空间旋转剧烈，远距离时正负相消（类似波的干涉效应）
+  \item \textbf{低频维度的缓慢下降}：右侧子空间旋转缓慢，保留了远程的微弱关联
+\end{enumerate}
+结合起来：RoPE 在数学上\textbf{主要关注局部}，但\textbf{保留了远程能力}。
+\end{importantbox}
+
+这类似于物理学中的\textbf{波干涉现象}：不同频率的波在远处相互抵消，但某些特定频率（低频）仍能传播到远处。
+
+\subsection{极端情况分析}
+
+对于最右侧的子空间（$j = d/2 - 1$）：
+$$
+\theta_{d/2-1} = \text{base}^{-1} \approx \frac{1}{\text{base}}
+$$
+
+如果 base = 10000，则 $\theta \approx 10^{-4}$，波长极长。即使 $\tau$ 很大，$\tau \cdot \theta$ 的增长仍然非常缓慢，$\cos(\tau \cdot \theta) \approx 1$。这就是远程信息得以保留的原因。
+
+\subsection{本章小结}
+
+Attention score 是所有子空间余弦波的叠加。远距离时高频项抵消、低频项缓慢衰减，共同产生了 RoPE 的远程衰减特性。RoPE 天然实现了``关注局部 + 保留远程''的注意力模式。
+
+\section{$\theta_j$ 与旋转频率的关系}
+
+\begin{table}[H]
+\centering
+\caption{子空间索引与频率特性}
+\begin{tabular}{cccc}
+\toprule
+\textbf{子空间位置} & \textbf{$j$ 值} & \textbf{$\theta_j$} & \textbf{特性} \\
+\midrule
+左侧（低索引） & 小 & 大（高频） & 快速旋转，编码短距离 \\
+右侧（高索引） & 大 & 小（低频） & 缓慢旋转，编码长距离 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{knowledgebox}{RoPE 的多尺度编码}
+RoPE 不同维度上有不同的旋转频率。将 embedding 向量视为一个行向量时：
+\begin{itemize}
+  \item 越左侧的 sub-space：频率越高，对相对位置越敏感
+  \item 越右侧的 sub-space：频率越低，对相对位置越不敏感
+\end{itemize}
+这种多尺度特性是 RoPE 成功的关键。
+\end{knowledgebox}
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item Attention score 正比于 $\sum_j \cos(\tau \cdot \theta_j)$，是多频余弦波的叠加
+  \item 远距离时高频项相消（干涉效应），低频项缓慢衰减
+  \item RoPE 天然实现了``局部优先 + 远程保留''的注意力模式
+  \item 下一期将探讨 Attention Head 的模式识别与 Attention Sink 现象
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Su et al., ``RoFormer'' 原始论文
+  \item NIPS 2025 Best Paper: Gated Attention 与 Attention Sink
+  \item Blog: ``Understanding RoPE through the lens of signal processing''
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,132 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{RoPE 几何视角与 Qwen3 RoPE 计算细节}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约21分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言：Multi-Head Self-Attention 的位置不敏感性}
+
+Multi-Head Self-Attention 本身是\textbf{位置不敏感的}。如果不引入位置编码，它相当于一个能力更强的词袋模型（bag of words）。RoPE（Rotary Position Embedding）通过旋转矩阵巧妙地将位置信息注入到注意力计算中。
+
+\begin{importantbox}{RoPE 的核心思想}
+通过赋予 $Q$ 和 $K$ 与\textbf{绝对位置}相关的旋转角度，利用旋转矩阵的数学特性，最终实现\textbf{相对位置编码}。这种相对性不是预先构建的，而是数学上自然推导出来的。
+\end{importantbox}
+
+\section{RoPE 的数学表达}
+
+\subsection{旋转矩阵的基本性质}
+
+对位置 $m$ 的 Query 施加旋转矩阵 $R_m$，对位置 $n$ 的 Key 施加 $R_n$：
+
+$$
+\text{score}(m, n) = (R_m q)^T (R_n k) = q^T R_m^T R_n k = q^T R_{n-m} k
+$$
+
+关键性质：$R_m^T R_n = R_{n-m}$，旋转矩阵的转置等于逆旋转，两个旋转的组合只依赖位置差 $n - m$。
+
+\begin{warningbox}{相对性是推演出来的}
+我们事先只需要为每个绝对位置计算旋转矩阵，相对位置编码是数学推导的自然结果，不需要显式构造。
+\end{warningbox}
+
+\subsection{频率参数 $\theta$}
+
+RoPE 在 embedding 向量的不同 2D 子空间（subspace）上施加不同频率的旋转：
+
+$$
+\theta_i = \text{base}^{-2i/d}
+$$
+
+\begin{itemize}
+  \item $\text{base}$：一般取 10000（标准 RoPE），Qwen3 取 \textbf{1000000}（追求更大 context window）
+  \item $i$：子空间索引，从 0 到 $d/2 - 1$
+  \item $d$：head dimension
+\end{itemize}
+
+$\theta_i$ 随 $i$ 增大呈\textbf{指数级衰减}，取 $\log$ 后呈线性下降。
+
+\subsection{本章小结}
+
+RoPE 通过绝对位置的旋转矩阵实现相对位置编码，$\theta_i$ 控制了各子空间的旋转频率。base 越大，低频子空间的旋转越慢，有利于长距离建模。
+
+\section{几何视角：从频率理解 RoPE}
+
+\subsection{多尺度特性}
+
+$\theta_i$ 的指数衰减意味着 RoPE 具有\textbf{多尺度}特性：
+
+\begin{importantbox}{RoPE 的频谱}
+\begin{itemize}
+  \item \textbf{低索引（$i$ 小）}：$\theta_i$ 大，旋转频率高 $\to$ 编码\textbf{短距离}依赖（语法、词组搭配如 ``New York''）
+  \item \textbf{高索引（$i$ 大）}：$\theta_i$ 小，旋转频率低 $\to$ 编码\textbf{长距离}依赖（语义、段落结构、远程指代）
+\end{itemize}
+\end{importantbox}
+
+\subsection{Qwen3 的 RoPE 配置}
+
+标准 RoPE 的 base = 10000，而 Qwen3 系列使用 base = 1000000。更大的 base 意味着所有频率都更低，低频子空间的旋转更加缓慢，有利于捕获更长距离的依赖关系，支持更大的 context window。
+
+\subsection{与标准 Interleaved 方案的对比}
+
+在之前介绍 LLaMA 时使用的是朴素 interleaved 版本的 RoPE 方案（将相邻维度视为一个 2D 子空间）。Qwen3 的实现在子空间划分上可能有所不同，需要查看具体代码确认。
+
+\subsection{本章小结}
+
+RoPE 的几何本质是在 embedding 的不同 2D 子空间上施加不同速率的旋转。高频子空间负责短距离语法关系，低频子空间负责长距离语义关系。Qwen3 通过增大 base 来支持更长的上下文窗口。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item RoPE 通过绝对位置旋转实现相对位置编码，相对性是数学推导的结果
+  \item $\theta_i = \text{base}^{-2i/d}$ 刻画了从高频到低频的多尺度频谱
+  \item 高频子空间 $\to$ 短距离依赖；低频子空间 $\to$ 长距离依赖
+  \item Qwen3 使用 base = 1000000，支持更大的 context window
+  \item 下一期将推导 attention score 的远程衰减公式
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Su et al., ``RoFormer: Enhanced Transformer with Rotary Position Embedding'' (2021)
+  \item Qwen3 技术报告中关于 RoPE 配置的说明
+  \item 系列前置视频：LLaMA 2 中 RoPE 的基础介绍
+\end{itemize}
+
+\end{document}

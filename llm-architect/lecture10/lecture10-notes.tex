@@ -1,0 +1,212 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{Prefill vs Decode、KV-Cache、GEMM vs GEMV}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约36分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言}
+
+Prefill 和 Decode 是大模型推理部署中最基础也最核心的一组概念。随着 Apple M5 Max 芯片在这两个阶段上的性能突破，以及 SGLang 等推理框架的广泛使用，深入理解这两个阶段的计算特性变得尤为重要。
+
+\begin{knowledgebox}{为什么要深入理解 Prefill vs. Decode？}
+\begin{itemize}
+  \item 部署 VLM 时经常遇到这两个阶段的性能瓶颈
+  \item SGLang 等框架的配置需要针对两阶段分别优化
+  \item Apple M5 Max 等新硬件专门针对这两阶段做了优化
+  \item 很多分析和介绍缺乏深度，本期追求更本质的理解
+\end{itemize}
+\end{knowledgebox}
+
+\section{Attention 的维度分析}
+
+\subsection{Q, K, V 的维度}
+
+回顾 Attention 的基本公式：
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V
+$$
+
+维度分析：
+\begin{itemize}
+  \item $Q$：序列长度 $N$，维度 $d_k$
+  \item $K, V$：序列长度 $M$，维度 $d_k$（$K$）和 $d_v$（$V$）
+  \item $K$ 和 $V$ 的序列长度必须一致（因为 softmax 后的权重要乘以 $V$）
+  \item $Q$ 的维度必须与 $K$ 的维度一致（因为要算内积）
+\end{itemize}
+
+\subsection{$N$ 和 $M$ 的差异}
+
+标准自回归注意力中 $N = M$。但存在两种场景使 $N \neq M$：
+\begin{enumerate}
+  \item \textbf{交叉注意力}（Cross Attention）：$Q$ 来自一个序列，$K, V$ 来自另一个序列
+  \item \textbf{Decode 阶段}：$Q$ 只有当前一个 token（$N=1$），$K, V$ 包含所有历史 token（$M$ 很大）
+\end{enumerate}
+
+\subsection{本章小结}
+
+维度分析是理解 Prefill 和 Decode 差异的基础。关键区别在于 $Q$ 的序列长度：Prefill 时 $N$ 很大，Decode 时 $N = 1$。
+
+\section{Prefill 阶段}
+
+\subsection{什么是 Prefill？}
+
+\begin{importantbox}{Prefill = 处理输入 Prompt}
+用户发送 prompt 后，模型需要一次性处理所有输入 token。这个阶段叫做 \textbf{Prefill}：
+\begin{itemize}
+  \item $Q$ 的长度 = prompt 长度 $N$（通常几百到几千）
+  \item $K, V$ 的长度也是 $N$（因为是自注意力）
+  \item 是一个大规模的 \textbf{矩阵-矩阵乘法}（GEMM）
+  \item \textbf{计算密集型}（Compute-bound）
+\end{itemize}
+\end{importantbox}
+
+\subsection{计算特性}
+
+Prefill 阶段的核心计算是 $Q \times K^T$，这是一个 $N \times d_k$ 乘以 $d_k \times N$ 的矩阵乘法，结果为 $N \times N$。
+
+\begin{itemize}
+  \item 计算量：$O(N^2 \cdot d_k)$
+  \item 数据量：$O(N \cdot d_k)$
+  \item 计算/内存比（Arithmetic Intensity）很高 $\Rightarrow$ \textbf{计算密集型}
+  \item GPU 的算力是瓶颈，内存带宽不是
+\end{itemize}
+
+\subsection{本章小结}
+
+Prefill 是大矩阵乘法（GEMM），计算密集型，瓶颈在算力而非内存带宽。
+
+\section{Decode 阶段}
+
+\subsection{什么是 Decode？}
+
+\begin{importantbox}{Decode = 逐 Token 生成}
+Prefill 完成后，模型开始逐 token 生成输出。每步只生成一个新 token：
+\begin{itemize}
+  \item $Q$ 的长度 = 1（只有当前 token）
+  \item $K, V$ 的长度 = 历史长度 $M$（包含所有之前的 token）
+  \item 是 \textbf{向量-矩阵乘法}（GEMV）
+  \item \textbf{内存带宽密集型}（Memory-bound）
+\end{itemize}
+\end{importantbox}
+
+\subsection{计算特性}
+
+Decode 阶段的核心计算是 $q \times K^T$（$1 \times d_k$ 乘以 $d_k \times M$），结果为 $1 \times M$ 的向量。
+
+\begin{itemize}
+  \item 计算量：$O(M \cdot d_k)$
+  \item 但需要从内存加载整个 $K$ 矩阵：$O(M \cdot d_k)$ 的数据量
+  \item 计算/内存比 $\approx 1$ $\Rightarrow$ \textbf{内存带宽密集型}
+  \item 内存带宽是瓶颈，GPU 算力严重闲置
+\end{itemize}
+
+\subsection{本章小结}
+
+Decode 是向量-矩阵乘法（GEMV），内存带宽密集型，瓶颈在内存带宽而非算力。
+
+\section{KV-Cache}
+
+\subsection{为什么需要 KV-Cache？}
+
+\begin{importantbox}{KV-Cache 的核心动机}
+在自回归生成中，每个新 token 需要与\textbf{所有历史 token} 计算 Attention。如果每步都重新计算所有 $K, V$，计算量为 $O(M \cdot d_k)$（其中 $M$ 不断增长）。KV-Cache 将历史 $K, V$ 向量缓存在 GPU 显存中，避免重复计算。
+\end{importantbox}
+
+\subsection{KV-Cache 的显存消耗}
+
+每层每个 token 的 KV-Cache 大小：
+$$
+\text{Per-token KV} = 2 \times n_{\text{kv\_heads}} \times d_h \times \text{bytes}
+$$
+
+总 KV-Cache：
+$$
+\text{Total KV} = L \times M \times 2 \times n_{\text{kv\_heads}} \times d_h \times \text{bytes}
+$$
+
+其中 $L$ 是层数，$M$ 是序列长度。这就是为什么 GQA（减少 KV heads）对推理效率如此重要。
+
+\subsection{本章小结}
+
+KV-Cache 是自回归推理的核心优化，避免了重复计算 $K, V$。它的显存消耗随序列长度线性增长，是长上下文推理的主要瓶颈。
+
+\section{GEMM vs. GEMV}
+
+\begin{table}[H]
+\centering
+\caption{Prefill vs. Decode 计算特性对比}
+\begin{tabular}{lcc}
+\toprule
+& \textbf{Prefill} & \textbf{Decode} \\
+\midrule
+核心操作 & GEMM（矩阵$\times$矩阵） & GEMV（向量$\times$矩阵） \\
+Q 长度 & $N$（prompt 长度） & 1 \\
+瓶颈类型 & 计算密集型 & 内存带宽密集型 \\
+GPU 利用 & 算力充分利用 & 算力严重闲置 \\
+优化方向 & 更强的 FLOPs & 更大的内存带宽 \\
+延迟特征 & TTFT（首 token 延迟） & TPS（每秒 token 数） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warningbox}{Decode 阶段的效率困境}
+Decode 阶段每步只生成一个 token，但需要加载整个模型权重和 KV-Cache。GPU 的算力大量闲置，内存带宽成为瓶颈。这就是为什么 Apple M5 Max 的统一内存架构（高带宽）在 Decode 阶段表现突出。
+\end{warningbox}
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item Prefill = GEMM = 计算密集型；Decode = GEMV = 内存带宽密集型
+  \item KV-Cache 避免了 Decode 时重复计算 $K, V$，但消耗大量显存
+  \item GQA 通过减少 KV heads 压缩 KV-Cache，是推理效率的关键
+  \item 后续将介绍 MHA（Massive Head Attention）和 KiMi 发布的 Attention Allocation 等新工作
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Apple M5 Max 的统一内存架构对 LLM 推理的影响
+  \item SGLang：高效 LLM 推理框架
+  \item FlashAttention：加速 Prefill 阶段的 Attention 计算
+  \item Paged Attention：优化 KV-Cache 的显存管理
+\end{itemize}
+
+\end{document}

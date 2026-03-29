@@ -1,0 +1,169 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{Attention Head 模式识别与 Attention Sink}
+\newcommand{\noteauthors}{五道口纳什 \& AI}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{五道口纳什}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约21分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{引言}
+
+过去两期深入介绍了 RoPE 的几何视角和远程衰减推导。本期聚焦于 \textbf{Attention 的可解释性}——Multi-Layer Multi-Head Attention 中各层各头到底在提取、处理和加工什么信息。
+
+核心出发点是 Qwen 团队在 NeurIPS 获得最佳论文的 \textbf{Gated Attention} 工作，它试图缓解 Attention 中的 Attention Sink 现象。
+
+\begin{knowledgebox}{模型可解释性作为研究方向}
+对于没有大规模 GPU 资源的研究者，模型可解释性是一个很好的方向：只需构造测试用例、跑前向推理、分析 Attention 模式，即可进行有意义的研究。本质上就是在``Debug 大语言模型''。
+\end{knowledgebox}
+
+\section{Attention 基础回顾}
+
+\subsection{Pre-Softmax Attention Score}
+
+Attention 的核心公式：
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V
+$$
+
+在 Softmax 之前的 $QK^T / \sqrt{d_k}$ 称为 \textbf{Attention Logits} 或 \textbf{Attention Score}。它决定了模型在处理位置 $m$ 的 token 时，对位置 $n$ 的 token 分配多少注意力。
+
+\subsection{Multi-Layer Multi-Head 的多样性}
+
+在 Transformer 中，每层有多个 Attention Head，不同层的不同 Head 学习到截然不同的注意力模式。通过可视化这些模式，可以理解模型的内部工作机制。
+
+\subsection{本章小结}
+
+Attention Score 是理解模型行为的窗口。Multi-Head 机制保证了不同 Head 可以学到不同类型的依赖关系。
+
+\section{Attention Head 的典型模式}
+
+\subsection{常见的 Head 模式}
+
+通过构造测试序列并可视化不同 Head 的 Attention 矩阵，可以识别出以下典型模式：
+
+\begin{importantbox}{五种典型 Attention 模式}
+\begin{enumerate}
+  \item \textbf{Local Head}：主要关注相邻 token，呈对角线形式
+  \item \textbf{Strided Head}：以固定步长关注 token，捕获周期性模式
+  \item \textbf{Global Head}：几乎均匀关注所有 token
+  \item \textbf{Position Head}：关注特定位置（如句首、段落开头）
+  \item \textbf{Sink Head}：将大量注意力集中在序列的第一个 token 上
+\end{enumerate}
+\end{importantbox}
+
+\subsection{不同层的功能分工}
+
+一般规律：
+\begin{itemize}
+  \item \textbf{浅层}（底层）：更多 Local Head，处理语法、词组搭配
+  \item \textbf{中层}：混合模式，开始建立语义关联
+  \item \textbf{深层}（顶层）：更多 Global 和 Position Head，处理高层语义
+\end{itemize}
+
+\subsection{本章小结}
+
+不同 Head 自然分化出不同功能。浅层关注局部语法，深层关注全局语义，形成了一个从底向上的抽象层次结构。
+
+\section{Attention Sink 现象}
+
+\subsection{什么是 Attention Sink？}
+
+\begin{importantbox}{Attention Sink 定义}
+在自回归语言模型中，大量 Attention Head 会将异常高的注意力权重分配给序列的\textbf{第一个 token}（或前几个 token），即使这些 token 在语义上并不重要。这种现象称为 \textbf{Attention Sink}。
+\end{importantbox}
+
+\subsection{为什么会出现 Attention Sink？}
+
+Softmax 的特性要求注意力权重之和为 1。当模型对某些位置``没什么可注意的''时，它需要把注意力``倾倒''到某个地方。第一个 token 成为了默认的``垃圾桶''：
+
+\begin{warningbox}{Attention Sink 的成因}
+\begin{itemize}
+  \item Softmax 强制归一化 $\to$ 注意力必须分配到某处
+  \item 第一个 token 对所有后续 token 都可见（因果 mask 下）
+  \item 模型训练中自然学会将``无意义''的注意力倾倒在此
+  \item 并非第一个 token 本身有特殊的语义价值
+\end{itemize}
+\end{warningbox}
+
+\subsection{Attention Sink 的影响}
+
+\begin{itemize}
+  \item \textbf{KV Cache}：在流式推理（sliding window）中，如果丢弃了第一个 token 的 KV，模型输出质量会显著下降
+  \item \textbf{模型质量}：注意力资源被浪费在无意义的位置
+  \item \textbf{可解释性}：干扰了对模型真实注意力模式的分析
+\end{itemize}
+
+\subsection{本章小结}
+
+Attention Sink 是 Softmax 归一化的副产品，第一个 token 成为了注意力的``默认接收器''。这个现象对 KV Cache 管理、模型效率和可解释性都有重要影响。
+
+\section{Gated Attention：缓解 Attention Sink}
+
+\subsection{核心思想}
+
+Gated Attention 引入一个\textbf{门控机制}，允许模型在某些 Head/位置上``不分配注意力''，从而避免被迫将注意力倾倒到第一个 token：
+
+$$
+\text{GatedAttention}(Q, K, V) = g \odot \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V
+$$
+
+其中 $g$ 是一个可学习的门控向量，可以将某些位置的注意力输出缩放到接近 0。
+
+\subsection{本章小结}
+
+Gated Attention 通过门控机制让模型``有权不注意''，缓解了 Softmax 强制归一化带来的 Attention Sink 问题。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+  \item Multi-Head Attention 的不同 Head 自然分化出 Local、Global、Sink 等模式
+  \item Attention Sink 是 Softmax 归一化的副产品，第一个 token 充当注意力``垃圾桶''
+  \item Gated Attention (NeurIPS Best Paper) 通过门控缓解此问题
+  \item 模型可解释性研究只需前向推理即可开展，适合资源有限的研究者
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+  \item Qwen/NeurIPS Best Paper: Gated Attention
+  \item ``Efficient Streaming Language Models with Attention Sinks'' (Xiao et al., 2023)
+  \item Anthropic 的 Attention Head 分类研究
+\end{itemize}
+
+\end{document}
