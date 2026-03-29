@@ -1,0 +1,244 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+\newcommand{\notetitle}{CS224R Lecture 15: 层次化模仿与强化学习}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.1cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 封面图未提供。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{为什么需要层次结构}
+
+\subsection{长视野任务的挑战}
+
+在前几讲中，我们讨论了多任务 RL、目标条件 RL 和 meta-RL。但这些方法在面对\textbf{长视野、复杂任务}时仍然面临挑战：
+
+\begin{itemize}
+    \item 信号稀疏：奖励仅在很长的轨迹末尾给出
+    \item 信用分配困难：难以确定哪些早期动作对最终成功至关重要
+    \item 组合爆炸：动作序列空间随视野长度指数增长
+\end{itemize}
+
+\begin{knowledgebox}{日常行为中的层次结构}
+人类的行为天然具有层次结构。例如"做一顿饭"可以分解为：选择菜单 $\to$ 准备食材 $\to$ 烹饪 $\to$ 摆盘。每个子任务又可以进一步分解。这种层次化分解让复杂任务变得可管理。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+层次化方法通过将复杂任务分解为可管理的子任务来应对长视野挑战，这是受人类行为的层次结构启发。
+
+\section{Options 框架}
+
+\subsection{Semi-MDP 和 Options}
+
+\begin{importantbox}{Option 的定义}
+一个 option $\omega$ 由三部分组成：
+\begin{itemize}
+    \item \textbf{启动条件}（Initiation set）$\mathcal{I}_\omega \subseteq \mathcal{S}$：option 可以在哪些状态下被激活
+    \item \textbf{内部策略}（Intra-option policy）$\pi_\omega(a|s)$：option 激活后执行什么动作
+    \item \textbf{终止条件}（Termination function）$\beta_\omega(s) \in [0, 1]$：option 在每个状态的终止概率
+\end{itemize}
+高层策略 $\pi_{\text{high}}(\omega | s)$ 选择要执行哪个 option，底层 option 自主执行直到终止。
+\end{importantbox}
+
+Options 框架将 MDP 提升为 \textbf{Semi-MDP (SMDP)}，其中每个"宏观动作"（option）可能持续多个时间步。这使得高层策略只需在更粗的时间粒度上做决策。
+
+\subsection{本章小结}
+
+Options 框架通过定义"时间抽象的动作"提供了一种形式化层次 RL 的方式。
+
+\section{Goal-Conditioned 层次 RL}
+
+\subsection{高层策略设定子目标}
+
+一种直观的层次化方法：高层策略输出\textbf{子目标}（subgoal），低层策略负责达到该子目标。
+
+\begin{importantbox}{两层层次结构}
+\begin{itemize}
+    \item \textbf{高层策略} $\pi_{\text{high}}(g | s)$：给定当前状态，输出子目标 $g$
+    \item \textbf{低层策略} $\pi_{\text{low}}(a | s, g)$：给定当前状态和子目标，输出原始动作
+    \item \textbf{高层奖励}：基于全局任务目标
+    \item \textbf{低层奖励}：基于是否达到了子目标 $g$
+\end{itemize}
+\end{importantbox}
+
+\subsection{HAC 和 HIRO}
+
+\begin{knowledgebox}{HIRO (Hierarchical RL with Off-Policy Correction)}
+HIRO 是 goal-conditioned 层次 RL 的代表方法：
+\begin{itemize}
+    \item 高层策略每 $c$ 步设定一个子目标
+    \item 低层策略在这 $c$ 步内尝试达到子目标
+    \item 使用 off-policy correction 来处理由于低层策略更新导致的高层数据失效问题
+\end{itemize}
+\end{knowledgebox}
+
+\begin{warningbox}{层次 RL 的非平稳性问题}
+在层次 RL 中，高层和低层策略是\textbf{同时学习}的。低层策略在不断更新，这意味着高层策略面对的"环境"（即低层策略的行为）是非平稳的。反之亦然。这种相互依赖使训练变得不稳定，是层次 RL 的核心挑战之一。
+\end{warningbox}
+
+\subsection{本章小结}
+
+子目标式层次 RL 通过"高层设目标、低层去执行"实现任务分解，但面临非平稳性等训练挑战。
+
+\section{层次化模仿学习}
+
+\subsection{从演示数据中学习层次结构}
+
+与 RL 不同，层次化模仿学习从人类演示数据中学习分解结构。
+
+\begin{importantbox}{技能发现}
+给定一组长视野演示轨迹，自动发现可复用的"技能"：
+\begin{itemize}
+    \item 将轨迹分割为有意义的片段（技能）
+    \item 每个片段训练一个低层策略
+    \item 训练高层策略来调度这些技能
+\end{itemize}
+\end{importantbox}
+
+\subsection{VQ-VAE 和离散潜变量方法}
+
+一种流行的技能发现方法是使用变分自编码器（VAE）或 VQ-VAE 将轨迹片段编码为离散潜变量：
+\begin{itemize}
+    \item 编码器将轨迹片段映射到离散的"技能代码"
+    \item 解码器（低层策略）根据技能代码和状态输出动作
+    \item 高层策略学习预测技能代码序列
+\end{itemize}
+
+\subsection{语言作为层次结构}
+
+\begin{knowledgebox}{语言指令作为子目标}
+在 LLM 时代，一种自然的层次化方法是用\textbf{自然语言}作为高层策略的输出。例如：
+\begin{itemize}
+    \item 高层策略输出指令："打开抽屉"
+    \item 低层策略根据语言指令执行对应的动作
+\end{itemize}
+这种方法的优势是语言提供了人类可理解的中间表示，且可以利用预训练语言模型的知识。SayCan（Google, 2022）和 Inner Monologue 等工作就是这一思路的代表。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+层次化 IL 通过从数据中发现可复用的技能来实现分解。语言模型作为高层规划器是一个新兴的有前景的方向。
+
+\section{层次化方法的实际案例}
+
+\subsection{机器人长视野操作}
+
+讲者展示了层次化方法在机器人操作中的应用，例如：
+\begin{itemize}
+    \item 厨房环境中完成多步任务（开微波炉、移动锅等）
+    \item 将任务分解为一系列子目标或技能
+    \item 层次化策略相比平坦策略在长视野任务上显著更好
+\end{itemize}
+
+\subsection{大语言模型作为规划器}
+
+利用 LLM 的世界知识作为高层规划器：
+\begin{enumerate}
+    \item LLM 将任务描述分解为子任务序列
+    \item 每个子任务映射到一个预训练的低层技能
+    \item 值函数或可行性检查器过滤不可执行的计划
+\end{enumerate}
+
+\subsection{本章小结}
+
+层次化方法在长视野机器人任务中展示了明显优势，LLM 作为高层规划器是融合 NLP 和机器人学的前沿方向。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item 层次化方法通过时间/空间抽象化解了长视野决策的信用分配和探索难题
+    \item Options 框架提供了形式化的 semi-MDP 层次结构
+    \item Goal-conditioned 层次 RL 通过子目标实现自然分解
+    \item 技能发现从数据中自动学习可复用的行为原语
+    \item LLM 作为高层规划器是融合语言和决策的前沿方向
+    \item 核心挑战仍然包括非平稳性和如何自动发现好的分解
+\end{enumerate}
+
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item Sutton et al., ``Between MDPs and Semi-MDPs: A Framework for Temporal Abstraction in RL,'' 1999
+    \item Nachum et al., ``Data-Efficient Hierarchical Reinforcement Learning (HIRO),'' NeurIPS 2018
+    \item Pertsch et al., ``Accelerating RL with Learned Skill Priors (SPiRL),'' CoRL 2020
+    \item Ahn et al., ``Do As I Can, Not As I Say: Grounding Language in Robotic Affordances (SayCan),'' 2022
+    \item Ajay et al., ``Compositional Foundation Models for Hierarchical Planning,'' NeurIPS 2023
+\end{itemize}
+\end{knowledgebox}
+
+\end{document}

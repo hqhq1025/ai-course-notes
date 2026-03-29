@@ -1,0 +1,236 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS146S Week 9: Agents Post-Deployment (DevOps)}
+\newcommand{\noteauthors}{基于 Mihail Eric + Mayank Agarwal (Resolve CTO) 授课内容整理}
+\newcommand{\notedate}{2025年11月}
+\newcommand{\videochannel}{Stanford CS146S}
+\newcommand{\videopublishdate}{Fall 2025}
+\newcommand{\videoduration}{1 lecture (Mon)}
+\newcommand{\videourl}{https://themodernsoftware.dev}
+\newcommand{\videocoverpath}{}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+\vspace{3cm}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程}：\videochannel\par
+\textbf{学期}：\videopublishdate\par
+\textbf{讲次}：\videoduration\par
+\textbf{网站}：\href{\videourl}{\nolinkurl{\videourl}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{生产环境运维的挑战}
+
+\subsection{为什么 DevOps 是软件工程的``更难的 70\%''}
+
+\begin{importantbox}{编码只占工程时间的 30\%}
+编码仅占工程师总时间的约 30\%。更难的 70\% 是在生产环境中运行代码——复杂性、工具孤岛（tool silos）、知识鸿沟和系统间的相互依赖在这里全面碰撞。
+\end{importantbox}
+
+监控和维护生产系统仍然是一项关键（mission-critical）任务，通常由 SRE（Site Reliability Engineer）承担。
+
+\subsection{SRE 的传统职责}
+
+\begin{itemize}
+    \item 运维监控：值班（on-call）、故障排查（troubleshooting）、基础设施管理和安全
+    \item 事件解决需要从多个不同来源和团队拼凑信息
+    \item 维护经常过时的 runbook（操作手册）
+    \item 云原生架构（容器化 + Kubernetes）引入了更多数据、依赖和跨系统复杂性
+\end{itemize}
+
+\begin{warningbox}{SRE 的职业倦怠}
+SRE 经常因为频繁的值班轮班而职业倦怠（burnout）。凌晨 3 点被 PagerDuty 叫醒处理 500 错误激增是许多 SRE 的日常。AI SRE 的一个重要价值就是减轻这种人力负担。
+\end{warningbox}
+
+\subsection{本章小结}
+
+生产环境运维是软件工程中最耗时且压力最大的部分。SRE 面临信息碎片化、文档过时和职业倦怠等多重挑战，这为 AI 介入创造了巨大空间。
+
+\section{基础设施与 DevOps 原则}
+
+\subsection{监控的四个黄金信号}
+
+\begin{importantbox}{Google SRE 的四个黄金信号}
+\begin{enumerate}
+    \item \textbf{Latency}（延迟）：请求的响应时间
+    \item \textbf{Errors}（错误）：失败请求的比率
+    \item \textbf{Traffic}（流量）：每秒请求数（requests/sec）
+    \item \textbf{Saturation}（饱和度）：资源利用率，接近极限时系统性能急剧下降
+\end{enumerate}
+此外，还需要监控生产环境的 traces（请求追踪链路）。
+\end{importantbox}
+
+\subsection{事件响应实战：凌晨 3:12 的数据库 500 错误}
+
+当 PagerDuty 告警显示数据库查询出现 500 错误激增时，标准的响应流程（playbook）如下：
+
+\begin{enumerate}
+    \item \textbf{确认与评估}（Acknowledge and assess）
+    \item \textbf{检查数据库 + 应用}（Check DB + app）
+    \item \textbf{识别近期变更}（Identify recent changes）
+    \item \textbf{定位影响范围}（Localize blast radius）
+    \item \textbf{执行缓解措施}（Execute mitigations）
+    \item \textbf{稳定 + 监控}（Stabilize + monitor）
+    \item \textbf{沟通}（Communicate）
+    \item \textbf{文档记录}（Document）
+\end{enumerate}
+
+\subsection{关键度量指标}
+
+\begin{itemize}
+    \item \textbf{MTTR}（Mean Time to Repair）：平均修复时间
+    \item \textbf{参与事件的工程师数量}
+    \item \textbf{客户 SLA 合规报告}
+\end{itemize}
+
+\subsection{本章小结}
+
+四个黄金信号（延迟、错误、流量、饱和度）是监控生产系统的基础框架。事件响应遵循标准化的 playbook，关键度量是 MTTR 和影响范围。
+
+\section{AI SRE：智能运维的新范式}
+
+\subsection{主要工具}
+
+\begin{itemize}
+    \item \textbf{Resolve AI}：本周嘉宾 Mayank Agarwal 是其 CTO
+    \item \textbf{DataDog Bits AI Agent}：基于 DataDog 监控数据的 AI 分析
+    \item \textbf{Splunk Observability Assistant}：Splunk 的 AI 可观测性助手
+\end{itemize}
+
+\subsection{AI SRE 的核心特征}
+
+\begin{enumerate}
+    \item \textbf{动态知识图谱}：动态映射服务间的依赖关系和状态
+    \item \textbf{跨可观测性栈的 Agentic 系统}：横跨多个云和监控工具
+    \item \textbf{实时叙述生成}：生成正在发生什么的实时叙述，定位可能的根因并提供支持证据，推荐具体的修复步骤
+    \item \textbf{可解释性和可审计性}：重点强调预测/推理的透明性
+\end{enumerate}
+
+\begin{knowledgebox}{AI SRE 解决信息孤岛问题}
+AI SRE 最重要的价值之一是打破组织内的知识孤岛。传统模式下，关于未文档化的依赖关系、脆弱的遗留服务和只在高压事件中暴露的系统怪癖，往往只存在于少数工程师的脑中。AI SRE 将这些分散的组织知识和服务级知识系统化，使其对整个团队可用。
+\end{knowledgebox}
+
+\subsection{AI 带来的改变}
+
+\begin{itemize}
+    \item 自动化减少审查时间，及早发现问题
+    \item 开发者通过 AI 建议学习最佳实践
+    \item AI 对所有代码审查应用相同标准
+    \item AI 处理常规检查，让人类专注于复杂逻辑
+    \item AI 系统随数据积累持续改进
+    \item 现代 AI 代码审查工具提供上下文分析和模式识别
+\end{itemize}
+
+\subsection{当前局限}
+
+\begin{warningbox}{AI SRE 的核心局限}
+\begin{itemize}
+    \item 可解决的事件\textbf{复杂度}有限——AI 目前更适合已知模式的问题
+    \item 现代生产技术栈的\textbf{异构性}增加了 AI 理解的难度
+    \item 基于检测结果\textbf{修复实际代码}的能力仍在早期——目前所有提供商都从根因分析入手
+    \item 好的根因分析依赖于\textbf{好的监控基础设施}（监控园艺/monitoring gardening）
+    \item 安全可能成为新的攻击向量
+\end{itemize}
+\end{warningbox}
+
+\subsection{本章小结}
+
+AI SRE 通过动态知识图谱、跨栈 Agent 系统和实时叙述生成来辅助运维。其最大价值在于打破信息孤岛、降低 MTTR。当前的局限在于只能处理中等复杂度的已知模式问题，从检测到自动修复仍有较长的路要走。
+
+\section{总结与延伸}
+
+Week 9 将视角从``写代码''转向``运行代码''。DevOps 和 SRE 是软件工程中最耗时的部分，AI SRE 正在通过知识图谱、跨栈 Agent 和实时分析来降低运维负担。
+
+\subsection{关键要点}
+
+\begin{itemize}
+    \item 编码只占工程时间的 30\%，运维是更难的 70\%
+    \item 四个黄金信号：延迟、错误、流量、饱和度
+    \item 事件响应遵循标准化 playbook，核心度量是 MTTR
+    \item AI SRE 的四大特征：动态知识图谱、跨栈 Agent、实时叙述、可解释性
+    \item 最大价值：打破知识孤岛，降低 MTTR
+    \item 当前从根因分析入手，自动修复仍在早期
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Resolve AI：\url{https://resolve.ai}
+    \item Google SRE Book：\url{https://sre.google/sre-book/table-of-contents/}
+    \item DataDog Bits AI：\url{https://www.datadoghq.com/product/platform/bits-ai/}
+    \item ``The Four Golden Signals'' (Google SRE Book, Chapter 6)
+    \item PagerDuty Incident Response Guide：\url{https://response.pagerduty.com}
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

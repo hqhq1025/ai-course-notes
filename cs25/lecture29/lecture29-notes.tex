@@ -1,0 +1,197 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
+    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
+    captionpos=b, extendedchars=false
+}
+
+\newcommand{\notetitle}{[CS25] Demystifying Mixtral of Experts --- Albert Jiang, Mistral}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Stanford CS25: Transformers United}
+\newcommand{\videopublishdate}{Spring 2024}
+\newcommand{\videoduration}{$\sim$1h}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言}
+
+Albert Jiang 是 Mistral AI 的 AI 科学家，同时在剑桥大学攻读博士学位，研究方向为语言模型预训练、推理与数学。本讲深入解析 Mixtral 8x7B——Mistral 发布的稀疏混合专家（Sparse Mixture of Experts, SMoE）语言模型。
+
+\section{稠密 Transformer 回顾：Mistral 7B}
+
+\subsection{架构要点}
+
+Mistral 7B 是一个稠密 Transformer decoder-only 模型，关键设计包括：
+
+\begin{itemize}
+\item \textbf{滑动窗口注意力}（Sliding Window Attention）：每个 token 只关注最近 $W$ 个 token（$W=4096$），将注意力计算从 $O(n^2)$ 降至 $O(nW)$
+\item \textbf{GQA}（Grouped Query Attention）：将 Key-Value 头分组共享，减少 KV 缓存内存
+\item \textbf{SiLU 激活函数}
+\item \textbf{RoPE 位置编码}
+\end{itemize}
+
+\begin{knowledgebox}{滑动窗口注意力的信息传播}
+虽然每层只看 $W$ 个 token，但经过 $L$ 层堆叠后，信息可以传播 $L \times W$ 个位置。例如 32 层 $\times$ 4096 窗口 $=$ 理论上约 131K 的有效上下文长度。
+\end{knowledgebox}
+
+\subsection{本章小结}
+Mistral 7B 通过滑动窗口注意力和 GQA 在保持性能的同时显著降低了推理成本。
+
+\section{混合专家架构}
+
+\subsection{从稠密到稀疏}
+
+\begin{importantbox}{SMoE 的核心思想}
+将 Transformer 中的前馈网络（FFN）替换为多个``专家'' FFN。每个 token 通过一个门控网络（Router）选择 Top-$K$ 个专家进行处理，其余专家不参与计算。这样，模型拥有大量参数但每个 token 只激活一小部分。
+\end{importantbox}
+
+Mixtral 8x7B 的具体配置：
+\begin{itemize}
+\item 8 个专家，每个 token 选择 Top-2
+\item 每个专家约 7B 参数规模
+\item 总参数量 $\sim$46.7B，但每个 token 的活跃参数约 12.9B
+\end{itemize}
+
+\subsection{门控机制（Router）}
+
+$$G(x) = \text{TopK}(\text{softmax}(W_g \cdot x), K)$$
+
+其中 $W_g$ 是可学习的门控权重矩阵。Router 对每个 token 独立计算路由决策。
+
+\begin{warningbox}{专家坍缩问题}
+训练初期，某些专家可能被频繁选中而其他专家``饿死''。通常需要辅助负载均衡损失来确保专家被均匀使用：
+$$\mathcal{L}_{\text{balance}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i$$
+其中 $f_i$ 是分配到专家 $i$ 的 token 比例，$P_i$ 是 router 给专家 $i$ 的平均概率。
+\end{warningbox}
+
+\subsection{本章小结}
+SMoE 通过条件计算实现了``大模型容量、小模型成本''的理想权衡。
+
+\section{Mixtral 的训练与表现}
+
+\subsection{性能对比}
+
+Mixtral 8x7B 在多个基准上的表现：
+\begin{itemize}
+\item 匹配或超越 LLaMA 2 70B（虽然活跃参数仅约 13B）
+\item 在数学和代码任务上尤为突出
+\item 推理速度远快于 70B 稠密模型
+\end{itemize}
+
+\begin{importantbox}{性能/成本比的优势}
+SMoE 模型的核心价值在于推理成本：Mixtral 8x7B 的生成速度与 13B 稠密模型相当，但质量接近 70B 模型。对于 API 提供商来说，这意味着以更低成本提供更好的服务。
+\end{importantbox}
+
+\subsection{专家专业化分析}
+
+有趣的发现：Mixtral 的专家并没有明显的``语言专家''或``代码专家''分化。专业化更多发生在句法层面（如不同 token 类型）而非语义层面。
+
+\subsection{本章小结}
+Mixtral 证明了 SMoE 是扩展语言模型的有效路径。
+
+\section{部署考量}
+
+\subsection{内存挑战}
+
+\begin{warningbox}{SMoE 的内存瓶颈}
+虽然每个 token 只激活 2 个专家，但所有 8 个专家的参数都必须加载到内存中。对于边缘设备（如手机），这可能不切实际。因此：
+\begin{itemize}
+\item \textbf{边缘部署}：建议使用稠密模型
+\item \textbf{云端部署}：SMoE 模型的性能/成本优势明显
+\item \textbf{量化}：可以通过量化（如 4-bit）大幅减少内存需求
+\end{itemize}
+\end{warningbox}
+
+\subsection{多节点推理}
+
+当模型跨多个节点部署时，专家间的通信成本变得显著。更多的专家（如 128 个）可以提高专业化，但也大幅增加了通信复杂度。
+
+\subsection{本章小结}
+SMoE 模型最适合云端 API 服务场景，边缘部署需要搭配量化技术。
+
+\section{开放研究方向}
+
+\begin{itemize}
+\item 更多专家（128+）的效果
+\item 微调 MoE 模型的最佳策略（全量 vs LoRA）
+\item 更好的负载均衡机制
+\item 专家剪枝和合并技术
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲深入解析了 Mixtral 8x7B 的架构设计和实践经验。核心信息：(1) SMoE 是扩展 LLM 性能的高效路径；(2) 门控机制和负载均衡是训练的关键；(3) 部署时需权衡内存和推理速度；(4) 开源 MoE 模型为社区提供了强大的基础设施。
+
+\subsection{拓展阅读}
+\begin{itemize}
+\item Jiang et al., ``Mixtral of Experts'', 2024
+\item Jiang et al., ``Mistral 7B'', 2023
+\item Shazeer et al., ``Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer'', 2017
+\item Fedus et al., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity'', 2022
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

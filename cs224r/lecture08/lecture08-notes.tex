@@ -1,0 +1,169 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\newcommand{\notetitle}{CS224R Lecture 8: Reward Learning}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-05}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/spring\_2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.1cm}
+\ifdefempty{\videocoverpath}{{\small 封面图未提供。\par}}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/spring_2025/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{奖励从哪里来}
+
+在之前的讲次中，我们假设奖励函数 $r(s, a)$ 是给定的。但在现实中，\textbf{定义奖励函数本身就是一个难题}。
+
+\begin{knowledgebox}{不同领域的奖励情况}
+\begin{itemize}
+    \item \textbf{电子游戏}：分数天然就是奖励，直接可用。
+    \item \textbf{机器人}：什么是"好的抓取"？什么是"整洁的折叠"？需要人工定义，往往使用代理指标。
+    \item \textbf{对话系统}：什么是"好的回答"？高度主观，难以用简单函数衡量。
+    \item \textbf{自动驾驶}：涉及安全、舒适、效率等多个维度的权衡。
+\end{itemize}
+\end{knowledgebox}
+
+除了直接定义奖励外，我们已经见过一种替代方案：\textbf{模仿学习}——直接模仿专家动作，无需奖励。但模仿学习不推理结果和动力学，且专家可能有不同的 embodiment。
+
+\subsection{本章小结}
+
+奖励设计是 RL 应用的关键瓶颈。本讲介绍三种从人类监督中\textbf{学习}奖励的方法。
+
+\section{Goal Classifiers：从目标示例学习奖励}
+
+\subsection{基本思想}
+
+收集成功状态（正例）和失败状态（负例），训练一个二分类器，用其输出作为奖励信号。
+
+\begin{enumerate}
+    \item 收集成功状态集 $D^+$ 和失败状态集 $D^-$
+    \item 训练二分类器：输入 $s_i$，标签 $\mathbf{1}(s_i \in G)$
+    \item 用分类器输出作为 RL 的奖励
+\end{enumerate}
+
+\begin{warningbox}{Reward Hacking}
+RL 算法会积极寻找使分类器输出高分的状态。它可能找到分类器\textbf{从未训练过的}状态——即利用分类器的弱点，而不是真正完成任务。
+\end{warningbox}
+
+\subsection{对抗训练解决 Reward Hacking}
+
+解决思路：将 RL 访问的状态加入负例集合，迫使分类器不断更新以避免被利用。
+
+\begin{enumerate}
+    \item 初始化 $D^+$（成功状态）和 $D^-$（失败状态）
+    \item 用 $D^+$ 和 $D^-$ 训练分类器（平衡数据集）
+    \item 用策略 $\pi$ 收集经验 $s_t, a_t, \ldots$
+    \item 用分类器奖励更新策略
+    \item 将访问的状态加入负例：$D^- \leftarrow D^- \cup \{s_t\}$
+    \item 重复
+\end{enumerate}
+
+\begin{knowledgebox}{为什么这个方法能工作}
+分类器不再能被利用。关键问题：如果策略真的成功了怎么办？只要保持 $D^+$ 和 $D^-$ 的平衡采样，分类器对真正的成功状态仍会输出 $p \geq 0.5$。
+\end{knowledgebox}
+
+实验表明，在机器人任务中，基于 50 个演示训练的 goal classifier + RL 达到了 62\% 的成功率，远高于直接模仿学习的 26\%。
+
+\subsection{本章小结}
+
+Goal classifier 是一种简单有效的奖励学习方法。对抗训练是防止 reward hacking 的关键。
+
+\section{Inverse RL：从行为推断奖励}
+
+\subsection{基本思想}
+
+给定专家的演示轨迹，推断专家\textbf{优化的是什么奖励函数}。
+
+$$\max_\psi \; \mathbb{E}_{\tau \sim \pi_{\text{expert}}}\left[\sum_t r_\psi(s_t, a_t)\right] - \mathbb{E}_{\tau \sim \pi}\left[\sum_t r_\psi(s_t, a_t)\right]$$
+
+直觉：学到的奖励应该使专家的行为比其他策略的行为获得更高的奖励。
+
+\subsection{MaxEntIRL}
+
+加入最大熵正则化后，IRL 与 GAN 有深层联系：奖励函数类似判别器，策略类似生成器。
+
+\subsection{本章小结}
+
+Inverse RL 从专家行为中推断奖励函数，比直接模仿学习更灵活（可以处理不同 embodiment），但需要交替优化奖励和策略。
+
+\section{从人类偏好学习奖励}
+
+\subsection{偏好比较}
+
+直接让人类给绝对评分困难且噪声大。更好的方式：展示两个选项，让人类选择哪个更好。
+
+$$p(y_1 \succ y_2 \mid x) = \sigma\left(R_\phi(x, y_1) - R_\phi(x, y_2)\right)$$
+
+\begin{importantbox}{Bradley-Terry 模型}
+给定人类偏好数据 $(y_w, y_l)$（$y_w$ 被偏好），训练奖励模型 $R_\phi$ 最大化：
+$$\mathcal{L}(\phi) = \mathbb{E}\left[\log \sigma\left(R_\phi(x, y_w) - R_\phi(x, y_l)\right)\right]$$
+
+这就是 RLHF 中\textbf{奖励模型训练}的核心公式。
+\end{importantbox}
+
+\subsection{RLHF Pipeline}
+
+\begin{enumerate}
+    \item 收集人类偏好比较数据
+    \item 训练奖励模型 $R_\phi$
+    \item 用 RL（如 PPO）优化策略以最大化 $R_\phi$ 的输出
+\end{enumerate}
+
+\begin{warningbox}{奖励模型也会被利用}
+与 goal classifier 类似，如果 RL 优化过度，策略可能找到奖励模型的漏洞而不是真正满足人类偏好。因此通常加入 KL 约束，限制策略不能偏离初始策略太远。
+\end{warningbox}
+
+\subsection{本章小结}
+
+从偏好比较中学习奖励模型是 RLHF 的基础。Bradley-Terry 模型将偏好比较转化为奖励差的 sigmoid，训练简单高效。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item 奖励设计是 RL 应用的瓶颈，reward learning 提供了自动化的解决方案。
+    \item \textbf{Goal Classifiers}：从成功/失败示例学习，简单直接。对抗训练防止 reward hacking。
+    \item \textbf{Inverse RL}：从专家行为推断奖励函数，比模仿学习更灵活。
+    \item \textbf{偏好学习}：从人类偏好比较中训练奖励模型，是 RLHF 的核心。
+    \item 所有 reward learning 方法都面临 reward hacking 的风险，需要正则化和约束。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Christiano et al., \textit{Deep Reinforcement Learning from Human Preferences} (2017)。
+    \item Ziegler et al., \textit{Fine-Tuning Language Models from Human Preferences} (2019)。
+    \item Sharma et al., \textit{Self-Improving Robots: End-to-End Autonomous Visuomotor Reinforcement Learning} (2023)。
+\end{itemize}
+
+\end{document}

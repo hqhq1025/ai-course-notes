@@ -1,0 +1,227 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{CS146S Week 2: The Anatomy of Coding Agents (MCP)}
+\newcommand{\noteauthors}{基于 Mihail Eric 授课内容整理}
+\newcommand{\notedate}{2025年10月}
+\newcommand{\videochannel}{Stanford CS146S}
+\newcommand{\videopublishdate}{Fall 2025}
+\newcommand{\videoduration}{2 lectures (Mon + Fri)}
+\newcommand{\videourl}{https://themodernsoftware.dev}
+\newcommand{\videocoverpath}{}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+\vspace{3cm}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程}：\videochannel\par
+\textbf{学期}：\videopublishdate\par
+\textbf{讲次}：\videoduration\par
+\textbf{网站}：\href{\videourl}{\nolinkurl{\videourl}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{从零构建 Coding Agent}
+
+\subsection{什么是 Coding Agent}
+
+Coding Agent 是一种能够自主执行编程任务的 AI 系统。其核心组件包括：
+
+\begin{itemize}
+    \item \textbf{System Prompt}：定义 Agent 的行为和指令
+    \item \textbf{User Prompt}：用户的自定义请求
+    \item \textbf{Assistant Prompt}：LLM 的响应
+    \item \textbf{Tool Set}：Agent 可调用的工具集合
+\end{itemize}
+
+\begin{importantbox}{Coding Agent 的核心循环}
+一个 Coding Agent 的基本工作流程极其简单：
+\begin{enumerate}
+    \item 从终端读取用户输入，持续追加到对话历史
+    \item 告知 LLM 可用的工具（Read\_file、List\_dir、Edit\_file 等）
+    \item LLM 在适当时机请求调用工具
+    \item 离线执行工具调用并返回结果
+    \item 重复上述过程直到任务完成
+\end{enumerate}
+\end{importantbox}
+
+\subsection{``秘密武器''：Claude Code 的设计哲学}
+
+深入分析 Claude Code 的底层设计，可以发现几个关键的工程决策：
+
+\begin{enumerate}
+    \item \textbf{前置 context 注入}：使用小而精准的 prompt 进行 context 前置加载
+    \item \textbf{System reminders 无处不在}：在 system prompt、user prompt、tool calls、tool results 中都插入 \texttt{<system-reminder>} 标签，防止模型在长对话中偏离目标
+    \item \textbf{Command prefix extraction}：从用户输入中提取命令前缀，实现快捷操作
+    \item \textbf{Subagent 派生}：生成子 Agent 处理特定子任务，避免单个 context 过载
+\end{enumerate}
+
+\begin{warningbox}{Context Drift 问题}
+在长对话中，LLM 容易``忘记''早期的指令和约束——这被称为 context drift。Claude Code 通过在对话的各个环节反复插入 system reminders 来对抗这一问题。这是一个经过工程验证的关键技巧。
+\end{warningbox}
+
+\subsection{本章小结}
+
+构建一个基础 Coding Agent 的技术门槛其实很低——核心就是 LLM + tool calling 的循环。但要构建一个\textbf{可靠}的 Coding Agent，需要大量的工程细节：context 管理、drift 防护、子任务分解等。
+
+\section{Model Context Protocol (MCP)}
+
+\subsection{为什么需要 MCP}
+
+LLM 拥有广泛但\textbf{静态}的世界知识——只有在重训时才会更新。要构建真正自主的系统，需要可靠的方式向 LLM 注入动态数据（天气、股价、最新 API 文档等）。
+
+RAG 和 tool calling 是目前最好的答案。但问题在于：
+
+\begin{knowledgebox}{M $\times$ N 连接器问题}
+假设有 $M$ 个 LLM 应用和 $N$ 个第三方工具/API。在 MCP 之前，每个应用需要为每个工具编写独立的集成代码——包括认证、错误处理、速率限制等。这导致了 $M \times N$ 个连接器的维护负担。
+\end{knowledgebox}
+
+\subsection{MCP 是什么}
+
+MCP（Model Context Protocol）是 Anthropic 于 2024 年 11 月推出的开放协议，为 LLM 提供了一种\textbf{标准化}的工具暴露格式。
+
+\begin{importantbox}{MCP 的核心价值}
+MCP 将工具集成从 $M \times N$ 降低到 $M + N$：
+\begin{itemize}
+    \item 不需要为每个工具重新实现认证、错误处理、速率限制
+    \item 使用 JSON-RPC 强制执行一致的输出格式
+    \item 从 Language Server Protocol (LSP) 扩展而来，但支持\textbf{主动的}（proactive）agentic workflow，而非 LSP 的纯反应式模式
+\end{itemize}
+\end{importantbox}
+
+\subsection{MCP 架构详解}
+
+\subsubsection{核心术语}
+
+\begin{itemize}
+    \item \textbf{Host}：宿主应用（如 Cursor、Claude Desktop）
+    \item \textbf{MCP Client}：嵌入在 Host 中的库（为每个 Server 维护有状态的 session）
+    \item \textbf{MCP Server}：轻量级的工具包装器（wrapper）
+    \item \textbf{Tool}：可调用的函数（数据源、API 等）
+\end{itemize}
+
+\subsubsection{工作流程}
+
+\begin{enumerate}
+    \item Client 调用 \texttt{tools/list} 向 MCP Server 查询：``你能做什么？''
+    \item Server 返回 JSON 描述每个工具（名称、摘要、JSON Schema）
+    \item Host 将这些 JSON 注入模型的 context
+    \item 用户 prompt 触发模型，模型输出结构化的 tool call
+    \item MCP Server 执行调用，对话继续
+\end{enumerate}
+
+\subsubsection{传输层}
+
+MCP 提供两种传输机制：
+\begin{itemize}
+    \item \textbf{stdio}：标准输入/输出，适用于本地进程通信
+    \item \textbf{SSE}（Server-Sent Events）：适用于远程服务通信
+\end{itemize}
+
+\subsection{MCP 的局限性}
+
+\begin{warningbox}{当前 Agent 处理多工具的能力有限}
+\begin{itemize}
+    \item Agent 在面对大量工具时表现不佳——工具描述会快速消耗 context window
+    \item API 设计需要面向 AI 原生（AI-native），而非沿用传统的刚性 API 设计
+    \item 复杂的 API 参数和嵌套结构会显著降低工具调用的准确率
+\end{itemize}
+\end{warningbox}
+
+\subsection{本章小结}
+
+MCP 是 AI 编程工具生态的重要基础设施，通过标准化的协议解决了 LLM 与外部工具集成的 $M \times N$ 问题。理解 MCP 的架构（Host $\rightarrow$ Client $\rightarrow$ Server $\rightarrow$ Tool）和通信流程是构建和使用 AI 编程工具的关键。
+
+\section{总结与延伸}
+
+Week 2 深入了 Coding Agent 的技术内核。从手动构建一个最小化的 Coding Agent，到理解 MCP 协议如何将工具集成标准化，课程展示了 AI 编程工具``魔法''背后的工程实现。
+
+\subsection{关键要点}
+
+\begin{itemize}
+    \item Coding Agent = LLM + Tool Calling 循环，核心简单但工程细节决定质量
+    \item Claude Code 的关键设计：context 前置加载、system reminders 防 drift、subagent 分流
+    \item MCP 将 $M \times N$ 集成降为 $M + N$，使用 JSON-RPC 标准化工具描述
+    \item MCP 架构：Host $\rightarrow$ Client $\rightarrow$ Server $\rightarrow$ Tool
+    \item 当前局限：Agent 处理多工具能力有限，API 需要 AI-native 设计
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item MCP 官方文档：\url{https://modelcontextprotocol.io}
+    \item Anthropic MCP 发布博客：\url{https://www.anthropic.com/news/model-context-protocol}
+    \item JSON-RPC 2.0 规范：\url{https://www.jsonrpc.org/specification}
+    \item Language Server Protocol：\url{https://microsoft.github.io/language-server-protocol/}
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

@@ -1,0 +1,202 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\newcommand{\notetitle}{CS224R Lecture 9: RLHF 与偏好优化}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-05}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/spring\_2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.1cm}
+\ifdefempty{\videocoverpath}{{\small 封面图未提供。\par}}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Archit Sharma (Guest Lecture)\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/spring_2025/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{从语言模型到助手}
+
+\subsection{预训练语言模型的局限}
+
+预训练语言模型学会了\textbf{补全文本}，但这不等于\textbf{帮助用户}。语言建模目标与"满足人类偏好"之间存在根本性的不对齐。
+
+\begin{knowledgebox}{预训练学到了什么}
+预训练通过大量文本学到了丰富的知识：事实、语法、共指消解、情感分析、基本推理、数学、编程等。但它学到的是"下一个最可能的 token"，而不是"用户最想要的回答"。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+预训练 LM 具有丰富的知识和能力，但需要额外的对齐步骤才能成为有用的助手。
+
+\section{Instruction Finetuning}
+
+\subsection{基本方法}
+
+收集 (instruction, output) 对，在预训练模型上继续做监督微调。
+
+\begin{importantbox}{Instruction Finetuning 的效果}
+FLAN-T5 在 1800+ 任务上进行 instruction finetuning 后，在未见过的任务上表现显著提升。更大的模型从 finetuning 中获益更多。
+\end{importantbox}
+
+\subsection{Instruction Finetuning 的局限}
+
+\begin{enumerate}
+    \item \textbf{开放式生成没有标准答案}：创意写作等任务无法用唯一正确输出来监督。
+    \item \textbf{Token 级别的惩罚不区分错误严重程度}：语言建模损失对所有 token 错误一视同仁。
+    \item \textbf{人类生成的答案本身不完美}：标注数据有噪声。
+\end{enumerate}
+
+\subsection{本章小结}
+
+Instruction finetuning 是从 LM 到助手的第一步，但仍存在目标不对齐的问题。需要更直接地优化人类偏好。
+
+\section{RLHF：从人类偏好中强化学习}
+
+\subsection{核心框架}
+
+\begin{enumerate}
+    \item \textbf{Instruction Finetuning}：作为初始化。
+    \item \textbf{训练奖励模型}：从人类偏好比较中学习 $R_\phi(x, y)$。
+    \item \textbf{RL 优化}：用 PPO 等算法最大化奖励模型的输出。
+\end{enumerate}
+
+\subsection{奖励模型训练}
+
+人类比较两个回答并选择更好的那个。使用 Bradley-Terry 模型：
+$$p(y_w \succ y_l \mid x) = \sigma(R_\phi(x, y_w) - R_\phi(x, y_l))$$
+
+损失函数：
+$$\mathcal{L}(\phi) = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma(R_\phi(x, y_w) - R_\phi(x, y_l))\right]$$
+
+\begin{knowledgebox}{为什么用比较而不是评分}
+人类给绝对评分时噪声大且校准不一致。成对比较更简单、更可靠：只需判断"A 比 B 好"而不需要"A 是 7.3 分"。
+\end{knowledgebox}
+
+\subsection{Policy Gradient 用于 LLM}
+
+将 LLM 生成视为 RL 问题：
+$$\max_\theta \; \mathbb{E}_{y \sim p_\theta(y|x)} \left[R_\phi(x, y)\right]$$
+
+使用 REINFORCE / policy gradient：
+$$\theta_{t+1} := \theta_t + \alpha \frac{1}{m}\sum_{i=1}^{m} R(s_i) \nabla_{\theta_t} \log p_{\theta_t}(s_i)$$
+
+直觉：高奖励的生成增加概率，低奖励的生成降低概率。
+
+\begin{warningbox}{KL 正则化的必要性}
+不加约束地优化奖励模型，策略会 exploit 奖励模型的弱点（reward hacking）。标准做法是加入 KL 惩罚：
+$$\max_\theta \; \mathbb{E}_{y \sim p_\theta}\left[R_\phi(x, y)\right] - \beta \, D_{\mathrm{KL}}(p_\theta \| p_{\mathrm{ref}})$$
+其中 $p_{\mathrm{ref}}$ 是 SFT 模型。$\beta$ 控制策略偏离初始模型的程度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RLHF 的完整 pipeline：instruction finetuning $\to$ 奖励模型训练 $\to$ PPO 优化。KL 正则化是防止 reward hacking 的关键。
+
+\section{DPO：Direct Preference Optimization}
+
+\subsection{绕过奖励模型}
+
+\begin{importantbox}{DPO 的核心洞察}
+RLHF 中带 KL 约束的 RL 问题有\textbf{闭式解}：
+$$\pi^*(y \mid x) = \frac{1}{Z(x)} \pi_{\mathrm{ref}}(y \mid x) \exp\left(\frac{1}{\beta} r(x, y)\right)$$
+
+反过来可以将奖励表示为策略的函数：
+$$r(x, y) = \beta \log \frac{\pi^*(y \mid x)}{\pi_{\mathrm{ref}}(y \mid x)} + \beta \log Z(x)$$
+
+将此代入 Bradley-Terry 模型，$Z(x)$ 项相消，得到 DPO 损失：
+$$\mathcal{L}_{\mathrm{DPO}}(\theta) = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w \mid x)}{\pi_{\mathrm{ref}}(y_w \mid x)} - \beta \log \frac{\pi_\theta(y_l \mid x)}{\pi_{\mathrm{ref}}(y_l \mid x)}\right)\right]$$
+\end{importantbox}
+
+DPO 的优势：
+\begin{itemize}
+    \item 不需要训练单独的奖励模型。
+    \item 不需要 RL 训练（无需 PPO）。
+    \item 只需要标准的监督训练循环。
+    \item 训练更稳定、更简单。
+\end{itemize}
+
+\subsection{DPO 的直觉}
+
+DPO 损失隐式地做了两件事：
+\begin{enumerate}
+    \item \textbf{增加}被偏好回答 $y_w$ 的概率。
+    \item \textbf{降低}不被偏好回答 $y_l$ 的概率。
+\end{enumerate}
+
+权重由 $\sigma$ 函数内部的"隐式奖励差"自动调节。
+
+\begin{knowledgebox}{DPO vs. RLHF}
+\begin{itemize}
+    \item \textbf{RLHF}：训练奖励模型 $\to$ RL 优化。两阶段，需要 RL 基础设施。
+    \item \textbf{DPO}：直接在偏好数据上优化策略。单阶段，只需 SFT 代码。
+    \item 理论上 DPO 与 RLHF 优化的是\textbf{同一个目标}。
+    \item 实践中 DPO 更简单但可能在某些场景下不如 RLHF 灵活。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DPO 通过将 RL 目标的闭式解代入 Bradley-Terry 模型，将偏好优化简化为纯监督学习问题。它是目前 LLM 对齐中最流行的方法之一。
+
+\section{RL for LLM Reasoning}
+
+\subsection{超越偏好：可验证奖励}
+
+在数学、编程等领域，答案是否正确可以\textbf{自动验证}。此时不需要人类偏好，可以直接用正确性作为奖励进行 RL 训练。
+
+\begin{importantbox}{RL for Reasoning 的兴起}
+DeepSeek-R1 等模型展示了 RL 训练能让 LLM 学会推理中的自我纠错和思维链等能力。这是 RL 在 LLM 中除对齐之外的另一个重要应用方向。
+\end{importantbox}
+
+\subsection{本章小结}
+
+RL 在 LLM 中不仅用于对齐（RLHF/DPO），还可以用于提升推理能力。可验证奖励（如数学答案正确性）为 RL 训练提供了免费且准确的信号。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item 从预训练 LM 到助手需要三步：instruction finetuning、奖励建模、策略优化。
+    \item \textbf{RLHF}：训练奖励模型 + PPO 优化，是 ChatGPT 等模型的核心技术。
+    \item \textbf{DPO}：将偏好优化简化为监督学习，无需 RL 基础设施。
+    \item KL 正则化防止 reward hacking，是偏好优化的关键组件。
+    \item RL 在 LLM 推理（数学、编程）中展现出巨大潜力。
+    \item 偏好比较比绝对评分更可靠，Bradley-Terry 模型是标准框架。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Ouyang et al., \textit{Training Language Models to Follow Instructions with Human Feedback} (InstructGPT, 2022)。
+    \item Rafailov et al., \textit{Direct Preference Optimization: Your Language Model is Secretly a Reward Model} (DPO, 2023)。
+    \item DeepSeek-AI, \textit{DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning} (2025)。
+    \item Chung et al., \textit{Scaling Instruction-Finetuned Language Models} (FLAN-T5, 2022)。
+\end{itemize}
+
+\end{document}

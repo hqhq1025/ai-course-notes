@@ -1,0 +1,155 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{[CS25] Perceiver and Perceiver IO — Andrew Jaegle, DeepMind}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Stanford CS25}
+\newcommand{\videopublishdate}{2021}
+\newcommand{\videoduration}{约60分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{引言：通用架构的动机}
+
+Andrew Jaegle 来自 DeepMind，介绍了 \textbf{Perceiver} 系列架构的研究动机和设计。核心目标是开发\textbf{通用感知架构}——一个能处理任意模态输入（图像、音频、视频、点云、文本等）的单一模型。
+
+\begin{importantbox}{为什么需要通用架构？}
+\begin{itemize}
+    \item 现实世界的数据模态极其多样（视觉、听觉、触觉、本体感觉、语言等）
+    \item 为每种模态设计专用架构效率低下且不可持续
+    \item 人类大脑能用统一的神经计算处理多种感知输入
+\end{itemize}
+\end{importantbox}
+
+\section{标准 Transformer 的瓶颈}
+
+\subsection{自注意力的二次复杂度}
+
+标准 Transformer 的自注意力复杂度为 $O(N^2)$，其中 $N$ 是序列长度。对于高维感知数据：
+\begin{itemize}
+    \item 图像 $224 \times 224 = 50176$ 像素
+    \item 音频 48kHz $\times$ 数秒 = 数十万采样点
+    \item 视频 = 帧数 $\times$ 像素数，轻松达到百万级
+\end{itemize}
+
+直接在这些序列上做自注意力在计算上不可行。
+
+\subsection{本章小结}
+
+标准 Transformer 的二次复杂度是构建通用感知架构的主要障碍。Perceiver 通过引入潜在瓶颈来解决这个问题。
+
+\section{Perceiver：交叉注意力瓶颈}
+
+\subsection{核心架构}
+
+\begin{importantbox}{Perceiver 的关键设计}
+引入一组\textbf{可学习的潜在变量}（latent array），维度远小于输入。处理流程：
+\begin{enumerate}
+    \item \textbf{交叉注意力}：潜在变量（query）从输入数据（key, value）中提取信息。复杂度 $O(M \times N)$，其中 $M \ll N$
+    \item \textbf{自注意力}：潜在变量之间进行自注意力计算。复杂度 $O(M^2)$
+    \item 重复上述步骤（迭代细化）
+\end{enumerate}
+这样，计算复杂度主要由 $M$（潜在变量数量）决定，与输入大小 $N$ 解耦。
+\end{importantbox}
+
+\begin{knowledgebox}{与 Slot Attention 的关系}
+Perceiver 的潜在变量类似于 Slot Attention 中的 ``slots''——两者都使用可学习的向量从输入数据中提取信息。但 Perceiver 更通用，不局限于对象分割。
+\end{knowledgebox}
+
+\subsection{位置编码的角色}
+
+由于 Perceiver 的输入是``扁平化''的字节数组，位置编码至关重要：
+\begin{itemize}
+    \item 使用傅里叶特征（Fourier features）编码位置
+    \item 可以灵活适应不同模态的空间/时间结构
+    \item 不假设任何特定的空间拓扑
+\end{itemize}
+
+\subsection{本章小结}
+
+Perceiver 通过交叉注意力将高维输入压缩到低维潜在空间，使计算复杂度不再受限于输入大小。
+
+\section{Perceiver IO：通用输出}
+
+\subsection{从感知到输出}
+
+原始 Perceiver 主要处理分类等简单输出。\textbf{Perceiver IO} 将通用性扩展到输出端。
+
+\begin{importantbox}{Perceiver IO 的输出机制}
+使用\textbf{输出查询}（output query）通过交叉注意力从潜在变量中读取信息：
+\begin{enumerate}
+    \item 定义与目标输出对应的查询向量
+    \item 这些查询向潜在变量做交叉注意力
+    \item 得到任意大小和结构的输出
+\end{enumerate}
+输出大小独立于潜在变量数量，实现了$O(\text{output size})$的线性缩放。
+\end{importantbox}
+
+\subsection{多模态多任务应用}
+
+Perceiver IO 可以用\textbf{同一个架构}处理：
+\begin{itemize}
+    \item 图像分类和目标检测
+    \item 光流估计（dense prediction）
+    \item 自然语言理解
+    \item 多模态输入（如视频 + 音频 + 文本）
+    \item 星际争霸 II 游戏
+\end{itemize}
+
+\begin{knowledgebox}{将任何数据视为表格数据}
+Perceiver 将所有输入数据视为``表格数据''——一个 $N \times C$ 的数组，其中 $N$ 是元素数量，$C$ 是每个元素的特征维度。位置编码提供结构信息。这种统一视角是通用性的关键。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Perceiver IO 将通用性从输入端扩展到输出端，真正实现了``一个架构处理所有模态''的愿景。
+
+\section{总结与延伸}
+
+Perceiver 系列展示了一种优雅的方式来构建通用感知架构：通过潜在瓶颈解耦输入/输出大小与计算复杂度。这一思想对后续的通用模型设计产生了深远影响。
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Jaegle et al., ``Perceiver: General Perception with Iterative Attention,'' ICML 2021
+    \item Jaegle et al., ``Perceiver IO: A General Architecture for Structured Inputs \& Outputs,'' ICLR 2022
+    \item Locatello et al., ``Object-Centric Learning with Slot Attention,'' NeurIPS 2020
+\end{itemize}
+
+\end{document}

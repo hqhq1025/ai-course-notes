@@ -1,0 +1,220 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+\newcommand{\notetitle}{CS224R Lecture 2: 模仿学习}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-04}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/spring\_2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.1cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 封面图未提供。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/spring_2025/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{模仿学习的基本思想}
+
+模仿学习（Imitation Learning）是深度 RL 中最直接的方法：给定专家的演示数据，让策略学会模仿专家的行为。
+
+\begin{importantbox}{模仿学习的目标}
+给定由专家策略 $\pi_{\text{expert}}$ 采集的演示轨迹数据集 $\mathcal{D} = \{(s_1, a_1, \ldots, s_T)\}$，目标是学习一个策略 $\pi_\theta$，使其表现达到专家水平。
+\end{importantbox}
+
+\subsection{Version 0：确定性策略回归}
+
+最简单的方法是将模仿学习视为监督回归问题：
+$$\min_\theta \frac{1}{|\mathcal{D}|} \sum_{(s,a) \in \mathcal{D}} \| \hat{a} - a \|^2, \quad \text{其中 } \hat{a} = \pi_\theta(s)$$
+
+\begin{warningbox}{均值问题}
+当数据由多个演示者收集时，$\ell_2$ 回归会趋向数据的\textbf{均值}。例如在驾驶场景中，如果有人向左打方向盘、有人向右打，回归结果可能是直行——这在实际中非常危险。这种情况在实践中\textbf{非常常见}。
+\end{warningbox}
+
+\subsection{本章小结}
+
+模仿学习的最简单版本是行为克隆（Behavior Cloning），但确定性回归在多模态数据上会产生均值问题。
+
+\section{学习表达性策略分布}
+
+\subsection{用神经网络表示分布}
+
+对于\textbf{离散动作}，神经网络可以输出各动作的概率，构成 categorical 分布——这是最大化表达力的。
+
+对于\textbf{连续动作}，简单地输出 $\mu, \sigma$ 构成高斯分布\textbf{表达力不足}——它只能表示单峰分布。
+
+\begin{importantbox}{关键洞察：网络表达力 $\neq$ 分布表达力}
+神经网络本身很"大"并不意味着它输出的分布很丰富。一个很大的网络输出单个高斯分布，仍然只能表示单峰行为。真正需要的是\textbf{分布层面}的表达力。
+\end{importantbox}
+
+\subsection{生成模型作为策略}
+
+核心想法：借助生成模型的工具来学习策略分布 $p(a \mid s)$。三种主要方法：
+
+\begin{enumerate}
+    \item \textbf{Mixture of Gaussians（MoG）}：输出多个高斯分量的参数 $(\mu_i, \sigma_i, w_i)$。
+    \item \textbf{Discretize + Autoregressive}：将连续动作离散化，自回归地预测每个维度。
+    \item \textbf{Diffusion Policy}：迭代去噪，从噪声中生成动作。
+\end{enumerate}
+
+\subsection{Version 1：表达性策略的模仿学习}
+
+使用表达性分布后，优化目标变为最大化演示动作的对数似然：
+$$\min_\theta - \mathbb{E}_{(s,a) \sim \mathcal{D}} \left[\log \pi_\theta(a \mid s)\right]$$
+
+实验证明，diffusion policy 和 GMM 在多人数据集上远优于 $\ell_2$ 回归，尤其是在机器人操作任务中。
+
+\subsection{实际应用}
+
+表达性策略 + 模仿学习的范式已经被广泛采用：
+\begin{itemize}
+    \item Physical Intelligence $\pi_0$：使用 diffusion policy。
+    \item NVIDIA Gr00t N1：使用 diffusion policy。
+    \item OpenVLA：使用 discretize + autoregressive。
+    \item Waymo EMMA、Wayve LINGO-2：自动驾驶中的 autoregressive prediction。
+\end{itemize}
+
+\subsection{本章小结}
+
+表达性策略是模仿学习成功的关键。生成模型（diffusion、GMM、autoregressive）为策略提供了丰富的分布表达力，使其能够捕捉数据中的多模态行为。
+
+\section{累积误差与在线修正}
+
+\subsection{Compounding Errors 问题}
+
+模仿学习与标准监督学习的关键区别：在监督学习中，输入 $x$ 独立于预测 $\hat{y}$；但在行为学习中，预测的动作 $\hat{a}$ 会影响下一个状态 $s'$。
+
+一旦学习到的策略犯了小错误，它就会漂移到训练数据分布之外。在这些未见过的状态上，策略可能犯更大的错误，导致\textbf{误差累积}（compounding errors）。
+
+\begin{warningbox}{分布偏移}
+核心问题是 $p_{\text{expert}}(s) \neq p_{\pi}(s)$：专家访问的状态分布与学习策略访问的状态分布不同。这就是 covariate shift。
+\end{warningbox}
+
+\subsection{DAgger：数据集聚合}
+
+解决思路：让学习到的策略运行，然后在它访问的状态上查询专家的动作，将修正数据加入训练集。
+
+\begin{enumerate}
+    \item 用学习策略 $\pi_\theta$ rollout：$s'_1, \hat{a}_1, \ldots, s'_T$
+    \item 在访问的状态上查询专家动作 $a^* \sim \pi_{\text{expert}}(\cdot \mid s')$
+    \item 将修正数据加入数据集 $\mathcal{D} \leftarrow \mathcal{D} \cup \{(s', a^*)\}$
+    \item 重新训练策略
+\end{enumerate}
+
+\subsection{Human-Gated DAgger：干预式修正}
+
+更实用的变体：人类在策略运行时监控，在策略犯错时接管控制权，提供部分演示，然后将这些修正数据加入训练集。
+
+\begin{knowledgebox}{Offline vs. Online 模仿学习}
+\begin{itemize}
+    \item \textbf{Offline（行为克隆）}：仅使用现有数据，不需要运行学习到的策略。简单安全，但可能需要大量数据。
+    \item \textbf{Online（DAgger/HG-DAgger）}：涉及运行策略并收集修正数据。数据效率更高，但需要交互接口。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Compounding errors 是模仿学习的核心挑战。DAgger 和 HG-DAgger 通过收集修正数据来缓解分布偏移问题。许多成功的方法会结合模仿学习和强化学习。
+
+\section{演示数据的收集}
+
+在某些领域（如驾驶、文本输入），演示数据可以从人类日常活动中自然收集。在机器人领域，常见方法包括：
+\begin{itemize}
+    \item \textbf{Kinesthetic Teaching}：直接用手引导机器人，界面简单但人手可能出现在画面中。
+    \item \textbf{Remote Controllers}：远程控制，可能有延迟。
+    \item \textbf{Puppeteering}：用镜像硬件操控，界面直觉但需要双倍硬件。
+\end{itemize}
+
+能否直接使用人类/动物的视频？存在\textbf{embodiment gap}（外观差异、自由度差异），直接模仿困难，但可以用来引导探索。
+
+\subsection{本章小结}
+
+演示数据的收集方式取决于应用领域。机器人领域有多种方法，各有优劣。跨 embodiment 的模仿仍是开放问题。
+
+\section{总结与延伸}
+
+本讲的核心要点：
+
+\begin{enumerate}
+    \item \textbf{行为克隆}：将模仿学习视为监督学习，简单但存在均值问题。
+    \item \textbf{表达性策略}：使用生成模型（diffusion、GMM、autoregressive）作为策略类，是实践中成功的关键。
+    \item \textbf{Compounding errors}：模仿学习的核心挑战，由分布偏移引起。
+    \item \textbf{DAgger/HG-DAgger}：通过在线修正来缓解。
+    \item 模仿学习是完全 offline 的（不需要奖励函数），但无法超越演示者，也没有自我改进的框架。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Chi et al., \textit{Diffusion Policy}: 将 diffusion model 用于机器人策略的开创性工作。
+    \item Ross et al., \textit{A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning} (DAgger 原文)。
+    \item Brohan et al., \textit{RT-2}: Vision-Language-Action Models，展示了大规模模仿学习的效果。
+\end{itemize}
+
+\end{document}

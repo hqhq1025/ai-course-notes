@@ -1,0 +1,298 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
+    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
+    captionpos=b, extendedchars=false
+}
+
+\newcommand{\notetitle}{[CS25 V5] Transformers in Diffusion Models --- Sayak Paul, HuggingFace}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
+\newcommand{\videopublishdate}{Spring 2025}
+\newcommand{\videoduration}{$\sim$1h}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{引言：扩散模型中的 Transformer 革命}
+
+Sayak Paul 是 HuggingFace 的工程师，主要负责 Diffusers 库的开发与维护，专注于扩散模型的训练、评估和应用。本讲系统梳理了 Transformer 如何逐步取代 U-Net 成为扩散模型的核心骨干网络。
+
+\begin{knowledgebox}{讲座范围说明}
+\begin{itemize}
+    \item 不会详细推导扩散或 Flow Matching 的数学原理，仅给出快速概览
+    \item 讨论的架构对扩散和 Flow Matching 是通用的
+    \item 以图像生成为主要示例，但这些架构也适用于音频等连续模态
+\end{itemize}
+\end{knowledgebox}
+
+\section{扩散模型基础}
+
+\subsection{核心思想}
+
+扩散模型的核心思想是：从随机噪声出发，通过\textbf{迭代去噪}过程逐步生成逼真图像。与 GAN（一步生成）不同，扩散模型是\textbf{序列化}的——需要多步去噪才能完成生成。
+
+当以文本作为条件时，去噪过程被引导向文本描述的方向，从而实现文本到图像的生成。
+
+\subsection{系统组件概览}
+
+一个完整的文本到图像系统包含以下组件：
+\begin{enumerate}
+    \item \textbf{文本编码器}：将文本提示转换为嵌入向量（当前最先进模型通常使用多个文本编码器，如 Stable Diffusion 3 使用三个）
+    \item \textbf{噪声潜变量}：从高斯分布采样的初始噪声
+    \item \textbf{时间步}：控制去噪过程进度的调度参数
+    \item \textbf{核心扩散网络}：执行去噪的主体网络（本讲重点）
+    \item \textbf{解码器}：将去噪后的潜变量转换为最终图像
+\end{enumerate}
+
+\begin{importantbox}{潜空间 vs.\ 像素空间}
+当前最先进的扩散模型几乎都在\textbf{潜空间}（Latent Space）而非像素空间中操作，因为像素空间的计算成本过高。这就是为什么输入是``噪声潜变量''而非原始像素。
+\end{importantbox}
+
+\subsection{训练与推理}
+
+\textbf{训练}：给定原始图像 $x_0$，从标准高斯分布采样噪声 $\epsilon$，从均匀分布采样时间步 $t$，通过噪声调度器混合得到含噪样本 $x_t$。训练目标是让网络预测噪声（或速度向量）。
+
+\textbf{推理}：从纯噪声出发，按时间步序列依次调用网络进行去噪，最终得到生成样本。
+
+\subsection{本章小结}
+
+扩散模型通过迭代去噪实现高质量图像生成，其系统由文本编码器、核心扩散网络和解码器组成。
+
+\section{早期架构：U-Net 时代}
+
+\subsection{U-Net 的主导地位}
+
+在 Transformer 进入之前，扩散模型几乎清一色使用 \textbf{U-Net} 作为核心网络——这是一种具有下采样-上采样结构和跳跃连接的卷积网络，最初为医学图像分割而设计。
+
+U-Net 的局限性包括：
+\begin{itemize}
+    \item 感受野受限于卷积核大小
+    \item 扩展性不如 Transformer（难以利用 Scaling Laws）
+    \item 缺乏成熟的大规模训练基础设施
+\end{itemize}
+
+\subsection{本章小结}
+
+U-Net 虽然在扩散模型早期取得了巨大成功，但其架构特性限制了进一步扩展。
+
+\section{DiT：扩散 Transformer 的诞生}
+
+\subsection{DiT 架构}
+
+\textbf{DiT}（Diffusion Transformer）是将 Transformer 引入扩散模型的里程碑工作。其核心设计：
+
+\begin{enumerate}
+    \item \textbf{Patchify}：将图像分割为 patch 并线性投影为 token 序列
+    \item \textbf{标准 Transformer 编码器}：多头自注意力 + MLP
+    \item \textbf{自适应层归一化}（Adaptive Layer Norm, adaLN）：用于注入条件信息
+    \item \textbf{Unpatchify}：单层解码器将输出 token 重新组装为图像
+\end{enumerate}
+
+\subsection{adaLN：条件注入的核心}
+
+\begin{importantbox}{自适应层归一化优于交叉注意力}
+在 DiT 中，条件信息（时间步嵌入 + 类别嵌入之和）通过 adaLN 注入，而\textbf{不是}通过交叉注意力。实验表明 adaLN 在性能和计算效率上都明显优于交叉注意力。原因是：
+\begin{itemize}
+    \item 当条件信息相对简单（如类别标签）时，交叉注意力是浪费计算
+    \item 在连续模态中，adaLN 对条件依赖的建模更为高效
+\end{itemize}
+\end{importantbox}
+
+通过标准层归一化加上额外的调制参数（从条件空间学习），adaLN 控制了 Transformer 块内部的``风格''信息流。
+
+\subsection{初始化策略}
+
+DiT 使用标准 ViT 初始化，但有两个关键修改：
+\begin{itemize}
+    \item 每个 Transformer 块初始化为恒等映射（类似 ResNet 中将 BatchNorm 的 $\beta$ 初始化为零）
+    \item 这有助于训练稳定性
+\end{itemize}
+
+\subsection{Scaling 特性}
+
+DiT 展示了优雅的扩展性——随着计算量增加，性能持续提升，且所有基于 ViT 的训练技术都可以直接应用。
+
+\subsection{本章小结}
+
+DiT 证明了 Transformer 可以有效替代 U-Net 作为扩散模型的核心网络，adaLN 是高效条件注入的关键。
+
+\section{从类别条件到文本条件}
+
+\subsection{PixArt-$\alpha$：文本条件 DiT 的先驱}
+
+将 DiT 从类别条件扩展到文本条件的关键问题是如何嵌入自然语言提示。PixArt-$\alpha$ 是早期探索这一方向的重要工作。
+
+文本条件的引入需要：
+\begin{itemize}
+    \item 使用预训练文本编码器（如 T5、CLIP）生成文本嵌入
+    \item 在 Transformer 块中引入\textbf{交叉注意力层}来建模文本与视觉 token 的交互
+\end{itemize}
+
+\begin{warningbox}{adaLN 与交叉注意力的适用场景}
+对于简单条件（类别标签、时间步），adaLN 足够且更高效。但对于复杂的文本条件，交叉注意力变得必要——文本序列的可变长度和丰富语义需要更灵活的交互机制。
+\end{warningbox}
+
+\subsection{adaLN 调制的重要演进}
+
+不同工作探索了如何在 Transformer 各层之间调制条件信息：
+\begin{itemize}
+    \item 共享 adaLN 参数（计算高效但表达力受限）
+    \item 每层独立的 adaLN 参数（表达力更强）
+    \item adaLN-Zero 变体（更高效的调制方式）
+\end{itemize}
+
+\subsection{本章小结}
+
+从类别条件到文本条件的扩展需要引入交叉注意力，而 adaLN 仍然在控制去噪过程的风格化方面发挥重要作用。
+
+\section{MM-DiT 与 Stable Diffusion 3}
+
+\subsection{MM-DiT 架构}
+
+MM-DiT（Multimodal DiT）是 Stable Diffusion 3 使用的架构，其核心创新是将文本 token 和视觉 token 放入同一个注意力计算中：
+
+\begin{itemize}
+    \item 文本和图像各自有独立的 adaLN 和 MLP
+    \item 但在注意力计算中，文本和图像 token 被拼接在一起进行联合自注意力
+    \item 这使得文本和图像之间的信息流动更加自然
+\end{itemize}
+
+\subsection{本章小结}
+
+MM-DiT 通过联合自注意力统一了文本和视觉 token 的交互方式，是当前最先进的文本到图像架构之一。
+
+\section{结构化控制与视频生成}
+
+\subsection{结构化控制}
+
+除了文本条件外，实际应用中还需要更精细的控制：
+\begin{itemize}
+    \item \textbf{姿态控制}：让生成的图像遵循特定的人体姿态
+    \item \textbf{分割图控制}：基于语义分割图生成图像
+    \item \textbf{深度图控制}：基于深度信息引导生成
+\end{itemize}
+
+实现方式包括：
+\begin{itemize}
+    \item \textbf{ControlNet}：学习辅助网络来编码结构信号并注入基础模型
+    \item \textbf{Flux Control}：增加输入通道以接受额外控制信号
+    \item \textbf{适配器网络}：学习小型网络来建模条件与噪声 token 的依赖关系
+\end{itemize}
+
+\begin{warningbox}{空间对应性问题}
+结构化控制（如姿态、分割图）具有空间对应性，但其他任务（如主题驱动生成、图像编辑）可能没有直接的空间对应关系。这是一个活跃的研究方向。
+\end{warningbox}
+
+\subsection{视频扩散模型}
+
+将扩散 Transformer 扩展到视频领域面临的挑战：
+\begin{itemize}
+    \item 注意力计算从 2D 扩展到 3D，计算量急剧增加
+    \item 分解注意力（如空间 + 时间分别处理）效果不佳
+    \item RoPE 位置编码在视频场景中工作良好
+\end{itemize}
+
+\subsection{本章小结}
+
+从图像到视频，从文本条件到结构化控制，扩散 Transformer 正在向更通用、更可控的方向发展。
+
+\section{下一代架构：上下文学习与统一生成}
+
+\subsection{扩散模型中的上下文学习}
+
+如何在扩散模型中实现类似语言模型的零样本/少样本学习？基本思路是：
+\begin{itemize}
+    \item 从预训练 LLM 出发，添加组件使其具备图像生成能力
+    \item \textbf{Transfusion}：同时在离散 token 上进行自回归生成，在连续 token 上进行扩散生成
+    \item 类似 Bagel、Show-o 等工作探索了统一的理解与生成框架
+\end{itemize}
+
+\subsection{本章小结}
+
+下一代架构正在探索将语言理解和视觉生成统一到单一模型中，这将极大扩展扩散模型的能力边界。
+
+\section{总结与延伸}
+
+本讲系统梳理了 Transformer 在扩散模型中的演进历程。核心信息：
+
+\begin{enumerate}
+    \item \textbf{DiT 是转折点}：证明了 Transformer 可以替代 U-Net 并带来更好的扩展性。
+    \item \textbf{adaLN 是核心技巧}：高效的条件注入机制，在多种架构变体中都不可或缺。
+    \item \textbf{Scaling 有效}：扩散 Transformer 与语言模型一样，随着规模增长性能持续提升。
+    \item \textbf{统一生成是未来}：将语言理解与视觉生成统一到单一 Transformer 中是最具前景的方向。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Peebles \& Xie, ``Scalable Diffusion Models with Transformers (DiT)'', ICCV 2023
+    \item Chen et al., ``PixArt-$\alpha$: Fast Training of Diffusion Transformer for Photorealistic Text-to-Image Synthesis'', 2023
+    \item Esser et al., ``Scaling Rectified Flow Transformers for High-Resolution Image Synthesis (SD3)'', 2024
+    \item Zhou et al., ``Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model'', 2024
+    \item HuggingFace Diffusers 库：\url{https://github.com/huggingface/diffusers}
+\end{itemize}
+
+\end{document}

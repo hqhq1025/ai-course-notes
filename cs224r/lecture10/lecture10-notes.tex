@@ -1,0 +1,315 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+\newcommand{\notetitle}{CS224R Lecture 10: 强化学习用于 LLM 推理}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.1cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 封面图未提供。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Aviral Kumar (Carnegie Mellon University)\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：为什么需要 RL 来做推理}
+
+本讲由 CMU 的 Aviral Kumar 客座讲授，聚焦于强化学习（RL）在大语言模型（LLM）推理中的应用。讲者将推理限定在数学问题求解场景下进行阐述，并以时间线为轴将内容分为两大部分：经典 RL 技术和现代扩展。
+
+\begin{importantbox}{核心动机}
+传统的 next-token prediction（NTP）训练范式存在根本性局限：学习到的模型 $\hat{p}_\theta(\mathbf{y}|\mathbf{x})$ 与真实分布 $p^*(\mathbf{y}|\mathbf{x})$ 的误差正比于 $|\mathcal{D}(\mathbf{y}|\mathbf{x})|^{-\alpha}$，即误差随与目标输入 $\mathbf{x}$ 相似的数据量增加而减小。对于推理问题，高质量的问题--解答数据极其稀缺，预计到 2028 年互联网高质量文本数据将耗尽。
+\end{importantbox}
+
+\subsection{NTP 的失败模式}
+
+仅靠监督训练的模型在解决如 AIME（美国数学邀请赛）或 IMO（国际数学奥林匹克）等困难数学问题时，虽然能生成"看上去像解答"的文本，但逻辑推理链条往往存在关键错误。模型会跳过必要的推理步骤，或者在证明过程中对个别项进行分析而忽略整体结构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-03.jpg}
+\caption{传统训练方式：next-token prediction 的误差界\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 3 页。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-04.jpg}
+\caption{数据稀缺问题：数学推理和具身 AI 领域的数据限制\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 4 页。}
+
+\subsection{本章小结}
+
+NTP 在推理场景下失效的核心原因是高质量推理数据不足。RL 的价值在于不依赖人工标注的完整解答，而是通过奖励信号（如答案是否正确）引导模型自主发现正确的推理路径。
+
+\section{讲座大纲}
+
+讲者将 RL for Reasoning 以 DeepSeek-R1/"thinking"模型为分界点，分为两个历史阶段：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-06.jpg}
+\caption{讲座大纲：经典技术 vs 现代扩展\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 6 页。}
+
+\begin{itemize}
+    \item \textbf{Part 1 --- 经典 RL 技术}：Imitation Learning、Offline RL、Online RL
+    \item \textbf{Part 2 --- 现代扩展}：在线 RL 训练"thinking"模型、DeepSeek-R1、Kimi K1.5 等
+\end{itemize}
+
+\section{Part 1：经典 RL 技术用于 LLM 推理}
+
+\subsection{将推理建模为 RL 问题}
+
+\begin{importantbox}{MDP 建模}
+将数学推理问题建模为 MDP：
+\begin{itemize}
+    \item \textbf{状态} $s_t$：问题描述 + 到目前为止生成的解答前缀（token 序列）
+    \item \textbf{动作} $a_t$：下一步推理步骤（可以是一个 token 或一个推理步骤/句子）
+    \item \textbf{奖励} $r$：通常是稀疏的终端奖励，仅当完整解答生成后验证答案是否正确（outcome-based reward）
+    \item \textbf{策略} $\pi_\theta(a_t | s_t)$：语言模型本身
+\end{itemize}
+\end{importantbox}
+
+\subsection{数据扩增：扩展问题和解答数量}
+
+在最简单的设定下，收集更多的 (问题, 解答) 对来做监督微调（SFT）。Setlur et al. (NeurIPS 2024) 的实验表明：
+
+\begin{itemize}
+    \item 在 GSM8K 上，SFT 测试误差随问题数增长的收敛速率约为 $|\mathcal{D}|^{-0.15}$
+    \item 在 MATH 上更慢，约为 $|\mathcal{D}|^{-0.05}$
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-10.jpg}
+\caption{Warmup：扩展问题数和 Oracle 解答的 scaling 行为\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 10 页。}
+
+\begin{knowledgebox}{RFT（Rejection Fine-Tuning）}
+RFT 是一种简单的利用 RL 信号改进 SFT 的方法：用当前模型采样多个解答，仅保留答案正确的解答用于微调。这等价于一种简化的 offline RL，因为它通过奖励信号过滤了训练数据。
+\end{knowledgebox}
+
+\subsection{离线 RL：利用负样本的优势}
+
+关键洞察：不仅使用正确解答（正样本），还应利用\textbf{错误解答}（负样本）来提供对比信号。
+
+\begin{importantbox}{Per-Step Advantage 的概念}
+对于错误解答中的每一步推理，可以通过从该步出发多次 rollout 来估计该步的"优势"（advantage）。如果从某个中间步出发的 rollout 总是失败，说明该步是一个"错误步骤"；如果有时成功有时失败，说明该步是"尚可的步骤"。这本质上是在估计 rollout 策略的值函数。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-15.jpg}
+\caption{负样本 on-policy 数据提供的优势信号\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 15 页。}
+
+离线 RL 使用这些优势估计的两种方式：
+
+\begin{enumerate}
+    \item \textbf{Option 1}：仅使用估计的优势进行加权 SFT（对正确步骤加大权重，对错误步骤降低权重）
+    \item \textbf{Option 2}：使用 DPO（Direct Preference Optimization），保留来自 $\tilde{\pi}$ 的部分 rollout 进行偏好对比训练
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-20.jpg}
+\caption{利用 Advantage 进行 Offline RL (DPO)\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 20 页。}
+
+\begin{warningbox}{离线 RL 的局限}
+Offline RL 的关键问题在于：用来估计 advantage 的 rollout 策略 $\tilde{\pi}$ 与当前正在训练的策略 $\pi_\theta$ 之间存在分布偏移（distribution shift）。随着训练进行，$\pi_\theta$ 更新后 advantage 估计会变得不准确。
+\end{warningbox}
+
+\subsection{在线 RL：REINFORCE 和 PPO}
+
+为了解决离线 RL 的分布偏移问题，在线 RL 在训练过程中持续用当前策略采样新数据。
+
+在线 RL 的基本流程：
+\begin{enumerate}
+    \item 用当前策略 $\pi_\theta$ 对问题采样多个解答
+    \item 用奖励模型或验证器评估这些解答
+    \item 估计每步的优势（advantage）
+    \item 用策略梯度方法（如 REINFORCE 或 PPO）更新策略
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-25.jpg}
+\caption{Per-Step Advantages in Online RL\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 25 页。}
+
+一个关键问题是：\textbf{是否应该在线实时做 rollout 来估计 advantage？}讲者提到可以训练一个参数化的过程奖励模型（Process Reward Model, PRM）来预测每步的 advantage，从而避免昂贵的在线 rollout。
+
+\subsection{本章小结}
+
+经典 RL 技术（SFT $\to$ RFT $\to$ Offline RL $\to$ Online RL）形成了一个逐步强化的工具链。核心 takeaway 是：RL 训练可以显著提高 LLM 推理的数据效率，相比纯 SFT 可提升约 8 倍。
+
+\section{Part 2：训练"Thinking"模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-30.jpg}
+\caption{Part 2：训练"Thinking"模型的主要论文\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 30 页。}
+
+\subsection{DeepSeek-R1：通过 RL 激励推理能力}
+
+DeepSeek-R1 是"thinking model"范式的标志性工作。其核心发现是：\textbf{仅通过 RL 训练（不需要人工标注的推理链），模型就能自发涌现出复杂的推理行为}。
+
+\begin{importantbox}{DeepSeek-R1 的训练流程}
+\begin{enumerate}
+    \item 在基础模型上直接应用 GRPO（Group Relative Policy Optimization）进行 RL 训练
+    \item 奖励仅基于最终答案是否正确（outcome reward）+ 格式奖励
+    \item 模型自发学会了：验证（verification）、回溯（backtracking）、设定子目标（subgoal setting）、反向推理（backward chaining）等元策略
+\end{enumerate}
+\end{importantbox}
+
+\begin{knowledgebox}{GRPO（Group Relative Policy Optimization）}
+GRPO 是 PPO 的简化变体。对于每个问题采样一组解答，用组内的相对奖励（减去组内均值后标准化）作为优势估计，避免了训练额外的 critic/value 网络。这在大规模 LLM 训练中更加高效。
+\end{knowledgebox}
+
+\subsection{涌现的推理行为}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-35.jpg}
+\caption{``Action'' Space：涌现的元策略对比\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 35 页。}
+
+Gandhi et al. (2025) 的研究表明，能否在 RL 训练中涌现认知行为取决于基础模型是否已经具备这些行为的"种子"。DeepSeek 系列模型在 RL 训练过程中，验证和回溯行为的频率先上升后下降；而 Meta 的 Llama 模型则完全没有展现出这些行为，RL 训练也未能改善其推理能力。
+
+\begin{warningbox}{RL 并非万能}
+RL 无法让模型学会它"完全不会"的行为。如果基础模型在预训练阶段没有接触过推理链式思考的数据，单靠 RL 很难从零涌现出复杂推理行为。基础模型的能力是 RL 发挥作用的前提。
+\end{warningbox}
+
+\subsection{Kimi K1.5：扩展 RL 训练}
+
+Kimi K1.5 的核心贡献在于如何在大规模上有效地进行 RL 训练：
+\begin{itemize}
+    \item 更长的上下文窗口（128K tokens）
+    \item 更好的采样策略和奖励设计
+    \item 实验表明 RL 训练的性能随计算量增加而持续提升
+\end{itemize}
+
+\subsection{Thinking 模型的效果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-40.jpg}
+\caption{Thinking 模型在各 benchmark 上的表现\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 40 页。}
+
+Thinking 模型在 Codeforces 竞赛编程、Humanity's Last Exam、AIME 等多个基准上取得了显著提升。DeepSeek-R1 在 AIME 2024 上达到 79.8\% 的 Pass@1，与 OpenAI o1-1217 的 79.2\% 相当。
+
+\subsection{Test-Time Compute 与 Meta-RL}
+
+讲者最后提到，优化 test-time compute（推理时计算量分配）本质上是一个 Meta-RL 问题：模型需要学习在推理时如何"花费"计算预算。
+
+\subsection{本章小结}
+
+DeepSeek-R1 等 thinking model 证明了：(1) RL 可以激励 LLM 自主发展推理能力；(2) 关键前提是基础模型需具备推理行为的"种子"；(3) GRPO 等简化的策略优化方法在大规模训练中既高效又有效。
+
+\section{总结与延伸}
+
+本讲的核心信息是：\textbf{经典 RL 的基本思想（策略梯度、advantage estimation、on/off-policy 区分）在 LLM 推理中同样适用且至关重要}。
+
+关键 takeaway：
+\begin{enumerate}
+    \item SFT 受限于数据稀缺，纯靠扩展数据的 scaling 速率很慢
+    \item RL 通过利用负样本和 advantage 信号，将数据效率提升了约 8 倍
+    \item 在线 RL（如 GRPO/PPO）通过持续采样避免了分布偏移
+    \item Thinking 模型展示了 RL 可以从简单的 outcome reward 中涌现复杂推理行为
+    \item 基础模型的预训练质量是 RL 成功的前提条件
+\end{enumerate}
+
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL (2025)
+    \item Kimi K1.5: Scaling Reinforcement Learning with LLMs (2025)
+    \item Setlur et al., ``RL on Incorrect Synthetic Data Scales the Efficiency of LLM Math Reasoning by Eight-Fold,'' NeurIPS 2024
+    \item Gandhi et al., ``Cognitive Behaviors that Enable Self-Improving Reasoners,'' arXiv 2025
+    \item Setlur et al., ``Rewarding Progress: Scaling Automated Process Supervision for LLM Reasoning,'' arXiv 2024
+\end{itemize}
+\end{knowledgebox}
+
+\end{document}

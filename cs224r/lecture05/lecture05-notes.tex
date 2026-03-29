@@ -1,0 +1,157 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\newcommand{\notetitle}{CS224R Lecture 5: Off-Policy Actor-Critic}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-04}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/spring\_2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.1cm}
+\ifdefempty{\videocoverpath}{{\small 封面图未提供。\par}}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/spring_2025/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{多步梯度更新的问题}
+
+On-policy actor-critic 每收集一批数据只能做一步梯度更新，效率很低。我们希望在同一批数据上做\textbf{多步}更新。
+
+\subsection{Importance Weights 回顾}
+
+用旧策略 $\pi_\theta$ 的数据来更新新策略 $\pi_{\theta'}$ 时，需要 importance weights：
+$$\nabla_{\theta'} J(\theta') \approx \sum_{t,i} \frac{\pi_{\theta'}(a_{i,t} \mid s_{i,t})}{\pi_\theta(a_{i,t} \mid s_{i,t})} \nabla_{\theta'} \log \pi_{\theta'}(a_{t,i} \mid s_{t,i}) \hat{A}^{\pi_\theta}(s_{t,i}, a_{t,i})$$
+
+\begin{warningbox}{多步更新的风险}
+如果对代理目标函数（surrogate objective）做很多步梯度上升，策略会被激励大幅偏离旧策略。此时 importance weights 不再可靠，优势估计也失效，导致过拟合和性能崩塌。
+\end{warningbox}
+
+\subsection{本章小结}
+
+多步梯度更新能提高数据效率，但需要约束策略更新的幅度来保持稳定性。
+
+\section{PPO：Proximal Policy Optimization}
+
+\subsection{核心思想：限制策略偏移}
+
+两种策略：
+
+\textbf{方法 1：KL 约束}
+
+$$\max_{\theta'} \tilde{J}(\theta') \quad \text{s.t.} \quad \mathbb{E}_{s \sim \pi_\theta}\left[D_{\mathrm{KL}}\left(\pi_{\theta'}(\cdot \mid s) \| \pi_\theta(\cdot \mid s)\right)\right] \leq \epsilon$$
+
+在 LLM 的偏好优化中非常常见。
+
+\textbf{方法 2：Clipping}
+
+不直接约束策略，而是裁剪 importance weights，移除策略大幅偏离的激励：
+
+$$\tilde{J}(\theta') = \sum_{t,i} \min\left(\frac{\pi_{\theta'}(a_{i,t} \mid s_{i,t})}{\pi_\theta(a_{i,t} \mid s_{i,t})} \hat{A}^{\pi_\theta}, \; \mathrm{clip}\left(\frac{\pi_{\theta'}(a_{i,t} \mid s_{i,t})}{\pi_\theta(a_{i,t} \mid s_{i,t})}, 1-\epsilon, 1+\epsilon\right) \hat{A}^{\pi_\theta}\right)$$
+
+\begin{importantbox}{PPO 的核心目标}
+这就是 PPO 的最终 surrogate objective。通过 clipping 和 min 操作，策略不再有激励大幅偏离旧策略，即使做多步更新也能保持稳定。
+\end{importantbox}
+
+\subsection{PPO 完整算法}
+
+\begin{enumerate}
+    \item 从当前策略 $\pi_\theta$ 采集一批数据
+    \item 拟合价值函数 $\hat{V}^\pi_\phi$
+    \item 计算优势 $\hat{A}^{\pi_\theta}$
+    \item 在这批数据上对 PPO objective 做多步梯度更新（约 3--10 步）
+    \item 重复
+\end{enumerate}
+
+\subsection{本章小结}
+
+PPO 通过 clipping importance weights 来限制策略偏移，允许在同一批数据上做多步更新，是目前最广泛使用的 on-policy RL 算法之一。
+
+\section{SAC：Soft Actor-Critic}
+
+\subsection{更彻底的 Off-Policy}
+
+PPO 仍然需要定期重新收集数据。SAC 走得更远：使用 \textbf{replay buffer} 存储所有历史数据，从中随机采样来更新 Q 函数和策略。
+
+\subsection{拟合 Q 函数}
+
+SAC 直接拟合 $Q^\pi$ 而不是 $V^\pi$，使用 TD 更新：
+$$\min_\phi \sum_{(s,a,s') \in \mathcal{D}} \left\| \hat{Q}^\pi_\phi(s, a) - \left(r(s,a) + \gamma \mathbb{E}_{a' \sim \pi_\theta(\cdot|s')}\left[\hat{Q}^\pi_{\phi'}(s', a')\right]\right)\right\|^2$$
+
+\begin{knowledgebox}{为什么 Q 函数可以用 off-policy 数据}
+Q 函数的 TD target $r(s,a) + \gamma \mathbb{E}_{a' \sim \pi}\left[Q(s', a')\right]$ 中，$a'$ 是从\textbf{当前}策略采样的（而不是从数据中读取的）。因此 $(s, a, s')$ 转移数据可以来自任何策略，只要 $a'$ 是新采样的即可。
+\end{knowledgebox}
+
+\subsection{策略更新}
+
+策略优化目标加入了\textbf{熵正则化}：
+$$\max_\theta \mathbb{E}_{s \sim \mathcal{D}, a \sim \pi_\theta(\cdot|s)} \left[\hat{Q}^\pi(s, a) - \alpha \log \pi_\theta(a \mid s)\right]$$
+
+熵项 $-\alpha \log \pi_\theta$ 鼓励策略保持一定的随机性，有助于探索。
+
+\subsection{SAC 完整算法}
+
+\begin{enumerate}
+    \item 用当前策略与环境交互，将转移 $(s, a, r, s')$ 存入 replay buffer $\mathcal{B}$
+    \item 从 $\mathcal{B}$ 采样 mini-batch
+    \item 更新 Q 函数（用 TD target）
+    \item 更新策略（最大化 Q + 熵）
+    \item 重复步骤 1-4
+\end{enumerate}
+
+\begin{importantbox}{PPO vs. SAC}
+\begin{itemize}
+    \item \textbf{PPO}：On-policy（加少量 off-policy），用 clipped surrogate objective。每次收集新数据后做几步更新。更稳定、更易调参。
+    \item \textbf{SAC}：完全 off-policy，用 replay buffer + Q 函数。数据效率更高。适合连续动作空间。
+\end{itemize}
+两者都是目前最常用的深度 RL 算法。
+\end{importantbox}
+
+\subsection{本章小结}
+
+SAC 通过拟合 Q 函数并使用 replay buffer 实现了完全 off-policy 的 actor-critic 算法，数据效率远高于 on-policy 方法。熵正则化鼓励探索并提高稳定性。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item Off-policy actor-critic 方法通过复用旧数据来提高效率。
+    \item \textbf{PPO}：用 clipping 限制策略偏移，允许多步更新。简单稳定，广泛使用。
+    \item \textbf{SAC}：完全 off-policy，replay buffer + Q 函数 + 熵正则化。数据效率高。
+    \item PPO 和 SAC 是深度 RL 中最重要的两个实用算法。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Schulman et al., \textit{Proximal Policy Optimization Algorithms} (PPO 原文, 2017)。
+    \item Haarnoja et al., \textit{Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor} (SAC 原文, 2018)。
+\end{itemize}
+
+\end{document}

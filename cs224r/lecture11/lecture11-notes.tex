@@ -1,0 +1,290 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+\newcommand{\notetitle}{CS224R Lecture 11: 基于模型的强化学习}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.1cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 封面图未提供。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{课程回顾：算法分类总览}
+
+本讲开头，Chelsea Finn 对课程迄今为止讨论过的所有算法做了一个高层回顾。
+
+\begin{importantbox}{算法分类框架}
+\begin{itemize}
+    \item \textbf{在线 (Online) vs 离线 (Offline)}：在线算法允许在训练中持续与环境交互收集数据；离线算法仅使用给定的固定数据集。
+    \item \textbf{Online 类别下}：
+    \begin{itemize}
+        \item On-policy RL：仅使用当前策略产生的数据（如 REINFORCE, PPO）
+        \item Off-policy RL：可以使用历史策略的数据（如 SAC, TD3）
+    \end{itemize}
+    \item \textbf{Offline 类别下}：
+    \begin{itemize}
+        \item Imitation Learning：行为克隆 (BC)、DAgger
+        \item Offline RL：CQL 等约束策略不偏离数据分布的方法
+    \end{itemize}
+\end{itemize}
+\end{importantbox}
+
+\section{Model-Based RL 的核心思想}
+
+\subsection{什么是 Model-Based RL}
+
+与 model-free 方法不同，model-based RL 显式地学习环境的\textbf{动力学模型}（dynamics model），然后利用该模型来做决策。
+
+\begin{importantbox}{动力学模型}
+学习一个函数 $f_\phi(\mathbf{s}, \mathbf{a})$ 来近似环境的状态转移 $p(\mathbf{s}' | \mathbf{s}, \mathbf{a})$：
+$$f_\phi(\mathbf{s}, \mathbf{a}) \approx \mathbf{s}'$$
+训练目标是最小化预测误差：
+$$\min_\phi \sum_i \|f_\phi(\mathbf{s}_i, \mathbf{a}_i) - \mathbf{s}_i'\|^2$$
+其中数据 $\mathcal{D} = \{(\mathbf{s}, \mathbf{a}, \mathbf{s}')_i\}$ 来自与环境的交互。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-05.jpg}
+\caption{本讲大纲：Model-Based RL 的核心内容\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 5 页。}
+
+\subsection{为什么要学习模型}
+
+\begin{knowledgebox}{Model-Based vs Model-Free 的核心权衡}
+\begin{itemize}
+    \item \textbf{数据效率}：Model-based 方法通常比 model-free 方法数据效率高得多。学到的模型可以用来"想象"无数种可能的轨迹，而不需要真实执行。
+    \item \textbf{代价}：模型不完美，基于不准确模型的决策可能导致性能下降。这就是\textbf{模型偏差}（model bias）问题。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Model-Based RL 的核心思路是"先学世界模型，再用模型做规划"。它在数据稀缺场景（如机器人）中特别有价值，但需要妥善处理模型误差。
+
+\section{如何使用学到的模型}
+
+\subsection{方法 1：基于模型的规划（Planning）}
+
+有了动力学模型后，可以直接在模型中搜索最优动作序列：
+
+$$\max_{\mathbf{a}_{t:t+H}} \sum_t r(\mathbf{s}_t, \mathbf{a}_t)$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-15.jpg}
+\caption{方法 1b：通过采样进行无梯度优化的规划\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 15 页。}
+
+具体算法流程：
+\begin{enumerate}
+    \item 运行某个策略（如随机策略）收集数据 $\mathcal{D} = \{(\mathbf{s}, \mathbf{a}, \mathbf{s}')_i\}$
+    \item 学习模型 $f_\phi(\mathbf{s}, \mathbf{a})$
+    \item 迭代地采样动作序列，通过模型前向推演选择最优动作
+\end{enumerate}
+
+\subsubsection{随机打靶法（Random Shooting）}
+
+最简单的方法是随机采样 $N$ 个动作序列，在模型中 rollout 每个序列，选择累积奖励最高的那个序列的第一个动作。
+
+\subsubsection{CEM（Cross-Entropy Method）}
+
+CEM 是一种更高级的无梯度优化方法：
+\begin{enumerate}
+    \item 初始化动作分布（如高斯分布）
+    \item 从分布中采样 $N$ 个动作序列
+    \item 在模型中评估每个序列的累积奖励
+    \item 选择 top-$K$ 的"精英"序列
+    \item 用精英序列更新动作分布的均值和方差
+    \item 重复若干轮迭代
+\end{enumerate}
+
+\begin{knowledgebox}{MPC（Model Predictive Control）}
+在实际执行时，通常采用 MPC 范式：每一步只执行规划得到的第一个动作，然后在新的状态上重新规划。这可以部分缓解模型在长时间跨度上的累积误差。
+\end{knowledgebox}
+
+\subsubsection{方法 1a：基于梯度的规划}
+
+如果模型可微，可以直接对动作序列求梯度来优化。但这种方法在实践中容易陷入局部最优，且对模型的光滑性要求较高。
+
+\subsection{方法 2：使用模型生成合成数据}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-25.jpg}
+\caption{Model-Based 策略优化的两种路线\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 25 页。}
+
+规划方法的主要局限：
+\begin{itemize}
+    \item 测试时计算开销大（每步都需要优化）
+    \item 受限于短视野问题
+\end{itemize}
+
+解决长视野问题的两种思路：
+\begin{enumerate}
+    \item \textbf{带终端值函数的规划}：用短视野规划 + 学到的值函数作为终端估值
+    \item \textbf{Dyna 风格方法}：用模型生成合成数据来增强 model-free RL 的训练
+\end{enumerate}
+
+\begin{importantbox}{Dyna 算法}
+Dyna 是 model-based RL 的经典范式：
+\begin{enumerate}
+    \item 收集真实数据，训练/更新动力学模型
+    \item 用模型生成合成数据（synthetic rollouts）
+    \item 将合成数据与真实数据混合，用 model-free RL 算法更新策略
+\end{enumerate}
+核心优势是利用模型的泛化能力将有限的真实数据"放大"为大量训练数据。
+\end{importantbox}
+
+\subsection{处理模型误差}
+
+\begin{warningbox}{模型误差的累积效应}
+模型在每一步的小误差会沿时间轴累积。如果规划视野为 $H$，且每步误差为 $\epsilon$，则 $H$ 步后的总误差可能高达 $O(H \cdot \epsilon)$ 甚至更大（如果动力学是不稳定的）。因此，盲目信任模型会导致策略"利用"模型的缺陷（model exploitation）。
+\end{warningbox}
+
+应对策略：
+\begin{itemize}
+    \item \textbf{模型集成（Ensemble）}：训练多个模型，用不同模型的预测来估计不确定性
+    \item \textbf{短视野 rollout}：限制模型 rollout 的步数
+    \item \textbf{持续更新模型}：随着收集新数据不断更新模型
+\end{itemize}
+
+\subsection{本章小结}
+
+模型可以通过两种方式使用：(1) 直接规划（优化动作序列），(2) 生成合成数据增强 model-free RL。两种方式都需要妥善处理模型误差。
+
+\section{案例研究：灵巧操作中的 Model-Based RL}
+
+讲者介绍了一个具体案例，使用 model-based RL 让机器人灵巧手进行物体操作。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slides-images/slide-35.jpg}
+\caption{灵巧操作的模拟消融实验结果\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第 35 页。}
+
+关键实验发现：
+\begin{itemize}
+    \item 需要足够大的模型架构（2x250 或 2x500 隐藏单元）
+    \item 至少需要 3 个集成成员来获得可靠的不确定性估计
+    \item 规划视野存在权衡：太短看不到足够远的未来，太长模型误差累积
+    \item 改进的 CEM 控制器（如 Filtering + Reward Weighting）比 Random Shooting 好得多
+\end{itemize}
+
+\subsection{何时使用 Model-Based RL}
+
+\begin{importantbox}{Model-Based RL 的适用场景}
+\begin{itemize}
+    \item 数据收集代价高昂（如真实机器人）
+    \item 状态空间相对低维且可预测
+    \item 需要快速适应新任务（模型可迁移）
+    \item 动力学具有一定的可学习结构
+\end{itemize}
+不适合的场景：高维观测（如图像）且动力学高度随机的环境。
+\end{importantbox}
+
+\subsection{本章小结}
+
+灵巧操作案例展示了 model-based RL 在数据效率上的优势，以及集成、规划视野等超参数对性能的关键影响。
+
+\section{总结与延伸}
+
+Model-Based RL 是 RL 工具箱中的重要组成部分，其核心优势在于数据效率。
+
+关键要点：
+\begin{enumerate}
+    \item 学习动力学模型可以大幅减少所需的真实交互数据
+    \item 模型可用于 planning（CEM/MPC）或生成合成数据（Dyna 风格）
+    \item 模型误差是核心挑战，需要通过集成、短视野 rollout、持续更新来缓解
+    \item 在机器人操作等数据昂贵的场景中特别有价值
+\end{enumerate}
+
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item Nagabandi et al., ``Neural Network Dynamics for Model-Based Deep RL with Model-Free Fine-Tuning,'' ICRA 2018
+    \item Chua et al., ``Deep Reinforcement Learning in a Handful of Trials using Probabilistic Dynamics Models (PETS),'' NeurIPS 2018
+    \item Janner et al., ``When to Trust Your Model: Model-Based Policy Optimization (MBPO),'' NeurIPS 2019
+    \item Sutton, ``Dyna, an Integrated Architecture for Learning, Planning, and Reacting,'' 1991
+\end{itemize}
+\end{knowledgebox}
+
+\end{document}

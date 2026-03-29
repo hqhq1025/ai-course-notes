@@ -1,0 +1,227 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
+    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
+    captionpos=b, extendedchars=false
+}
+
+\newcommand{\notetitle}{[CS25] Behind the Scenes of LLM Pre-training: StarCoder --- Loubna Ben Allal, HuggingFace}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Stanford CS25: Transformers United}
+\newcommand{\videopublishdate}{Spring 2024}
+\newcommand{\videoduration}{$\sim$1h}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：训练一个好的 LLM 需要什么？}
+
+Loubna Ben Allal 是 HuggingFace Science 团队的机器学习工程师，BigCode 项目核心成员，The Stack 数据集和 StarCoder 代码模型的共同作者。本讲以一个核心问题展开：``训练一个好的 LLM 到底需要什么？''
+
+\begin{knowledgebox}{开源追赶闭源}
+几年前人们认为闭源模型（如 GPT-4）有不可逾越的优势。但如 Google 内部备忘录所预言，开源社区``破解了大部分拼图''。LLaMA 3 70B Instruct 已接近 GPT-4 水平，且开放权重允许量化、微调和定制化部署。
+\end{knowledgebox}
+
+\section{数据：LLM 的核心燃料}
+
+\subsection{数据决定一切}
+
+\begin{importantbox}{训练一个好 LLM 的关键要素}
+\begin{enumerate}
+\item \textbf{数据}（最重要）：质量、多样性、规模
+\item \textbf{模型架构}：相对标准化（decoder-only Transformer）
+\item \textbf{训练配方}：学习率调度、batch size、训练 token 数
+\item \textbf{评估}：持续监控训练质量
+\end{enumerate}
+数据的重要性超过架构选择——架构已高度标准化，但数据处理仍有巨大优化空间。
+\end{importantbox}
+
+\subsection{The Stack：大规模代码数据集}
+
+The Stack 是 BigCode 项目构建的开源代码数据集：
+\begin{itemize}
+\item V1 覆盖约 80 种编程语言
+\item V2 扩展到 600+ 种语言，并增加了 GitHub Issues、Git Commits、Jupyter Notebooks、Kaggle Notebooks 和 Pull Requests
+\end{itemize}
+
+\subsection{数据处理流水线}
+
+\begin{enumerate}
+\item \textbf{语言选择}：保留流行且维护中的编程语言，排除配置文件等
+\item \textbf{质量检查}：检查平均行长度、文件大小等指标
+\item \textbf{按语言定制阈值}：不同编程语言的代码特征不同（如某些语言天然行更长）
+\item \textbf{近似去重}（Near-deduplication）：去除高度相似的文件
+\item \textbf{PII 检测}：检测并移除个人身份信息
+\end{enumerate}
+
+\begin{warningbox}{去重的重要性}
+代码数据中的重复问题严重——同一段代码可能在数千个仓库中出现。不去重会导致模型过拟合于这些重复模式，严重影响泛化能力。近似去重（如 MinHash + LSH）比精确去重在计算上更可行。
+\end{warningbox}
+
+\subsection{社区驱动的质量审查}
+
+BigCode 社区的成员为每种编程语言审查 100 个样本，帮助确定合适的过滤阈值。这种``人在环路''的方法确保了过滤标准的合理性。
+
+\subsection{本章小结}
+数据质量和处理流水线是 LLM 性能的决定性因素。
+
+\section{模型架构与训练}
+
+\subsection{StarCoder 架构}
+
+StarCoder 基于标准 decoder-only Transformer，关键配置：
+
+\begin{itemize}
+\item 15.5B 参数
+\item 8K 上下文窗口
+\item Multi-Query Attention（MQA）：所有注意力头共享一组 KV，大幅减少 KV 缓存
+\item Fill-in-the-Middle（FIM）训练目标
+\end{itemize}
+
+\begin{importantbox}{Fill-in-the-Middle (FIM)}
+FIM 训练目标允许模型不仅预测下一个 token，还能填充代码中间的空缺。这对代码补全至关重要——用户通常需要在已有代码中间插入新代码，而非仅在末尾追加。
+$$\text{输入}：\text{prefix} + \text{suffix} \to \text{输出}：\text{middle}$$
+\end{importantbox}
+
+\subsection{StarCoder 2}
+
+StarCoder 2 的改进：
+\begin{itemize}
+\item 训练数据量从 1T 增加到 3.3T token
+\item 引入更多数据源（Pull Requests、Jupyter Notebooks）
+\item 提供 3B、7B、15B 三种规模
+\item 切换到 Grouped Query Attention (GQA)
+\end{itemize}
+
+\subsection{本章小结}
+代码 LLM 的架构选择日趋标准化，FIM 等任务特定目标是关键差异。
+
+\section{数据配比（Data Mixture）}
+
+\subsection{数据配比实验}
+
+\begin{importantbox}{小规模消融实验的价值}
+在大规模训练前，用小模型（如 1B 参数）在不同数据配比上进行消融实验，可以以低成本找到接近最优的数据混合策略。关键变量包括：
+\begin{itemize}
+\item 各编程语言的比例
+\item 代码 vs 自然语言的比例
+\item GitHub Issues 等非代码数据的权重
+\end{itemize}
+\end{importantbox}
+
+\subsection{更多数据 vs 更多遍}
+
+\begin{warningbox}{预训练 vs 微调的数据策略截然不同}
+\textbf{预训练}：数据越多越好（LLaMA 的经验）。重复训练同一数据会导致性能下降。\\
+\textbf{微调}：数据质量远重要于数量。LIMA 论文表明，1000 条高质量指令可以超越百万条低质量指令。
+\end{warningbox}
+
+\subsection{本章小结}
+数据配比是被低估的超参数，小规模实验是找到好配比的实用方法。
+
+\section{评估}
+
+\subsection{代码模型评估}
+
+\begin{itemize}
+\item \textbf{HumanEval / MBPP}：经典的 Python 代码生成基准
+\item \textbf{MultiPL-E}：多语言代码评估
+\item \textbf{DS-1000}：数据科学代码评估
+\end{itemize}
+
+\subsection{训练过程中的监控}
+
+持续追踪验证损失和关键基准分数，及时发现训练不稳定性（如损失尖峰、性能退化）。
+
+\subsection{本章小结}
+评估需要覆盖多种编程语言和任务类型。
+
+\section{数据集发布的注意事项}
+
+\begin{knowledgebox}{负责任的数据集发布}
+发布大规模数据集时需要考虑：
+\begin{itemize}
+\item 许可证合规性
+\item 版权保护
+\item 提供 Opt-out 工具（允许代码作者要求移除自己的代码）
+\item 敏感数据需要访问控制（如 PII 检测数据集）
+\item 完善的文档和数据卡
+\end{itemize}
+\end{knowledgebox}
+
+\section{总结与延伸}
+
+本讲以 StarCoder 为案例，详细展示了 LLM 预训练的全流程：数据收集 $\to$ 清洗过滤 $\to$ 去重 $\to$ 数据配比 $\to$ 模型训练 $\to$ 评估。核心教训：数据质量比模型架构更重要；社区协作可以加速开源进展；负责任的数据发布是可持续发展的基础。
+
+\subsection{拓展阅读}
+\begin{itemize}
+\item Li et al., ``StarCoder: May the Source Be with You!'', 2023
+\item Lozhkov et al., ``StarCoder 2 and The Stack v2: The Next Generation'', 2024
+\item Kocetkov et al., ``The Stack: 3 TB of Permissively Licensed Source Code'', 2022
+\item Zhou et al., ``LIMA: Less Is More for Alignment'', 2023
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

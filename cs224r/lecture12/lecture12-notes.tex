@@ -1,0 +1,212 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+\newcommand{\notetitle}{CS224R Lecture 12: 多任务 RL 与目标条件 RL}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.1cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 封面图未提供。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{Model-Based RL 补充：合成数据生成}
+
+本讲前半部分继续完成上一讲关于 model-based RL 的内容，重点讨论如何利用学到的模型生成合成数据以及何时应选择 model-based RL。
+
+\subsection{Dyna 风格方法的细节}
+
+\begin{importantbox}{合成数据生成的关键设计选择}
+使用学到的模型生成数据时需要决定：
+\begin{itemize}
+    \item \textbf{Rollout 长度}：短 rollout 减少误差累积，但提供的信息量有限
+    \item \textbf{起始状态分布}：可以从真实数据中采样起始状态，然后用模型 rollout
+    \item \textbf{合成数据与真实数据的比例}：需要平衡模型偏差和数据效率
+\end{itemize}
+\end{importantbox}
+
+\subsection{何时选择 Model-Based RL}
+
+讲者总结了选择 model-based vs model-free 方法的指导原则：
+\begin{itemize}
+    \item 真实数据收集昂贵 $\rightarrow$ 偏向 model-based
+    \item 状态空间低维且动力学可预测 $\rightarrow$ model-based 更有效
+    \item 环境高度随机或部分可观测 $\rightarrow$ model-free 可能更稳健
+\end{itemize}
+
+\subsection{本章小结}
+
+Model-based RL 通过学习世界模型实现数据增强，但需要在模型偏差和数据效率之间取得平衡。
+
+\section{多任务强化学习}
+
+\subsection{动机与问题定义}
+
+现实世界的智能体通常需要完成多种不同的任务，而不是单一任务。多任务 RL 的目标是训练一个能同时处理多个任务的策略。
+
+\begin{importantbox}{多任务 MDP 的形式化}
+将多任务问题建模为一组 MDP $\{\mathcal{M}_i\}$，它们共享状态空间和动作空间，但可能有不同的奖励函数。可以定义聚合 MDP：
+$$\tilde{\mathcal{M}} = (\mathcal{S} \times \mathcal{Z}, \mathcal{A}, \tilde{p}, \tilde{r}, \gamma)$$
+其中 $\mathcal{Z}$ 是任务描述空间（task descriptor），策略 $\pi(a | s, z)$ 以任务描述 $z$ 为条件。
+\end{importantbox}
+
+\subsection{任务描述的形式}
+
+任务描述 $z$ 可以采用多种形式：
+\begin{itemize}
+    \item \textbf{One-hot 编码}：简单直接，但无法泛化到新任务
+    \item \textbf{自然语言指令}：如 "pick up the red block"
+    \item \textbf{目标状态}：将任务描述为需要达到的目标状态
+    \item \textbf{奖励函数参数}：直接参数化奖励
+\end{itemize}
+
+\subsection{多任务 Imitation Learning}
+
+最直接的多任务学习方式：收集多个任务的演示数据，训练条件策略 $\pi_\theta(a | s, z)$。
+
+\begin{knowledgebox}{多任务学习中的数据共享}
+多任务学习的一个关键优势是\textbf{数据共享}：不同任务之间可能有共同的技能或子结构。例如，"拿起红色方块"和"拿起蓝色方块"共享"抓取"技能。通过在共享架构中联合训练，模型可以利用跨任务的共同结构。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+多任务 RL 通过引入任务描述将单任务 MDP 扩展为多任务框架，核心优势在于跨任务的知识共享。
+
+\section{目标条件强化学习}
+
+\subsection{将目标作为任务描述}
+
+目标条件 RL（Goal-Conditioned RL）是多任务 RL 的一个重要特例：任务描述就是一个\textbf{目标状态} $g$。
+
+\begin{importantbox}{目标条件 RL 的形式化}
+\begin{itemize}
+    \item 策略：$\pi(a | s, g)$，其中 $g$ 是目标状态
+    \item 奖励：通常定义为目标达成奖励
+    $$r(s, a, g) = \begin{cases} 1 & \text{if } d(s, g) < \epsilon \\ 0 & \text{otherwise} \end{cases}$$
+    或者连续形式：$r(s, a, g) = -d(s, g)$
+    \item 目标：学习一个通用策略，能够从任意初始状态到达任意目标状态
+\end{itemize}
+\end{importantbox}
+
+\subsection{Hindsight Relabeling}
+
+\begin{importantbox}{HER（Hindsight Experience Replay）}
+HER 是目标条件 RL 中最重要的技术之一。核心思想极其简洁：
+
+\textbf{即使一条轨迹没有达到预期目标，我们也可以假装它达到了某个目标（即实际到达的状态）。}
+
+具体来说：
+\begin{enumerate}
+    \item 策略试图达到目标 $g$，但实际到达了状态 $s_T$
+    \item 将目标重新标记为 $g' = s_T$
+    \item 这条"失败"的轨迹在新目标下变成了"成功"的经验
+    \item 用重标记后的数据训练目标条件策略
+\end{enumerate}
+\end{importantbox}
+
+\begin{warningbox}{Hindsight Relabeling 的隐含假设}
+HER 假设\textbf{奖励函数可以根据任意目标重新计算}。这在目标达成任务中自然成立，但在奖励函数复杂或不可分解的任务中可能不适用。此外，HER 生成的数据分布偏向于"容易到达"的状态，可能对学习困难目标的帮助有限。
+\end{warningbox}
+
+\subsection{为什么 Hindsight Relabeling 有效}
+
+从信息论角度看，HER 解决了目标条件 RL 中的\textbf{稀疏奖励问题}。在没有 HER 的情况下，如果目标空间很大，随机策略几乎不可能恰好到达指定目标，导致所有经验的奖励都是零。HER 通过"改变问题来适应答案"的策略，将每条轨迹都变成有用的训练数据。
+
+\subsection{本章小结}
+
+目标条件 RL 是多任务 RL 的自然特例。Hindsight relabeling 通过"重新解释"失败经验解决了稀疏奖励问题，是该领域最优雅的技术之一。
+
+\section{总结与延伸}
+
+本讲覆盖了从 model-based RL 的补充内容到多任务 RL 和目标条件 RL 的完整体系：
+
+\begin{enumerate}
+    \item Model-based RL 通过合成数据生成提升数据效率
+    \item 多任务 RL 通过条件策略 $\pi(a|s,z)$ 实现跨任务知识共享
+    \item 目标条件 RL 将目标状态作为任务描述，适合导航和操作任务
+    \item Hindsight relabeling 是解决稀疏奖励问题的关键技术
+\end{enumerate}
+
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item Andrychowicz et al., ``Hindsight Experience Replay,'' NeurIPS 2017
+    \item Schaul et al., ``Universal Value Function Approximators,'' ICML 2015
+    \item Yu et al., ``Meta-World: A Benchmark and Evaluation for Multi-Task and Meta Reinforcement Learning,'' CoRL 2020
+    \item Ghosh et al., ``Learning to Reach Goals via Iterated Supervised Learning,'' ICLR 2021
+\end{itemize}
+\end{knowledgebox}
+
+\end{document}

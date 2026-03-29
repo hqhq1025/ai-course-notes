@@ -1,0 +1,157 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\lstset{basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\newcommand{\notetitle}{CS224R Lecture 4: Actor-Critic 方法}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{2025 年春季}
+\newcommand{\videochannel}{Stanford Online}
+\newcommand{\videopublishdate}{2025-04}
+\newcommand{\videoduration}{约 80 分钟}
+\newcommand{\videourl}{https://cs224r.stanford.edu/spring\_2025/}
+\newcommand{\videocoverpath}{cover.jpg}
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.1cm}
+\ifdefempty{\videocoverpath}{{\small 封面图未提供。\par}}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{讲者}：Chelsea Finn\par
+\textbf{课程主页}：\href{https://cs224r.stanford.edu/spring_2025/}{cs224r.stanford.edu}
+\end{tcolorbox}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{回顾：策略梯度的不足}
+
+策略梯度使用采样的 reward-to-go 来估计每个动作的好坏，但这种估计\textbf{方差很大}。
+
+\begin{warningbox}{策略梯度的两个核心问题}
+\begin{enumerate}
+    \item \textbf{数据利用不充分}：稀疏奖励下，大部分轨迹的奖励为零，梯度信息很少。
+    \item \textbf{高方差}：采样 reward-to-go 是单次采样估计，噪声大。
+\end{enumerate}
+\end{warningbox}
+
+核心改进思路：能否\textbf{学习}什么是好的、什么是坏的，而不是仅依赖采样估计？
+
+\section{核心对象回顾}
+
+\begin{importantbox}{价值函数、Q 函数与优势函数}
+\begin{itemize}
+    \item \textbf{价值函数} $V^\pi(s)$：从状态 $s$ 出发遵循 $\pi$ 的期望未来奖励。
+    \item \textbf{Q 函数} $Q^\pi(s, a)$：从 $s$ 执行 $a$ 后遵循 $\pi$ 的期望未来奖励。
+    \item \textbf{优势函数} $A^\pi(s, a) = Q^\pi(s, a) - V^\pi(s)$：动作 $a$ 相对于策略 $\pi$ 的平均表现好多少。
+\end{itemize}
+关键关系：$V^\pi(s) = \mathbb{E}_{a \sim \pi(\cdot|s)}\left[Q^\pi(s, a)\right]$
+\end{importantbox}
+
+\subsection{本章小结}
+
+$V$、$Q$、$A$ 三个函数从不同角度描述策略的好坏。优势函数 $A$ 特别有用，因为它直接衡量某个动作相对于策略平均水平的好坏。
+
+\section{Actor-Critic 框架}
+
+\subsection{用优势函数改进策略梯度}
+
+用 $A^\pi$ 替代 reward-to-go：
+$$\nabla_\theta J(\theta) \approx \frac{1}{N}\sum_{i=1}^{N}\sum_{t=1}^{T} \nabla_\theta \log \pi_\theta(a_{i,t} \mid s_{i,t}) \cdot \hat{A}^\pi(s_{i,t}, a_{i,t})$$
+
+更好的 $\hat{A}$ 估计 $\Rightarrow$ 更低噪声的梯度。
+
+\subsection{如何估计价值函数}
+
+只需拟合 $\hat{V}^\pi$ 即可，因为：
+$$\hat{A}^\pi(s_t, a_t) = r(s_t, a_t) + \gamma \hat{V}^\pi(s_{t+1}) - \hat{V}^\pi(s_t)$$
+
+这里利用了采样得到的 $s_{t+1}$ 来近似期望。
+
+\subsection{价值函数的拟合方法}
+
+\textbf{方法 1：Monte Carlo 回归}
+
+$$\min_\phi \sum_{s_t \in \mathcal{D}} \left\| \hat{V}^\pi_\phi(s_t) - \sum_{t'=t}^{T} r(s_{t'}, a_{t'}) \right\|^2$$
+
+直接用采样的累计奖励作为 target。无偏但高方差。
+
+\textbf{方法 2：Bootstrapped / TD 更新}
+
+$$\min_\phi \sum_{(s,a,s') \in \mathcal{D}} \left\| \hat{V}^\pi_\phi(s) - \left(r(s,a) + \gamma \hat{V}^\pi_{\phi'}(s')\right) \right\|^2$$
+
+用自身的估计作为 target（bootstrap）。低方差但有偏。
+
+\textbf{方法 3：n-step 回报}
+
+结合上述两者，使用 $n$ 步实际奖励 + bootstrap：
+$$y_{i,t} = \sum_{t'=t}^{t+n-1} r(s_{i,t'}, a_{i,t'}) + \gamma^n \hat{V}^\pi(s_{i,t+n})$$
+
+\begin{knowledgebox}{Bias-Variance Tradeoff}
+\begin{itemize}
+    \item Monte Carlo：无偏，高方差。
+    \item TD (1-step bootstrap)：有偏（因为 $\hat{V}$ 不精确），低方差。
+    \item n-step：在两者之间提供可调的平衡。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{Actor-Critic 完整流程}
+
+\begin{enumerate}
+    \item 运行策略收集数据
+    \item 拟合价值函数 $\hat{V}^\pi$
+    \item 估计优势 $\hat{A}^\pi$
+    \item 用策略梯度更新策略 $\pi_\theta$
+    \item 重复
+\end{enumerate}
+
+\subsection{本章小结}
+
+Actor-Critic 通过学习价值函数来估计优势，替代了策略梯度中噪声很大的采样 reward-to-go，显著降低了梯度方差。
+
+\section{Off-Policy Actor-Critic 简介}
+
+当结合 importance weights 时，Actor-Critic 可以复用旧数据进行多步梯度更新。
+
+$$\nabla_{\theta'} J(\theta') \approx \sum_{t,i} \frac{\pi_{\theta'}(a_{i,t} \mid s_{i,t})}{\pi_\theta(a_{i,t} \mid s_{i,t})} \nabla_{\theta'} \log \pi_{\theta'}(a_{t,i} \mid s_{t,i}) \hat{A}^{\pi_\theta}(s_{t,i}, a_{t,i})$$
+
+但 importance weights 在新旧策略差异大时不稳定。下一讲将介绍如何用 KL 约束和 clipping 来解决这个问题。
+
+\subsection{本章小结}
+
+Off-policy actor-critic 通过 importance sampling 复用旧数据，但需要限制策略更新的步幅以保持稳定性。
+
+\section{总结与延伸}
+
+\begin{enumerate}
+    \item Actor-Critic 方法通过学习价值函数来估计优势，降低了策略梯度的方差。
+    \item 价值函数可以用 Monte Carlo、TD、或 n-step 方法拟合，各有 bias-variance 权衡。
+    \item Off-policy 版本通过 importance weights 复用旧数据，提高数据效率。
+    \item Actor-Critic 是 PPO、SAC 等现代 RL 算法的基础。
+\end{enumerate}
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Mnih et al., \textit{Asynchronous Methods for Deep Reinforcement Learning} (A3C)。
+    \item Schulman et al., \textit{High-Dimensional Continuous Control Using Generalized Advantage Estimation} (GAE)。
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,166 @@
+\documentclass[a4paper]{article}
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
+\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
+\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+
+\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+
+\newcommand{\notetitle}{[CS25] Mixture of Experts / Switch Transformer — Barret Zoph, Google}
+\newcommand{\noteauthors}{五道口纳什 \& Codex}
+\newcommand{\notedate}{\today}
+\newcommand{\videochannel}{Stanford CS25}
+\newcommand{\videopublishdate}{2021}
+\newcommand{\videoduration}{约60分钟}
+\newcommand{\videourl}{}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\begin{document}
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}\vspace{0.8cm}
+{\large \noteauthors\par}\vspace{0.3cm}
+{\large \notedate\par}\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：\ifdefempty{\videourl}{未填写}{\href{\videourl}{\nolinkurl{\videourl}}}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{引言：通过稀疏性扩展 Transformer}
+
+Barret Zoph（与 Erwin 联合演讲）介绍了通过\textbf{稀疏性（Sparsity）}来扩展 Transformer 的研究。核心动机来自缩放定律（Scaling Laws）——模型性能随规模（计算、数据、参数）的增长而可预测地提升。
+
+\begin{importantbox}{稀疏模型的核心思想}
+传统密集模型对每个输入使用所有参数。稀疏模型（Mixture of Experts, MoE）让\textbf{不同的输入激活不同的参数子集}，从而在不成比例增加计算量的情况下大幅增加模型参数量。
+\end{importantbox}
+
+\section{Mixture of Experts（MoE）基础}
+
+\subsection{MoE 架构}
+
+MoE 层替换 Transformer 中的标准 FFN 层：
+\begin{itemize}
+    \item 包含 $N$ 个独立的``专家''（每个是一个 FFN）
+    \item 一个\textbf{路由网络（Router/Gate）}决定每个 token 发送给哪些专家
+    \item 标准方案：Top-$k$ 路由——每个 token 选择得分最高的 $k$ 个专家
+\end{itemize}
+
+$$y = \sum_{i=1}^{N} g_i(x) \cdot E_i(x), \quad g(x) = \text{TopK}(\text{softmax}(W_g \cdot x))$$
+
+\begin{knowledgebox}{MoE 的历史}
+MoE 的思想可以追溯到 1991 年 Jacobs 等人的工作。在深度学习时代，Shazeer et al. (2017) 首次将 MoE 成功应用于大规模 LSTM 语言模型。Switch Transformer 进一步简化了 MoE 并将其应用于 Transformer。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+MoE 通过条件计算实现了参数量和计算量的解耦——模型可以拥有万亿参数，但每个 token 只使用其中一小部分。
+
+\section{Switch Transformer：简化 MoE}
+
+\subsection{核心创新：Top-1 路由}
+
+\begin{importantbox}{Switch Transformer 的简化}
+Switch Transformer 将路由简化为 \textbf{Top-1}——每个 token 只路由到一个专家。这带来了：
+\begin{itemize}
+    \item 更低的计算开销（每个 token 只经过一个专家 FFN）
+    \item 更简单的实现和通信模式
+    \item 在保持质量的同时获得更高的训练吞吐量
+\end{itemize}
+\end{importantbox}
+
+\subsection{容量因子（Capacity Factor）}
+
+每个专家有一个固定大小的缓冲区来接收 token：
+$$\text{专家缓冲区大小} = \text{Capacity Factor} \times \frac{\text{总 token 数}}{\text{专家数}}$$
+
+\begin{itemize}
+    \item Capacity Factor = 1.0：理想均匀分配
+    \item Capacity Factor > 1.0：允许负载不均衡，减少 token 溢出
+    \item 溢出的 token 跳过 MoE 层，仅通过残差连接
+\end{itemize}
+
+\subsection{负载均衡损失}
+
+\begin{warningbox}{专家坍缩问题}
+如果没有额外约束，路由器可能将所有 token 都发送给少数几个专家，导致其余专家未被训练——这就是\textbf{专家坍缩}。Switch Transformer 使用辅助负载均衡损失来鼓励均匀分配：
+$$L_{\text{balance}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i$$
+其中 $f_i$ 是分配给专家 $i$ 的 token 比例，$P_i$ 是路由器对专家 $i$ 的平均概率。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Switch Transformer 通过 Top-1 路由大幅简化了 MoE 的训练和推理，同时保持了稀疏模型的扩展优势。
+
+\section{实验结果}
+
+\subsection{预训练加速}
+
+Switch Transformer 在相同计算预算下的训练速度提升显著：
+\begin{itemize}
+    \item 与同等计算量的密集 T5 模型相比，Switch-Base 达到相同质量的\textbf{速度快 7 倍}
+    \item 在 101 种语言上的多语言实验中，91\% 的语言获得超过 4 倍加速
+\end{itemize}
+
+\subsection{Top-1 vs. Top-2 路由对比}
+
+\begin{itemize}
+    \item 在相同 FLOPS 下，Top-1（Switch）与 Top-2（传统 MoE）质量相当
+    \item Top-1 的训练速度更快（通信和计算更简单）
+    \item 综合考虑速度和质量，Top-1 是更好的选择
+\end{itemize}
+
+\subsection{知识蒸馏}
+
+稀疏模型的一个挑战是参数量巨大，部署困难。通过将稀疏模型蒸馏回密集模型，可以在保留大部分性能的同时缩小模型：
+\begin{itemize}
+    \item Switch-Base 蒸馏到 T5-Base：保留约 30\% 的质量提升
+    \item 这证明稀疏预训练可以作为更好的``教师''来提升密集模型
+\end{itemize}
+
+\subsection{本章小结}
+
+Switch Transformer 在预训练速度和多语言任务上表现出色，知识蒸馏为实际部署提供了可行路径。
+
+\section{展望与讨论}
+
+\subsection{稀疏性的未来}
+
+讲者认为稀疏性将在以下方面发挥作用：
+\begin{itemize}
+    \item \textbf{自适应计算}：不同难度的输入使用不同的计算量
+    \item \textbf{与线性注意力等效率方法结合}
+    \item \textbf{新的预训练目标}
+\end{itemize}
+
+\section{总结与延伸}
+
+MoE 和 Switch Transformer 代表了一种重要的模型扩展范式：通过稀疏激活，在计算预算有限的情况下大幅增加模型容量。这一思想在后续的 GShard、GLaM、Mixtral 等工作中得到广泛应用和发展。
+
+\subsection{拓展阅读}
+\begin{itemize}
+    \item Fedus et al., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity,'' JMLR 2022
+    \item Shazeer et al., ``Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer,'' ICLR 2017
+    \item Lepikhin et al., ``GShard: Scaling Giant Models with Conditional Computation,'' ICLR 2021
+\end{itemize}
+
+\end{document}
