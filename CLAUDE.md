@@ -154,6 +154,55 @@ articles/
 - `\videoduration` → 阅读时长（估算）
 - 不需要视频时间戳脚注
 
+## 环境注意事项（GCRSANDBOX142）
+
+- **TikZ 编译极慢**：避免使用 TikZ 图，改用表格和文字描述
+- **xeCJK `[` bug**：表格单元格以 `[` 开头会导致编译死循环，用 `{[}...{]}` 转义
+- **Whisper 需要 python3.11**：系统默认 python3 是 3.12，torch 2.11 不支持 V100 (CC 7.0)，必须用 `python3.11` + torch 2.4.x
+- **ffmpeg**：静态二进制在 `~/.local/bin/ffmpeg`
+- **双 V100 GPU**：每张 32GB，Whisper large-v3 每实例 ~10GB，单卡可跑 3 实例，双卡最多 6 路并行
+- 用 `CUDA_VISIBLE_DEVICES=0` / `CUDA_VISIBLE_DEVICES=1` 控制进程分配到哪张卡
+
+## Bilibili 下载
+
+- 未登录只能下载前 2-3 分钟音频，**必须使用 cookies**
+- Cookies 文件：`bilibili_cookies.txt`（已在 .gitignore 中）
+- 下载命令：`yt-dlp --cookies bilibili_cookies.txt -x -o "dir/audio.%(ext)s" URL`
+- 音频格式通常是 m4a，Whisper 可直接读取（需要 ffmpeg）
+- 封面下载：从 `--dump-json` 的 `thumbnail` 字段用 curl 下载
+
+## 批量处理策略
+
+处理大量视频时采用三阶段流水线，各阶段尽量并行：
+1. **下载**：批量下载音频+封面（顺序即可，每个几秒）
+2. **转录**：Whisper large-v3 多路并行（双卡 5-6 进程，用独立 Python 脚本 + `CUDA_VISIBLE_DEVICES`）
+3. **讲义生成**：派多个 agent 并行生成 LaTeX（不同目录互不冲突）
+
+已转录的可以先开始生成讲义，不必等全部转录完。每批 agent 控制在 8-16 讲以内防止超时。
+
+## 完整目录结构
+
+```
+ai-course-notes/
+├── cs336/                 # Stanford CS336 (17讲)
+├── cs224n/                # Stanford CS224N (17讲)
+├── cs231n/                # Stanford CS231N (18讲)
+├── cs224r/                # Stanford CS224R Deep RL (19讲, 含 slides PDF)
+├── cs146s/                # Stanford CS146S Modern SWE (10周, 基于 slides)
+├── cs25/                  # Stanford CS25 Transformers United (40讲, V1-V5)
+├── modern-agent/          # 五道口纳什 Modern Agent (16讲)
+├── llm-architect/         # 五道口纳什 LLM Architect (10讲)
+├── agentic-rl/            # 五道口纳什 Agentic RL + veRL (20讲)
+├── interviews/            # 访谈 (杨植麟/季逸超/谢赛宁)
+├── talks/
+│   ├── berkeley-llm-agents/  # Berkeley CS294 LLM Agents (35讲, f24/sp25/f25)
+│   ├── qingke-*/           # 青稞 AI 嘉年华 (4场圆桌)
+│   ├── zhang-bo-agi/       # AGI 峰会演讲
+│   └── ...
+├── articles/              # 技术文章笔记
+└── bilibili_cookies.txt   # (gitignored)
+```
+
 ## 注意事项
 
 - `yt-dlp` 版本需保持最新（`pip install --upgrade yt-dlp`），YouTube 经常更新反爬策略
@@ -162,3 +211,5 @@ articles/
 - 矩阵维度、公式细节以 slides 为准（字幕可能有听写错误）
 - 编译 PDF 需要运行两次 xelatex 才能正确生成目录和引用
 - X/Twitter 内容获取使用 `api.fxtwitter.com`（无需 API key，零依赖）
+- YouTube 英文视频也用中文写讲义，技术术语保留英文
+- Seminar 类课程（CS25, Berkeley LLM Agents）每讲是独立 talk，标题格式 `[系列名] 主题 — 嘉宾`
