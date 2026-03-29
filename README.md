@@ -1,90 +1,120 @@
 # AI Course Notes
 
-CS / AI / LLM 相关公开课的中文讲义，基于视频字幕、课程 slides 和公开视频整理。
+CS / AI / LLM 相关公开课、演讲和访谈的中文讲义，基于视频字幕（Whisper large-v3 转录 / YouTube 自动字幕）、课程 slides 和公开资料整理生成。
 
-当前已收录：
-- `CS336 (Spring 2025)`：`17/17`
-- `CS224N (Spring 2024)`：`17/17`
-- `CS231N (Spring 2025)`：`18/18`
-- 合计：`52` 份可编译 PDF 讲义
+**收录统计：220 份可编译 PDF 讲义**
 
-## 仓库说明
+| 类别 | 来源 | 数量 |
+|------|------|------|
+| Stanford 课程 | CS336 / CS224N / CS231N / CS224R / CS146S / CS25 | 121 |
+| Berkeley 课程 | CS294 LLM Agents (F24/SP25/F25) | 35 |
+| B站系列 | Modern Agent / LLM Architect / Agentic RL | 46 |
+| 演讲与访谈 | AGI 峰会 / 青稞嘉年华 / 访谈 | 13 |
+| 文章笔记 | 技术博客整理 | 5 |
 
-- 每讲目录通常包含字幕、封面、slides 原文件、抽取后的 `slides-images/`、LaTeX 源文件和编译出的 PDF。
-- `download_all.sh`：批量下载字幕和封面。
-- `download_slides.sh`：批量下载 slides 并抽取讲义插图。
+---
 
-## 课程列表
+## Stanford 课程
 
-### Stanford CS336: Language Modeling from Scratch (Spring 2025)
+### CS336: Language Modeling from Scratch (Spring 2025)
 
-| # | 主题 | PDF | 状态 |
-|---|------|-----|------|
-| 1 | 课程导论与整体地图 | [lecture01-notes.pdf](cs336/lecture01/lecture01-notes.pdf) | ✅ |
-| 2 | Building a Model in PyTorch | [lecture02-notes.pdf](cs336/lecture02/lecture02-notes.pdf) | ✅ |
-| 3 | Architectures, Hyperparameters | [lecture03-notes.pdf](cs336/lecture03/lecture03-notes.pdf) | ✅ |
-| 4 | Mixture of Experts | [lecture04-notes.pdf](cs336/lecture04/lecture04-notes.pdf) | ✅ |
-| 5 | GPUs | [lecture05-notes.pdf](cs336/lecture05/lecture05-notes.pdf) | ✅ |
-| 6 | Kernels, Triton | [lecture06-notes.pdf](cs336/lecture06/lecture06-notes.pdf) | ✅ |
-| 7 | Parallelism 1 | [lecture07-notes.pdf](cs336/lecture07/lecture07-notes.pdf) | ✅ |
-| 8 | Distributed Training Across Multiple GPUs | [lecture08-notes.pdf](cs336/lecture08/lecture08-notes.pdf) | ✅ |
-| 9 | Scaling Laws 1 | [lecture09-notes.pdf](cs336/lecture09/lecture09-notes.pdf) | ✅ |
-| 10 | Inference | [lecture10-notes.pdf](cs336/lecture10/lecture10-notes.pdf) | ✅ |
-| 11 | Scaling Laws 2 | [lecture11-notes.pdf](cs336/lecture11/lecture11-notes.pdf) | ✅ |
-| 12 | Evaluation | [lecture12-notes.pdf](cs336/lecture12/lecture12-notes.pdf) | ✅ |
-| 13 | Data | [lecture13-notes.pdf](cs336/lecture13/lecture13-notes.pdf) | ✅ |
-| 14 | 数据过滤与去重 | [lecture14-notes.pdf](cs336/lecture14/lecture14-notes.pdf) | ✅ |
-| 15 | Alignment - SFT/RLHF | [lecture15-notes.pdf](cs336/lecture15/lecture15-notes.pdf) | ✅ |
-| 16 | Reinforcement Learning from Verifiable Rewards | [lecture16-notes.pdf](cs336/lecture16/lecture16-notes.pdf) | ✅ |
-| 17 | Policy Gradient Mechanics and GRPO | [lecture17-notes.pdf](cs336/lecture17/lecture17-notes.pdf) | ✅ |
+从零构建语言模型：Tokenizer → Transformer → 训练 → 推理 → 评估 → 数据 → 对齐。17 讲。
 
-**资源**：[课程官网](https://stanford-cs336.github.io/) · [YouTube 播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) · [Slides 仓库](https://github.com/stanford-cs336/spring2025-lectures)
+📎 [课程官网](https://stanford-cs336.github.io/) · [YouTube](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) · [Slides](https://github.com/stanford-cs336/spring2025-lectures) · 详见 [cs336/](cs336/)
 
-### Stanford CS224N: Natural Language Processing with Deep Learning (Spring 2024)
+### CS224R: Deep Reinforcement Learning (Spring 2025)
 
-| # | 主题 | PDF | 状态 |
-|---|------|-----|------|
-| 1 | Intro and Word Vectors | [lecture01-notes.pdf](cs224n/lecture01/lecture01-notes.pdf) | ✅ |
-| 2 | Word Vectors and Language Models | [lecture02-notes.pdf](cs224n/lecture02/lecture02-notes.pdf) | ✅ |
-| 3 | Backpropagation and Neural Networks | [lecture03-notes.pdf](cs224n/lecture03/lecture03-notes.pdf) | ✅ |
-| 4 | Dependency Parsing | [lecture04-notes.pdf](cs224n/lecture04/lecture04-notes.pdf) | ✅ |
-| 5 | Recurrent Neural Networks | [lecture05-notes.pdf](cs224n/lecture05/lecture05-notes.pdf) | ✅ |
-| 6 | Seq2Seq and Machine Translation | [lecture06-notes.pdf](cs224n/lecture06/lecture06-notes.pdf) | ✅ |
-| 7 | Attention and LLM Intro | [lecture07-notes.pdf](cs224n/lecture07/lecture07-notes.pdf) | ✅ |
-| 8 | Transformers | [lecture08-notes.pdf](cs224n/lecture08/lecture08-notes.pdf) | ✅ |
-| 9 | Pretraining | [lecture09-notes.pdf](cs224n/lecture09/lecture09-notes.pdf) | ✅ |
-| 10 | Post-training - RLHF, SFT, DPO | [lecture10-notes.pdf](cs224n/lecture10/lecture10-notes.pdf) | ✅ |
-| 11 | Benchmarking and Evaluation | [lecture11-notes.pdf](cs224n/lecture11/lecture11-notes.pdf) | ✅ |
-| 12 | Efficient Neural Network Training | [lecture12-notes.pdf](cs224n/lecture12/lecture12-notes.pdf) | ✅ |
-| 13 | Brain-Computer Interfaces for Speech | [lecture13-notes.pdf](cs224n/lecture13/lecture13-notes.pdf) | ✅ |
-| 14 | Reasoning and Agents | [lecture14-notes.pdf](cs224n/lecture14/lecture14-notes.pdf) | ✅ |
-| 15 | Life After DPO | [lecture15-notes.pdf](cs224n/lecture15/lecture15-notes.pdf) | ✅ |
-| 16 | ConvNets and Tree Recursive Neural Networks | [lecture16-notes.pdf](cs224n/lecture16/lecture16-notes.pdf) | ✅ |
-| 18 | NLP, Linguistics, and Philosophy | [lecture18-notes.pdf](cs224n/lecture18/lecture18-notes.pdf) | ✅ |
+Chelsea Finn 主讲。Imitation Learning → Policy Gradient → Actor-Critic → RLHF → Meta-RL → 机器人。19 讲，每讲配官方 slides。
 
-**资源**：[课程官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/) · [YouTube 播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) · [Slides 页面](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/slides/)
+📎 [课程官网](https://cs224r.stanford.edu/) · [YouTube](https://www.youtube.com/playlist?list=PLoROMvodv4rPwxE0ONYRa_itZFdaKCylL) · 详见 [cs224r/](cs224r/)
 
-### Stanford CS231N: Deep Learning for Computer Vision (Spring 2025)
+### CS25: Transformers United (V1–V5, 40讲)
 
-| # | 主题 | PDF | 状态 |
-|---|------|-----|------|
-| 1 | Introduction | [lecture01-notes.pdf](cs231n/lecture01/lecture01-notes.pdf) | ✅ |
-| 2 | Image Classification with Linear Classifiers | [lecture02-notes.pdf](cs231n/lecture02/lecture02-notes.pdf) | ✅ |
-| 3 | Regularization and Optimization | [lecture03-notes.pdf](cs231n/lecture03/lecture03-notes.pdf) | ✅ |
-| 4 | Neural Networks and Backpropagation | [lecture04-notes.pdf](cs231n/lecture04/lecture04-notes.pdf) | ✅ |
-| 5 | Image Classification with CNNs | [lecture05-notes.pdf](cs231n/lecture05/lecture05-notes.pdf) | ✅ |
-| 6 | CNN Architectures | [lecture06-notes.pdf](cs231n/lecture06/lecture06-notes.pdf) | ✅ |
-| 7 | Recurrent Neural Networks | [lecture07-notes.pdf](cs231n/lecture07/lecture07-notes.pdf) | ✅ |
-| 8 | Attention and Transformers | [lecture08-notes.pdf](cs231n/lecture08/lecture08-notes.pdf) | ✅ |
-| 9 | Object Detection and Image Segmentation | [lecture09-notes.pdf](cs231n/lecture09/lecture09-notes.pdf) | ✅ |
-| 10 | Video Understanding | [lecture10-notes.pdf](cs231n/lecture10/lecture10-notes.pdf) | ✅ |
-| 11 | Large Scale Distributed Training | [lecture11-notes.pdf](cs231n/lecture11/lecture11-notes.pdf) | ✅ |
-| 12 | Self-Supervised Learning | [lecture12-notes.pdf](cs231n/lecture12/lecture12-notes.pdf) | ✅ |
-| 13 | Generative Models 1 | [lecture13-notes.pdf](cs231n/lecture13/lecture13-notes.pdf) | ✅ |
-| 14 | Generative Models (Part 2) | [lecture14-notes.pdf](cs231n/lecture14/lecture14-notes.pdf) | ✅ |
-| 15 | 3D Vision | [lecture15-notes.pdf](cs231n/lecture15/lecture15-notes.pdf) | ✅ |
-| 16 | Multi-Modal Foundation Models | [lecture16-notes.pdf](cs231n/lecture16/lecture16-notes.pdf) | ✅ |
-| 17 | Robot Learning | [lecture17-notes.pdf](cs231n/lecture17/lecture17-notes.pdf) | ✅ |
-| 18 | What We See and What We Value | [lecture18-notes.pdf](cs231n/lecture18/lecture18-notes.pdf) | ✅ |
+Stanford 最受欢迎的 Seminar。嘉宾包括 **Geoffrey Hinton**、**Andrej Karpathy**、**Ashish Vaswani**（Attention 原作者）、**Noam Brown**、**Chris Olah**、**Jim Fan** 等。
 
-**资源**：[课程官网](https://cs231n.stanford.edu/) · [YouTube 播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOABXSygHTsbvUz4G_YQhOb) · [Slides 页面](https://cs231n.stanford.edu/slides/2025)
+📎 [课程官网](https://web.stanford.edu/class/cs25/) · [YouTube](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) · 详见 [cs25/](cs25/)
+
+### CS146S: The Modern Software Developer (Fall 2025)
+
+AI 时代的软件开发方法论。10 周，每周邀请业界嘉宾（Claude Code 创作者、Warp CEO、Semgrep CEO 等）。基于 slides 生成。
+
+📎 [课程官网](https://themodernsoftware.dev) · 详见 [cs146s/](cs146s/)
+
+### CS224N: NLP with Deep Learning (Spring 2024)
+
+17 讲，Chris Manning 主讲。
+
+📎 [课程官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/) · [YouTube](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) · 详见 [cs224n/](cs224n/)
+
+### CS231N: Deep Learning for Computer Vision (Spring 2025)
+
+18 讲。
+
+📎 [课程官网](https://cs231n.stanford.edu/) · [YouTube](https://www.youtube.com/playlist?list=PLoROMvodv4rOABXSygHTsbvUz4G_YQhOb) · 详见 [cs231n/](cs231n/)
+
+---
+
+## Berkeley 课程
+
+### CS294/194-196: Large Language Model Agents (35讲)
+
+Dawn Song 组织的 LLM Agents Seminar Series。三个学期，每讲邀请一位顶级嘉宾。
+
+- **Fall 2024** (12讲): Denny Zhou, 姚顺雨, Percy Liang, Jim Fan, Ben Mann (Anthropic), Omar Khattab (DSPy)
+- **Spring 2025 Advanced** (12讲): Jason Weston, Thomas Hubert (AlphaProof), Ruslan Salakhutdinov
+- **Fall 2025 Agentic AI** (11讲): Noam Brown, Oriol Vinyals, James Zou, Yangqing Jia
+
+📎 [课程官网](https://rdi.berkeley.edu/llm-agents/f24) · [YouTube F24](https://www.youtube.com/playlist?list=PLS01nW3RtgopsNLeM936V4TNSsvvVglLc) · [YouTube SP25](https://www.youtube.com/playlist?list=PLS01nW3RtgorL3AW8REU9nGkzhvtn6Egn) · [YouTube F25](https://www.youtube.com/playlist?list=PLS01nW3RtgoqGkm4UeqNeZLccW-OGc1fJ) · 详见 [talks/berkeley-llm-agents/](talks/berkeley-llm-agents/)
+
+---
+
+## B站系列课程（五道口纳什）
+
+### Modern Agent (16讲)
+
+LLM Agent 实战：ReAct、LangGraph、RAG、Visual Prompting、Codex 内部机制、Skills 系统、Subagents。
+
+详见 [modern-agent/](modern-agent/)
+
+### LLM Architect (10讲)
+
+模型架构深度解析：MoE 参数量计算、RoPE 几何推导、Attention Head 模式、VLM 多模态设计、K2.5 论文串讲、KV-Cache 与推理优化。
+
+详见 [llm-architect/](llm-architect/)
+
+### Agentic RL (20讲)
+
+强化学习 for LLM：PG → PPO → GRPO → DPO 完整链路，veRL 框架实现，AgentLoop 代码串讲，Multi-Turn Tool Use 训练。
+
+详见 [agentic-rl/](agentic-rl/)
+
+---
+
+## 演讲与访谈
+
+### 青稞 AI 嘉年华 (4场圆桌)
+
+LLM/MLLM、Agentic、RL、Infra 四个专题的专家圆桌讨论。详见 [talks/qingke-*/](talks/)
+
+### 访谈
+
+| 嘉宾 | 主题 | PDF |
+|------|------|-----|
+| 杨植麟 | K2、Agentic LLM、艰难的泛化 | [PDF](interviews/yang-zhilin-k2/yang-zhilin-k2-notes.pdf) |
+| 季逸超 | Manus 决定出售前最后的访谈 | [PDF](interviews/ji-yichao-manus/ji-yichao-manus-notes.pdf) |
+| 谢赛宁 | 7 小时马拉松访谈 | [PDF](interviews/xie-saining-ami/xie-saining-ami-notes.pdf) |
+
+### AGI 峰会演讲
+
+张钹院士、杨植麟、林俊旸 (Qwen)、姚顺雨、阿里云圆桌、Greg Isenberg (Claude Code)。详见 [talks/](talks/)
+
+---
+
+## 生成方式
+
+1. **素材获取**：YouTube/Bilibili 视频下载 + 官方 slides 搜集
+2. **字幕转录**：Whisper large-v3（双 V100 GPU 多路并行）或 YouTube 自动字幕
+3. **讲义生成**：基于字幕 + slides 生成 LaTeX 中文讲义，ctex + tcolorbox 模板
+4. **编译**：XeLaTeX 两次编译生成 PDF
+
+详细流程见 [CLAUDE.md](CLAUDE.md)。
