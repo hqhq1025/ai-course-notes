@@ -2,11 +2,11 @@
 
 # 📚 AI Course Notes
 
-**239 份 AI / LLM 公开课中文讲义 PDF**
+**248 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-239份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-248份-blue?style=for-the-badge)](.)
 [![Courses](https://img.shields.io/badge/课程系列-13个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
@@ -73,10 +73,22 @@
 | **AGI 峰会** ×4 | 张钹 / 林俊旸 / 姚顺雨 / 阿里圆桌 | AITIME / 阿里云 |
 | **Greg Isenberg** | Claude Cowork & Code | YouTube |
 
-### 📝 技术文章笔记 (14 篇)
+### 📝 技术文章笔记 (24 篇)
 
 | 文章 | 来源 |
 |------|------|
+| **Agent Harness Engineering 专题** | |
+| [Harness Engineering](articles/openai-harness-engineering/) | OpenAI |
+| [Building Effective Agents](articles/anthropic-building-agents/) | Anthropic |
+| [Writing Effective Tools](articles/anthropic-writing-tools/) | Anthropic |
+| [Effective Harnesses for Long-Running Agents](articles/anthropic-effective-harnesses/) | Anthropic |
+| [Harness Design for Long-Running Apps](articles/anthropic-harness-long-running/) | Anthropic |
+| [Improving Deep Agents with Harness Engineering](articles/langchain-improving-deep-agents/) | LangChain |
+| [Evaluating Deep Agents](articles/langchain-evaluating-deep-agents/) | LangChain |
+| [Agent Needs a Harness, Not a Framework](articles/inngest-agent-harness/) | Inngest |
+| [Skill Issue: Harness Engineering](articles/humanlayer-skill-issue/) | HumanLayer |
+| [Harness Engineering](articles/fowler-harness-engineering/) | Martin Fowler |
+| **其他** | |
 | [Anthropic Harness Design](articles/anthropic-harness-design/) | Anthropic Blog |
 | [Karpathy: Vibe Coding](articles/dotey-karpathy-translation/) | @kabornethy (宝玉译) |
 | [Claude Code Skills 指南](articles/dotey-claude-code-skills-translation/) | @dotey (宝玉译) |
