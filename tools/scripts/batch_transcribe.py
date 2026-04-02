@@ -4,12 +4,18 @@ Batch Whisper transcription for downloaded audio files.
 Supports multi-GPU parallel execution.
 
 Usage:
-    # Single GPU
-    python3.11 batch_transcribe.py /path/to/dirs/*/
-    
+    # Single GPU (default model: large-v3, needs ~10GB VRAM)
+    python3 batch_transcribe.py /path/to/dirs/*/
+
+    # Use a smaller model if GPU memory is limited
+    WHISPER_MODEL=medium python3 batch_transcribe.py /path/to/dirs/*/
+
+    # English courses
+    WHISPER_LANG=en python3 batch_transcribe.py /path/to/dirs/*/
+
     # Multi-GPU (run multiple instances)
-    CUDA_VISIBLE_DEVICES=0 python3.11 batch_transcribe.py dir1/ dir2/ dir3/ &
-    CUDA_VISIBLE_DEVICES=1 python3.11 batch_transcribe.py dir4/ dir5/ dir6/ &
+    CUDA_VISIBLE_DEVICES=0 python3 batch_transcribe.py dir1/ dir2/ dir3/ &
+    CUDA_VISIBLE_DEVICES=1 python3 batch_transcribe.py dir4/ dir5/ dir6/ &
 """
 import whisper, os, sys, glob
 
@@ -29,7 +35,8 @@ def transcribe_dir(model, d):
         print(f"SKIP {name}: SRT exists")
         return
     print(f"TRANSCRIBING {name}...")
-    result = model.transcribe(audio, language="zh", verbose=False)
+    lang = os.environ.get("WHISPER_LANG", "zh")
+    result = model.transcribe(audio, language=lang, verbose=False)
     segments = result.get("segments", [])
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(segments, 1):
@@ -42,8 +49,10 @@ def transcribe_dir(model, d):
 
 if __name__ == "__main__":
     dirs = sys.argv[1:] if len(sys.argv) > 1 else sorted(glob.glob("*/"))
-    print("Loading Whisper large-v3...")
-    model = whisper.load_model("large-v3", device="cuda")
+    model_name = os.environ.get("WHISPER_MODEL", "large-v3")
+    device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") is not None or __import__('torch').cuda.is_available() else "cpu"
+    print(f"Loading Whisper {model_name} on {device}...")
+    model = whisper.load_model(model_name, device=device)
     print(f"Processing {len(dirs)} directories")
     for d in dirs:
         try:

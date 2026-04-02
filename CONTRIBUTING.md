@@ -37,7 +37,10 @@ cp -r tools/skills/* ~/.claude/skills/
 bash tools/scripts/batch_download.sh cookies.txt output_dir/ BV1xxx BV2xxx
 
 # 批量转录（支持多 GPU 并行）
-CUDA_VISIBLE_DEVICES=0 python3.11 tools/scripts/batch_transcribe.py dir1/ dir2/
+# 默认用 large-v3 + GPU，可通过环境变量调整
+CUDA_VISIBLE_DEVICES=0 python3 tools/scripts/batch_transcribe.py dir1/ dir2/
+# 没有 GPU 或显存不足时用 medium 模型
+WHISPER_MODEL=medium python3 tools/scripts/batch_transcribe.py dir1/ dir2/
 ```
 
 ### 3. 改进现有讲义质量
