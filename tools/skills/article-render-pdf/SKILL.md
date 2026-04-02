@@ -132,11 +132,14 @@ For articles with embedded images:
 3. Start from `assets/notes-template.tex`.
    Adapt the metadata block for articles:
    - Change `课程笔记` to `文章笔记` on the front page
+   - `\noteauthors{...}` → "基于 [Author Name] 文章内容整理". Never use "XX \& Codex", "XX \& AI", or similar
+   - `\notedate{...}` → the article's actual publish date (e.g., "2025-03-15"). Never use `\today`
    - `\videochannel` → article author / source platform
    - `\videopublishdate` → publish date
    - `\videoduration` → estimated reading time (e.g., "阅读时长：约 15 分钟")
-   - `\videourl` → article URL
+   - `\videourl` → article URL (always fill this in — you have the URL the user provided)
    - `\videocoverpath` → leave empty (articles typically have no cover image)
+   - `\repourl{https://github.com/hqhq1025/ai-course-notes}` → keep the default; do not change or delete
 
 4. For translated articles, add a note below the metadata box:
    ```latex
@@ -184,10 +187,14 @@ articles/
 │   ├── original_content.txt       # original English text
 │   ├── original_metadata.json     # original source metadata
 │   ├── metadata.json
-│   ├── notes.tex
-│   └── notes.pdf
+│   ├── dotey-karpathy-translation-notes.tex
+│   └── dotey-karpathy-translation-notes.pdf
 └── ...
 ```
+
+### File Naming Rule
+
+The `.tex` and `.pdf` files MUST be named `<dirname>-notes.tex` and `<dirname>-notes.pdf`, where `<dirname>` is the article directory name. For example, if the directory is `anthropic-harness-design/`, the files must be `anthropic-harness-design-notes.tex` and `anthropic-harness-design-notes.pdf`. Never use bare `notes.tex` or other ad-hoc names.
 
 ## Delivery
 
@@ -213,6 +220,7 @@ xelatex -interaction=nonstopmode <file>.tex  # second pass (resolve references)
 - Always compile PDF twice (`xelatex` two passes) to resolve references
 - When source is a translation, trace back to the original and use that as primary source
 - Technical terms keep English original even when notes are in Chinese
+- Do NOT use TikZ for any visualization — it causes compilation timeouts. Use LaTeX tables or pre-generated images instead
 
 ## Asset
 

@@ -9,6 +9,11 @@
 
 3. Start from `assets/notes-template.tex`.
    Fill in the metadata block, including the local cover image path, and replace the body content block with the generated notes.
+   Fill every metadata command with a concrete value:
+   - `\noteauthors{...}` — use "基于公开课程资料整理" or "基于 [Speaker Name] 授课内容整理". Never use "某某 \& Codex", "某某 \& AI", or similar
+   - `\notedate{...}` — use the video's publish date or course semester (e.g., "2025年春季" or "2025-03-15"). Never use `\today`
+   - `\videourl{...}` — the full video URL. If truly unavailable, leave empty (`\videourl{}`) — but this should be rare
+   - `\repourl{https://github.com/hqhq1025/ai-course-notes}` — keep the default; do not change or delete
 
 4. The front page must include the video's original cover image when available.
    Place it on the first page rather than burying it later in the document.
@@ -134,17 +139,20 @@ Whenever the `.tex` or PDF references a specific video frame, or a crop derived 
 
 For concepts that remain hard to explain with only screenshots and prose, add accurate visualizations.
 
-Two acceptable routes:
+**IMPORTANT: Do NOT use TikZ or PGFPlots.** TikZ compilation is extremely slow on this machine and can cause xelatex to hang or time out. This is a hard rule, not a suggestion.
 
-- generate LaTeX-native visualizations with TikZ or PGFPlots
-- generate figures ahead of time with scripts and include them as images
+Acceptable routes:
+
+- generate figures ahead of time with Python scripts (matplotlib, PIL) and include them as images
+- use LaTeX tables (`tabular` / `booktabs`) for structured comparisons
+- use text-based diagrams or formatted lists for simple flows
 
 Use visualizations for:
 
-- process flows
-- architecture layouts
-- scaling-law plots
-- summary diagrams
-- comparisons that are clearer as charts than prose
+- process flows (use tables or text-based formatting)
+- architecture layouts (use included images or tables)
+- scaling-law plots (generate with matplotlib, include as image)
+- summary diagrams (use tables)
+- comparisons that are clearer as charts than prose (use booktabs tables)
 
 Do not add decorative graphics that do not teach anything.

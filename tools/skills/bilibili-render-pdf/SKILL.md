@@ -31,7 +31,13 @@ Same as youtube-render-pdf — produce a professional Chinese lecture note with 
 
 ### Supplementary Material Discovery
 
-Same as youtube-render-pdf — search for official slides before downloading video.
+Same as youtube-render-pdf — search for official slides AND official lecture notes before downloading video.
+
+Additional Bilibili-specific notes:
+- Many Chinese courses host slides on their own course websites or Gitee/GitHub repos
+- Some courses have companion textbooks or reading lists — check the video description
+- Google Slides/Docs strategy: try `/export/pdf` URL pattern; fall back to video frames if export fails
+- Official lecture notes are especially valuable for Bilibili courses where subtitles may be auto-generated and formula accuracy is lower
 
 ### Metadata Inspection
 
@@ -75,6 +81,11 @@ whisper audio.wav --model medium --language zh --output_format srt --output_dir 
 - Prefer CC subtitles; fall back to Whisper only when unavailable
 - Skip non-teaching content (intros, sponsor segments, 一键三连, 关注投币)
 - Use `[H]` float placement for all figures
+- Set `\noteauthors` to "基于公开课程资料整理" or "基于 [Speaker Name] 授课内容整理" — never "XX \& Codex" or similar
+- Set `\notedate` to the video's publish date or course semester — never `\today`
+- Always fill `\videourl` with the URL the user provided
+- Keep `\repourl{https://github.com/hqhq1025/ai-course-notes}` unchanged from the template default
+- Do NOT use TikZ for any visualization — it causes compilation timeouts. Use tables or pre-generated images instead
 
 ## Asset
 

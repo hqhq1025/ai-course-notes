@@ -26,9 +26,14 @@ Before downloading the video, search for official slides, lecture notes, or othe
 
 1. Extract course code, speaker name, institution, year from video title/description
 2. Search: video description links → course website → GitHub repos → speaker's website → web search
-3. If slides are a PDF, extract pages as images (`magick -density 200 slides.pdf slides-images/slide-%03d.jpg`) — prefer these over video frames
-4. When slides are available, use them as primary figure source; still download video for supplementary frames
-5. If no materials found, proceed with video-only mode
+3. Look for BOTH slides AND official lecture notes/readings — lecture notes provide precise formulas, proofs, and context that subtitles often garble
+4. If slides are a PDF, extract pages as images (`magick -density 200 slides.pdf slides-images/slide-%03d.jpg`) — prefer these over video frames
+5. **Google Slides / Google Docs**: some courses host slides on Google Slides instead of PDF. Strategy:
+   - Try appending `/export/pdf` to the Google Slides URL to download as PDF (e.g., `https://docs.google.com/presentation/d/XXXXX/export/pdf`)
+   - If export fails, note the URL in the metadata and fall back to video frame extraction
+6. When slides are available, use them as primary figure source; still download video for supplementary frames
+7. When official lecture notes are available, use them to verify formula accuracy and fill in details the speaker glossed over verbally
+8. If no materials found, proceed with video-only mode
 
 ## Source Acquisition
 
@@ -52,6 +57,11 @@ Before downloading the video, search for official slides, lecture notes, or othe
 - Prefer manual subtitles; fall back to auto-generated or `youtube-transcript-api`
 - Skip non-teaching content (intros, sponsor segments, channel promos)
 - Use `[H]` float placement for all figures
+- Set `\noteauthors` to "基于公开课程资料整理" or "基于 [Speaker Name] 授课内容整理" — never "XX \& Codex" or similar
+- Set `\notedate` to the video's publish date or course semester — never `\today`
+- Always fill `\videourl` with the URL the user provided
+- Keep `\repourl{https://github.com/hqhq1025/ai-course-notes}` unchanged from the template default
+- Do NOT use TikZ for any visualization — it causes compilation timeouts. Use tables or pre-generated images instead
 
 ## Asset
 
