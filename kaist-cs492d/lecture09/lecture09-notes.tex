@@ -1,0 +1,647 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 9: Flow Matching 1}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{53分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=-1hgQC58Nfc}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{课程背景与回顾}
+
+本讲是 KAIST CS492D（扩散模型与生成模型）的第 9 讲，主题为 \textbf{Flow Matching}（流匹配）。在前几讲中，我们已经详细讨论了扩散模型（Diffusion Models）的各种变体——从 DDPM 到 DDIM，再到基于 SDE/ODE 的 Score-Based 模型和 DPM-Solver 等加速技术。本讲将从一个全新的角度引入生成模型：\textbf{Continuous Normalizing Flows}（连续正则化流）和 \textbf{Flow Matching}（流匹配）。
+
+\begin{knowledgebox}{课程脉络回顾}
+在前面的课程中，我们建立了以下认知链条：
+\begin{enumerate}
+    \item \textbf{DDPM}：离散时间步的去噪扩散模型，典型需要 1000 步采样
+    \item \textbf{DDIM}：确定性采样，将步数降至 50--200 步
+    \item \textbf{Score-Based SDE}：将扩散过程统一为随机微分方程（SDE）框架
+    \item \textbf{Probability Flow ODE}：从 SDE 导出等价的 ODE 形式，实现确定性生成
+    \item \textbf{DPM-Solver}：利用 ODE 结构的专用求解器，进一步将步数降至 10--15 步
+\end{enumerate}
+本讲的 Flow Matching 将提供另一种理解和训练 ODE-based 生成模型的方式。
+\end{knowledgebox}
+
+\subsection{扩散模型的速度瓶颈}
+
+扩散模型的核心优势在于能够生成高质量、无模式崩塌（mode collapse）的输出。但其主要瓶颈始终是\textbf{采样速度}：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{方法} & \textbf{典型步数} & \textbf{是否需要重新训练} \\
+\midrule
+DDPM & $\sim$1000 & 否 \\
+DDIM & 50--200 & 否 \\
+DPM-Solver (高阶) & 10--15 & 否 \\
+Consistency Models & 1--2 & 是（微调） \\
+Distillation 方法 & 1--5 & 是（微调） \\
+\bottomrule
+\end{tabular}
+\caption{扩散模型采样加速方法对比}
+\end{table}
+
+讲者指出，DDPM 到 DPM-Solver 的演进实现了约 \textbf{100 倍}的加速，且不需要重新训练模型——这是扩散模型非常有吸引力的特性。但要进一步将步数降至 1--5 步，则需要 distillation 等额外训练手段。
+
+\subsection{Consistency Models 简介}
+
+\begin{importantbox}{Consistency Models 的核心思想}
+Consistency Models 的基本思想是：对于 ODE 轨迹上的所有点，训练网络使其能从轨迹的\textbf{任意中间点}直接预测最终输出。具体来说：
+\begin{enumerate}
+    \item 从标准高斯样本出发，运行 ODE 求解器获得完整轨迹
+    \item 对轨迹上的每个中间点 $x_t$，利用 Tweedie 公式计算最终输出的期望
+    \item 训练网络使得较早时刻的预测与较晚时刻的预测保持一致（consistent）
+\end{enumerate}
+这样，在推理时只需一步或两步即可从噪声直接跳到数据样本。
+\end{importantbox}
+
+Consistency Models 和其他 distillation 方法的共同缺点是：它们都需要预训练的扩散模型作为起点，通过额外的微调来实现加速。这意味着需要在训练阶段投入更多计算资源，以换取测试时更快的速度。
+
+\subsection{本章小结}
+
+从 DDPM 到 Consistency Models，扩散模型社区在采样加速方面取得了巨大进展。然而，这些方法要么受限于特定的噪声调度（noise schedule），要么需要复杂的蒸馏训练。Flow Matching 将从一个完全不同的角度出发，提供更灵活、更简洁的生成模型训练框架。
+
+\section{从扩散模型到流模型：范式转换}
+
+\subsection{时间方向的翻转}
+
+在正式引入 Flow Matching 之前，讲者特别强调了一个\textbf{极易混淆}的符号约定变化：
+
+\begin{warningbox}{时间方向的翻转——最容易混淆的地方}
+\textbf{扩散模型}的时间方向（前向过程视角）：
+\begin{itemize}
+    \item $t = 0$：数据分布 $p_{\text{data}}$
+    \item $t = T$：噪声分布（标准高斯）$\mathcal{N}(0, I)$
+\end{itemize}
+
+\textbf{Flow Matching}的时间方向（生成过程视角）：
+\begin{itemize}
+    \item $t = 0$：噪声分布（标准高斯）$p_0 = \mathcal{N}(0, I)$
+    \item $t = 1$：数据分布 $p_1 = p_{\text{data}}$
+\end{itemize}
+
+也就是说，$x_0$ 在 Flow Matching 中代表高斯噪声样本，$x_1$ 代表真实数据样本。这与扩散模型的习惯完全相反！
+\end{warningbox}
+
+讲者坦言，即使是他本人也经常被这两套符号搞混。之所以保留这种不一致，是因为扩散模型和流匹配分别来自不同的文献传统，各自的论文和教材都遵循各自的约定。
+
+\subsection{扩散模型与流模型的关键区别}
+
+\begin{importantbox}{核心区别：参考分布的灵活性}
+\textbf{扩散模型}中，所有推导都假设参考分布（噪声分布）是标准高斯分布 $\mathcal{N}(0, I)$。如果更换为其他分布（如各向异性高斯），所有数学推导都需要重新进行。
+
+\textbf{流模型}的一大优势是：参考分布 $p_0$ 可以是\textbf{任意分布}。无论 $p_0$ 怎么变化，流匹配的数学公式保持不变。这使得流模型可以被看作扩散模型的一种\textbf{泛化}。
+\end{importantbox}
+
+尽管两者来自不同的文献传统，最终它们在数学上是等价的（在标准高斯参考分布的特殊情况下）。这也是本讲要揭示的一个重要洞见。
+
+\subsection{本章小结}
+
+Flow Matching 从生成过程的视角出发，将时间方向翻转，并允许任意参考分布。虽然最终可以与扩散模型建立等价关系，但这种新视角带来了更简洁的训练目标和更灵活的模型设计空间。
+
+\section{连续正则化流（CNF）的基本框架}
+
+\subsection{三个核心概念}
+
+Flow Matching 的数学框架围绕三个核心概念展开，它们之间存在紧密的相互联系：
+
+\begin{importantbox}{Flow Matching 的三大核心概念}
+\begin{enumerate}
+    \item \textbf{流映射}（Flow Map）$\phi_t(x)$：从起始点 $x$ 出发，沿轨迹到达时刻 $t$ 的位置
+    \item \textbf{向量场}（Vector Field）$v_t(x)$：定义 ODE 中每个时空点处的速度方向
+    \item \textbf{概率密度路径}（Probability Density Path）$p_t(x)$：时刻 $t$ 处数据点的概率分布
+\end{enumerate}
+这三者之间的关系贯穿整个 Flow Matching 理论。
+\end{importantbox}
+
+\subsection{流映射（Flow Map）}
+
+流映射 $\phi_t(x_0)$ 表示从初始点 $x_0$（来自参考分布 $p_0$）出发，经过时间 $t$ 后到达的位置。形式化定义为：
+
+$$\phi_t(x_0) = x_0 + \int_0^t v_s(\phi_s(x_0)) \, ds$$
+
+其中各符号的含义为：
+\begin{itemize}
+    \item $\phi_t(x_0)$：从 $x_0$ 出发，在时刻 $t$ 的轨迹位置
+    \item $v_s(\cdot)$：时刻 $s$ 处的向量场（速度场）
+    \item $\phi_0(x_0) = x_0$：边界条件，$t=0$ 时轨迹起点就是 $x_0$ 本身
+    \item $\phi_1(x_0) \sim p_1$：边界条件，$t=1$ 时应到达数据分布的样本
+\end{itemize}
+
+\begin{knowledgebox}{ODE 与流映射的关系}
+流映射本质上是以下常微分方程（ODE）的解：
+$$\frac{d\phi_t(x_0)}{dt} = v_t(\phi_t(x_0)), \quad \phi_0(x_0) = x_0$$
+这里\textbf{没有随机性}——一旦确定了起始点 $x_0$ 和向量场 $v_t$，整条轨迹就完全确定了。这也是"Ordinary" Differential Equation 中"Ordinary"的含义——相对于 SDE 中的随机项。
+\end{knowledgebox}
+
+有时为了简化符号，我们会用 $x_t$ 来表示 $\phi_t(x_0)$，即从 $x_0$ 出发在时刻 $t$ 的轨迹点。
+
+\subsection{向量场（Vector Field）}
+
+向量场 $v_t(x)$ 定义了每个时空点 $(t, x)$ 处的"速度"。它是流映射的时间导数：
+
+$$v_t(\phi_t(x_0)) = \frac{d\phi_t(x_0)}{dt}$$
+
+向量场编码了从噪声到数据的映射信息。如果我们能找到一个好的向量场，使得从 $p_0$ 采样的点能被映射到 $p_1$（数据分布），那么我们就得到了一个生成模型。
+
+\subsection{概率密度路径（Probability Density Path）}
+
+概率密度路径 $p_t(x)$ 描述了时刻 $t$ 处数据点 $x$ 的概率密度。它满足以下性质：
+\begin{itemize}
+    \item $p_0 = \mathcal{N}(0, I)$（参考分布，通常为标准高斯）
+    \item $p_1 \approx p_{\text{data}}$（数据分布）
+    \item 中间时刻 $p_t$ 是从 $p_0$ 到 $p_1$ 的插值
+\end{itemize}
+
+\begin{knowledgebox}{连续性方程（Continuity Equation）}
+向量场和概率密度路径之间的关系由\textbf{连续性方程}给出：
+$$\frac{\partial p_t(x)}{\partial t} + \nabla \cdot (p_t(x) v_t(x)) = 0$$
+这是 Fokker-Planck 方程在无扩散项（即 ODE 而非 SDE）情况下的简化形式。它建立了向量场和概率路径之间的精确数学联系。
+\end{knowledgebox}
+
+\subsection{三者之间的关系}
+
+在扩散模型中，我们的推导路径是：
+$$\text{概率密度路径 } p_t \;\longrightarrow\; \text{SDE/ODE 形式} \;\longrightarrow\; \text{向量场 } v_t \;\longrightarrow\; \text{流映射 } \phi_t$$
+
+而在 Flow Matching 中，我们走的是\textbf{相反的路径}：
+$$\text{向量场 } v_t \;\longrightarrow\; \text{流映射 } \phi_t \;\longrightarrow\; \text{概率密度路径 } p_t$$
+
+也就是说，我们先定义向量场，再由它推导出流映射和概率路径。
+
+\subsection{对数概率的计算}
+
+向量场还可以用来计算数据点的对数概率。对于 $x_1 \sim p_1$，其对数似然可以通过以下方式计算：
+
+$$\log p_1(x_1) = \log p_0(x_0) - \int_0^1 \nabla \cdot v_t(\phi_t(x_0)) \, dt$$
+
+其中各项的含义为：
+\begin{itemize}
+    \item $\log p_0(x_0)$：起始点在参考分布下的对数概率（高斯分布，已知解析形式）
+    \item $\nabla \cdot v_t$：向量场的散度（divergence）
+    \item 积分项：沿轨迹的体积变化累积
+\end{itemize}
+
+这意味着，如果我们能找到一个使 $\log p_1(x_1)$ 最大化的向量场，就能训练出一个好的生成模型。
+
+\subsection{本章小结}
+
+连续正则化流（CNF）的框架由三个核心概念构成：流映射、向量场和概率密度路径。它们之间通过 ODE 和连续性方程相互联系。与扩散模型不同，CNF 直接从向量场出发定义生成过程，提供了更直接的数学框架。
+
+\section{Flow Matching 目标函数}
+
+\subsection{朴素方法：全局最大似然训练}
+
+一种直觉方法是直接最大化数据的对数似然：
+
+$$\max_\theta \; \mathbb{E}_{x_1 \sim p_{\text{data}}} \left[ \log p_1(x_1) \right]$$
+
+具体来说：
+\begin{enumerate}
+    \item 用神经网络 $v_\theta(t, x)$ 参数化向量场
+    \item 对每个数据点 $x_1$，从 $x_1$ 出发反向运行 ODE 到 $x_0$
+    \item 计算 $\log p_0(x_0) - \int_0^1 \nabla \cdot v_\theta(t, \phi_t) \, dt$
+    \item 最大化这个值
+\end{enumerate}
+
+\begin{warningbox}{朴素方法的致命缺陷}
+虽然这个方法在理论上是正确的，但在实践中存在严重问题：
+\begin{enumerate}
+    \item \textbf{计算代价高}：每次计算损失函数都需要求解 ODE，这本身就是一个昂贵的操作
+    \item \textbf{数值不稳定}：ODE 求解器在长时间积分时容易产生数值误差累积
+    \item \textbf{反向传播困难}：梯度需要通过整个 ODE 求解过程反向传播（需要 adjoint method），进一步增加计算成本和不稳定性
+\end{enumerate}
+这就是早期 Continuous Normalizing Flows（如 Neural ODE，Chen et al., 2018）面临的核心困难。
+\end{warningbox}
+
+\subsection{Flow Matching 目标：回归向量场}
+
+Flow Matching 的核心突破在于：\textbf{绕过 ODE 求解}，直接用简单的回归损失来训练向量场。
+
+Flow Matching 的损失函数定义为：
+
+$$\mathcal{L}_{\text{FM}}(\theta) = \mathbb{E}_{t \sim \mathcal{U}[0,1], \, x_t \sim p_t} \left\| v_\theta(t, x_t) - v_t(x_t) \right\|^2$$
+
+其中各符号的含义为：
+\begin{itemize}
+    \item $v_\theta(t, x_t)$：神经网络预测的向量场
+    \item $v_t(x_t)$：目标向量场（ground truth）
+    \item $t \sim \mathcal{U}[0,1]$：均匀采样时间步
+    \item $x_t \sim p_t$：从时刻 $t$ 的边际分布中采样
+\end{itemize}
+
+\begin{importantbox}{Flow Matching 的核心优势}
+这个损失函数是一个简单的\textbf{均方误差回归}，不需要求解任何 ODE！但问题在于：我们并不知道边际向量场 $v_t(x_t)$ 和边际分布 $p_t(x_t)$ 的解析形式——因为数据分布 $p_{\text{data}}$ 本身就是未知的。
+
+这就引出了 Flow Matching 的关键创新：\textbf{Conditional Flow Matching}。
+\end{importantbox}
+
+\subsection{本章小结}
+
+直接最大化似然需要昂贵的 ODE 求解，而 Flow Matching 提出了简洁的回归目标函数。但边际量的不可解析性要求我们进一步引入条件版本的公式。
+
+
+\section{条件流匹配（Conditional Flow Matching）}
+
+\subsection{条件设定的动机}
+
+边际分布 $p_t(x)$ 和边际向量场 $v_t(x)$ 都没有解析表达式，因为它们依赖于未知的数据分布。为了解决这个问题，Flow Matching 引入了\textbf{条件版本}的各个量。
+
+核心思想是：给定一个具体的数据点 $x_1$，将数据分布"简化"为一个集中在 $x_1$ 附近的高斯分布 $\mathcal{N}(x_1, \sigma_{\min}^2 I)$（其中 $\sigma_{\min}$ 极小）。这样，所有条件量都有了解析表达式。
+
+\begin{knowledgebox}{条件设定与扩散模型的前向过程}
+这个条件设定与扩散模型中的前向跳跃分布（forward transition kernel）有着深刻的联系。在扩散模型中，给定一个数据点 $x_0$（注意扩散模型的符号约定），前向过程定义了每个时间步的条件分布 $q(x_t | x_0) = \mathcal{N}(\alpha_t x_0, \sigma_t^2 I)$。
+
+在 Flow Matching 中，我们做了类似的事情：给定数据点 $x_1$，定义条件概率路径 $p_t(x | x_1)$。两者的数学结构完全相同，只是时间方向相反。
+\end{knowledgebox}
+
+\subsection{条件概率路径}
+
+给定数据样本 $x_1$，条件概率路径定义为：
+
+$$p_t(x | x_1) = \mathcal{N}(x; \mu_t(x_1), \sigma_t^2(x_1) I)$$
+
+其中 $\mu_t$ 和 $\sigma_t$ 必须满足\textbf{边界条件}：
+\begin{itemize}
+    \item $t = 0$ 时：$\mu_0(x_1) = 0$，$\sigma_0(x_1) = 1$，使得 $p_0(x | x_1) = \mathcal{N}(0, I)$
+    \item $t = 1$ 时：$\mu_1(x_1) \approx x_1$，$\sigma_1(x_1) \approx \sigma_{\min} \to 0$，使得 $p_1(x | x_1) \approx \delta(x - x_1)$
+\end{itemize}
+
+边际概率路径通过对所有数据点积分恢复：
+
+$$p_t(x) = \int p_t(x | x_1) \, p_{\text{data}}(x_1) \, dx_1$$
+
+\subsection{条件流映射}
+
+\begin{importantbox}{线性条件流映射——Flow Matching 的简洁之美}
+Flow Matching 的一个关键设计选择是将条件流映射定义为\textbf{线性函数}：
+$$\phi_t(x_0 | x_1) = \mu_t(x_1) + \sigma_t(x_1) \cdot x_0$$
+这意味着，给定数据点 $x_1$ 和噪声样本 $x_0$，从 $x_0$ 到 $x_1$ 的轨迹是一条\textbf{直线}（在 $\mu_t$ 和 $\sigma_t$ 为线性函数时）。
+
+必须满足边界条件：
+\begin{itemize}
+    \item $\phi_0(x_0 | x_1) = x_0$（$t=0$ 时，输出就是噪声样本）
+    \item $\phi_1(x_0 | x_1) \approx x_1$（$t=1$ 时，输出接近数据样本）
+\end{itemize}
+\end{importantbox}
+
+线性条件流映射的好处是：
+\begin{enumerate}
+    \item 条件概率路径自然成为高斯分布
+    \item 条件向量场有解析表达式
+    \item 采样过程简单高效
+\end{enumerate}
+
+\subsection{条件向量场}
+
+从条件流映射的定义出发，条件向量场可以通过对时间求导获得：
+
+$$u_t(x | x_1) = \frac{d\phi_t(x_0 | x_1)}{dt} = \mu_t'(x_1) + \sigma_t'(x_1) \cdot x_0$$
+
+其中 $\mu_t'$ 和 $\sigma_t'$ 分别是 $\mu_t$ 和 $\sigma_t$ 对时间 $t$ 的导数。
+
+由于 $x_0 = (\phi_t^{-1}(x | x_1)) = \frac{x - \mu_t(x_1)}{\sigma_t(x_1)}$，条件向量场可以写成关于 $x$ 的函数：
+
+$$u_t(x | x_1) = \mu_t'(x_1) + \frac{\sigma_t'(x_1)}{\sigma_t(x_1)} \left( x - \mu_t(x_1) \right)$$
+
+\begin{warningbox}{不要混淆条件量和边际量}
+条件向量场 $u_t(x | x_1)$ 依赖于具体的数据点 $x_1$，而我们最终需要的是不依赖于 $x_1$ 的\textbf{边际向量场} $v_t(x)$。条件向量场本身不能直接用于生成（因为生成时我们不知道目标 $x_1$），但它是训练过程中的关键中间量。
+\end{warningbox}
+
+\subsection{从条件量到边际量}
+
+边际向量场可以通过条件向量场和条件概率路径的加权平均得到：
+
+$$v_t(x) = \frac{\int u_t(x | x_1) \, p_t(x | x_1) \, p_{\text{data}}(x_1) \, dx_1}{p_t(x)}$$
+
+\begin{importantbox}{Conditional Flow Matching 的核心定理}
+Flow Matching 的关键理论结果是：使用条件向量场训练的损失函数——
+$$\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{t, \, x_1 \sim p_{\text{data}}, \, x_0 \sim p_0} \left\| v_\theta(t, \phi_t(x_0 | x_1)) - u_t(\phi_t(x_0 | x_1) | x_1) \right\|^2$$
+——与原始的 Flow Matching 损失函数 $\mathcal{L}_{\text{FM}}(\theta)$ 具有\textbf{相同的梯度}（关于参数 $\theta$）。
+
+这意味着我们可以用条件损失来等价地训练边际向量场，而条件损失中的所有量都有解析表达式！
+\end{importantbox}
+
+\subsection{本章小结}
+
+Conditional Flow Matching 通过引入条件设定，将不可解析的边际量转化为有解析形式的条件量。关键的理论保证是：条件损失函数和边际损失函数具有相同的梯度，因此训练效果等价。这就是 Flow Matching 能够避免 ODE 求解的根本原因。
+
+
+\section{具体的 Flow Matching 变体}
+
+\subsection{最简选择：Optimal Transport 路径}
+
+最简单也最常用的选择是\textbf{Optimal Transport (OT) 条件流映射}，也称为 rectified flow：
+
+$$\phi_t(x_0 | x_1) = (1 - t) x_0 + t \, x_1$$
+
+对应的参数为：
+\begin{itemize}
+    \item $\mu_t(x_1) = t \, x_1$
+    \item $\sigma_t(x_1) = 1 - t$
+\end{itemize}
+
+这就是 $x_0$ 和 $x_1$ 之间的\textbf{线性插值}，对应的条件轨迹是一条\textbf{直线}。
+
+\begin{importantbox}{OT 路径的向量场与训练目标}
+对于 OT 路径，条件向量场极其简洁：
+$$u_t(x | x_1) = x_1 - x_0$$
+这是一个\textbf{常数向量}（不依赖于 $t$），方向从 $x_0$ 指向 $x_1$。
+
+因此，Conditional Flow Matching 的训练目标变为：
+$$\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{t, \, x_1, \, x_0} \left\| v_\theta(t, (1-t)x_0 + t x_1) - (x_1 - x_0) \right\|^2$$
+
+训练过程极其简单：
+\begin{enumerate}
+    \item 采样 $x_1 \sim p_{\text{data}}$，$x_0 \sim \mathcal{N}(0, I)$，$t \sim \mathcal{U}[0,1]$
+    \item 计算 $x_t = (1-t)x_0 + t \, x_1$
+    \item 训练网络 $v_\theta(t, x_t)$ 预测 $x_1 - x_0$
+\end{enumerate}
+\end{importantbox}
+
+\subsection{与扩散模型中 VP/VE 调度的对应}
+
+除了 OT 路径，我们也可以选择与扩散模型中的 VP（Variance Preserving）或 VE（Variance Exploding）调度对应的参数化。
+
+\textbf{VP 对应}（类比 DDPM 的噪声调度）：
+\begin{itemize}
+    \item $\mu_t(x_1) = \alpha_t \, x_1$，其中 $\alpha_0 = 0$，$\alpha_1 \approx 1$
+    \item $\sigma_t(x_1) = \sqrt{1 - \alpha_t^2}$（保持总方差不变）
+\end{itemize}
+
+条件向量场在这种情况下变为：
+$$u_t(x | x_1) = \frac{\alpha_t'}{1 - \alpha_t^2} \left( \alpha_t \, x_1 - x \right) + \alpha_t' \, x_1$$
+
+\begin{knowledgebox}{Flow Matching 与 Score Function 的关系}
+条件向量场和扩散模型中的 score function（得分函数）之间存在精确的数学关系。在 VP 参数化下：
+$$u_t(x | x_1) = f(t) \, x + g(t) \, \nabla_x \log p_t(x | x_1)$$
+其中 $f(t)$ 和 $g(t)$ 是与噪声调度相关的系数。
+
+这说明\textbf{训练 Flow Matching 的向量场和训练扩散模型的 score function 本质上是在做同一件事}——只是用不同的参数化和不同的损失权重。
+\end{knowledgebox}
+
+\subsection{直线轨迹 vs 弯曲轨迹}
+
+\begin{warningbox}{条件轨迹 vs 边际轨迹}
+虽然每条\textbf{条件}轨迹（给定 $x_0$ 和 $x_1$）是一条直线，但\textbf{边际}轨迹（只给定 $x_0$，不知道目标 $x_1$）通常不是直线。这是因为同一个空间点 $x_t$ 可能被多条不同的条件轨迹经过，而网络需要预测这些条件向量场的加权平均。
+
+这就是为什么即使使用 OT 路径训练，实际采样时仍然需要多步 ODE 求解——因为学到的边际向量场并不是常数。
+\end{warningbox}
+
+\subsection{本章小结}
+
+OT 路径（线性插值）是 Flow Matching 最简单也最常用的变体，训练目标归结为预测 $x_1 - x_0$。通过选择不同的 $\mu_t$ 和 $\sigma_t$ 函数，Flow Matching 可以复现扩散模型的各种噪声调度。这种灵活性是流模型的重要优势。
+
+
+\section{Flow Matching 与扩散模型的统一视角}
+
+\subsection{等价性的建立}
+
+在本讲的最后部分，讲者揭示了 Flow Matching 和扩散模型之间的深层联系。当我们选择与 VP/VE 调度对应的 $\mu_t$ 和 $\sigma_t$ 时：
+
+\begin{enumerate}
+    \item Flow Matching 的条件概率路径 $p_t(x | x_1) = \mathcal{N}(\mu_t x_1, \sigma_t^2 I)$ 与扩散模型的前向跳跃分布完全一致（只是时间方向相反）
+    \item Flow Matching 的条件向量场与 Probability Flow ODE 中的漂移项存在精确对应关系
+    \item 两种训练目标在适当的参数化和损失权重下是等价的
+\end{enumerate}
+
+\begin{importantbox}{统一视角：两条路通向同一座山}
+\textbf{扩散模型的路径}：定义前向过程（噪声注入） $\to$ 推导反向 SDE $\to$ 得到 Probability Flow ODE $\to$ 训练 score function
+
+\textbf{Flow Matching 的路径}：定义条件流映射 $\to$ 推导条件向量场 $\to$ 训练向量场预测网络
+
+两条路最终到达同一个目标：一个能将噪声映射到数据的 ODE。不同之处在于：
+\begin{itemize}
+    \item 扩散模型从概率密度路径出发推导向量场
+    \item Flow Matching 从流映射出发推导概率密度路径
+    \item 推导顺序相反，但结果等价
+\end{itemize}
+\end{importantbox}
+
+\subsection{Flow Matching 的优势}
+
+尽管数学上等价，Flow Matching 框架具有以下实践优势：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{特性} & \textbf{扩散模型} & \textbf{Flow Matching} \\
+\midrule
+参考分布 & 必须是标准高斯 & 可以是任意分布 \\
+训练目标 & 噪声预测 / score 预测 & 速度预测 \\
+理论推导 & 需要 SDE/Fokker-Planck & 直接定义 ODE \\
+噪声调度 & 需要精心设计 & 自由选择 $\mu_t$, $\sigma_t$ \\
+直线路径 & 非自然（弯曲轨迹） & 自然（OT 路径） \\
+\bottomrule
+\end{tabular}
+\caption{扩散模型与 Flow Matching 的特性对比}
+\end{table}
+
+\begin{knowledgebox}{为什么现代生成模型更倾向于 Flow Matching}
+Stable Diffusion 3（Stability AI）和 Flux（Black Forest Labs）等最新图像生成模型都采用了 Flow Matching / Rectified Flow 框架。主要原因包括：
+\begin{enumerate}
+    \item \textbf{更直的轨迹}：OT 路径产生的轨迹更接近直线，使得少步采样的效果更好
+    \item \textbf{更简单的训练}：速度预测目标比噪声预测或 score 预测更直观
+    \item \textbf{更灵活的设计}：可以自由选择参考分布和路径参数化
+    \item \textbf{更好的理论基础}：与 optimal transport 理论的天然联系
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Flow Matching 和扩散模型在数学上是等价的，但 Flow Matching 提供了更简洁的理论框架和更灵活的模型设计空间。在实践中，直线路径（OT 路径）带来的更优轨迹结构使得 Flow Matching 成为当前主流生成模型的首选训练范式。
+
+
+\section{训练与推理流程}
+
+\subsection{训练算法}
+
+Conditional Flow Matching 的完整训练算法如下：
+
+\begin{lstlisting}[caption={Conditional Flow Matching 训练算法（OT 路径）}]
+# v_theta: neural network parameterizing the vector field
+# p_data: data distribution (training dataset)
+
+for each training step:
+    # 1. Sample data and noise
+    x1 = sample_from(p_data)           # data sample
+    x0 = sample_from(Normal(0, I))     # noise sample
+    t  = sample_from(Uniform(0, 1))    # time step
+
+    # 2. Compute interpolation (conditional flow map)
+    xt = (1 - t) * x0 + t * x1
+
+    # 3. Compute target (conditional vector field)
+    target = x1 - x0
+
+    # 4. Compute loss and update
+    prediction = v_theta(t, xt)
+    loss = MSE(prediction, target)
+    loss.backward()
+    optimizer.step()
+\end{lstlisting}
+
+\begin{warningbox}{训练中的注意事项}
+\begin{enumerate}
+    \item 时间 $t$ 应均匀采样自 $[0, 1]$，某些实现会对端点做小幅裁剪（如 $[\epsilon, 1-\epsilon]$）以避免数值问题
+    \item 对于 OT 路径，目标 $x_1 - x_0$ 不依赖于 $t$，但 $x_t$ 依赖于 $t$，因此网络仍需以 $t$ 为输入
+    \item 网络架构可以复用扩散模型的 U-Net 或 DiT 架构，只需确保时间 $t$ 的编码方式正确
+\end{enumerate}
+\end{warningbox}
+
+\subsection{推理（采样）算法}
+
+训练完成后，生成新样本的过程如下：
+
+\begin{lstlisting}[caption={Flow Matching 采样算法（Euler 方法）}]
+# v_theta: trained vector field network
+# N: number of discretization steps
+# dt: step size = 1/N
+
+# 1. Sample from reference distribution
+x = sample_from(Normal(0, I))
+
+# 2. Solve ODE from t=0 to t=1
+for i in range(N):
+    t = i / N
+    x = x + v_theta(t, x) * dt    # Euler step
+
+# x is now approximately a sample from p_data
+return x
+\end{lstlisting}
+
+可以使用更高阶的 ODE 求解器（如 Heun、Dormand-Prince/RK45）来提高采样质量或减少步数。
+
+\subsection{本章小结}
+
+Flow Matching 的训练和推理流程都极其简洁：训练就是在随机插值点上回归速度目标，推理就是从噪声出发求解 ODE。整个流程不涉及任何 SDE 模拟或复杂的噪声调度设计。
+
+
+\section{总结与延伸}
+
+\subsection{本讲要点回顾}
+
+本讲介绍了 Flow Matching 作为一种全新的生成模型训练范式，其核心贡献包括：
+
+\begin{enumerate}
+    \item \textbf{连续正则化流（CNF）框架}：基于 ODE 的确定性生成过程，由流映射、向量场和概率密度路径三个核心概念构成
+    \item \textbf{Flow Matching 目标函数}：简单的向量场回归损失，完全避免了 ODE 求解的计算开销
+    \item \textbf{Conditional Flow Matching}：通过条件化技巧，将不可解析的边际量转化为有解析形式的条件量，同时保证训练等价性
+    \item \textbf{与扩散模型的统一}：揭示了 Flow Matching 和扩散模型在数学上的等价性，以及 Flow Matching 在灵活性方面的优势
+\end{enumerate}
+
+\begin{importantbox}{关键公式速查}
+\textbf{OT 路径的条件流映射}：$\phi_t(x_0 | x_1) = (1 - t)x_0 + t \, x_1$
+
+\textbf{OT 路径的条件向量场}：$u_t(x | x_1) = x_1 - x_0$
+
+\textbf{CFM 训练损失}：$\mathcal{L} = \mathbb{E}_{t, x_1, x_0} \left\| v_\theta(t, (1-t)x_0 + tx_1) - (x_1 - x_0) \right\|^2$
+
+\textbf{ODE 采样}：$\frac{dx_t}{dt} = v_\theta(t, x_t), \quad x_0 \sim \mathcal{N}(0, I)$
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item \textbf{Flow Matching 原始论文}：Lipman et al., ``Flow Matching for Generative Modeling'', ICLR 2023
+    \item \textbf{Conditional Flow Matching}：Tong et al., ``Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport'', ICML 2024
+    \item \textbf{Rectified Flow}：Liu et al., ``Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow'', ICLR 2023
+    \item \textbf{Neural ODE}：Chen et al., ``Neural Ordinary Differential Equations'', NeurIPS 2018 ——连续正则化流的开创性工作
+    \item \textbf{Stochastic Interpolants}：Albergo \& Vanden-Eijnden, ``Building Normalizing Flows with Stochastic Interpolants'', ICLR 2023
+    \item \textbf{Meta Flow Matching Tutorial}：\href{https://ai.meta.com/blog/flow-matching-guide-generative-ai/}{Meta AI Blog} 提供了详细的教程和代码
+    \item \textbf{Fokker-Planck 方程推导}：关于向量场、概率路径和连续性方程之间关系的详细推导，可参考 Song et al., ``Score-Based Generative Modeling through Stochastic Differential Equations''（附录部分）
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

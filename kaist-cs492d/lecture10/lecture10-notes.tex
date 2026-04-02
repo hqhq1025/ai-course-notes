@@ -1,0 +1,619 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 10: Flow Matching 2}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{40分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=o9tccBWdcQ4}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+% Footer with repo info
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：从 Flow Matching 1 到 Flow Matching 2}
+
+本讲是 KAIST CS492D（扩散模型与流模型）的第 10 讲，也是 Flow Matching 专题的第二部分。讲者 Minhyuk Sung 首先回顾了上一讲中引入的 Flow Matching 基本框架——流映射（Flow Map）、向量场（Vector Field）和概率路径（Probability Path）三大核心概念及其相互关系，然后在此基础上深入探讨以下关键问题：
+
+\begin{enumerate}
+    \item 扩散模型与流模型的\textbf{数学等价关系}：在何种条件下两者等价，如何互相转换？
+    \item \textbf{速度场与分数函数的对应关系}：velocity 与 score function 之间的精确数学表达式是什么？
+    \item \textbf{Rectified Flow}：如何通过直线轨迹简化生成过程，又如何通过 Reflow 微调使轨迹更直？
+    \item \textbf{Optimal Transport} 视角：随机配对 vs.\ 最优配对如何影响轨迹弯曲程度？
+    \item \textbf{实际应用}：Stable Diffusion 3（SD3）和 Flux 模型如何运用 Flow Matching 技术？
+\end{enumerate}
+
+\begin{knowledgebox}{前置知识回顾}
+理解本讲需要以下来自上一讲（Lecture 9: Flow Matching 1）的前置概念：
+\begin{itemize}
+    \item \textbf{流映射（Flow Map）} $\psi_t$：从 $t=0$ 到 $t$ 的确定性映射，$\psi_0(\mathbf{x}) = \mathbf{x}$
+    \item \textbf{向量场（Vector Field）} $u_t(\mathbf{x})$：流映射的时间导数，$\frac{d\psi_t}{dt} = u_t(\psi_t(\mathbf{x}))$
+    \item \textbf{概率路径（Probability Path）} $p_t$：随时间 $t$ 变化的概率分布，满足 $p_0 = p_{\text{ref}}$, $p_1 = p_{\text{data}}$
+    \item \textbf{Fokker--Planck 方程}：向量场与概率路径之间的联系方程
+    \item \textbf{条件流匹配（Conditional Flow Matching）}：将边际向量场分解为对条件向量场的期望
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{符号约定与时间域的变化}
+
+在 Flow Matching 的语境中，时间域与扩散模型有所不同：
+
+\begin{itemize}
+    \item \textbf{扩散模型}：时间从 $T$（噪声端）到 $0$（数据端），生成是``逆过程''
+    \item \textbf{流模型}：时间从 $0$（参考分布）到 $1$（数据分布），生成是``正向过程''
+\end{itemize}
+
+具体地：
+\begin{itemize}
+    \item $\mathbf{x}_0 \sim p_0 = \mathcal{N}(\mathbf{0}, \mathbf{I})$：来自参考分布（标准高斯）的样本
+    \item $\mathbf{x}_1 \sim p_1 = p_{\text{data}}$：来自数据分布的样本
+\end{itemize}
+
+\begin{warningbox}{容易混淆的符号}
+注意在 Flow Matching 中 $\mathbf{x}_0$ 是\textbf{噪声}而 $\mathbf{x}_1$ 是\textbf{数据}，这与 DDPM 中 $\mathbf{x}_0$ 是数据、$\mathbf{x}_T$ 是噪声的惯例恰好相反。此外，Lecture 9 中的 $\mu_t, \sigma_t$ 函数与变分扩散模型中的 $\alpha_t, \sigma_t$ 本质相同，只是由于时间域翻转，位置互换了。
+\end{warningbox}
+
+\subsection{条件流映射的一般形式}
+
+上一讲中引入了条件流映射（Conditional Flow Map）的线性高斯形式：
+$$\psi_t(\mathbf{x}_0 \mid \mathbf{x}_1) = \sigma_t \cdot \mathbf{x}_0 + \alpha_t \cdot \mathbf{x}_1$$
+
+其中：
+\begin{itemize}
+    \item $\sigma_t, \alpha_t$ 是关于时间 $t$ 的标量函数
+    \item 边界条件：$\sigma_0 = 1, \alpha_0 = 0$（$t=0$ 时得到纯噪声 $\mathbf{x}_0$）；$\sigma_1 = 0, \alpha_1 = 1$（$t=1$ 时得到数据 $\mathbf{x}_1$）
+\end{itemize}
+
+对应的条件概率路径为高斯分布：
+$$p_t(\mathbf{x} \mid \mathbf{x}_1) = \mathcal{N}(\mathbf{x}; \alpha_t \mathbf{x}_1, \sigma_t^2 \mathbf{I})$$
+
+对条件流映射取时间导数，得到条件向量场：
+$$u_t(\mathbf{x} \mid \mathbf{x}_1) = \dot{\sigma}_t \cdot \mathbf{x}_0 + \dot{\alpha}_t \cdot \mathbf{x}_1$$
+
+\subsection{本章小结}
+
+本节回顾了 Flow Matching 的基本设定，包括时间域约定、条件流映射的定义和条件向量场的推导。关键要点在于：流模型的时间从 $0$（噪声）到 $1$（数据），训练目标是学习一个神经网络来预测向量场（速度），这在概念上类似于扩散模型中预测噪声。
+
+\section{扩散模型与流模型的等价关系}
+
+本节是本讲的核心理论部分，讲者详细推导了扩散模型和流模型之间的精确数学等价关系。
+
+\subsection{从变分扩散模型出发}
+
+回忆变分扩散模型（Variational Diffusion Model, VDM）中，前向过程定义为：
+$$q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \alpha_t \mathbf{x}_0, \sigma_t^2 \mathbf{I})$$
+
+在 Flow Matching 的语境下，将这个前向过程重新解读为条件流映射：
+$$\psi_t(\mathbf{x}_0 \mid \mathbf{x}_1) = \sigma_t \cdot \mathbf{x}_0 + \alpha_t \cdot \mathbf{x}_1$$
+
+\begin{importantbox}{核心洞察：扩散模型是流模型的特殊情况}
+当条件流映射定义为上述线性高斯形式，且 $\alpha_t, \sigma_t$ 函数与变分扩散模型中的调度函数完全一致时，扩散模型可以被视为流模型的一种\textbf{特殊情况}。换言之，流模型是扩散模型的\textbf{推广}。两者的区别仅在于：
+\begin{itemize}
+    \item \textbf{扩散模型}：先定义概率路径（前向加噪过程），再推导出向量场和轨迹
+    \item \textbf{流模型}：先定义条件流映射（轨迹），再推导出向量场和概率路径
+\end{itemize}
+\end{importantbox}
+
+\subsection{Tweedie 公式的再现}
+
+讲者在此处引入了一个重要的计算工具——Tweedie 公式。给定中间数据点 $\mathbf{x}_t = \sigma_t \mathbf{x}_0 + \alpha_t \mathbf{x}_1$，其中 $\mathbf{x}_0 \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$, $\mathbf{x}_1 \sim p_{\text{data}}$，我们可以计算 $\mathbf{x}_1$ 的后验期望：
+
+$$\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t] = \frac{\mathbf{x}_t - \sigma_t \cdot \mathbb{E}[\mathbf{x}_0 \mid \mathbf{x}_t]}{\alpha_t} = \frac{\mathbf{x}_t + \sigma_t^2 \nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t)}{\alpha_t}$$
+
+其中：
+\begin{itemize}
+    \item $\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t)$ 是分数函数（Score Function）
+    \item 这与 Lecture 5 中介绍的 Tweedie 公式完全一致，只是使用了 Flow Matching 的符号约定
+\end{itemize}
+
+\begin{knowledgebox}{Tweedie 公式的直觉}
+Tweedie 公式的核心思想是：给定一个被噪声污染的观测 $\mathbf{x}_t$，原始信号 $\mathbf{x}_1$ 的后验均值可以通过分数函数来计算。分数函数指向对数概率密度增长最快的方向，即``数据更密集''的方向。在高斯似然模型中，这等价于从当前位置向后验均值方向移动。
+\end{knowledgebox}
+
+\subsection{速度场与分数函数的关系}
+
+这是本讲最重要的推导之一。从条件向量场出发：
+
+$$u_t(\mathbf{x} \mid \mathbf{x}_1) = \dot{\sigma}_t \cdot \mathbf{x}_0 + \dot{\alpha}_t \cdot \mathbf{x}_1$$
+
+将 $\mathbf{x}_0$ 用 $\mathbf{x}_t$ 和 $\mathbf{x}_1$ 表示：$\mathbf{x}_0 = \frac{\mathbf{x}_t - \alpha_t \mathbf{x}_1}{\sigma_t}$，代入得到：
+
+$$u_t(\mathbf{x}_t \mid \mathbf{x}_1) = \frac{\dot{\sigma}_t}{\sigma_t}(\mathbf{x}_t - \alpha_t \mathbf{x}_1) + \dot{\alpha}_t \mathbf{x}_1$$
+
+$$= \frac{\dot{\sigma}_t}{\sigma_t} \mathbf{x}_t + \left(\dot{\alpha}_t - \frac{\dot{\sigma}_t \alpha_t}{\sigma_t}\right) \mathbf{x}_1$$
+
+对 $\mathbf{x}_1$ 取期望（边际化），并利用 Tweedie 公式，得到边际向量场：
+
+\begin{importantbox}{速度场与分数函数的等价公式}
+$$u_t(\mathbf{x}_t) = \frac{\dot{\sigma}_t}{\sigma_t} \mathbf{x}_t + \left(\dot{\alpha}_t - \frac{\dot{\sigma}_t \alpha_t}{\sigma_t}\right) \mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t]$$
+
+将 Tweedie 公式代入 $\mathbb{E}[\mathbf{x}_1 \mid \mathbf{x}_t]$，可以建立\textbf{速度场}与\textbf{分数函数}之间的等价关系：
+$$u_t(\mathbf{x}_t) = \frac{\dot{\sigma}_t}{\sigma_t} \mathbf{x}_t + \left(\dot{\alpha}_t - \frac{\dot{\sigma}_t \alpha_t}{\sigma_t}\right) \cdot \frac{\mathbf{x}_t + \sigma_t^2 \nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t)}{\alpha_t}$$
+
+这意味着：给定任意中间数据点 $\mathbf{x}_t$ 和时间 $t$，只要知道分数函数就能计算速度场，反之亦然。
+\end{importantbox}
+
+\subsection{速度场与噪声预测的关系}
+
+利用分数函数与噪声预测之间的已知关系 $\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t) = -\frac{\boldsymbol{\epsilon}}{\sigma_t}$，可以进一步建立速度场与噪声预测网络之间的等价关系：
+
+$$u_t(\mathbf{x}_t) = \frac{\dot{\alpha}_t}{\alpha_t} \mathbf{x}_t - \left(\dot{\alpha}_t \frac{\sigma_t}{\alpha_t} - \dot{\sigma}_t\right) \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$$
+
+其中 $\boldsymbol{\epsilon}_\theta$ 是扩散模型中训练好的噪声预测网络。
+
+\begin{warningbox}{速度预测 vs.\ 噪声预测：不只是换个输出头}
+虽然速度场和噪声场在数学上可以精确互转，但在\textbf{训练}时选择预测哪个量会影响梯度的数值行为。近年来的实践表明，直接训练速度预测（v-prediction）在某些调度下比噪声预测（$\epsilon$-prediction）具有更好的数值稳定性，特别是在 $t$ 接近端点时。这也是 SD3 和 Flux 选择 v-prediction 的原因之一。
+\end{warningbox}
+
+\subsection{与 Probability Flow ODE 的一致性}
+
+讲者进一步指出，从 Flow Matching 推导出的向量场与从 SDE 框架推导出的 Probability Flow ODE（PF-ODE）是完全一致的。回忆 PF-ODE 的一般形式：
+
+$$d\mathbf{x} = \left[f(\mathbf{x}, t) - \frac{1}{2}g(t)^2 \nabla_\mathbf{x} \log p_t(\mathbf{x})\right] dt$$
+
+其中 $f(\mathbf{x}, t)$ 和 $g(t)$ 分别是 SDE 的漂移项和扩散系数，它们与 $\alpha_t, \sigma_t$ 的关系为：
+$$f(\mathbf{x}, t) = \frac{\dot{\alpha}_t}{\alpha_t} \mathbf{x}, \quad g(t)^2 = \frac{d\sigma_t^2}{dt} - 2\frac{\dot{\alpha}_t}{\alpha_t}\sigma_t^2$$
+
+将这些代入 PF-ODE，可以验证其结果与 Flow Matching 推导的向量场\textbf{完全相同}。
+
+\begin{importantbox}{三种等价视角的统一}
+到此为止，我们建立了以下三种视角的完全等价关系（在线性高斯条件路径下）：
+\begin{enumerate}
+    \item \textbf{扩散模型视角}：学习分数函数 $\nabla_\mathbf{x} \log p_t(\mathbf{x})$ 或噪声 $\boldsymbol{\epsilon}$
+    \item \textbf{Flow Matching 视角}：学习向量场/速度 $u_t(\mathbf{x})$
+    \item \textbf{PF-ODE 视角}：通过 SDE 到 ODE 的转换获得确定性采样路径
+\end{enumerate}
+三者在数学上可精确互转，区别在于训练时预测哪个量、以及采样时使用哪种求解策略。
+\end{importantbox}
+
+\subsection{本章小结}
+
+本节建立了扩散模型与流模型之间的精确数学等价关系。核心结论是：在线性高斯条件流映射下，扩散模型是流模型的特殊情况。速度场、分数函数、噪声预测三者可以自由互转。这一等价关系不仅具有理论意义，更在实际中意味着：一个预训练好的扩散模型可以直接被``重新解读''为流模型来使用。
+
+\section{流模型的优势与推广能力}
+
+在建立了等价关系之后，讲者转向讨论流模型相对于扩散模型的\textbf{独特优势}——即流模型在哪些方面真正``超越''了扩散模型。
+
+\subsection{非线性条件流映射}
+
+扩散模型本质上使用的是线性高斯形式的条件路径。而 Flow Matching 框架允许定义\textbf{任意}的条件流映射，不限于线性形式：
+
+\begin{itemize}
+    \item 可以尝试非线性的 $\psi_t(\mathbf{x}_0 \mid \mathbf{x}_1)$，例如加入余弦、sigmoid 等非线性变换
+    \item 实验表明，虽然非线性流映射目前并没有显著超越线性形式，但框架本身的灵活性为未来探索提供了空间
+\end{itemize}
+
+\subsection{任意参考分布}
+
+这是流模型最重要的推广之一。扩散模型要求参考分布必须是标准高斯分布 $\mathcal{N}(\mathbf{0}, \mathbf{I})$，因为整个理论（前向扩散过程）建立在高斯噪声的基础上。而流模型可以使用\textbf{任意}参考分布：
+
+\begin{importantbox}{分布到分布的映射}
+Flow Matching 允许学习从\textbf{任意}源分布到\textbf{任意}目标分布的映射。这不仅包括：
+\begin{itemize}
+    \item 标准高斯 $\to$ 数据分布（经典生成任务）
+\end{itemize}
+还包括：
+\begin{itemize}
+    \item 数据分布 A $\to$ 数据分布 B（风格迁移、域转换）
+    \item 低分辨率分布 $\to$ 高分辨率分布（超分辨率）
+    \item 任意复杂分布之间的转换
+\end{itemize}
+这种灵活性是扩散模型框架所不具备的。
+\end{importantbox}
+
+\subsection{ODE vs.\ SDE 的出发点}
+
+\begin{knowledgebox}{两种建模哲学}
+扩散模型和流模型的另一个根本区别在于建模的\textbf{出发点}：
+\begin{itemize}
+    \item \textbf{扩散模型}：从\textbf{随机微分方程}（SDE）出发，将前向扩散定义为逐步加高斯噪声的随机过程；然后发现等价的\textbf{确定性} ODE 也能给出相同的边际分布
+    \item \textbf{流模型}：直接从\textbf{常微分方程}（ODE）出发，定义从源分布到目标分布的确定性映射，无需引入随机性
+\end{itemize}
+流模型的出发点更简洁，避免了 SDE 到 ODE 转换的复杂推导。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+流模型在以下方面推广了扩散模型：(1) 条件流映射不限于线性形式；(2) 参考分布不限于标准高斯；(3) 直接从 ODE 出发，概念更简洁。这些推广为更灵活的生成模型设计提供了理论基础。
+
+\section{Rectified Flow 与直线轨迹}
+
+本节是本讲在应用层面最重要的部分，讲者详细介绍了 Rectified Flow（矫正流）的思想、训练方法以及通过 Reflow 使轨迹变直的技术。
+
+\subsection{Rectified Flow 的定义}
+
+Rectified Flow 是 Flow Matching 的一种特殊情况，其条件流映射定义为 $\mathbf{x}_0$ 和 $\mathbf{x}_1$ 之间的\textbf{线性插值}：
+
+$$\psi_t(\mathbf{x}_0 \mid \mathbf{x}_1) = (1 - t)\, \mathbf{x}_0 + t\, \mathbf{x}_1$$
+
+对应的条件向量场（速度）极为简洁：
+
+$$u_t(\mathbf{x}_t \mid \mathbf{x}_0, \mathbf{x}_1) = \mathbf{x}_1 - \mathbf{x}_0$$
+
+即：条件速度恒定，方向始终指向从 $\mathbf{x}_0$ 到 $\mathbf{x}_1$ 的直线方向。
+
+\begin{importantbox}{Rectified Flow 的训练流程}
+Rectified Flow 的训练过程极其简洁：
+\begin{enumerate}
+    \item 从数据分布采样 $\mathbf{x}_1 \sim p_{\text{data}}$
+    \item 从参考分布采样 $\mathbf{x}_0 \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$
+    \item 均匀采样时间 $t \sim \mathcal{U}(0, 1)$
+    \item 计算中间点 $\mathbf{x}_t = (1-t)\mathbf{x}_0 + t\mathbf{x}_1$
+    \item 计算目标速度 $v^* = \mathbf{x}_1 - \mathbf{x}_0$
+    \item 最小化 $\mathcal{L} = \| v_\theta(\mathbf{x}_t, t) - v^* \|^2$
+\end{enumerate}
+\end{importantbox}
+
+\subsection{条件轨迹 vs.\ 边际轨迹}
+
+这是理解 Rectified Flow 局限性的关键。虽然每一对 $(\mathbf{x}_0, \mathbf{x}_1)$ 的\textbf{条件轨迹}是严格直线，但训练后模型输出的\textbf{边际向量场}产生的轨迹通常\textbf{不是}直线。
+
+\begin{warningbox}{条件直线不等于边际直线}
+考虑一个二维例子：源分布有两个高斯团，目标分布也有两个高斯团。每对 $(\mathbf{x}_0, \mathbf{x}_1)$ 之间的条件轨迹确实是直线，但由于 $\mathbf{x}_0$ 和 $\mathbf{x}_1$ 是\textbf{独立随机}配对的，在某些中间点 $\mathbf{x}_t$，条件速度可能指向截然不同的方向（向上或向下）。训练后神经网络输出的是这些条件速度的\textbf{期望}，结果可能既不向上也不向下，而是指向两者的平均方向。因此边际轨迹会发生弯曲。
+\end{warningbox}
+
+\textbf{弯曲轨迹的后果}：如果边际轨迹弯曲，在求解 ODE 时就需要足够多的时间步才能准确跟踪轨迹。步数越少，离散化误差越大，生成质量越差。理想情况下，如果所有边际轨迹都是直线，那么只需\textbf{一步}就能从 $\mathbf{x}_0$ 直接到达 $\mathbf{x}_1$。
+
+\subsection{Reflow：通过微调使轨迹变直}
+
+为了使边际轨迹更接近直线，Liu et al.\ (2023) 提出了 \textbf{Reflow}（重流化）技术：
+
+\begin{enumerate}
+    \item \textbf{第一阶段}：正常训练一个 Rectified Flow 模型（1-Rectified Flow）
+    \item \textbf{生成配对数据}：使用训练好的模型，从 $\mathbf{x}_0 \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ 出发，通过完整的 ODE 求解生成 $\mathbf{x}_1$，记录 $(\mathbf{x}_0, \mathbf{x}_1)$ 配对
+    \item \textbf{第二阶段}：用这些配对数据重新训练模型（2-Rectified Flow）
+    \item 可以继续迭代：用 2-Rectified Flow 生成新配对，训练 3-Rectified Flow，以此类推
+\end{enumerate}
+
+\begin{importantbox}{Reflow 为什么有效？}
+Reflow 之所以能使轨迹变直，核心直觉是：
+\begin{itemize}
+    \item 在第一阶段，$\mathbf{x}_0$ 和 $\mathbf{x}_1$ 是\textbf{独立}采样的随机配对，没有对应关系
+    \item 经过第一阶段训练后，模型已经学到了一种从 $\mathbf{x}_0$ 到 $\mathbf{x}_1$ 的（弯曲的）映射
+    \item 在 Reflow 阶段，$(\mathbf{x}_0, \mathbf{x}_1)$ 配对不再是随机的，而是由模型确定的\textbf{确定性映射}产生的。这些配对之间已经存在合理的对应关系
+    \item 用这些``有意义的配对''重新训练，轨迹的交叉和冲突大大减少，边际轨迹自然变得更直
+\end{itemize}
+\end{importantbox}
+
+实验表明：
+\begin{itemize}
+    \item \textbf{1-Rectified Flow}：边际轨迹明显弯曲
+    \item \textbf{2-Rectified Flow}：轨迹显著变直
+    \item \textbf{3-Rectified Flow}：轨迹几乎是直线
+\end{itemize}
+
+\subsection{直线轨迹与少步生成}
+
+直线轨迹的直接好处是可以用\textbf{极少}的 ODE 求解步数完成生成：
+
+\begin{itemize}
+    \item 如果轨迹是完美直线，从起点 $\mathbf{x}_0$ 预测一次速度 $v_\theta(\mathbf{x}_0, 0)$，沿该方向走到终点即可——这是\textbf{单步生成}
+    \item 即使轨迹接近直线但不完美，2--4 步的 Euler 求解也能获得高质量结果
+    \item 对比：标准扩散模型通常需要 20--100 步才能获得同等质量
+\end{itemize}
+
+\begin{knowledgebox}{从 GAN 到扩散再到单步流模型}
+讲者指出了生成模型发展的有趣循环：
+\begin{itemize}
+    \item \textbf{GAN/VAE 时代}：单步生成，速度快但质量/多样性受限
+    \item \textbf{扩散模型时代}：多步迭代，质量大幅提升但速度牺牲
+    \item \textbf{Rectified Flow + Reflow}：通过微调回到单步/少步生成，同时保持高质量
+\end{itemize}
+这是一种``螺旋式上升''的发展路径。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Rectified Flow 通过线性插值定义条件流映射，使训练极其简洁。然而随机配对导致边际轨迹弯曲，需要多步 ODE 求解。Reflow 技术通过使用模型自身生成的配对数据进行微调，可以有效地将边际轨迹``拉直''，从而实现少步甚至单步生成。
+
+\section{Optimal Transport 视角}
+
+轨迹弯曲的根本原因在于 $\mathbf{x}_0$ 和 $\mathbf{x}_1$ 的\textbf{配对方式}。本节从 Optimal Transport（最优传输）的视角来理解这一问题。
+
+\subsection{随机配对 vs.\ 最优配对}
+
+在标准 Flow Matching 训练中，$\mathbf{x}_0$ 和 $\mathbf{x}_1$ 是\textbf{独立}采样的：
+$$\mathbf{x}_0 \sim p_0, \quad \mathbf{x}_1 \sim p_1, \quad \text{两者独立}$$
+
+这意味着一个噪声样本 $\mathbf{x}_0$ 可能被``分配''到任意一个数据样本 $\mathbf{x}_1$，没有空间结构上的偏好。
+
+\begin{importantbox}{最优传输（Optimal Transport）的基本思想}
+最优传输问题关注的是：如何找到从分布 $p_0$ 到分布 $p_1$ 的最``经济''的传输方案？具体地，对于 $L_2$ 代价（又称 Wasserstein-2 距离），最优传输方案最小化：
+$$W_2^2(p_0, p_1) = \inf_{\pi \in \Pi(p_0, p_1)} \int \|\mathbf{x}_0 - \mathbf{x}_1\|^2 \, d\pi(\mathbf{x}_0, \mathbf{x}_1)$$
+其中 $\Pi(p_0, p_1)$ 是所有耦合（联合分布）的集合，其边际分别为 $p_0$ 和 $p_1$。
+
+\medskip
+\textbf{直觉}：最优传输倾向于将``近处''的点配对，避免长距离搬运，从而最小化总搬运代价。
+\end{importantbox}
+
+\subsection{OT 配对对轨迹直度的影响}
+
+如果我们用最优传输方案来配对 $\mathbf{x}_0$ 和 $\mathbf{x}_1$，而不是随机配对，那么：
+
+\begin{itemize}
+    \item 配对更``合理''：附近的噪声点倾向于映射到附近的数据点
+    \item 不同配对之间的条件轨迹交叉更少
+    \item 边际向量场的冲突更少，边际轨迹自然更直
+\end{itemize}
+
+\begin{warningbox}{OT 配对的计算代价}
+尽管 OT 配对在理论上很有吸引力，但精确计算 Optimal Transport 方案的复杂度很高。对于 $n$ 个样本，经典算法的复杂度为 $O(n^3)$，这在大规模训练中不太实际。因此，实际中通常采用近似方法，例如在 mini-batch 内计算 OT（Mini-batch OT），或者使用 Reflow 作为替代方案——Reflow 可以看作是一种``隐式的'' OT 配对优化。
+\end{warningbox}
+
+\subsection{Reflow 与 OT 的关系}
+
+Reflow 和 Optimal Transport 之间有深刻的联系：
+
+\begin{itemize}
+    \item Reflow 通过迭代微调，隐式地优化了 $\mathbf{x}_0 \to \mathbf{x}_1$ 的配对方案
+    \item 每一轮 Reflow 都使配对更接近 OT 方案——因为模型学到的映射倾向于走``最短路径''
+    \item 理论上，无限次 Reflow 迭代的极限就是 OT 映射（在某些正则性条件下）
+\end{itemize}
+
+\begin{knowledgebox}{从传输代价看轨迹弯曲}
+轨迹弯曲的本质是\textbf{传输代价过高}。当远处的点被配对在一起时，连接它们的直线会穿越中间区域，与其他配对的直线交叉。交叉导致边际向量场不一致（同一点处有多个方向的速度），网络只能学习期望（平均）速度，结果就是弯曲的轨迹。OT 配对通过最小化传输代价来减少交叉，Reflow 则通过迭代隐式实现类似效果。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Optimal Transport 提供了理解轨迹弯曲问题的理论框架。随机配对导致高传输代价和轨迹交叉，OT 配对可以缓解这一问题但计算代价高。Reflow 提供了一种实用的替代方案，通过迭代微调隐式优化配对。
+
+\section{实际应用：Stable Diffusion 3 与 Flux}
+
+本节讲者简要介绍了 Flow Matching 技术在当前最先进的图像和视频生成模型中的应用。
+
+\subsection{SD3 与 Flux 的流模型基础}
+
+讲者明确指出，许多当前最先进的生成模型已经从扩散模型\textbf{转向}了流模型：
+
+\begin{itemize}
+    \item \textbf{Stable Diffusion 3}（SD3）：虽然名字中有``diffusion''，但实际上使用的是 Flow Matching 训练，网络预测的是速度（velocity）而非噪声
+    \item \textbf{Flux}：Black Forest Labs 开发的模型，同样基于 Rectified Flow 技术
+\end{itemize}
+
+\begin{importantbox}{SD3 的关键设计选择}
+Stable Diffusion 3 的核心技术决策包括：
+\begin{itemize}
+    \item \textbf{Rectified Flow 训练}：使用线性插值条件流映射，网络输出为速度 $v_\theta(\mathbf{x}_t, t)$
+    \item \textbf{MM-DiT 架构}：采用 Multimodal Diffusion Transformer 作为骨干网络
+    \item \textbf{直线轨迹目标}：通过 Reflow 等技术追求更直的生成轨迹，减少采样步数
+    \item \textbf{速度预测（v-prediction）}：而非噪声预测（$\epsilon$-prediction），在某些噪声水平下提供更好的数值稳定性
+\end{itemize}
+\end{importantbox}
+
+\subsection{Flux 模型}
+
+讲者提到，在课程第一讲中就让学生使用 Flux 模型生成图像。Flux 的一个关键变体是 \textbf{Flux.1-schnell}，它使用了 Rectified Flow 加 Reflow 的技术来实现\textbf{单步}或\textbf{少步}高质量图像生成。
+
+\begin{knowledgebox}{Consistency Model vs.\ Rectified Flow：加速生成的两条技术路线}
+在加速扩散/流模型的采样方面，目前存在两条主要的竞争路线：
+\begin{itemize}
+    \item \textbf{Consistency Model（一致性模型）}：通过 Consistency Distillation (CD) 或 Consistency Training (CT) 学习 ODE 轨迹上的``快捷映射''，直接从任意中间点跳到终点。Lecture 8/9 中讨论过
+    \item \textbf{Rectified Flow + Reflow}：通过使轨迹本身变直来减少所需步数。本讲的主题
+\end{itemize}
+
+实验比较显示：
+\begin{itemize}
+    \item Consistency Model 在 1--2 步生成时，ImageNet 64$\times$64 上 FID 约 3--4
+    \item 2-Rectified Flow 在 1--2 步生成时，也能达到类似的 FID
+\end{itemize}
+两种方法各有优劣，目前仍是活跃的研究方向。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Flow Matching，特别是 Rectified Flow 变体，已经成为当前最先进图像生成模型（SD3、Flux）的基础技术。其核心优势在于训练简洁、轨迹可控、少步生成成为可能。
+
+\section{训练与推理的全流程对比}
+
+为了帮助读者建立完整的理解，本节以表格形式对比扩散模型和流模型在训练与推理各环节的差异。
+
+\subsection{训练阶段对比}
+
+\begin{table}[H]
+\centering
+\caption{扩散模型 vs.\ 流模型：训练阶段对比}
+\begin{tabular}{@{} p{3.8cm} p{5cm} p{5cm} @{}}
+\toprule
+\textbf{环节} & \textbf{扩散模型} & \textbf{流模型（Rectified Flow）} \\
+\midrule
+时间域 & $t \in \{0, \ldots, T\}$ 或 ${[}0, T{]}$ & $t \in {[}0, 1{]}$ \\
+前向过程 & $\mathbf{x}_t = \sqrt{\bar\alpha_t}\,\mathbf{x}_0 + \sqrt{1-\bar\alpha_t}\,\boldsymbol{\epsilon}$ & $\mathbf{x}_t = (1-t)\mathbf{x}_0 + t\mathbf{x}_1$ \\
+预测目标 & 噪声 $\boldsymbol{\epsilon}$ 或分数 $\nabla\log p_t$ & 速度 $v = \mathbf{x}_1 - \mathbf{x}_0$ \\
+训练损失 & $\|\boldsymbol{\epsilon}_\theta(\mathbf{x}_t,t) - \boldsymbol{\epsilon}\|^2$ & $\|v_\theta(\mathbf{x}_t,t) - (\mathbf{x}_1-\mathbf{x}_0)\|^2$ \\
+数据需求 & 仅需 $\mathbf{x}_0 \sim p_{\text{data}}$ & 需要 $\mathbf{x}_0 \sim p_0$ 和 $\mathbf{x}_1 \sim p_1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{推理阶段对比}
+
+\begin{table}[H]
+\centering
+\caption{扩散模型 vs.\ 流模型：推理阶段对比}
+\begin{tabular}{@{} p{3.8cm} p{5cm} p{5cm} @{}}
+\toprule
+\textbf{环节} & \textbf{扩散模型} & \textbf{流模型} \\
+\midrule
+起点 & $\mathbf{x}_T \sim \mathcal{N}(\mathbf{0},\mathbf{I})$ & $\mathbf{x}_0 \sim \mathcal{N}(\mathbf{0},\mathbf{I})$ \\
+求解方式 & SDE 或 PF-ODE & ODE \\
+每步更新 & $\mathbf{x}_{t-1} = \mathbf{x}_t + f(\mathbf{x}_t,t)\Delta t$ & $\mathbf{x}_{t+\Delta t} = \mathbf{x}_t + v_\theta(\mathbf{x}_t,t)\Delta t$ \\
+典型步数 & 20--100 步 & 1--10 步（Reflow 后） \\
+高级求解器 & DPM-Solver 等 & Euler / Midpoint 即可 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{本章小结}
+
+流模型在训练和推理两个阶段都提供了更简洁的流程。特别值得注意的是，Rectified Flow 的推理阶段在 Reflow 后可以用极少步数完成，这是其在实际部署中的最大优势。
+
+\section{课程知识体系总览}
+
+讲者在课程结尾回顾了整个课程到目前为止的知识发展脉络。
+
+\subsection{技术演进路径}
+
+从课程开始到第 10 讲，讲者构建了以下完整的技术脉络：
+
+\begin{enumerate}
+    \item \textbf{VAE/GAN}（Lecture 1--2）：单步生成模型，质量和多样性受限
+    \item \textbf{DDPM}（Lecture 3--4）：引入多步迭代去噪，大幅提升生成质量
+    \item \textbf{DDIM}（Lecture 5--6）：DDPM 的确定性采样变体，支持跳步
+    \item \textbf{SDE/ODE}（Lecture 7）：连续时间框架，统一视角
+    \item \textbf{DPM-Solver}（Lecture 8）：利用 ODE 结构加速采样
+    \item \textbf{Consistency Model}（Lecture 9）：学习快捷映射实现少步生成
+    \item \textbf{Flow Matching}（Lecture 9--10）：更一般的框架，Rectified Flow + Reflow 实现直线轨迹和单步生成
+\end{enumerate}
+
+\begin{warningbox}{Flow Matching 不是扩散模型的``替代品''}
+虽然本讲强调了流模型的优势，但需要注意：
+\begin{itemize}
+    \item 扩散模型和流模型在数学上是等价的（在线性高斯条件路径下）
+    \item 已训练的扩散模型可以被直接转换为流模型使用
+    \item 选择哪种框架更多取决于实际考量：训练稳定性、采样效率、代码复杂度等
+    \item 当前的``最佳实践''是使用 Flow Matching 框架 + Rectified Flow 训练 + Reflow 微调
+\end{itemize}
+\end{warningbox}
+
+\subsection{后续课程预告}
+
+讲者预告了接下来三周的课程内容：
+\begin{itemize}
+    \item \textbf{下一周}：Inference-time Guidance（推理时引导），如何在不重新训练的前提下注入用户偏好
+    \item \textbf{之后}：Discrete Diffusion Models（离散数据的扩散模型），将扩散/流的思想拓展到非连续数据（如文本）
+\end{itemize}
+
+\subsection{本章小结}
+
+从 GAN 到扩散模型再到流模型，生成模型领域经历了从单步到多步再到少步的演进。Flow Matching 提供了一个统一且更灵活的框架，既能理解扩散模型的已有成果，又能为未来的改进提供空间。
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本讲（Flow Matching 2）的核心贡献在于建立了扩散模型与流模型之间的\textbf{完整数学桥梁}，并展示了如何利用这一桥梁来设计更高效的生成模型。主要结论包括：
+
+\begin{enumerate}
+    \item \textbf{数学等价}：在线性高斯条件路径下，扩散模型是流模型的特殊情况。速度场 $u_t$、分数函数 $\nabla \log p_t$、噪声预测 $\boldsymbol{\epsilon}_\theta$ 三者可以精确互转
+
+    \item \textbf{三种视角统一}：SDE（扩散）、PF-ODE（概率流）、Flow ODE（流匹配）在数学上完全一致
+
+    \item \textbf{Rectified Flow}：线性插值定义条件轨迹，训练目标为速度预测，形式极其简洁
+
+    \item \textbf{轨迹弯曲问题}：随机配对导致条件轨迹交叉，边际轨迹弯曲，需要多步 ODE 求解
+
+    \item \textbf{Reflow 微调}：通过使用模型自身生成的配对数据重新训练，可有效将轨迹拉直，实现少步生成
+
+    \item \textbf{Optimal Transport 联系}：OT 配对可减少轨迹交叉，Reflow 隐式逼近 OT 映射
+
+    \item \textbf{实际影响}：SD3、Flux 等当前最先进模型已采用 Flow Matching / Rectified Flow 作为核心技术
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Lipman, Y., et al. \textit{Flow Matching for Generative Modeling}. ICLR 2023. {\small Flow Matching 的奠基论文}
+    \item Liu, X., Gong, C., \& Liu, Q. \textit{Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow}. ICLR 2023. {\small Rectified Flow 和 Reflow 的原始论文}
+    \item Esser, P., et al. \textit{Scaling Rectified Flow Transformers for High-Resolution Image Synthesis}. ICML 2024. {\small SD3 的技术报告，将 Rectified Flow 扩展到大规模图像生成}
+    \item Tong, A., et al. \textit{Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport}. TMLR 2024. {\small Mini-batch OT 在 Flow Matching 中的应用}
+    \item Albergo, M. S. \& Vanden-Eijnden, E. \textit{Building Normalizing Flows with Stochastic Interpolants}. ICLR 2023. {\small Stochastic Interpolant 视角，与 Flow Matching 密切相关}
+    \item Song, Y., et al. \textit{Consistency Models}. ICML 2023. {\small 加速采样的竞争方案，可与 Rectified Flow 对比}
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

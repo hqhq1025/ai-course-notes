@@ -1,0 +1,642 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 8: ODE Solvers (DPM-Solver)}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{55分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=eKW5AAy5ae8}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言与课程回顾}
+
+本讲是 KAIST CS492D（扩散模型与流模型）的第 8 讲，核心议题是\textbf{如何高效求解扩散模型的逆过程 ODE}。讲者 Minhyuk Sung 首先回顾了此前课程中介绍的 DDPM、DDIM 以及连续时间 SDE/ODE 框架，然后引出本讲的核心问题：既然扩散模型的逆过程可以被等价地描述为一个常微分方程（ODE），那么我们能否利用 ODE 的特殊结构来设计更高效的求解器，从而在极少的采样步数下获得高质量图像？
+
+\begin{knowledgebox}{前置知识概览}
+理解本讲需要以下前置概念：
+\begin{itemize}
+    \item \textbf{DDPM}（Denoising Diffusion Probabilistic Models）：基于马尔可夫链的离散时间扩散模型，通常需要 $T=1000$ 步才能完成采样
+    \item \textbf{DDIM}（Denoising Diffusion Implicit Models）：DDPM 的确定性采样变体，可使用子序列跳步采样
+    \item \textbf{SDE/ODE 框架}：Song et al. 提出的连续时间表述，将扩散过程描述为随机微分方程（SDE），并给出等价的概率流 ODE（Probability Flow ODE）
+    \item \textbf{Score function}：$\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$，可通过噪声预测网络 $\epsilon_\theta$ 计算
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{从 DDPM 到连续时间框架}
+
+在 DDPM 中，前向扩散过程定义为：
+$$q(\mathbf{x}_t | \mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\bar{\alpha}_t}\, \mathbf{x}_0, (1 - \bar{\alpha}_t)\, \mathbf{I})$$
+
+其中：
+\begin{itemize}
+    \item $\bar{\alpha}_t = \prod_{s=1}^{t} (1 - \beta_s)$，是累积信号保留率
+    \item $\beta_t$ 是每步的噪声调度参数
+\end{itemize}
+
+在变分扩散模型（Variational Diffusion Model, VDM）的更一般框架下，前向跳跃分布可以重写为：
+$$q(\mathbf{x}_t | \mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \alpha_t \mathbf{x}_0, \sigma_t^2 \mathbf{I})$$
+
+\begin{warningbox}{符号混淆警告}
+不同论文中 $\alpha$ 的定义不一致。在 DDPM 原始论文中，$\alpha_t = 1 - \beta_t$；而在 VDM/DPM-Solver 框架中，$\alpha_t$ 直接对应信号缩放系数 $\sqrt{\bar{\alpha}_t}$。阅读文献时需特别注意上下文中的符号约定，避免混淆。
+\end{warningbox}
+
+采样 $\mathbf{x}_t$ 等价于对干净数据 $\mathbf{x}_0$ 与标准高斯噪声 $\boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ 做线性插值：
+$$\mathbf{x}_t = \alpha_t \mathbf{x}_0 + \sigma_t \boldsymbol{\epsilon}$$
+
+定义该框架只需要满足一个约束：信噪比（Signal-to-Noise Ratio, SNR）$\frac{\alpha_t^2}{\sigma_t^2}$ 关于时间 $t$ 单调递减——即随着时间推移，噪声逐渐占主导，直至 $\mathbf{x}_T$ 近似于标准高斯分布。
+
+\subsection{SDE 与 ODE 的双重描述}
+
+在连续时间域中，前向扩散过程可以用 SDE 描述：
+$$d\mathbf{x} = f(t)\, \mathbf{x}\, dt + g(t)\, d\mathbf{w}$$
+
+其中 $f(t)$ 为漂移系数，$g(t)$ 为扩散系数，$\mathbf{w}$ 为标准维纳过程。给定前向 SDE，对应的逆时间 SDE 为：
+$$d\mathbf{x} = \left[f(t)\, \mathbf{x} - g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right] dt + g(t)\, d\bar{\mathbf{w}}$$
+
+\begin{importantbox}{Probability Flow ODE（概率流 ODE）}
+Anderson (1982) 证明，对于任意逆时间 SDE，都存在一个确定性的 ODE，使得两者在边际分布 $p_t(\mathbf{x})$ 上完全一致：
+$$\frac{d\mathbf{x}}{dt} = f(t)\, \mathbf{x} - \frac{1}{2} g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$$
+这就是概率流 ODE（PF-ODE）。由于没有随机噪声项，给定相同初始点 $\mathbf{x}_T$，ODE 的解是确定性的。这为利用 ODE 求解器加速采样奠定了基础。
+\end{importantbox}
+
+利用噪声预测网络 $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t) \approx -\sigma_t \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$，可将 PF-ODE 改写为只包含 $\boldsymbol{\epsilon}_\theta$ 的形式。
+
+\subsection{引入 $\lambda$ 函数}
+
+为了简化后续推导，定义 log-SNR 的半值函数：
+$$\lambda_t = \frac{1}{2} \log \frac{\alpha_t^2}{\sigma_t^2} = \log \frac{\alpha_t}{\sigma_t}$$
+
+\begin{itemize}
+    \item $\lambda_t$ 是 $t$ 的严格单调递减函数（因为 SNR 单调递减）
+    \item 利用 $\lambda_t$，许多表达式可以大幅化简
+    \item $e^{\lambda_t} = \frac{\alpha_t}{\sigma_t}$，$e^{-\lambda_t} = \frac{\sigma_t}{\alpha_t}$
+\end{itemize}
+
+引入 $\lambda_t$ 后，前向 SDE 的漂移函数 $f(t)$ 可以更简洁地用 $\lambda_t$ 表示，后续的积分变量替换也将围绕 $\lambda$ 进行。
+
+\subsection{本章小结}
+
+本节建立了从离散 DDPM/DDIM 到连续时间 SDE/ODE 的统一视角。关键要点：(1) 扩散模型的逆过程可以等价表述为一个确定性 ODE；(2) 该 ODE 具有半线性（semi-linear）结构，线性部分可以解析求解；(3) 变量 $\lambda_t$ 提供了更方便的参数化。
+
+
+\section{ODE 求解基础}
+
+\subsection{为什么需要快速 ODE 求解器}
+
+扩散模型的采样过程等价于从 $t=T$（纯噪声）到 $t=0$（干净数据）求解 PF-ODE。朴素方法——如 DDPM 的 1000 步采样——本质上是对 SDE 的欧拉-丸山离散化，每步都需要一次神经网络前向传播。实际应用中，我们希望将步数从数百步压缩到 10$\sim$20 步，同时保持图像质量。
+
+\begin{importantbox}{核心挑战：少步高质量采样}
+每一次 ODE 求解器的"步"（step）都需要调用一次噪声预测网络 $\boldsymbol{\epsilon}_\theta$，这是计算的瓶颈。因此，减少求解步数 = 减少网络推理次数 = 加速生成。目标是在 10$\sim$20 次网络评估（NFE, Number of Function Evaluations）内生成高质量图像。
+\end{importantbox}
+
+\subsection{欧拉法（Euler Method）}
+
+给定 ODE $\frac{d\mathbf{x}}{dt} = \mathbf{v}(\mathbf{x}, t)$，欧拉法是最简单的数值积分方案：
+$$\mathbf{x}_{t+h} = \mathbf{x}_t + h \cdot \mathbf{v}(\mathbf{x}_t, t)$$
+
+其中 $h$ 为步长。直觉上，欧拉法假设在 $[t, t+h]$ 区间内速度场 $\mathbf{v}$ 不变，用起点处的速度做线性外推。
+
+\begin{knowledgebox}{欧拉法的几何直觉}
+想象一条在二维平面上的曲线（ODE 的真实轨迹）。欧拉法在当前点计算切线方向（速度场），然后沿切线走一小步。步长越小，近似越准确，但需要更多步。当步长较大时，直线近似偏离真实曲线，产生截断误差（truncation error）。对于扩散模型，DDIM 的采样公式实际上就是对 PF-ODE 的一种欧拉离散化。
+\end{knowledgebox}
+
+\subsection{高阶 ODE 求解器概览}
+
+为了在较大步长下仍然保持精度，数值分析领域发展了大量高阶求解器：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{求解器} & \textbf{阶数} & \textbf{每步 NFE} \\
+\midrule
+Euler（欧拉法） & 1 & 1 \\
+Heun（改进欧拉法/梯形法） & 2 & 2 \\
+Runge-Kutta 4 (RK4) & 4 & 4 \\
+Dormand-Prince (DOPRI5) & 5 & 6 \\
+\bottomrule
+\end{tabular}
+\caption{常见通用 ODE 求解器及其特性}
+\end{table}
+
+\begin{warningbox}{通用求解器的局限性}
+上述求解器对\textbf{任意} ODE 都适用，但它们没有利用 PF-ODE 的特殊结构。例如 Runge-Kutta 4 每步需要 4 次网络评估，在扩散模型场景下代价昂贵。DPM-Solver 的核心创新在于：利用 PF-ODE 的半线性结构，在\textbf{每步仅 1 次网络评估}的前提下实现高阶精度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+欧拉法是最基础的 ODE 求解方案，也是 DDIM 采样的等价形式。通用高阶求解器（如 RK4）可以提高精度，但每步需要多次网络评估。本讲后续的重点是如何利用扩散模型 ODE 的特殊结构来设计"免费午餐"式的高阶求解器。
+
+
+\section{线性 ODE 与精确解}
+
+\subsection{简单线性 ODE 的解析解}
+
+在讨论扩散模型的 ODE 之前，讲者从最简单的线性 ODE 入手建立直觉。考虑标量 ODE：
+$$\frac{dx}{dt} = p(t) \cdot x(t)$$
+
+其中 $p(t)$ 是已知的时间函数。假设 $x(t) > 0$，两边除以 $x(t)$：
+$$\frac{1}{x(t)} \frac{dx}{dt} = p(t)$$
+
+左侧恰好是 $\frac{d}{dt} \ln x(t)$，因此：
+$$\ln x(t) - \ln x(s) = \int_s^t p(\tau)\, d\tau$$
+
+\begin{importantbox}{线性 ODE 的精确解}
+$$x(t) = x(s) \cdot \exp\left(\int_s^t p(\tau)\, d\tau\right)$$
+这个解是\textbf{解析}的——不需要任何离散化近似。对于线性 ODE，我们总能通过积分得到精确解。这一事实是后续推导的关键基石。
+\end{importantbox}
+
+\subsection{半线性 ODE 与积分因子法}
+
+扩散模型的 PF-ODE 不是纯线性的，而是\textbf{半线性}（semi-linear）的，形如：
+$$\frac{d\mathbf{x}}{dt} = p(t) \cdot \mathbf{x}(t) + q(t)$$
+
+其中 $p(t) \cdot \mathbf{x}$ 是线性部分，$q(t)$ 是非线性偏移项（在扩散模型中，$q(t)$ 包含噪声预测网络的输出）。
+
+为了求解半线性 ODE，引入\textbf{积分因子}（integrating factor）：
+$$\mu(t) = \exp\left(-\int_0^t p(\tau)\, d\tau\right)$$
+
+$\mu(t)$ 是齐次方程 $\frac{dx}{dt} = p(t) \cdot x$ 的"逆解"。将 ODE 两边乘以 $\mu(t)$：
+$$\mu(t) \frac{dx}{dt} - \mu(t) p(t) x(t) = \mu(t) q(t)$$
+
+利用乘积求导法则，左侧化为 $\frac{d}{dt}\left[\mu(t) x(t)\right]$，积分后得到：
+
+\begin{importantbox}{半线性 ODE 的精确解（Variation of Constants）}
+$$x(t) = \frac{\mu(s)}{\mu(t)} x(s) + \frac{1}{\mu(t)} \int_s^t \mu(\tau) q(\tau)\, d\tau$$
+\begin{itemize}
+    \item 第一项：线性部分的精确解，只依赖初始值 $x(s)$，可以解析计算
+    \item 第二项：非线性部分的积分，涉及 $q(\tau)$（包含神经网络输出），通常需要数值近似
+\end{itemize}
+这就是\textbf{指数积分器}（Exponential Integrator）的基本形式：线性部分精确处理，仅对非线性部分做数值近似。
+\end{importantbox}
+
+\begin{knowledgebox}{为什么叫"指数积分器"？}
+因为线性部分的精确解包含指数函数 $\exp(\cdot)$。传统欧拉法会对整个 ODE（线性+非线性）做近似，而指数积分器只对非线性部分做近似。在线性部分占主导的情况下（如扩散模型的 PF-ODE），这种拆分能显著提高精度。
+\end{knowledgebox}
+
+\subsection{带常数偏移项的精确解}
+
+作为练习，考虑带常数 $q$（不依赖 $t$）的情形：
+$$\frac{dx}{dt} = p(t) \cdot x(t) + c$$
+
+将通解公式代入并化简，可以得到一个更紧凑的表达式。讲者在课上带学生推导了这一过程，核心思路是将 $c$ 提出积分号外，然后利用 $\mu(t)$ 的性质化简。
+
+\subsection{本章小结}
+
+线性 ODE 有解析解；半线性 ODE 可以通过积分因子法将线性部分精确求解，仅剩非线性部分需要数值近似。这是 DPM-Solver 的数学基础。
+
+
+\section{DPM-Solver 的推导}
+
+\subsection{PF-ODE 的半线性结构}
+
+回到扩散模型的 PF-ODE。利用噪声预测网络 $\boldsymbol{\epsilon}_\theta$ 和变分扩散模型的参数化，PF-ODE 可以写成：
+$$\frac{d\mathbf{x}}{dt} = \underbrace{f(t) \cdot \mathbf{x}(t)}_{\text{线性部分}} + \underbrace{g(t) \cdot \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}_{\text{非线性部分}}$$
+
+其中：
+\begin{itemize}
+    \item $f(t)$：可由 $\alpha_t, \sigma_t$ 解析计算的漂移系数
+    \item $g(t)$：可由 $\alpha_t, \sigma_t$ 解析计算的扩散相关系数
+    \item $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$：噪声预测网络，是唯一的非线性（需要神经网络评估的）部分
+\end{itemize}
+
+\begin{importantbox}{DPM-Solver 的核心观察}
+PF-ODE 具有半线性结构：线性部分 $f(t) \cdot \mathbf{x}$ 可以通过指数积分器\textbf{精确}求解，唯一需要数值近似的只有涉及 $\boldsymbol{\epsilon}_\theta$ 的非线性积分。这意味着我们可以最大限度地减少数值误差。
+\end{importantbox}
+
+\subsection{利用指数积分器求解}
+
+应用上一节的半线性 ODE 精确解，并将 $\lambda_t$ 作为积分变量（替换时间 $t$），可以得到：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \alpha_t \int_{\lambda_s}^{\lambda_t} e^{-\lambda}\, \hat{\boldsymbol{\epsilon}}_\theta(\lambda)\, d\lambda$$
+
+其中：
+\begin{itemize}
+    \item $\frac{\alpha_t}{\alpha_s} \mathbf{x}_s$：线性部分的精确解
+    \item $\hat{\boldsymbol{\epsilon}}_\theta(\lambda) = \boldsymbol{\epsilon}_\theta(\mathbf{x}_{\tau(\lambda)}, \tau(\lambda))$：将噪声预测视为 $\lambda$ 的函数
+    \item 积分区间 $[\lambda_s, \lambda_t]$：对应时间 $[s, t]$
+\end{itemize}
+
+\begin{knowledgebox}{变量替换 $t \to \lambda$ 的意义}
+将积分变量从时间 $t$ 替换为 log-SNR $\lambda$ 有两个好处：(1) 化简了系数中复杂的 $\alpha_t, \sigma_t$ 表达式，使得积分核变为简单的 $e^{-\lambda}$；(2) $\lambda$ 在噪声调度空间中均匀分布，是更自然的积分变量。讲者强调这一步化简使得原本复杂的 ODE 变得出人意料地简洁。
+\end{knowledgebox}
+
+进一步化简后，DPM-Solver 的核心公式为：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \sigma_t \int_{\lambda_s}^{\lambda_t} e^{\lambda - \lambda_t}\, \boldsymbol{\epsilon}_\theta(\mathbf{x}_\lambda, \lambda)\, d\lambda$$
+
+这个公式将求解 ODE 的问题转化为：如何近似噪声预测的加权积分。不同阶次的近似对应不同阶次的 DPM-Solver。
+
+\subsection{一阶近似：DPM-Solver-1 即 DDIM}
+
+最简单的近似是假设在积分区间 $[\lambda_s, \lambda_t]$ 内，噪声预测 $\boldsymbol{\epsilon}_\theta$ 为常数（零阶泰勒展开）：
+$$\boldsymbol{\epsilon}_\theta(\mathbf{x}_\lambda, \lambda) \approx \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s) \quad \forall \lambda \in [\lambda_s, \lambda_t]$$
+
+代入积分公式并计算 $e^{-\lambda}$ 的定积分，可得：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \sigma_t (e^{h} - 1) \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)$$
+
+其中 $h = \lambda_t - \lambda_s$。
+
+\begin{importantbox}{DDIM 就是 DPM-Solver-1}
+将上式用 $\alpha_t, \sigma_t$ 展开，可以验证这恰好就是 DDIM 的确定性采样公式！也就是说，DDIM 并非对 PF-ODE 做\textbf{整体}欧拉离散化，而是利用了半线性结构做\textbf{指数积分}——线性部分精确处理，仅对噪声预测做零阶近似。这解释了为什么 DDIM 比直接欧拉法效果更好。
+\end{importantbox}
+
+\begin{warningbox}{常见误解：DDIM 不等于朴素欧拉法}
+很多人认为 DDIM 就是对 PF-ODE 做欧拉离散化。实际上，DDIM 是对 PF-ODE 做一阶\textbf{指数积分}——它精确处理了线性部分，只对非线性噪声预测做了零阶近似。这种微妙的区别在精度上有本质差异，特别是在步数较少时。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DPM-Solver 的推导利用了 PF-ODE 的半线性结构，通过指数积分器精确处理线性部分，将数值近似限定在噪声预测的积分上。一阶 DPM-Solver 等价于 DDIM。
+
+
+\section{高阶 DPM-Solver}
+
+\subsection{二阶近似：DPM-Solver-2}
+
+一阶近似假设 $\boldsymbol{\epsilon}_\theta$ 在整个区间内为常数。自然的改进是使用\textbf{一阶泰勒展开}（线性近似），利用两个点的噪声预测值来拟合 $\boldsymbol{\epsilon}_\theta$ 的变化趋势。
+
+DPM-Solver-2 的算法步骤如下：
+
+\textbf{步骤 1：计算中间点}
+
+给定当前时间步 $s$ 和目标时间步 $t$，选取中间时间点 $r$（通常取区间中点），用一阶 DPM-Solver 计算中间值：
+$$\mathbf{u} = \frac{\alpha_r}{\alpha_s} \mathbf{x}_s - \sigma_r (e^{h_1} - 1) \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)$$
+
+其中 $h_1 = \lambda_r - \lambda_s$。
+
+\textbf{步骤 2：利用中间点的噪声预测更新}
+
+在中间点 $r$ 处重新评估噪声预测 $\boldsymbol{\epsilon}_\theta(\mathbf{u}, r)$，然后用两点信息做线性插值近似积分：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \sigma_t (e^{h} - 1) \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s) - \frac{\sigma_t}{2h_1}(e^{h} - 1 - h)\left[\boldsymbol{\epsilon}_\theta(\mathbf{u}, r) - \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)\right]$$
+
+其中 $h = \lambda_t - \lambda_s$。
+
+\begin{importantbox}{二阶近似的关键思想}
+DPM-Solver-2 每步需要 2 次网络评估（$s$ 处和 $r$ 处），但获得了二阶精度。与通用的 Heun 方法不同，DPM-Solver-2 利用了 PF-ODE 的半线性结构，因此在相同 NFE 下精度更高。
+\end{importantbox}
+
+\subsection{三阶及更高阶近似}
+
+遵循同样的思路，可以继续做二阶泰勒展开得到 DPM-Solver-3：在区间内选取两个中间点，利用三个噪声预测值来构造二次多项式近似 $\boldsymbol{\epsilon}_\theta$ 在 $\lambda$ 空间中的变化。
+
+\begin{knowledgebox}{递归结构}
+DPM-Solver 的阶次提升具有递归结构：
+\begin{itemize}
+    \item \textbf{$k$ 阶 DPM-Solver} 需要 $k$ 次网络评估
+    \item 先用低阶 DPM-Solver 计算 $k-1$ 个中间点
+    \item 利用所有 $k$ 个噪声预测值构造 $(k-1)$ 次多项式近似
+    \item 将多项式代入积分公式解析积分
+\end{itemize}
+实践中，2 阶和 3 阶已经足够好。超过 3 阶后，收益递减，因为噪声预测网络本身的近似误差成为瓶颈。
+\end{knowledgebox}
+
+\subsection{各阶 DPM-Solver 对比}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{方法} & \textbf{每步 NFE} & \textbf{精度阶数} & \textbf{备注} \\
+\midrule
+DDPM & 1 & 约 0.5 阶 & 朴素欧拉-丸山离散化 \\
+DDIM / DPM-Solver-1 & 1 & 1 阶 & 指数积分 + 零阶噪声近似 \\
+DPM-Solver-2 & 2 & 2 阶 & 指数积分 + 一阶噪声近似 \\
+DPM-Solver-3 & 3 & 3 阶 & 指数积分 + 二阶噪声近似 \\
+\bottomrule
+\end{tabular}
+\caption{DPM-Solver 各阶方法的特性比较}
+\end{table}
+
+\subsection{本章小结}
+
+高阶 DPM-Solver 通过在 $\lambda$ 空间中对噪声预测做高阶多项式近似，在每步仅增加少量网络评估的代价下获得更高精度。这种递归构造使得从一阶到三阶的提升在概念上非常自然。
+
+
+\section{DPM-Solver++ 与实践改进}
+
+\subsection{从噪声预测到数据预测}
+
+DPM-Solver 的原始公式基于噪声预测 $\boldsymbol{\epsilon}_\theta$。DPM-Solver++ 提出了一个关键改进：转而对\textbf{数据预测}（data prediction）$\hat{\mathbf{x}}_0$ 做多项式近似。
+
+由 $\mathbf{x}_t = \alpha_t \mathbf{x}_0 + \sigma_t \boldsymbol{\epsilon}$ 可得：
+$$\hat{\mathbf{x}}_0(\mathbf{x}_t, t) = \frac{\mathbf{x}_t - \sigma_t \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}{\alpha_t}$$
+
+\begin{importantbox}{DPM-Solver++ 的核心改进}
+DPM-Solver++ 将积分对象从 $\boldsymbol{\epsilon}_\theta$ 换为 $\hat{\mathbf{x}}_0$。两者在数学上等价，但在有限步数下，$\hat{\mathbf{x}}_0$ 的变化通常比 $\boldsymbol{\epsilon}_\theta$ 更平滑，多项式近似误差更小。实验表明，DPM-Solver++ 在较少步数（如 10$\sim$15 步）时显著优于原始 DPM-Solver。
+\end{importantbox}
+
+\begin{knowledgebox}{为什么数据预测更平滑？}
+直觉上，$\hat{\mathbf{x}}_0$ 是"去噪后的干净图像估计"，它在采样过程中逐渐收敛到最终图像。相比之下，$\boldsymbol{\epsilon}_\theta$（噪声估计）随时间步的变化更剧烈，特别是在噪声水平发生快速变化的区域。因此，对 $\hat{\mathbf{x}}_0$ 做低阶多项式近似更合理。
+\end{knowledgebox}
+
+\subsection{多步法（Multistep Method）}
+
+除了单步法（每步从头计算中间点），DPM-Solver++ 还支持\textbf{多步法}：利用前几步已经计算过的噪声预测值来构造高阶近似，而无需额外的网络评估。
+
+例如，二阶多步 DPM-Solver++：
+\begin{enumerate}
+    \item 在第 $i$ 步，已有 $\boldsymbol{\epsilon}_\theta(\mathbf{x}_{t_i}, t_i)$ 和 $\boldsymbol{\epsilon}_\theta(\mathbf{x}_{t_{i-1}}, t_{i-1})$
+    \item 用这两个值做线性外推来近似区间内的噪声变化
+    \item 代入指数积分公式计算 $\mathbf{x}_{t_{i+1}}$
+\end{enumerate}
+
+\begin{importantbox}{多步法的优势}
+多步法在每步只需 1 次网络评估（NFE=1），但仍可达到 2 阶甚至 3 阶精度。代价是需要保存前几步的噪声预测缓存。在固定步数预算下，多步法通常是最具性价比的选择。
+\end{importantbox}
+
+\subsection{时间步调度策略}
+
+DPM-Solver 的性能还受到时间步选取策略的影响。常见策略包括：
+
+\begin{itemize}
+    \item \textbf{均匀时间步}：在 $t \in [0, T]$ 上等间距分割
+    \item \textbf{均匀 $\lambda$ 步}：在 $\lambda \in [\lambda_T, \lambda_0]$ 上等间距分割——这通常更好，因为 $\lambda$ 空间的均匀性与 ODE 的数值误差分布更匹配
+    \item \textbf{自适应步长}：根据误差估计动态调整步长（如 DOPRI5 中的方法）
+\end{itemize}
+
+\begin{warningbox}{不当的时间步选取会严重降低性能}
+在 $t$ 空间均匀分割时，低噪声区域（$t$ 接近 0）的步长在 $\lambda$ 空间中过大，导致近似误差集中在最后几步——而这恰恰是图像细节被确定的关键阶段。因此，在 $\lambda$ 空间中均匀分割通常是更安全的默认选择。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DPM-Solver++ 通过对数据预测（而非噪声预测）做多项式近似来改善有限步精度，并引入多步法以在每步 1 NFE 的代价下实现高阶精度。时间步调度（特别是在 $\lambda$ 空间均匀分割）对最终性能也有重要影响。
+
+
+\section{实验结果与性能分析}
+
+\subsection{FID 对比}
+
+讲者展示了不同采样方法在 CIFAR-10 等数据集上的 FID（Frechet Inception Distance）对比：
+
+\begin{itemize}
+    \item \textbf{DDPM}（1000 步）：FID 约 3$\sim$4（基线）
+    \item \textbf{DDIM}（100 步）：FID 有明显退化，约 5$\sim$8
+    \item \textbf{DDIM}（10 步）：FID 大幅恶化，约 20+
+    \item \textbf{DPM-Solver-2}（15$\sim$20 步）：FID 接近 DDPM 1000 步的水平
+    \item \textbf{DPM-Solver-3}（10$\sim$15 步）：FID 达到甚至优于 DDPM 1000 步
+\end{itemize}
+
+\begin{importantbox}{关键结果}
+使用 DPM-Solver-3，仅需 15 步即可达到 DDPM 1000 步的采样质量。这意味着约 \textbf{70 倍}的加速，且\textbf{无需重新训练模型}——完全在推理阶段通过更优的 ODE 求解器实现。这也是讲者反复强调的一个亮点：不同的数学视角（SDE $\to$ ODE $\to$ 半线性结构 $\to$ 指数积分器）可以直接转化为实际性能提升。
+\end{importantbox}
+
+\subsection{不同阶次的收敛行为}
+
+\begin{knowledgebox}{阶次与步数的关系}
+\begin{itemize}
+    \item 步数充足（$>50$）时，各阶 DPM-Solver 差异不大，因为欧拉法本身误差已经很小
+    \item 步数较少（$10\sim 20$）时，高阶方法优势显著，二阶比一阶好一个数量级
+    \item 步数极少（$<10$）时，三阶比二阶仍有提升，但收益递减
+    \item 超过三阶后，网络本身的近似误差（$\boldsymbol{\epsilon}_\theta \neq \boldsymbol{\epsilon}^*$）成为瓶颈
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{与其他加速方法的关系}
+
+DPM-Solver 属于\textbf{Training-free}（无需额外训练）的采样加速方法。与之互补的还有：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{方法} & \textbf{需要训练？} & \textbf{核心思路} \\
+\midrule
+DPM-Solver/DDIM & 否 & 更好的 ODE 离散化 \\
+知识蒸馏（Progressive Distillation） & 是 & 学生模型模仿多步教师 \\
+一致性模型（Consistency Models） & 是 & 直接学习从噪声到数据的映射 \\
+Flow Matching + Euler & 否 & 更直的轨迹，欧拉法更有效 \\
+\bottomrule
+\end{tabular}
+\caption{不同采样加速策略的比较}
+\end{table}
+
+\begin{knowledgebox}{DPM-Solver 与 Flow Matching 的互补}
+Flow Matching 通过训练使 ODE 轨迹更直（接近线性），从而让欧拉法就能工作得很好。DPM-Solver 则是在给定（可能弯曲的）ODE 轨迹上寻找更好的数值求解方案。两者的思路正交且互补：如果 ODE 轨迹已经很直，DPM-Solver 的优势会减小；但对于标准扩散模型的弯曲轨迹，DPM-Solver 的价值就非常显著。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+实验证明，DPM-Solver 在不重新训练模型的前提下，将采样步数从 1000 步压缩到 10$\sim$20 步，实现了数十倍的加速。其核心优势在于利用了扩散模型 ODE 的半线性结构，这是通用 ODE 求解器无法做到的。
+
+
+\section{理论深入：从 DDIM 到 DPM-Solver 的统一视角}
+
+\subsection{DDIM 采样公式的重新推导}
+
+讲者在课上带学生将 DPM-Solver-1 的结果逐项展开，验证其等价于 DDIM：
+
+从 DPM-Solver-1 的公式出发：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \sigma_t (e^{h} - 1) \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)$$
+
+其中 $h = \lambda_t - \lambda_s = \log\frac{\alpha_t}{\sigma_t} - \log\frac{\alpha_s}{\sigma_s} = \log\frac{\alpha_t \sigma_s}{\sigma_t \alpha_s}$。
+
+因此 $e^h = \frac{\alpha_t \sigma_s}{\sigma_t \alpha_s}$，$e^h - 1 = \frac{\alpha_t \sigma_s - \sigma_t \alpha_s}{\sigma_t \alpha_s}$。
+
+代入：
+$$\mathbf{x}_t = \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \sigma_t \cdot \frac{\alpha_t \sigma_s - \sigma_t \alpha_s}{\sigma_t \alpha_s} \cdot \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)$$
+$$= \frac{\alpha_t}{\alpha_s} \mathbf{x}_s - \frac{\alpha_t \sigma_s - \sigma_t \alpha_s}{\alpha_s} \cdot \boldsymbol{\epsilon}_\theta(\mathbf{x}_s, s)$$
+
+\begin{importantbox}{统一视角}
+这正是 DDIM 在连续时间参数化下的采样公式。通过这一推导，我们看到了扩散模型不同理解方式之间的深层联系：
+\begin{enumerate}
+    \item DDPM $\to$ DDIM（Song et al., 2020）：从随机采样到确定性采样
+    \item SDE $\to$ PF-ODE（Song et al., 2021）：从随机过程到确定性流
+    \item PF-ODE $\to$ 指数积分（Lu et al., 2022）：从通用数值方法到结构化求解
+\end{enumerate}
+DDIM 恰好位于最后一条线的一阶近似位置——它不是"发明"出来的，而是扩散模型 ODE 结构的自然产物。
+\end{importantbox}
+
+\subsection{$\lambda$ 空间中的 Taylor 展开}
+
+DPM-Solver 各阶方法的统一框架可以用 $\boldsymbol{\epsilon}_\theta$ 在 $\lambda$ 空间的 Taylor 展开来理解：
+$$\boldsymbol{\epsilon}_\theta(\lambda) = \boldsymbol{\epsilon}_\theta(\lambda_s) + (\lambda - \lambda_s) \boldsymbol{\epsilon}_\theta'(\lambda_s) + \frac{(\lambda - \lambda_s)^2}{2} \boldsymbol{\epsilon}_\theta''(\lambda_s) + \cdots$$
+
+\begin{itemize}
+    \item \textbf{零阶截断}（$\boldsymbol{\epsilon}_\theta \approx$ 常数）$\to$ DPM-Solver-1 = DDIM
+    \item \textbf{一阶截断}（$\boldsymbol{\epsilon}_\theta \approx$ 线性）$\to$ DPM-Solver-2
+    \item \textbf{二阶截断}（$\boldsymbol{\epsilon}_\theta \approx$ 二次）$\to$ DPM-Solver-3
+\end{itemize}
+
+高阶导数 $\boldsymbol{\epsilon}_\theta'(\lambda_s)$ 无法解析获得（因为 $\boldsymbol{\epsilon}_\theta$ 是神经网络），但可以用有限差分来近似——这就是为什么需要在中间点额外评估网络。
+
+\subsection{本章小结}
+
+从 Taylor 展开的视角，DPM-Solver 的各阶方法形成了一个自然的精度递增族。DDIM 作为一阶特例的身份被揭示，高阶方法则是在 $\lambda$ 空间中对噪声预测做更精细的多项式拟合。
+
+
+\section{实践指南}
+
+\subsection{推荐配置}
+
+根据讲者的讨论和 DPM-Solver 的实践经验，以下是不同场景的推荐配置：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{场景} & \textbf{推荐方法} & \textbf{步数} \\
+\midrule
+快速预览 / 交互式应用 & DPM-Solver++(2M) & 10$\sim$15 \\
+高质量生成 & DPM-Solver++(2M) & 20$\sim$25 \\
+最高质量（不计速度） & DPM-Solver++(3M) & 25$\sim$50 \\
+\bottomrule
+\end{tabular}
+\caption{不同场景下的推荐 DPM-Solver 配置（2M = 二阶多步法，3M = 三阶多步法）}
+\end{table}
+
+\subsection{实现要点}
+
+\begin{warningbox}{实现中的常见陷阱}
+\begin{enumerate}
+    \item \textbf{数值稳定性}：$e^{\lambda}$ 在 $\lambda$ 值较大时可能溢出，需要使用 log-space 计算
+    \item \textbf{时间步方向}：扩散模型的"前向"是加噪（$t: 0 \to T$），"逆向"是去噪（$t: T \to 0$）。ODE 求解的方向是逆向的，$h = \lambda_t - \lambda_s$ 通常为\textbf{正值}（因为 $\lambda$ 随去噪递增）
+    \item \textbf{多步法的预热}：二阶多步法在第一步没有历史缓存，需回退到一阶单步法
+    \item \textbf{与 Classifier-free Guidance 的兼容性}：CFG 会改变有效的 ODE，DPM-Solver++ 对此做了专门的适配
+\end{enumerate}
+\end{warningbox}
+
+\begin{knowledgebox}{DPM-Solver 在主流框架中的集成}
+DPM-Solver/DPM-Solver++ 已被广泛集成在主流扩散模型库中：
+\begin{itemize}
+    \item \textbf{Diffusers}（Hugging Face）：\texttt{DPMSolverMultistepScheduler}
+    \item \textbf{k-diffusion}：作为默认采样器之一
+    \item \textbf{Stable Diffusion WebUI}：在 Sampler 下拉菜单中可选
+\end{itemize}
+在实际使用中，通常只需将 scheduler/sampler 切换为 DPM-Solver++，即可享受加速效果，无需修改模型本身。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DPM-Solver++ 的二阶多步法（2M）是实际应用中的最佳默认选择，兼顾速度和质量。实现时需注意数值稳定性和多步法预热等细节。
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本讲围绕"如何高效求解扩散模型的逆过程 ODE"展开，核心贡献如下：
+
+\begin{enumerate}
+    \item \textbf{半线性结构的发现}：PF-ODE 的右端项可以分解为线性部分（可精确求解）和非线性部分（需要数值近似），这为高效求解提供了基础
+    \item \textbf{指数积分器的应用}：通过积分因子法精确处理线性部分，将数值近似限定在噪声预测的积分上
+    \item \textbf{$\lambda$ 空间的参数化}：用 log-SNR 做变量替换，大幅简化积分表达式
+    \item \textbf{DDIM 的重新诠释}：DDIM 是 DPM-Solver 的一阶特例，而非朴素欧拉法
+    \item \textbf{高阶方法的递归构造}：通过在 $\lambda$ 空间对噪声预测做高阶多项式近似，以少量额外 NFE 换取显著精度提升
+    \item \textbf{DPM-Solver++}：转为对数据预测做多项式近似，进一步提升有限步精度
+\end{enumerate}
+
+\subsection{更广阔的视角}
+
+\begin{knowledgebox}{为什么数学理解如此重要}
+讲者在课程中反复强调：所有这些加速都是在\textbf{不改变训练模型}的前提下实现的。这深刻体现了一个原则——对问题结构的数学理解可以直接转化为实际性能提升。从 DDPM 到 DDIM 到 DPM-Solver，每一步都是对同一个扩散过程的更深入理解。
+\end{knowledgebox}
+
+\subsection{后续发展}
+
+DPM-Solver 之后，扩散模型的加速采样继续快速发展：
+
+\begin{itemize}
+    \item \textbf{一致性模型}（Consistency Models, Song et al., 2023）：学习直接从噪声跳到数据的映射，可实现单步生成
+    \item \textbf{渐进蒸馏}（Progressive Distillation, Salimans \& Ho, 2022）：通过知识蒸馏将多步过程压缩为少步
+    \item \textbf{Flow Matching}（Lipman et al., 2022）：设计更直的传输路径，使得简单的欧拉法即可高效工作
+    \item \textbf{Rectified Flow}（Liu et al., 2022）：通过 Reflow 操作使 ODE 轨迹趋于直线
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Lu, C., et al. (2022). \textit{DPM-Solver: A Fast ODE Solver for Diffusion Probabilistic Model Sampling in Around 10 Steps}. NeurIPS 2022.
+    \item Lu, C., et al. (2022). \textit{DPM-Solver++: Fast Solver for Guided Sampling of Diffusion Probabilistic Models}. arXiv:2211.01095.
+    \item Song, J., et al. (2020). \textit{Denoising Diffusion Implicit Models}. ICLR 2021.
+    \item Song, Y., et al. (2021). \textit{Score-Based Generative Modeling through Stochastic Differential Equations}. ICLR 2021.
+    \item Karras, T., et al. (2022). \textit{Elucidating the Design Space of Diffusion-Based Generative Models}. NeurIPS 2022.
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

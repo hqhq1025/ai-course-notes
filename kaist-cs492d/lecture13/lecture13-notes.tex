@@ -1,0 +1,571 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 13: Score Distillation / Course Wrap-Up}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{60分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=xVcHTUYQms4}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% ==================== 正文开始 ====================
+
+\section{引言：从 2D 先验到跨模态生成}
+
+本节课是 KAIST CS492D（Diffusion Models and Their Applications）的最后一讲。Minhyuk Sung 教授在前几讲中已经讨论了扩散模型的基础理论（DDPM、DDIM、连续时间扩散、SDE/ODE 转换、Flow Matching）以及推理时引导（inference-time guidance）等技术。本节课聚焦一个核心问题：\textbf{如何利用预训练的 2D 图像扩散模型生成训练数据中从未出现过的其他模态数据}——尤其是 3D 内容。
+
+\begin{knowledgebox}{课程回顾：从引导到蒸馏}
+前几讲中，我们讨论了如何在推理阶段注入引导信号（guidance），使扩散模型生成满足特定约束的样本。本节课的 Score Distillation Sampling（SDS）则更进一步：它不是在已有数据域中做引导生成，而是将预训练扩散模型的知识``蒸馏''到一个全新的数据域中。
+\end{knowledgebox}
+
+\subsection{动机：数据规模的鸿沟}
+
+扩散模型在图像和视频生成上取得了巨大成功，核心原因之一是训练数据的规模——图像数据集已达数十亿级别（如 LAION-5B 约 50 亿张图像）。然而，对于其他数据类型，数据规模远远不及：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{数据类型} & \textbf{最大公开数据集规模} & \textbf{类比} \\
+\midrule
+2D 图像 & $\sim$50 亿 & 世界人口 \\
+3D 模型 & $\sim$1000 万 & 首尔人口 \\
+分子结构 & 数百万级 & 更少 \\
+运动/动作数据 & 数十万级 & 很少 \\
+\bottomrule
+\end{tabular}
+\caption{不同数据类型的公开数据集规模对比}
+\end{table}
+
+\begin{importantbox}{核心问题}
+图像扩散模型因数十亿级训练数据而具备了强大的生成能力与多样性。但对于 3D 模型、矢量图、CAD、分子结构等领域，我们很难获得同等规模的训练数据。\textbf{能否借用图像扩散模型已学到的知识来生成这些跨模态数据？}
+\end{importantbox}
+
+这个问题的实际意义非常广泛：医学影像（用少量样本训练诊断模型）、工业设计（CAD 模型生成）、电商（3D 产品展示）等场景都面临数据不足的困境。
+
+\subsection{本章小结}
+
+本节引出了 Score Distillation 的核心动机：预训练图像扩散模型拥有在数十亿图像上学到的丰富先验知识，SDS 提供了一种方法将这些知识迁移到 3D 等其他领域，即便目标域没有大规模训练数据。
+
+\newpage
+\section{Neural Rendering 背景}
+
+在讨论 Score Distillation 之前，需要理解一个关键前提——\textbf{可微分渲染}（differentiable rendering）。
+
+\subsection{从多视图图像到 3D 重建}
+
+Neural Rendering 的基本任务是：给定一个场景的多视角图像集合，重建出该场景的 3D 表示，使得从任意新视角渲染出的图像都尽可能逼真。
+
+\begin{knowledgebox}{Neural Rendering 的核心思想}
+Neural Rendering 使用\textbf{神经网络}作为 3D 场景的表示。网络参数 $\theta$ 隐式地编码了场景的几何与外观信息。给定一个相机视角参数 $\pi$，通过可微分的渲染函数 $g(\theta, \pi)$ 可以生成对应的 2D 图像。
+
+代表性工作包括 NeRF（Neural Radiance Fields）和 3D Gaussian Splatting。
+\end{knowledgebox}
+
+\subsection{传统 3D 重建的优化目标}
+
+给定 $N$ 张已知视角的参考图像 $\{I_i\}_{i=1}^{N}$，3D 重建的优化目标非常直接：
+
+$$
+\theta^* = \arg\min_{\theta} \sum_{i=1}^{N} \| g(\theta, \pi_i) - I_i \|_2^2
+$$
+
+其中：
+\begin{itemize}
+    \item $\theta$：3D 表示的参数（如 NeRF 的网络权重）
+    \item $\pi_i$：第 $i$ 张图像的相机参数（位姿）
+    \item $g(\theta, \pi_i)$：从视角 $\pi_i$ 渲染得到的图像
+    \item $I_i$：对应视角的真实参考图像
+\end{itemize}
+
+\begin{warningbox}{重建质量取决于输入图像数量}
+传统的 Neural Rendering 需要较多的输入图像（通常 $\sim$100 张）才能获得高质量的 3D 重建。当图像数量减少到 10 张、5 张甚至 1 张时，重建质量会急剧下降——未覆盖视角的区域会出现明显的伪影（如黑色区域、模糊等）。
+\end{warningbox}
+
+\subsection{实际应用中的挑战}
+
+Neural Rendering 在实际应用中面临诸多挑战：
+
+\begin{itemize}
+    \item \textbf{重建速度}：计算量大，不适合实时应用
+    \item \textbf{渲染速度}：需要快速渲染以支持交互式浏览
+    \item \textbf{场景规模}：从单个物体到城市级场景
+    \item \textbf{动态物体}：如何处理场景中的运动物体
+    \item \textbf{输入图像数量}：如何用尽可能少的图像实现高质量重建
+\end{itemize}
+
+特别是在电商场景中（如在线购物的 3D 产品展示），用户期望仅拍摄少量照片就能快速生成 3D 模型，这要求极少输入图像下的高质量重建。
+
+\subsection{本章小结}
+
+Neural Rendering 提供了一个从 2D 图像到 3D 表示的桥梁，其核心是\textbf{可微分渲染函数}。传统方法依赖大量输入图像，而引入外部先验（如预训练扩散模型的知识）可以显著减少所需图像数量，甚至实现零样本 3D 生成。
+
+\newpage
+\section{从 CLIP 引导到扩散模型引导}
+
+\subsection{CLIP 引导的 3D 生成}
+
+在 Score Distillation 出现之前，研究者首先探索了使用 CLIP（Contrastive Language-Image Pre-training）模型的先验知识来辅助 3D 重建。
+
+\begin{knowledgebox}{CLIP 模型简介}
+CLIP 是 OpenAI 提出的视觉-语言对齐模型，它将图像和文本映射到同一个嵌入空间中。通过计算嵌入向量之间的距离，可以衡量一张图像与一段文本描述之间的语义对齐程度。CLIP 在大规模图文对数据上训练，具有强大的零样本迁移能力。
+\end{knowledgebox}
+
+\subsubsection{少样本 3D 重建}
+
+利用 CLIP 的思路如下：
+\begin{itemize}
+    \item 对于有参考图像的视角：使用传统的 L2 重建损失
+    \item 对于没有参考图像的视角：使用 CLIP 距离作为损失函数
+\end{itemize}
+
+例如重建一个推土机模型时，我们知道无论从哪个角度看，它都应该是``推土机''。因此，对于缺少参考图像的视角，我们可以要求渲染出的图像在 CLIP 嵌入空间中与``bulldozer''这个文本描述尽可能接近。
+
+\subsubsection{零样本 3D 生成}
+
+CLIP 引导的极限情况是：\textbf{完全没有任何参考图像}，仅凭一个文本描述就生成 3D 模型。这时候所有视角都使用 CLIP 损失：
+
+$$
+\theta^* = \arg\min_{\theta} \sum_{\pi \sim \mathcal{P}} d_{\text{CLIP}}(g(\theta, \pi),\ \text{``a bulldozer''})
+$$
+
+\begin{importantbox}{从重建到生成的范式转变}
+当输入图像数量减少到零时，任务的性质发生了根本变化：不再是``3D 重建''，而是``3D 生成''。这是利用 2D 先验知识创造 3D 内容的第一次重要尝试。
+
+代表性工作：DreamFields（2021）——仅用 CLIP 损失和 NeRF 实现了文本到 3D 的生成。
+\end{importantbox}
+
+\subsection{CLIP 引导的局限性}
+
+虽然 CLIP 引导的 3D 生成开辟了新方向，但输出质量有限——生成的 3D 模型往往较为粗糙，细节不足。这是因为 CLIP 本质上是一个判别模型（discriminator），只能判断图像与文本是否匹配，但不能提供``图像应该长什么样''的精细指导。
+
+\begin{warningbox}{CLIP 作为损失函数的局限}
+CLIP 嵌入空间中的距离只能衡量语义级别的对齐，无法提供像素级别的生成指导。用 CLIP 损失优化时，模型可能会产生``语义正确但视觉不自然''的结果（adversarial examples 问题）。
+\end{warningbox}
+
+\subsection{核心问题：能否用扩散模型替代 CLIP？}
+
+CLIP 是一个天然的判别器——输入图像和文本，输出匹配分数。但扩散模型是一个生成器——输入文本，输出图像。
+
+\textbf{问题}：如何将一个生成模型当作判别器来使用？
+
+如果我们使用的是 GAN，这很简单——GAN 本身就包含一个判别器。但扩散模型没有显式的判别器。Score Distillation Sampling（SDS）正是为解决这个问题而提出的。
+
+\subsection{本章小结}
+
+CLIP 引导的 3D 生成（如 DreamFields）证明了利用 2D 先验生成 3D 内容的可行性，但受限于 CLIP 只能提供语义级别的引导。下一步自然的想法是：用拥有更丰富像素级知识的扩散模型来替代 CLIP，从而获得更高质量的生成结果。
+
+\newpage
+\section{Score Distillation Sampling（SDS）}
+
+\subsection{核心思想：将扩散模型的损失函数作为对齐度量}
+
+SDS 的核心直觉出奇地简单：\textbf{直接利用扩散模型的训练损失函数作为生成质量的度量}。
+
+\begin{importantbox}{SDS 的关键洞察}
+扩散模型训练完成后，对于训练分布中的真实数据 $x_0$，其噪声预测损失会收敛到一个很小的值：
+$$
+\mathcal{L}_{\text{diffusion}}(x_0) = \mathbb{E}_{t, \epsilon}\left[\| \epsilon_\phi(x_t, t, c) - \epsilon \|_2^2\right] \approx \text{small value}
+$$
+这意味着我们可以反过来使用这个损失：\textbf{如果一张图像使得预训练扩散模型的噪声预测损失很小，那么这张图像就接近真实数据分布}。
+\end{importantbox}
+
+\subsection{SDS 的算法流程}
+
+SDS 的优化过程包含四个步骤，在每次迭代中循环执行：
+
+\begin{enumerate}
+    \item \textbf{渲染}：从随机视角 $\pi$ 渲染当前 3D 表示，得到 2D 图像
+    $$x_0 = g(\theta, \pi)$$
+
+    \item \textbf{前向加噪}：随机采样时间步 $t$ 和噪声 $\epsilon$，对渲染图像执行前向过程
+    $$x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1 - \bar{\alpha}_t}\, \epsilon$$
+
+    \item \textbf{噪声预测}：使用预训练的扩散模型预测噪声
+    $$\hat{\epsilon} = \epsilon_\phi(x_t, t, c)$$
+    其中 $c$ 是文本条件（如``a bulldozer''）
+
+    \item \textbf{反向传播}：计算损失 $\| \hat{\epsilon} - \epsilon \|_2^2$，将梯度通过渲染函数 $g$ 传回 3D 表示参数 $\theta$
+\end{enumerate}
+
+\subsection{梯度推导与 Jacobian 近似}
+
+对上述损失函数关于 $\theta$ 求梯度，利用链式法则可得：
+
+$$
+\nabla_\theta \mathcal{L} = (\hat{\epsilon} - \epsilon) \cdot \underbrace{\frac{\partial \hat{\epsilon}}{\partial x_t}}_{\text{U-Net Jacobian}} \cdot \frac{\partial x_t}{\partial x_0} \cdot \frac{\partial g(\theta, \pi)}{\partial \theta}
+$$
+
+其中三个因子分别对应：
+\begin{itemize}
+    \item $(\hat{\epsilon} - \epsilon)$：噪声预测残差
+    \item $\frac{\partial \hat{\epsilon}}{\partial x_t}$：噪声预测网络（U-Net）的 Jacobian
+    \item $\frac{\partial x_t}{\partial x_0} \cdot \frac{\partial g}{\partial \theta}$：前向过程和渲染函数的导数
+\end{itemize}
+
+\begin{importantbox}{SDS 梯度的核心简化}
+在实践中，\textbf{U-Net Jacobian $\frac{\partial \hat{\epsilon}}{\partial x_t}$ 被近似为单位矩阵}（即直接忽略）。这带来两大好处：
+
+\begin{enumerate}
+    \item \textbf{节省计算}：U-Net 的 Jacobian 计算需要对网络所有参数做反向传播，这是整个流程中计算量最大的部分。跳过它可以显著节省时间和显存。
+    \item \textbf{质量基本不变}：实验表明，有无 Jacobian 项的生成质量几乎相同。
+\end{enumerate}
+
+简化后的 SDS 梯度为：
+$$
+\nabla_\theta \mathcal{L}_{\text{SDS}} \approx \mathbb{E}_{t,\epsilon}\left[w(t)(\hat{\epsilon} - \epsilon) \frac{\partial g(\theta, \pi)}{\partial \theta}\right]
+$$
+其中 $w(t)$ 是与时间步相关的权重函数。
+\end{importantbox}
+
+\begin{warningbox}{SDS 缺乏严格理论保证}
+Minhyuk Sung 教授明确指出，SDS 是一个``非常实用但没有完美理论解释''的方法。它并不是从某个明确的目标函数推导出来的最优梯度，而是一种启发式的实用设计。尽管如此，它在实验中表现非常好。
+\end{warningbox}
+
+\subsection{为什么叫 ``Score Distillation''？}
+
+\begin{knowledgebox}{名称解读：Score Distillation Sampling}
+\textbf{Score}（分数）：扩散模型学到的噪声预测 $\epsilon_\phi$ 与数据分布的 score function $\nabla_x \log p(x)$ 密切相关。噪声预测的残差 $(\hat{\epsilon} - \epsilon)$ 本质上提供了关于``数据应该如何调整才能更接近真实分布''的方向。
+
+\textbf{Distillation}（蒸馏）：我们将预训练扩散模型中学到的知识（以 score/噪声预测的形式）蒸馏到一个新的表示（如 3D 模型）中。
+
+\textbf{Sampling}：整个过程可以看作是一种特殊的采样过程——不是在图像空间中采样，而是在参数空间 $\theta$ 中通过梯度下降``采样''一个使得所有视角渲染都接近真实图像分布的 3D 表示。
+\end{knowledgebox}
+
+\subsection{SDS 的关键要求：可微分渲染}
+
+SDS 的梯度需要通过渲染函数 $g$ 反向传播到 3D 表示参数 $\theta$，因此\textbf{渲染函数必须是可微分的}。这正是 Neural Rendering 的重要性所在——NeRF 和 3D Gaussian Splatting 都提供了可微分的渲染管线。
+
+\subsection{本章小结}
+
+SDS 通过一个巧妙的设计将预训练扩散模型的损失函数作为跨模态生成的优化目标。其核心简化（忽略 U-Net Jacobian）使得算法既高效又有效。虽然缺乏完整的理论分析，但在实践中取得了令人印象深刻的结果。
+
+\newpage
+\section{DreamFusion：SDS 的代表性应用}
+
+\subsection{DreamFusion 概述}
+
+DreamFusion（Poole et al., 2022）是第一个将 SDS 成功应用于文本到 3D 生成的工作。它将预训练的 Imagen 文本到图像扩散模型的知识蒸馏到一个 NeRF 中，实现了仅从文本描述生成 3D 模型。
+
+\begin{importantbox}{DreamFusion 的流程}
+DreamFusion 的工作流程如下：
+\begin{enumerate}
+    \item 初始化一个随机的 NeRF 表示 $\theta$
+    \item 在每次迭代中：
+    \begin{itemize}
+        \item 随机选择一个相机视角 $\pi$
+        \item 渲染该视角下的 2D 图像 $x_0 = g(\theta, \pi)$
+        \item 计算 SDS 梯度并更新 $\theta$
+    \end{itemize}
+    \item 经过数千次迭代后，$\theta$ 收敛为一个高质量的 3D 模型
+\end{enumerate}
+\end{importantbox}
+
+\subsection{生成结果示例}
+
+DreamFusion 能够根据各种创意性文本描述生成 3D 模型，包括：
+\begin{itemize}
+    \item ``a fox wearing a sweater''（穿毛衣的狐狸）
+    \item ``a ghost eating a hamburger''（吃汉堡的幽灵）
+    \item ``a DSLR photo of a peacock on a surfboard''（冲浪板上的孔雀）
+\end{itemize}
+
+这些都是在互联网上几乎找不到对应 3D 模型的创意场景，但由于图像扩散模型在数十亿张图像上训练过，它``见过''足够多的相关视觉概念，因此能够通过 SDS 引导生成合理的 3D 结果。
+
+\subsection{SDS 的广泛应用}
+
+SDS 不仅限于 3D 生成，它的框架可以推广到任何满足以下条件的任务：
+\begin{enumerate}
+    \item 目标数据可以通过某种\textbf{可微分映射}转换为图像
+    \item 有对应的\textbf{预训练扩散模型}可用
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{应用场景} & \textbf{数据类型} & \textbf{渲染函数 $g$} \\
+\midrule
+文本到 3D & 3D NeRF/Mesh & 可微分 3D 渲染器 \\
+矢量图生成 & SVG 笔画参数 & 可微分光栅化 \\
+4D 生成 & 动态 3D 场景 & 视频渲染器 \\
+3D 编辑 & 已有 3D 模型 & 可微分 3D 渲染器 \\
+纹理生成 & 表面纹理贴图 & UV 映射渲染 \\
+\bottomrule
+\end{tabular}
+\caption{SDS 框架在不同应用场景中的实例化}
+\end{table}
+
+\begin{knowledgebox}{从图像扩散到视频扩散}
+SDS 的思想同样可以与预训练的\textbf{视频扩散模型}结合，用于生成 4D 内容（动态 3D 场景）。通过将视频帧作为渲染目标，可以利用视频扩散模型中学到的时间一致性先验来生成动态的 3D 场景。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DreamFusion 是 SDS 在文本到 3D 生成中的里程碑式应用，展示了将大规模 2D 先验迁移到 3D 领域的巨大潜力。SDS 的框架具有很强的通用性，可以推广到矢量图、4D 场景、纹理、音频等多种模态。
+
+\newpage
+\section{SDS 的问题与挑战}
+
+尽管 SDS 取得了令人印象深刻的结果，但它也存在一些固有的问题。
+
+\subsection{Janus Problem（多面问题）}
+
+SDS 最著名的失败模式是 \textbf{Janus Problem}（以古罗马双面神 Janus 命名）：生成的 3D 模型从每个视角看都像正面，导致一个物体出现多张脸。
+
+\begin{warningbox}{Janus Problem 的根本原因}
+Janus Problem 的根源在于 2D 先验与 3D 一致性之间的矛盾：
+
+\begin{enumerate}
+    \item 图像扩散模型在\textbf{单视角}图像上训练，不具备 3D 一致性的概念
+    \item SDS 独立优化每个视角的渲染结果，每个视角都倾向于生成该文本描述最``典型''的图像
+    \item 对于人脸等有明显正面的物体，``最典型''的图像几乎总是正面视角
+    \item 结果就是 3D 模型的每个面都变成了正面——产生多张脸
+\end{enumerate}
+
+本质上，这是因为 2D 扩散模型只有\textbf{局部观测}（单视角图像）的先验，而 3D 生成需要\textbf{全局一致性}的约束。
+\end{warningbox}
+
+\subsection{CFG 权重与多样性的权衡}
+
+在使用 SDS 时，通常需要设置非常高的 Classifier-Free Guidance（CFG）权重才能获得干净的输出。
+
+\begin{knowledgebox}{高 CFG 权重的双刃剑效应}
+高 CFG 权重会将生成分布收缩到与文本描述高度匹配的狭窄区域：
+
+\begin{itemize}
+    \item \textbf{优点}：输出质量更高、与文本描述的一致性更强
+    \item \textbf{缺点}：多样性大幅降低，所有生成结果趋于相似
+\end{itemize}
+
+如何在保证质量的同时维持多样性，是 SDS 的一个重要开放问题。
+\end{knowledgebox}
+
+\subsection{其他局限性}
+
+\begin{itemize}
+    \item \textbf{过饱和问题}：SDS 生成的纹理常常过于饱和、缺乏自然感
+    \item \textbf{优化不稳定}：由于每次迭代的随机视角和随机噪声，优化过程可能振荡
+    \item \textbf{计算成本}：每次迭代需要一次扩散模型的前向传播，整个优化过程需要数千次迭代
+    \item \textbf{几何质量}：生成的 3D 几何往往不够精细，尤其是遮挡区域
+\end{itemize}
+
+\begin{warningbox}{从局部先验到全局一致：本质困难}
+SDS 的所有问题都可以追溯到同一个根本困难：用\textbf{局部的 2D 观测先验}去约束\textbf{全局的 3D 结构}。这是一个病态（ill-posed）问题——无数种 3D 结构都能产生局部看起来合理的 2D 渲染。仅靠 2D 先验不足以消除这种歧义，还需要引入 3D 领域特定的先验知识。
+\end{warningbox}
+
+\subsection{本章小结}
+
+SDS 的主要挑战包括 Janus Problem、过饱和纹理、CFG 权重调节等。这些问题的根源在于 2D 先验的局部性无法完全约束 3D 结构的全局一致性。后续工作（如 SDS 的各种改进版本 VSD、ISM 等）致力于缓解这些问题。
+
+\newpage
+\section{课程总结与前沿展望}
+
+\subsection{课程内容回顾}
+
+KAIST CS492D 在本学期重点覆盖了扩散模型与 Flow 模型的理论与应用，课程内容可以分为两大部分：
+
+\subsubsection{理论基础}
+
+\begin{enumerate}
+    \item \textbf{DDPM}（Denoising Diffusion Probabilistic Models）：扩散模型的基础框架，定义了前向加噪过程和反向去噪过程
+    \item \textbf{DDIM}（Denoising Diffusion Implicit Models）：确定性采样方法，加速了推理过程
+    \item \textbf{连续时间扩散}：将离散的扩散过程推广到连续时间 SDE/ODE 框架
+    \item \textbf{SDE 与 ODE 的转换}：建立了随机与确定性采样之间的联系
+    \item \textbf{Flow Matching}：一种更灵活的生成建模方法，将扩散模型连接到最优传输理论
+\end{enumerate}
+
+\subsubsection{应用拓展}
+
+\begin{enumerate}
+    \item \textbf{推理时引导}（Inference-Time Guidance）：在不重新训练模型的情况下，通过引导信号控制生成过程
+    \item \textbf{Score Distillation}：将预训练扩散模型的知识蒸馏到其他数据域，实现跨模态生成
+    \item \textbf{3D 生成}：利用 2D 图像扩散模型的先验知识生成 3D 内容
+\end{enumerate}
+
+\begin{importantbox}{课程设计理念}
+本学期的课程设计注重从基础到应用的渐进式推进：先理解模型的数学本质（概率论、随机微分方程、最优传输），再探讨如何将这些理论工具应用到实际问题中（图像编辑、3D 生成、跨模态迁移）。
+\end{importantbox}
+
+\subsection{未来方向：离散扩散与多模态模型}
+
+课程最后，Minhyuk Sung 教授提出了一个发人深省的问题：
+
+\begin{importantbox}{Autoregressive vs. Diffusion：边界正在模糊}
+传统观点认为：
+\begin{itemize}
+    \item \textbf{自回归模型}（Autoregressive Models）最适合文本等\textbf{离散序列数据}
+    \item \textbf{扩散/Flow 模型}最适合图像、视频等\textbf{高维连续数据}
+\end{itemize}
+
+但这种分界正在被打破：
+\begin{itemize}
+    \item 自回归模型通过图像 tokenization（如 VQ-VAE）也开始生成高质量图像
+    \item 离散扩散模型（Discrete Diffusion）将扩散过程推广到离散数据空间
+    \item GPT-4o、Gemini 等多模态模型可以同时生成文本和图像
+\end{itemize}
+\end{importantbox}
+
+\subsubsection{离散扩散模型}
+
+扩散模型不局限于连续数据，也可以应用于离散数据。离散扩散的前向过程不是添加高斯噪声，而是通过\textbf{离散马尔可夫链}逐步破坏数据（如随机替换 token）。这为将扩散模型应用于文本、代码、分子序列等打开了大门。
+
+\subsubsection{统一的多模态生成}
+
+当前的前沿研究正在探索将文本和图像统一到同一个生成框架中：
+
+\begin{knowledgebox}{多模态统一架构的两种范式}
+\begin{enumerate}
+    \item \textbf{Tokenize Everything}：将图像离散化为 token（通过 VQ-VAE 等），然后与文本 token 一起用自回归模型处理。代表：GPT-4o 系列。
+    \item \textbf{Hybrid Architecture}：文本部分使用自回归解码，图像部分使用扩散/Flow 解码，通过共享的表示空间连接。代表：Transfusion。
+\end{enumerate}
+
+哪种范式会胜出仍是开放问题。
+\end{knowledgebox}
+
+\subsection{对研究者的建议}
+
+Minhyuk Sung 教授在课程结束时给出了几条建议：
+
+\begin{enumerate}
+    \item \textbf{动手实践}：SDS 等技术已有大量开源实现，建议亲自运行代码、观察结果、理解失败模式
+    \item \textbf{不仅关注生成，也关注编辑}：3D 编辑（在已有 3D 内容上进行修改）可能比从零生成更具实用价值
+    \item \textbf{跨领域思考}：SDS 的框架不限于视觉内容，音频、分子、运动等领域都有潜在应用
+    \item \textbf{关注前沿趋势}：自回归与扩散的融合、多模态统一模型等方向值得持续关注
+\end{enumerate}
+
+\subsection{本章小结}
+
+课程系统地覆盖了从 DDPM 到 Flow Matching 的理论发展，以及从推理引导到 Score Distillation 的应用拓展。当前的前沿趋势——离散扩散、自回归图像生成、多模态统一模型——正在打破传统的模型选择边界，预示着更灵活、更强大的生成建模框架。
+
+\newpage
+\section{总结与延伸}
+
+\subsection{本讲核心要点}
+
+\begin{enumerate}
+    \item \textbf{数据鸿沟问题}：图像数据集达数十亿级别，但 3D 模型等其他模态的数据规模小得多。如何利用 2D 先验弥补 3D 数据的不足是核心动机。
+
+    \item \textbf{Neural Rendering 作为桥梁}：可微分渲染函数 $g(\theta, \pi)$ 将 3D 表示映射为 2D 图像，使得 2D 空间的优化信号可以反向传播到 3D 参数。
+
+    \item \textbf{从 CLIP 到扩散模型}：CLIP 提供语义级别的对齐，但细节不足。扩散模型包含更丰富的像素级先验，SDS 提供了利用这些先验的有效方式。
+
+    \item \textbf{SDS 的核心机制}：将预训练扩散模型的噪声预测损失作为渲染质量的度量，通过忽略 U-Net Jacobian 的简化实现高效优化。
+
+    \item \textbf{DreamFusion 的成功与局限}：展示了 SDS 在文本到 3D 生成中的巨大潜力，但 Janus Problem 等问题揭示了 2D 先验的固有局限性。
+
+    \item \textbf{未来趋势}：自回归与扩散模型的边界正在模糊，统一的多模态生成框架是重要方向。
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Poole, B. et al. ``DreamFusion: Text-to-3D using 2D Diffusion.'' \textit{ICLR 2023}. \\
+    ——首次提出 SDS 用于文本到 3D 生成的开创性工作
+
+    \item Wang, Z. et al. ``ProlificDreamer: High-Fidelity and Diverse Text-to-3D Generation with Variational Score Distillation.'' \textit{NeurIPS 2023}. \\
+    ——提出 VSD（Variational Score Distillation），显著改善了 SDS 的过饱和与多样性问题
+
+    \item Mildenhall, B. et al. ``NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis.'' \textit{ECCV 2020}. \\
+    ——Neural Radiance Fields 的原始论文，Neural Rendering 的里程碑
+
+    \item Kerbl, B. et al. ``3D Gaussian Splatting for Real-Time Radiance Field Rendering.'' \textit{SIGGRAPH 2023}. \\
+    ——3D Gaussian Splatting，一种高效的可微分渲染方法
+
+    \item Jain, A. et al. ``DreamFields: Zero-Shot Text-Guided Object Generation with Dream Fields.'' \textit{CVPR 2022}. \\
+    ——CLIP 引导的零样本 3D 生成
+
+    \item Radford, A. et al. ``Learning Transferable Visual Models From Natural Language Supervision.'' \textit{ICML 2021}. \\
+    ——CLIP 模型原始论文
+
+    \item Luo, T. et al. ``Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution.'' \textit{ICML 2024}. \\
+    ——离散扩散模型的代表性工作
+\end{itemize}
+
+%% ==================== 正文结束 ====================
+
+\end{document}

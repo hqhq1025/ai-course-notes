@@ -1,0 +1,710 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D: 生成模型导论 --- GAN 与 VAE}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{65分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=96XoVM7PYtQ}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+% Footer with repo info
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
+}
+\textbf{课程主页}：\href{https://diffusion.kaist.ac.kr/}{https://diffusion.kaist.ac.kr/}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{课程概览与生成模型的核心问题}
+
+本讲是 KAIST CS492D ``Diffusion and Flow Models'' 课程的第一讲。在正式进入 Diffusion Model 和 Flow Model 之前，授课教师 Minhyuk Sung 首先回顾了生成模型（Generative Models）的基础知识，涵盖采样理论、GAN（Generative Adversarial Network）和 VAE（Variational Autoencoder）两大经典范式，以及支撑这些模型的概率统计工具。
+
+\subsection{什么是生成模型？}
+
+生成模型的核心任务可以用一句话概括：\textbf{给定一组数据样本，学习一个模型，使之能够生成新的、看起来与训练数据相似但又不完全相同的样本}。
+
+以图像为例，假设我们有一个包含 58 亿张图像的超大规模数据集（如 LAION-5B），生成模型的目标就是训练一个模型，使其能够产出全新的、逼真的图像——既不是简单地从数据集中复制某张图片，也不是随机噪声，而是分布上与真实图像一致的全新样本。
+
+\begin{importantbox}{生成模型的统计视角}
+从统计学角度看，生成模型的问题可以形式化为：假设所有数据点 $x_1, x_2, \ldots, x_N$ 都是从某个未知的概率分布 $p_{\text{data}}(x)$ 中独立同分布（i.i.d.）采样得到的，我们的目标是学习这个分布，从而能够从 $p_{\text{data}}(x)$ 中采样新的数据点。
+\end{importantbox}
+
+为了帮助理解，授课教师从一个更简单的场景出发：假设我们有一组二维平面上的点，它们形成某种特定的形状（例如两个半月形）。那么问题变为：如何构建一个模型，使其能够生成新的点，使这些新点看起来像是从同一个分布中采样得到的？
+
+\subsection{从简单到复杂：图像作为高维向量}
+
+一张 $256 \times 256$ 的 RGB 图像，可以展平为一个 $256 \times 256 \times 3 = 196{,}608$ 维的向量。因此，一组图像就是高维空间中的一组点，图像生成的问题本质上等价于在这个高维空间中采样。
+
+\begin{knowledgebox}{图像的向量化表示}
+每张 $H \times W$ 的 RGB 图像可以看作 $\mathbb{R}^{H \times W \times 3}$ 空间中的一个点。图像集合就是该高维空间中的点云，它们共同定义了一个数据分布 $p_{\text{data}}(x)$。生成模型的任务就是从这个分布中采样新的点（即新的图像）。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+生成模型的核心思想是将数据建模为某个概率分布的样本，通过学习这个分布来生成新数据。无论是二维点还是高维图像，问题的数学本质是一样的——从未知分布中采样。
+
+\newpage
+\section{采样理论基础}
+
+在讨论如何学习复杂的数据分布之前，授课教师首先回顾了一个基本问题：\textbf{如果我们已经知道了一个概率分布，如何从中采样？}
+
+\subsection{逆变换采样（Inverse Transform Sampling）}
+
+\subsubsection{离散情形：从 Categorical 分布采样}
+
+考虑一个有 $K$ 个状态的 categorical 分布，每个状态 $k$ 有概率 $p_k$，且 $\sum_{k=1}^K p_k = 1$。从这个分布采样的经典方法是\textbf{逆变换采样}：
+
+\begin{enumerate}
+    \item 计算累积分布函数（CDF）：$F(k) = \sum_{i=1}^{k} p_i$
+    \item 从均匀分布 $U \sim \text{Uniform}(0, 1)$ 中采样一个值 $u$
+    \item 找到满足 $F(k-1) < u \leq F(k)$ 的状态 $k$，该状态即为采样结果
+\end{enumerate}
+
+直觉上，概率越高的状态在 CDF 的 $y$ 轴上占据的``区间''越宽，因此均匀采样落入该区间的概率也越大。
+
+\subsubsection{连续情形}
+
+对于连续随机变量 $X$，其概率密度函数为 $f(x)$，CDF 为：
+
+$$F(x) = \int_{-\infty}^{x} f(t) \, dt$$
+
+逆变换采样的步骤为：
+
+\begin{enumerate}
+    \item 采样 $u \sim \text{Uniform}(0, 1)$
+    \item 计算 $x = F^{-1}(u)$
+\end{enumerate}
+
+\begin{importantbox}{逆变换采样的核心公式}
+设 $F$ 为连续分布的 CDF，$F^{-1}$ 为其逆函数，则：
+$$X = F^{-1}(U), \quad U \sim \text{Uniform}(0,1) \implies X \sim F$$
+关键前提：\textbf{必须能够计算 CDF 的逆函数 $F^{-1}$}。
+\end{importantbox}
+
+\subsubsection{课堂练习：从 $f(x) = \frac{3}{8}x^2$ 采样}
+
+授课教师给出了一个小练习：设 PDF 为 $f(x) = \frac{3}{8}x^2$，$x \in {[}-2, 2{]}$，求逆变换采样的采样公式。
+
+解法：
+\begin{enumerate}
+    \item 计算 CDF：$F(x) = \int_{-2}^{x} \frac{3}{8}t^2 \, dt = \frac{1}{8}(x^3 + 8)$
+    \item 令 $u = F(x)$，解出 $x$：$u = \frac{1}{8}(x^3 + 8) \implies x = (8u - 8)^{1/3} = 2(u-1)^{1/3}$
+    \item 不对，更仔细的推导：$x^3 = 8u - 8 \implies x = \sqrt{[}3{]}{8u - 8}$
+\end{enumerate}
+
+因此采样过程为：先采 $u \sim \text{Uniform}(0,1)$，再计算 $x = (8u - 8)^{1/3}$。
+
+\subsection{高斯分布的采样：Box-Muller 变换}
+
+\subsubsection{问题的提出}
+
+标准正态分布 $\mathcal{N}(0, 1)$ 的 PDF 为：
+
+$$f(x) = \frac{1}{\sqrt{2\pi}} e^{-x^2/2}$$
+
+其 CDF $\Phi(x) = \int_{-\infty}^{x} f(t) \, dt$ \textbf{没有解析形式的逆函数}，因此无法直接使用逆变换采样。
+
+\begin{warningbox}{高斯 CDF 不可逆的陷阱}
+虽然高斯分布的 PDF 有优美的解析形式，但其 CDF 的逆函数（即 probit 函数）不存在封闭形式。这意味着不能直接对高斯分布使用最简单的逆变换采样方法。实践中需要借助变量替换等技巧。
+\end{warningbox}
+
+\subsubsection{Box-Muller 变换的推导}
+
+Box-Muller 变换的核心思想是：\textbf{同时考虑两个独立的标准正态样本，通过极坐标变换使得每个分量都可以用逆变换采样}。
+
+设 $X, Y \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, 1)$，其联合密度为：
+
+$$f_{X,Y}(x, y) = \frac{1}{2\pi} e^{-(x^2 + y^2)/2}$$
+
+引入极坐标变量 $D = X^2 + Y^2$（平方半径）和 $\Theta$（角度），可以证明：
+
+\begin{itemize}
+    \item $\Theta \sim \text{Uniform}(0, 2\pi)$（角度均匀分布，直接采样）
+    \item $D \sim \text{Exponential}(1/2)$，即 $f_D(d) = \frac{1}{2}e^{-d/2}$（$\chi^2$ 分布，自由度为 2）
+\end{itemize}
+
+对 $D$ 的分布，CDF 为 $F_D(d) = 1 - e^{-d/2}$，其逆函数为：
+
+$$d = F_D^{-1}(u) = -2\ln(1 - u)$$
+
+由于 $1-u$ 与 $u$ 同为 $\text{Uniform}(0,1)$，可简化为 $d = -2\ln(u)$。
+
+\begin{importantbox}{Box-Muller 变换的完整公式}
+给定两个独立的均匀分布样本 $U_1, U_2 \sim \text{Uniform}(0,1)$：
+$$X = \sqrt{-2\ln U_1} \cdot \cos(2\pi U_2)$$
+$$Y = \sqrt{-2\ln U_1} \cdot \sin(2\pi U_2)$$
+则 $X, Y$ 为两个独立的标准正态分布样本。一次变换可以同时得到两个高斯样本。
+\end{importantbox}
+
+\subsection{多元高斯分布的采样与 Reparameterization}
+
+\subsubsection{各向同性（Isotropic）高斯分布}
+
+对于多元标准正态分布 $\mathcal{N}(\mathbf{0}, \mathbf{I})$，由于各维度独立，可以对每个维度分别用 Box-Muller 变换采样。
+
+\subsubsection{各向异性（Anisotropic）高斯分布}
+
+对于一般的多元高斯分布 $\mathcal{N}(\boldsymbol{\mu}, \boldsymbol{\Sigma})$，采样方法为\textbf{重参数化（Reparameterization）}：
+
+$$\mathbf{x} = \boldsymbol{\mu} + \mathbf{L} \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$$
+
+其中 $\mathbf{L}$ 满足 $\boldsymbol{\Sigma} = \mathbf{L}\mathbf{L}^T$（例如 Cholesky 分解）。
+
+\begin{importantbox}{Reparameterization Trick}
+从 $\mathcal{N}(\boldsymbol{\mu}, \boldsymbol{\Sigma})$ 采样等价于：
+$$\mathbf{x} = \boldsymbol{\mu} + \boldsymbol{\Sigma}^{1/2} \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$$
+这个技巧不仅是采样的基础，更是 VAE 中实现梯度反向传播的关键——它将随机性``分离''到 $\boldsymbol{\epsilon}$ 中，使得采样过程对 $\boldsymbol{\mu}$ 和 $\boldsymbol{\Sigma}$ 可微。
+\end{importantbox}
+
+\begin{knowledgebox}{为什么生成模型偏爱高斯分布？}
+高斯分布在生成模型中无处不在，原因包括：（1）我们知道如何高效采样；（2）高斯分布具有优良的数学性质（如 KL 散度有闭合形式）；（3）中心极限定理保证许多分布渐近趋向高斯；（4）在给定均值和方差的约束下，高斯分布是最大熵分布。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+当概率分布的形式已知时，我们可以通过逆变换采样、变量替换（如 Box-Muller 变换）以及重参数化等技术进行采样。然而，现实中的数据分布（如自然图像的分布）形式未知，且极其复杂——这正是需要深度生成模型的原因。
+
+\newpage
+\section{生成模型的统一框架：从 Latent 到 Data}
+
+\subsection{核心思想：学习分布间的映射}
+
+\begin{importantbox}{所有生成模型的共同思路}
+所有深度生成模型（GAN、VAE、Diffusion Model、Flow Model）共享同一个核心思想：\textbf{学习一个从简单分布（latent distribution）到复杂数据分布（data distribution）的映射}。
+
+具体而言：
+\begin{enumerate}
+    \item 选择一个容易采样的简单分布作为 latent distribution $p(z)$（通常是标准高斯分布 $\mathcal{N}(\mathbf{0}, \mathbf{I})$）
+    \item 用神经网络学习一个映射 $G_\theta: z \mapsto x$
+    \item 生成时：采样 $z \sim p(z)$，计算 $x = G_\theta(z)$
+\end{enumerate}
+不同模型的区别在于\textbf{如何训练这个映射}。
+\end{importantbox}
+
+\subsection{符号约定}
+
+本课程使用以下贯穿始终的符号：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+符号 & 含义 & 说明 \\
+\midrule
+$z$ & latent 变量 & 来自简单分布（通常为 $\mathcal{N}(\mathbf{0}, \mathbf{I})$） \\
+$x$ & 数据点 & 来自训练数据集 \\
+$p(z)$ & latent / prior 分布 & 已知 \\
+$p(x)$ / $p_{\text{data}}(x)$ & 数据分布 & \textbf{未知}，这是我们要逼近的目标 \\
+$p_\theta(x|z)$ & likelihood 分布 & 给定 $z$ 生成 $x$ 的条件分布 \\
+$p(z|x)$ & posterior 分布 & 给定 $x$ 推断 $z$ 的条件分布 \\
+\bottomrule
+\end{tabular}
+\caption{本课程使用的符号约定}
+\end{table}
+
+\subsection{Autoencoder 的启发}
+
+Autoencoder 是理解生成模型的一个起点：
+
+\begin{itemize}
+    \item \textbf{Encoder}：$f_\phi: x \mapsto z$，将数据点压缩到低维 latent 空间
+    \item \textbf{Decoder}：$g_\theta: z \mapsto \hat{x}$，从 latent 表示重建数据
+    \item 训练目标：最小化重建误差 $\|x - g_\theta(f_\phi(x))\|^2$
+\end{itemize}
+
+在生成模型的语境下，\textbf{decoder 就是我们需要的映射}——它将 latent 空间中的点映射到数据空间。但关键问题是：\textbf{如何保证 decoder 能够将 latent distribution 中的任意采样点都映射为合理的数据点？}
+
+\begin{warningbox}{Autoencoder 不等于生成模型}
+普通 Autoencoder 的 latent 空间并不服从某个已知的简单分布。如果我们直接从 latent 空间随机采样一个点 $z$ 并送入 decoder，得到的输出很可能不像真实数据。VAE 正是通过对 latent 空间施加先验约束来解决这个问题。
+\end{warningbox}
+
+\subsection{本章小结}
+
+生成模型的统一范式是：从一个已知的简单分布 $p(z)$ 出发，通过神经网络学习到数据分布 $p_{\text{data}}(x)$ 的映射。GAN、VAE、Diffusion Model 和 Flow Model 的区别仅在于训练策略的不同。Autoencoder 的 decoder 提供了这种映射的雏形，但需要额外的机制来保证 latent 空间的结构化。
+
+\newpage
+\section{GAN：生成对抗网络}
+
+\subsection{从对抗攻击到生成模型}
+
+GAN 的思想起源于对抗攻击（Adversarial Attack）。授课教师通过一个经典例子说明：一个训练好的分类器可以正确识别熊猫，但如果在图像上添加一个人眼几乎不可见的微小扰动（噪声），分类器就会将其误判为鸵鸟——即使将差异放大 10 倍，人眼也很难看出区别。
+
+\begin{knowledgebox}{从对抗攻击到 GAN 的思想飞跃}
+对抗攻击揭示了一个事实：神经网络可以对人眼无法察觉的细微变化极其敏感。GAN 的创始人 Ian Goodfellow 正是受此启发：如果一个网络（攻击者/生成器）可以生成``欺骗''另一个网络（防御者/判别器）的样本，那么通过两者的竞争，生成器最终能学会生成逼真的数据。
+\end{knowledgebox}
+
+\subsection{GAN 的架构}
+
+GAN 由两个神经网络组成：
+
+\begin{itemize}
+    \item \textbf{Generator（生成器）} $G_\theta$：接受 latent 样本 $z \sim p(z)$，输出``假''数据点 $G_\theta(z)$
+    \item \textbf{Discriminator（判别器）} $D_\phi$：接受一个数据点，输出该数据点为``真实数据''的概率 $D_\phi(x) \in {[}0, 1{]}$
+\end{itemize}
+
+生成器和判别器互相竞争：
+\begin{itemize}
+    \item 判别器的目标：正确区分真实数据和生成数据
+    \item 生成器的目标：生成能骗过判别器的样本
+\end{itemize}
+
+\subsection{GAN 的损失函数：Minimax 博弈}
+
+GAN 的训练目标是一个 minimax 优化问题：
+
+$$\min_\theta \max_\phi \; V(G_\theta, D_\phi) = \mathbb{E}_{x \sim p_{\text{data}}} {[}\log D_\phi(x){]} + \mathbb{E}_{z \sim p(z)} {[}\log(1 - D_\phi(G_\theta(z))){]}$$
+
+\begin{importantbox}{GAN 损失函数各项的含义}
+\begin{itemize}
+    \item $\mathbb{E}_{x \sim p_{\text{data}}} {[}\log D_\phi(x){]}$：对真实数据，判别器应输出高概率（接近 1），使 $\log D_\phi(x)$ 尽量大
+    \item $\mathbb{E}_{z \sim p(z)} {[}\log(1 - D_\phi(G_\theta(z))){]}$：对生成数据 $G_\theta(z)$，判别器应输出低概率（接近 0），使 $1 - D_\phi(G_\theta(z))$ 接近 1
+\end{itemize}
+\textbf{判别器}通过\textbf{最大化} $V$ 来提高区分能力；\textbf{生成器}通过\textbf{最小化} $V$ 来提高欺骗能力。
+\end{importantbox}
+
+\subsubsection{判别器的最优解}
+
+固定生成器 $G_\theta$，对判别器求最优解：
+
+$$D^*_\phi(x) = \frac{p_{\text{data}}(x)}{p_{\text{data}}(x) + p_G(x)}$$
+
+其中 $p_G(x)$ 是生成器诱导的分布。当 $p_G = p_{\text{data}}$ 时，$D^*(x) = 1/2$，即判别器无法区分真假——这正是 GAN 训练收敛的理想状态。
+
+\subsubsection{全局最优的 GAN}
+
+可以证明，当 $p_G = p_{\text{data}}$ 时，损失函数达到全局最小值 $-2\log 2$。此时生成器的分布与数据分布完全匹配。
+
+\subsection{GAN 的训练难题}
+
+\begin{warningbox}{GAN 训练中的常见问题}
+Minimax 优化问题在实践中\textbf{极其难以优化}，容易陷入糟糕的局部最优。常见的失败模式包括：
+\begin{itemize}
+    \item \textbf{判别器过强（Discriminator Dominance）}：判别器收敛速度远快于生成器，导致生成器得到的梯度信号极弱（几乎为零），无法有效学习。这是最常见的失败模式。
+    \item \textbf{Mode Collapse（模式坍塌）}：即使训练顺利进行，生成器也可能只学会生成数据分布中的部分模式（modes），丢失了数据的多样性。例如在多模态数据上，生成器可能只集中生成某一个模式的样本。
+    \item \textbf{训练不稳定}：loss 曲线剧烈震荡，难以判断是否收敛。
+\end{itemize}
+\end{warningbox}
+
+授课教师提到了一个生动的类比：如果你一开始就设定了极其严格的成功标准（discriminator 太强），那就什么也学不到了——这就像生活中的道理一样。
+
+\subsubsection{GAN 训练的工程实践}
+
+在实践中，GAN 训练需要大量的工程技巧：
+
+\begin{itemize}
+    \item 通常先预训练生成器几步，让它能产出略有意义的输出，再引入判别器进行对抗训练
+    \item 需要仔细平衡两个网络的学习率和训练步数比例
+    \item 许多公司在 2020 年之前投入了大量专门的工程团队来调试 GAN 训练参数
+\end{itemize}
+
+\subsection{GAN 的发展历程}
+
+GAN 自 2013/2014 年由 Goodfellow 等人提出后，涌现了大量变体。授课教师简要提到了几个里程碑式的工作：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+模型 & 年份 & 主要贡献 \\
+\midrule
+GAN & 2014 & 提出对抗训练框架 \\
+DCGAN & 2015 & 引入卷积架构 \\
+WGAN & 2017 & 用 Wasserstein 距离替代 JS 散度 \\
+Progressive GAN & 2017 & 渐进式增长训练策略 \\
+StyleGAN / StyleGAN2 & 2019/2020 & 高质量人脸生成 \\
+\bottomrule
+\end{tabular}
+\caption{GAN 的重要变体（部分）}
+\end{table}
+
+\begin{knowledgebox}{为什么从 GAN 转向 Diffusion Model？}
+授课教师指出，业界从 GAN 转向 Diffusion/Flow Model 的主要原因并非质量——StyleGAN 在 2019 年已经能生成非常逼真的人脸图像。真正的驱动力是：（1）\textbf{训练困难}——minimax 优化极不稳定，需要大量工程投入；（2）\textbf{多样性不足}——mode collapse 问题导致生成样本缺乏多样性。Diffusion Model 通过将生成过程分解为多步去噪，巧妙地规避了这两个问题。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+GAN 通过生成器和判别器的对抗博弈来学习数据分布，其理论框架优美（minimax 博弈在理想情况下能精确匹配数据分布），但实践中面临训练不稳定、mode collapse 等严重问题。这些问题促使了 VAE 和后来的 Diffusion Model 等替代方案的发展。
+
+\newpage
+\section{VAE：变分自编码器}
+
+\subsection{从 GAN 到 VAE 的动机}
+
+GAN 的核心困难在于 minimax 优化。VAE 的思路是：\textbf{能否不用对抗训练，而是通过更稳定的方式学习从 latent distribution 到 data distribution 的映射？}
+
+VAE 的关键创新在于：不再学习一个确定性的映射函数 $G_\theta(z)$，而是学习一个\textbf{条件概率分布} $p_\theta(x|z)$，即给定 latent 变量 $z$ 后，数据 $x$ 的分布。
+
+\subsection{VAE 的概率框架}
+
+\subsubsection{生成过程（Generative Process）}
+
+VAE 定义了以下生成过程：
+
+\begin{enumerate}
+    \item 从先验分布采样：$z \sim p(z) = \mathcal{N}(\mathbf{0}, \mathbf{I})$
+    \item 从 likelihood 分布采样：$x \sim p_\theta(x|z) = \mathcal{N}(\mu_\theta(z), \sigma^2 \mathbf{I})$
+\end{enumerate}
+
+其中 $\mu_\theta(z)$ 是 decoder 神经网络的输出（给定 $z$ 预测 $x$ 的均值），$\sigma^2$ 是固定的方差超参数。
+
+\begin{importantbox}{VAE 的概率生成模型}
+$$p_\theta(x, z) = p_\theta(x|z) \cdot p(z)$$
+其中：
+\begin{itemize}
+    \item $p(z) = \mathcal{N}(\mathbf{0}, \mathbf{I})$：先验分布（prior），已知
+    \item $p_\theta(x|z) = \mathcal{N}(\mu_\theta(z), \sigma^2 \mathbf{I})$：似然分布（likelihood），由 decoder 参数化
+    \item $p_\theta(x) = \int p_\theta(x|z) p(z) \, dz$：边际似然（marginal likelihood），对 $z$ 积分得到
+\end{itemize}
+\end{importantbox}
+
+\subsubsection{训练目标：最大化边际似然}
+
+理想情况下，我们希望最大化数据的边际对数似然：
+
+$$\max_\theta \; \mathbb{E}_{x \sim p_{\text{data}}} [\log p_\theta(x)] = \max_\theta \; \mathbb{E}_{x \sim p_{\text{data}}} \left[\log \int p_\theta(x|z) p(z) \, dz \right]$$
+
+\begin{warningbox}{边际似然不可计算}
+积分 $p_\theta(x) = \int p_\theta(x|z) p(z) \, dz$ 在高维空间中\textbf{无法精确计算}。直觉上：latent 空间的维度可能是数百维，对所有可能的 $z$ 做积分是不现实的。这就是为什么我们需要变分推断（Variational Inference）。
+\end{warningbox}
+
+\subsection{概率论回顾：VAE 所需的数学工具}
+
+\subsubsection{边际化（Marginalization）}
+
+给定联合分布 $p(x, z)$，通过对一个变量积分（或求和），可以得到另一个变量的边际分布：
+
+$$p(x) = \int p(x, z) \, dz = \int p(x|z) p(z) \, dz$$
+
+\subsubsection{贝叶斯定理（Bayes' Rule）}
+
+$$p(z|x) = \frac{p(x|z) p(z)}{p(x)}$$
+
+各项的术语约定：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+符号 & 名称 \\
+\midrule
+$p(z)$ & Prior（先验）：关于 $z$ 的先验知识 \\
+$p(x|z)$ & Likelihood（似然）：给定 $z$，观测到 $x$ 的可能性 \\
+$p(z|x)$ & Posterior（后验）：观测到 $x$ 后，关于 $z$ 的更新信念 \\
+$p(x)$ & Evidence / Marginal Likelihood（证据）：数据的边际概率 \\
+\bottomrule
+\end{tabular}
+\caption{贝叶斯定理中各项的术语}
+\end{table}
+
+\subsubsection{KL 散度（Kullback-Leibler Divergence）}
+
+KL 散度衡量两个概率分布之间的``距离''（注意：它不是对称的，因此不是严格意义上的距离度量）：
+
+$$D_{\mathrm{KL}}(p \| q) = \mathbb{E}_{x \sim p} \left[\log \frac{p(x)}{q(x)}\right] = \int p(x) \log \frac{p(x)}{q(x)} \, dx$$
+
+\begin{importantbox}{KL 散度的关键性质}
+\begin{itemize}
+    \item \textbf{非负性}：$D_{\mathrm{KL}}(p \| q) \geq 0$，当且仅当 $p = q$ 几乎处处相等时取等
+    \item \textbf{非对称性}：一般 $D_{\mathrm{KL}}(p \| q) \neq D_{\mathrm{KL}}(q \| p)$
+    \item \textbf{两个高斯分布之间的 KL 散度有封闭形式}
+\end{itemize}
+\end{importantbox}
+
+\begin{knowledgebox}{两个多元高斯分布的 KL 散度}
+设 $p = \mathcal{N}(\boldsymbol{\mu}_1, \boldsymbol{\Sigma}_1)$，$q = \mathcal{N}(\boldsymbol{\mu}_2, \boldsymbol{\Sigma}_2)$，则：
+$$D_{\mathrm{KL}}(p \| q) = \frac{1}{2}\left[\log\frac{|\boldsymbol{\Sigma}_2|}{|\boldsymbol{\Sigma}_1|} - d + \mathrm{tr}(\boldsymbol{\Sigma}_2^{-1}\boldsymbol{\Sigma}_1) + (\boldsymbol{\mu}_2 - \boldsymbol{\mu}_1)^T \boldsymbol{\Sigma}_2^{-1} (\boldsymbol{\mu}_2 - \boldsymbol{\mu}_1)\right]$$
+其中 $d$ 是维度。特别地，当 $q = \mathcal{N}(\mathbf{0}, \mathbf{I})$ 时：
+$$D_{\mathrm{KL}}(\mathcal{N}(\boldsymbol{\mu}, \boldsymbol{\Sigma}) \| \mathcal{N}(\mathbf{0}, \mathbf{I})) = \frac{1}{2}\left[-\log|\boldsymbol{\Sigma}| - d + \mathrm{tr}(\boldsymbol{\Sigma}) + \boldsymbol{\mu}^T\boldsymbol{\mu}\right]$$
+这个公式在 VAE 训练中直接使用。
+\end{knowledgebox}
+
+\subsection{Jensen 不等式与 ELBO 的推导}
+
+\subsubsection{凸函数与 Jensen 不等式}
+
+\textbf{凸函数（Convex Function）}的定义：对任意点 $x_1, \ldots, x_n$ 和权重 $t_1, \ldots, t_n$（$t_i \geq 0$, $\sum t_i = 1$），满足：
+
+$$f\left(\sum_i t_i x_i\right) \leq \sum_i t_i f(x_i)$$
+
+直觉上，凸函数的图形``向下弯曲''，任意两点之间的线段都在函数图形之上。
+
+\textbf{凹函数（Concave Function）}是凸函数的相反：函数图形``向上弯曲''，$-f$ 为凸函数。$\log$ 函数是一个重要的凹函数。
+
+\begin{importantbox}{Jensen 不等式}
+设 $f$ 为凸函数，$X$ 为随机变量，则：
+$$f(\mathbb{E}{[}X{]}) \leq \mathbb{E}{[}f(X){]}$$
+若 $f$ 为凹函数（如 $\log$），不等式方向反转：
+$$f(\mathbb{E}{[}X{]}) \geq \mathbb{E}{[}f(X){]}$$
+即 $\log(\mathbb{E}{[}X{]}) \geq \mathbb{E}{[}\log X{]}$。
+\end{importantbox}
+
+\subsubsection{ELBO 的推导}
+
+ELBO（Evidence Lower Bound）是 VAE 训练的核心目标。以下是完整推导过程。
+
+\textbf{出发点}：我们想最大化边际对数似然 $\log p_\theta(x)$，但它不可直接计算。引入一个近似后验分布 $q_\phi(z|x)$（encoder），我们有：
+
+\begin{align}
+\log p_\theta(x) &= \log \int p_\theta(x, z) \, dz \nonumber \\
+&= \log \int \frac{p_\theta(x, z)}{q_\phi(z|x)} q_\phi(z|x) \, dz \nonumber \\
+&= \log \mathbb{E}_{z \sim q_\phi(z|x)} \left[\frac{p_\theta(x, z)}{q_\phi(z|x)}\right] \nonumber \\
+&\geq \mathbb{E}_{z \sim q_\phi(z|x)} \left[\log \frac{p_\theta(x, z)}{q_\phi(z|x)}\right] \quad \text{(Jensen 不等式，$\log$ 为凹函数)}
+\end{align}
+
+最后一行就是 ELBO：
+
+$$\text{ELBO}(\theta, \phi; x) = \mathbb{E}_{z \sim q_\phi(z|x)} \left[\log \frac{p_\theta(x, z)}{q_\phi(z|x)}\right]$$
+
+\begin{importantbox}{ELBO 的分解}
+将 $p_\theta(x, z) = p_\theta(x|z)p(z)$ 代入，ELBO 可以分解为两项：
+\begin{align}
+\text{ELBO} &= \mathbb{E}_{z \sim q_\phi(z|x)} \left[\log p_\theta(x|z)\right] - D_{\mathrm{KL}}(q_\phi(z|x) \| p(z)) \nonumber
+\end{align}
+\begin{itemize}
+    \item \textbf{重建项}（Reconstruction Term）：$\mathbb{E}_{z \sim q_\phi(z|x)} {[}\log p_\theta(x|z){]}$ ——衡量 decoder 从 $z$ 重建 $x$ 的能力。当 $p_\theta(x|z) = \mathcal{N}(\mu_\theta(z), \sigma^2 I)$ 时，这一项等价于负的均方误差（MSE）。
+    \item \textbf{正则项}（Regularization / KL Term）：$-D_{\mathrm{KL}}(q_\phi(z|x) \| p(z))$ ——鼓励 encoder 的输出分布接近先验 $p(z) = \mathcal{N}(\mathbf{0}, \mathbf{I})$，从而使 latent 空间结构化。
+\end{itemize}
+\end{importantbox}
+
+\subsubsection{ELBO 与边际似然的关系}
+
+实际上，可以更精确地写出：
+
+$$\log p_\theta(x) = \text{ELBO}(\theta, \phi; x) + D_{\mathrm{KL}}(q_\phi(z|x) \| p_\theta(z|x))$$
+
+\begin{warningbox}{ELBO 是下界而非等式}
+由于 $D_{\mathrm{KL}}(q_\phi(z|x) \| p_\theta(z|x)) \geq 0$，ELBO 始终小于等于真实的边际对数似然 $\log p_\theta(x)$。差距（gap）等于近似后验 $q_\phi(z|x)$ 与真实后验 $p_\theta(z|x)$ 之间的 KL 散度。当 $q_\phi(z|x) = p_\theta(z|x)$ 时（近似后验恰好等于真实后验），ELBO 等于 $\log p_\theta(x)$，gap 为零。
+\end{warningbox}
+
+\subsection{VAE 的网络架构}
+
+在实现层面，VAE 包括：
+
+\begin{itemize}
+    \item \textbf{Encoder 网络} $q_\phi(z|x)$：输入 $x$，输出 $\mu_\phi(x)$ 和 $\sigma_\phi(x)$（latent 分布的均值和标准差）
+    \item \textbf{Decoder 网络} $p_\theta(x|z)$：输入 $z$，输出 $\mu_\theta(z)$（重建 $x$ 的均值）
+    \item \textbf{采样过程}：通过 reparameterization trick 采样 $z = \mu_\phi(x) + \sigma_\phi(x) \odot \epsilon$，$\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$
+\end{itemize}
+
+\begin{knowledgebox}{Reparameterization Trick 在 VAE 中的关键作用}
+直接从 $q_\phi(z|x) = \mathcal{N}(\mu_\phi(x), \sigma^2_\phi(x) \mathbf{I})$ 采样 $z$ 的操作不可微分，无法通过反向传播优化 $\phi$。Reparameterization trick 将采样写为 $z = \mu_\phi(x) + \sigma_\phi(x) \odot \epsilon$（其中 $\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ 与参数无关），使得梯度可以流过 $\mu_\phi$ 和 $\sigma_\phi$，实现端到端训练。
+\end{knowledgebox}
+
+\subsection{VAE 的损失函数}
+
+综合以上推导，VAE 的训练目标是最大化 ELBO，等价于最小化以下损失函数：
+
+$$\mathcal{L}_{\text{VAE}}(\theta, \phi; x) = -\text{ELBO} = -\mathbb{E}_{z \sim q_\phi(z|x)}{[}\log p_\theta(x|z){]} + D_{\mathrm{KL}}(q_\phi(z|x) \| p(z))$$
+
+当 $p_\theta(x|z) = \mathcal{N}(\mu_\theta(z), \sigma^2 \mathbf{I})$ 且 $p(z) = \mathcal{N}(\mathbf{0}, \mathbf{I})$ 时：
+
+$$\mathcal{L}_{\text{VAE}} = \frac{1}{2\sigma^2}\|x - \mu_\theta(z)\|^2 + D_{\mathrm{KL}}(\mathcal{N}(\mu_\phi(x), \text{diag}(\sigma^2_\phi(x))) \| \mathcal{N}(\mathbf{0}, \mathbf{I}))$$
+
+\begin{importantbox}{VAE 损失函数的直觉}
+VAE 的损失由两部分组成：
+\begin{enumerate}
+    \item \textbf{重建误差}（MSE）：迫使模型准确重建输入数据
+    \item \textbf{KL 惩罚}：迫使 latent 分布接近标准高斯，使 latent 空间平滑、连续、可采样
+\end{enumerate}
+两项之间存在张力：重建误差希望 latent 编码尽可能保留信息（可能导致各数据点的 latent 分布互不重叠），KL 项则迫使所有 latent 分布向标准高斯靠拢（可能导致信息丢失）。找到好的平衡点是 VAE 调参的核心。
+\end{importantbox}
+
+\subsection{VAE 与 Diffusion Model 的联系}
+
+授课教师在讲解 VAE 时多次预示：\textbf{VAE 的思想与 Diffusion Model 直接相关}。具体而言：
+
+\begin{itemize}
+    \item Diffusion Model 可以理解为一种``层次化''的 VAE，其 latent 变量是一系列逐步加噪的中间状态
+    \item ELBO 的推导方法可以直接推广到 Diffusion Model
+    \item VAE 中的 reparameterization trick 在 Diffusion Model 中同样不可或缺
+\end{itemize}
+
+\subsection{本章小结}
+
+VAE 通过变分推断规避了 GAN 的 minimax 优化难题。它引入 encoder（近似后验）和 decoder（likelihood），通过最大化 ELBO（边际对数似然的下界）来训练。ELBO 自然分解为重建项和 KL 正则项，两者的平衡决定了生成质量和 latent 空间的结构化程度。VAE 的训练比 GAN 稳定得多，且其概率框架为后续的 Diffusion Model 奠定了理论基础。
+
+\newpage
+\section{概率论工具箱}
+
+本节汇总本讲涉及的关键概率论概念和公式，供快速查阅。
+
+\subsection{边际化（Marginalization）}
+
+$$p(x) = \int p(x, z) \, dz = \int p(x|z) p(z) \, dz$$
+
+在离散情形下，积分替换为求和：$p(x) = \sum_z p(x, z)$
+
+\subsection{条件概率与贝叶斯定理}
+
+$$p(z|x) = \frac{p(x|z) p(z)}{p(x)} = \frac{p(x|z) p(z)}{\int p(x|z') p(z') \, dz'}$$
+
+\subsection{期望（Expectation）}
+
+$$\mathbb{E}_{x \sim p}{[}f(x){]} = \int f(x) p(x) \, dx$$
+
+对于离散随机变量：$\mathbb{E}{[}X{]} = \sum_i x_i p(x_i)$
+
+\subsection{KL 散度}
+
+$$D_{\mathrm{KL}}(p \| q) = \int p(x) \log \frac{p(x)}{q(x)} \, dx \geq 0$$
+
+等号成立当且仅当 $p = q$（几乎处处）。
+
+\subsection{Jensen 不等式}
+
+对凸函数 $f$：$f(\mathbb{E}{[}X{]}) \leq \mathbb{E}{[}f(X){]}$
+
+对凹函数 $f$（如 $\log$）：$f(\mathbb{E}{[}X{]}) \geq \mathbb{E}{[}f(X){]}$
+
+\subsection{本章小结}
+
+边际化、贝叶斯定理、KL 散度和 Jensen 不等式是理解 VAE 和 Diffusion Model 的数学基础。特别是 Jensen 不等式直接导出了 ELBO，而 KL 散度同时出现在 ELBO 的分解和 VAE 的正则项中。
+
+\newpage
+\section{总结与延伸}
+
+\subsection{本讲核心要点}
+
+本讲是 KAIST CS492D 课程的导论，系统性地建立了生成模型的理论框架：
+
+\begin{enumerate}
+    \item \textbf{生成模型的核心问题}：给定数据样本，学习底层数据分布 $p_{\text{data}}(x)$，从而生成新样本
+    \item \textbf{统一框架}：所有深度生成模型都在学习从简单分布 $p(z)$ 到数据分布 $p_{\text{data}}(x)$ 的映射
+    \item \textbf{GAN}：通过生成器-判别器的对抗博弈（minimax 优化）学习映射。理论优美但训练极不稳定
+    \item \textbf{VAE}：通过变分推断学习条件分布 $p_\theta(x|z)$，最大化 ELBO。训练稳定，为 Diffusion Model 奠定基础
+    \item \textbf{数学工具}：逆变换采样、Box-Muller 变换、reparameterization trick、边际化、贝叶斯定理、KL 散度、Jensen 不等式
+\end{enumerate}
+
+\subsection{GAN vs. VAE 对比}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+特性 & GAN & VAE \\
+\midrule
+训练方式 & Minimax 对抗训练 & 最大化 ELBO \\
+训练稳定性 & 不稳定，容易失败 & 相对稳定 \\
+生成质量 & 高（尤其是图像清晰度） & 中等（倾向模糊） \\
+多样性 & 容易 mode collapse & 较好 \\
+理论基础 & 博弈论 & 变分推断 \\
+是否有 encoder & 无（仅 generator + discriminator） & 有（encoder + decoder） \\
+latent 空间结构 & 无显式约束 & 有 KL 正则化约束 \\
+与 Diffusion 关系 & 弱 & 强（ELBO 框架直接推广） \\
+\bottomrule
+\end{tabular}
+\caption{GAN 与 VAE 的系统对比}
+\end{table}
+
+\subsection{展望：Diffusion Model 与 Flow Model}
+
+本讲为后续课程内容铺垫了所有必要的理论基础。在接下来的讲次中，课程将深入探讨：
+
+\begin{itemize}
+    \item \textbf{Diffusion Model}：可以理解为一种``多步 VAE''，通过逐步加噪和去噪来建模数据分布。ELBO 的推导可以直接推广到 diffusion 设定下
+    \item \textbf{Flow Model}：通过可逆变换直接建模精确的对数似然（不需要 ELBO 这样的下界近似）
+    \item \textbf{Score-based Model}：从另一个角度——学习数据分布的 score function（对数密度的梯度）——来实现生成
+\end{itemize}
+
+本讲的采样理论（逆变换采样、reparameterization trick）、概率框架（prior / likelihood / posterior）以及 ELBO 推导将在后续每一讲中反复出现和深化。
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Goodfellow et al., \textit{Generative Adversarial Nets}, NeurIPS 2014
+    \item Kingma \& Welling, \textit{Auto-Encoding Variational Bayes}, ICLR 2014
+    \item Kingma \& Welling, \textit{An Introduction to Variational Autoencoders}, Foundations and Trends in ML, 2019
+    \item Doersch, \textit{Tutorial on Variational Autoencoders}, arXiv:1606.05908
+    \item KAIST CS492D 课程主页：\url{https://diffusion.kaist.ac.kr/}
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

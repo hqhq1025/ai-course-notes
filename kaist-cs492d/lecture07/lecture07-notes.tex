@@ -1,0 +1,693 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D: 连续时间扩散模型}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{55分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=by_flhcQJj4}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：从离散到连续}
+
+在前几讲中，我们已经学习了扩散模型（Diffusion Models）的基础内容，包括 DDPM（Denoising Diffusion Probabilistic Models）的前向过程、反向过程，以及 DDIM（Denoising Diffusion Implicit Models）将随机生成过程转化为确定性过程以减少采样步数的方法。这些基础知识已经足够在许多应用场景中构建和训练自己的扩散模型。
+
+本讲的核心目标是从一个全新的视角——\textbf{连续时间域}——重新理解扩散模型。我们将看到：
+
+\begin{itemize}
+    \item 离散时间的 DDPM 和 SMLD（Score Matching with Langevin Dynamics）都可以被统一到一个连续时间的 SDE（Stochastic Differential Equation，随机微分方程）框架中；
+    \item 给定前向 SDE，可以直接推导出反向 SDE；
+    \item 存在一个与 SDE 等价的 ODE（Ordinary Differential Equation，常微分方程）形式，称为 Probability Flow ODE；
+    \item 这一连续框架为我们提供了更多设计扩散模型的自由度和理论工具。
+\end{itemize}
+
+\begin{knowledgebox}{课程背景}
+本讲基于 Song et al.（2021）的经典论文 ``Score-Based Generative Modeling through Stochastic Differential Equations'' 展开。该论文统一了 SMLD（NCSN）和 DDPM 两种范式，提出了通用的 SDE 框架。这是理解现代扩散模型理论的关键文献。
+\end{knowledgebox}
+
+\begin{importantbox}{核心观点}
+之前我们在\textbf{离散时间}下定义扩散模型的前向和反向过程。本讲的关键转变是：当离散时间步数 $N \to \infty$ 时，整个前向加噪过程可以用一个 SDE 来描述，而反向去噪过程同样对应一个反向 SDE。这种连续时间视角不仅统一了 SMLD 和 DDPM，还为设计新型扩散模型和高效采样器提供了理论基础。
+\end{importantbox}
+
+
+\section{随机微分方程（SDE）基础}
+
+\subsection{SDE 的一般形式}
+
+在连续时间域中，扩散模型的前向过程可以表示为如下 SDE：
+
+$$
+\mathrm{d}\mathbf{x} = f(\mathbf{x}, t)\,\mathrm{d}t + g(t)\,\mathrm{d}\mathbf{w}
+$$
+
+其中各符号含义如下：
+
+\begin{itemize}
+    \item $\mathbf{x}$ —— 数据变量（如图像），是关于时间 $t$ 的随机过程；
+    \item $f(\mathbf{x}, t)$ —— \textbf{漂移系数}（drift coefficient），决定了 $\mathbf{x}_t$ 的均值随时间的演化方向；
+    \item $g(t)$ —— \textbf{扩散系数}（diffusion coefficient），控制注入随机性的强度；
+    \item $\mathbf{w}$ —— \textbf{标准 Wiener 过程}（维纳过程），又称布朗运动（Brownian motion）；
+    \item $\mathrm{d}\mathbf{w}$ —— Wiener 过程的微小增量。
+\end{itemize}
+
+\begin{importantbox}{漂移与扩散的直觉}
+\textbf{漂移项} $f(\mathbf{x}, t)\,\mathrm{d}t$ 可以理解为一个确定性的"力"，它将每个数据点沿某个方向移动（例如向原点收缩）。\textbf{扩散项} $g(t)\,\mathrm{d}\mathbf{w}$ 则注入随机噪声，使得 $\mathbf{x}_t$ 的轨迹变得锯齿状（jagged）。两者结合，就产生了从数据分布到噪声分布的连续映射。
+\end{importantbox}
+
+\subsection{Wiener 过程（布朗运动）}
+
+Wiener 过程 $\mathbf{w}(t)$ 是 SDE 中随机性的来源，它具有以下四个特征性质：
+
+\begin{enumerate}
+    \item \textbf{初始条件}：$\mathbf{w}(0) = 0$（几乎必然，即 $P(\mathbf{w}(0)=0) = 1$）；
+    \item \textbf{增量的正态性}：对任意 $0 \le s < t$，增量 $\mathbf{w}(t) - \mathbf{w}(s) \sim \mathcal{N}(0, (t-s)\mathbf{I})$；
+    \item \textbf{独立增量}：不重叠时间区间上的增量相互独立；
+    \item \textbf{路径连续性}：$\mathbf{w}(t)$ 关于 $t$ 几乎必然连续。
+\end{enumerate}
+
+\begin{knowledgebox}{Wiener 过程本身就是一个 SDE}
+如果令 $f = 0$、$g = 1$，则 SDE 退化为 $\mathrm{d}\mathbf{x} = \mathrm{d}\mathbf{w}$，其解就是 Wiener 过程本身。因此，布朗运动可以看作最简单的 SDE——没有漂移，只有纯粹的随机扩散。
+\end{knowledgebox}
+
+\subsection{Taylor 展开与近似}
+
+在将离散前向过程转化为连续 SDE 时，Taylor 展开是核心数学工具。给定光滑函数 $f$，其一阶近似为：
+
+$$
+f(t + \Delta t) \approx f(t) + f'(t) \cdot \Delta t
+$$
+
+例如，对于 $f(\epsilon) = \sqrt{1 - \epsilon}$，当 $\epsilon$ 很小时：
+
+$$
+\sqrt{1 - \epsilon} \approx 1 - \frac{\epsilon}{2}
+$$
+
+这一近似在推导 VP-SDE 的 $f(t)$ 和 $g(t)$ 时被反复使用。当时间步长 $\Delta t \to 0$，高阶项消失，从而得到精确的微分方程形式。
+
+\begin{warningbox}{连续近似的前提}
+从离散到连续的转化依赖于时间步长足够小（$\Delta t \to 0$），噪声调度函数（如 $\beta_t$）足够光滑的假设。对于实际实现中的有限步数离散化，连续 SDE 只是一个近似——步数越多，近似越精确。这也解释了为什么增加离散步数通常能改善生成质量。
+\end{warningbox}
+
+\subsection{本章小结}
+
+SDE 通过漂移项和扩散项描述了数据在连续时间下的随机演化。Wiener 过程为其提供了标准的随机驱动。通过 Taylor 展开，我们可以从离散 Markov 链的转移概率出发，推导出对应的连续 SDE。
+
+
+\section{VE-SDE：方差爆炸型 SDE}
+
+\subsection{从 SMLD 到 VE-SDE}
+
+SMLD（Score Matching with Langevin Dynamics，也称为 NCSN）定义的前向转移分布为：
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) = \mathcal{N}\!\left(\mathbf{x}_t;\, \mathbf{x}_{t-1},\, (\sigma_t^2 - \sigma_{t-1}^2)\mathbf{I}\right)
+$$
+
+对应的跳跃分布（从 $\mathbf{x}_0$ 直接到 $\mathbf{x}_t$）为：
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\!\left(\mathbf{x}_t;\, \mathbf{x}_0,\, \sigma_t^2 \mathbf{I}\right)
+$$
+
+\begin{importantbox}{SMLD 的核心思想}
+SMLD 的前向过程本质上是\textbf{逐步增大高斯噪声的方差}，而不移动数据点的均值。即每个数据点 $\mathbf{x}_0$ 被"模糊化"：随着时间推进，以 $\mathbf{x}_0$ 为中心的高斯分布逐渐变宽，直到整个数据分布近似为一个大方差的高斯分布。在反向过程中，score function $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$ 指引我们从模糊回到清晰。
+\end{importantbox}
+
+\subsection{VE-SDE 的推导}
+
+将离散 Markov 链改写为连续形式。当时间步数 $N \to \infty$，时间间隔 $\Delta t \to 0$ 时，转移概率变为：
+
+$$
+\mathbf{x}_{t+\Delta t} = \mathbf{x}_t + \sqrt{\sigma^2(t+\Delta t) - \sigma^2(t)} \cdot \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})
+$$
+
+利用 Taylor 展开 $\sigma^2(t+\Delta t) \approx \sigma^2(t) + \frac{\mathrm{d}[\sigma^2(t)]}{\mathrm{d}t}\Delta t$，取极限得到：
+
+$$
+\mathrm{d}\mathbf{x} = \sqrt{\frac{\mathrm{d}[\sigma^2(t)]}{\mathrm{d}t}}\;\mathrm{d}\mathbf{w}
+$$
+
+这就是 \textbf{VE-SDE}（Variance Exploding SDE）。对应的系数为：
+
+\begin{itemize}
+    \item \textbf{漂移系数}：$f(\mathbf{x}, t) = 0$（没有确定性漂移）
+    \item \textbf{扩散系数}：$g(t) = \sqrt{\dfrac{\mathrm{d}[\sigma^2(t)]}{\mathrm{d}t}}$
+\end{itemize}
+
+\begin{knowledgebox}{为什么叫"方差爆炸"}
+在 VE-SDE 中，由于漂移项为零，均值始终保持不变（$\mathbb{E}[\mathbf{x}_t \mid \mathbf{x}_0] = \mathbf{x}_0$），而方差 $\sigma^2(t)$ 随时间单调递增且无上界（如果不做截断的话）。因此称为 Variance Exploding——方差"爆炸"式增长。对应的物理图像是：每个数据点"原地不动"，但周围的高斯噪声云越来越大。
+\end{knowledgebox}
+
+\subsection{VE-SDE 中的 $\alpha_t$ 和 $\sigma_t$}
+
+在 Variational Diffusion Models 的统一框架下，VE-SDE 对应：
+
+$$
+\alpha_t = 1, \qquad \sigma_t = \sigma(t)
+$$
+
+其中 $\sigma(t)$ 即为 SMLD 中定义的噪声标度函数。信噪比（SNR）为：
+
+$$
+\mathrm{SNR}(t) = \frac{\alpha_t^2}{\sigma_t^2} = \frac{1}{\sigma^2(t)}
+$$
+
+由于 $\sigma(t)$ 单调递增，SNR 单调递减，满足 Variational Diffusion Models 的条件。
+
+\subsection{本章小结}
+
+VE-SDE 是 SMLD 在连续时间域的自然推广：没有漂移、只有扩散，方差随时间持续增大。它对应 Annealed Langevin Dynamics 中逐渐增加噪声方差的过程。
+
+
+\section{VP-SDE：方差保持型 SDE}
+
+\subsection{从 DDPM 到 VP-SDE}
+
+DDPM 的前向转移分布定义为：
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) = \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\, \beta_t \mathbf{I}\right)
+$$
+
+对应的跳跃分布为：
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\, (1 - \bar{\alpha}_t)\mathbf{I}\right)
+$$
+
+其中 $\bar{\alpha}_t = \prod_{s=1}^{t}(1-\beta_s)$。
+
+\begin{warningbox}{DDPM 与 SMLD 的关键区别}
+SMLD 只增加方差（均值不变），而 DDPM 同时\textbf{缩小均值}并增加方差——$\sqrt{1-\beta_t}$ 因子使得均值逐步衰减向零。这意味着 DDPM 中数据点同时在"被拉向原点"和"被噪声扰动"，最终收敛到标准高斯分布 $\mathcal{N}(0, \mathbf{I})$。
+\end{warningbox}
+
+\subsection{VP-SDE 的推导}
+
+定义连续时间的 $\beta(t)$（通过 $\beta_t^{\text{discrete}} = \beta(t) \cdot \Delta t$ 关联），则 DDPM 的离散 Markov 链变为：
+
+$$
+\mathbf{x}_{t+\Delta t} = \sqrt{1 - \beta(t)\Delta t}\;\mathbf{x}_t + \sqrt{\beta(t)\Delta t}\;\boldsymbol{\epsilon}
+$$
+
+利用一阶 Taylor 近似 $\sqrt{1 - \beta(t)\Delta t} \approx 1 - \frac{1}{2}\beta(t)\Delta t$，取极限 $\Delta t \to 0$：
+
+$$
+\mathrm{d}\mathbf{x} = -\frac{1}{2}\beta(t)\,\mathbf{x}\,\mathrm{d}t + \sqrt{\beta(t)}\,\mathrm{d}\mathbf{w}
+$$
+
+这就是 \textbf{VP-SDE}（Variance Preserving SDE）。对应的系数为：
+
+\begin{itemize}
+    \item \textbf{漂移系数}：$f(\mathbf{x}, t) = -\frac{1}{2}\beta(t)\,\mathbf{x}$（线性漂移，将 $\mathbf{x}$ 拉向原点）
+    \item \textbf{扩散系数}：$g(t) = \sqrt{\beta(t)}$
+\end{itemize}
+
+\begin{importantbox}{VP-SDE 的名称由来}
+如果初始数据的协方差为单位阵 $\mathbf{I}$（即 $\mathrm{Cov}(\mathbf{x}_0) = \mathbf{I}$），那么在 VP-SDE 下，对于所有中间时刻 $t$，协方差始终保持为 $\mathbf{I}$：
+
+$$
+\mathrm{Cov}(\mathbf{x}_t) = \mathbf{I}, \quad \forall\, t
+$$
+
+这就是"方差保持"（Variance Preserving）的含义。漂移项中的 $-\frac{1}{2}\beta(t)\mathbf{x}$ 恰好与扩散项注入的方差相抵消，使得总方差不变。
+\end{importantbox}
+
+\subsection{VP-SDE 中的 $\alpha_t$ 和 $\sigma_t$}
+
+在 Variational Diffusion Models 框架下，VP-SDE 对应：
+
+$$
+\alpha_t = e^{-\frac{1}{2}\int_0^t \beta(s)\,\mathrm{d}s}, \qquad \sigma_t^2 = 1 - \alpha_t^2 = 1 - e^{-\int_0^t \beta(s)\,\mathrm{d}s}
+$$
+
+\begin{knowledgebox}{离散 $\bar{\alpha}_t$ 与连续 $\alpha_t$ 的关系}
+在离散 DDPM 中，$\bar{\alpha}_t = \prod_{s=1}^t (1-\beta_s)$，这是一个乘积形式。在连续极限下，它变为指数形式 $\alpha_t = e^{-\frac{1}{2}\int_0^t \beta(s)\,\mathrm{d}s}$。这两者是等价的近似：利用 $\ln(1-x) \approx -x$（当 $x$ 很小时），$\prod(1-\beta_s) \approx e^{-\sum \beta_s} \approx e^{-\int \beta(s)\,\mathrm{d}s}$。但注意乘积中的指数为 $-\sum \beta_s$，而连续版本的指数含有 $\frac{1}{2}$ 因子，两者的差异源于 $\sqrt{1-\beta}$ 和 $1-\frac{\beta}{2}$ 近似的细节。
+\end{knowledgebox}
+
+\subsection{SNR 的单调递减性}
+
+VP-SDE 的信噪比为：
+
+$$
+\mathrm{SNR}(t) = \frac{\alpha_t^2}{\sigma_t^2} = \frac{e^{-\int_0^t \beta(s)\,\mathrm{d}s}}{1 - e^{-\int_0^t \beta(s)\,\mathrm{d}s}}
+$$
+
+由于 $\beta(t) > 0$，积分 $\int_0^t \beta(s)\,\mathrm{d}s$ 关于 $t$ 严格递增，因此分子单调递减、分母单调递增，SNR 单调递减。这验证了 DDPM 是 Variational Diffusion Models 的一个特例。
+
+\begin{warningbox}{$\beta(t)$ 必须为正}
+在 DDPM 和 VP-SDE 中，$\beta(t) > 0$ 是一个基本约束。如果 $\beta(t)$ 在某个时刻为负，SNR 可能不再单调递减，前向过程就不再是一个有效的"加噪"过程。在实际实现中，$\beta_t$ 通常被定义为一个线性或余弦调度，确保始终为正。
+\end{warningbox}
+
+\subsection{本章小结}
+
+VP-SDE 是 DDPM 在连续时间域的推广：漂移项将数据拉向原点，扩散项注入噪声，两者精心平衡使得方差保持不变。与 VE-SDE 不同的是，VP-SDE 有非零漂移。
+
+
+\section{反向 SDE 与生成过程}
+
+\subsection{Anderson 定理：反向 SDE}
+
+给定前向 SDE
+
+$$
+\mathrm{d}\mathbf{x} = f(\mathbf{x}, t)\,\mathrm{d}t + g(t)\,\mathrm{d}\mathbf{w}
+$$
+
+Anderson（1982）证明了对应的反向时间 SDE 为：
+
+$$
+\mathrm{d}\mathbf{x} = \left[f(\mathbf{x}, t) - g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right]\mathrm{d}t + g(t)\,\mathrm{d}\bar{\mathbf{w}}
+$$
+
+其中 $\bar{\mathbf{w}}$ 是反向时间的 Wiener 过程，$\mathrm{d}t$ 在此为\textbf{负}的时间增量（时间从 $T$ 走回 $0$）。
+
+\begin{importantbox}{反向 SDE 的结构}
+反向 SDE 与前向 SDE 有着惊人的相似结构：
+\begin{itemize}
+    \item 扩散系数 $g(t)$ \textbf{完全相同}；
+    \item 漂移项在原有 $f(\mathbf{x}, t)$ 基础上\textbf{额外减去} $g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$。
+\end{itemize}
+唯一需要额外知道的就是 \textbf{score function} $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$——这正是扩散模型通过神经网络学习的目标。
+\end{importantbox}
+
+\subsection{Score Function 的角色}
+
+回顾离散 DDPM 中的做法：
+\begin{enumerate}
+    \item 定义前向过程（加噪）；
+    \item 训练噪声预测网络 $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$；
+    \item 通过 $\nabla_{\mathbf{x}} \log p_t(\mathbf{x}_t) = -\frac{\boldsymbol{\epsilon}}{\sigma_t}$ 的关系获得 score；
+    \item 利用 score 执行反向去噪过程。
+\end{enumerate}
+
+在连续时间框架下，逻辑完全一致：
+\begin{enumerate}
+    \item 定义前向 SDE（漂移 + 扩散）；
+    \item 训练 score 网络 $\mathbf{s}_\theta(\mathbf{x}, t) \approx \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$；
+    \item 将 $\mathbf{s}_\theta$ 代入反向 SDE，即可执行生成。
+\end{enumerate}
+
+\begin{knowledgebox}{Score 与噪声预测的等价性}
+对于跳跃分布 $q(\mathbf{x}_t | \mathbf{x}_0) = \mathcal{N}(\alpha_t \mathbf{x}_0, \sigma_t^2 \mathbf{I})$，score function 可以表示为：
+$$
+\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t | \mathbf{x}_0) = -\frac{\mathbf{x}_t - \alpha_t \mathbf{x}_0}{\sigma_t^2} = -\frac{\boldsymbol{\epsilon}}{\sigma_t}
+$$
+其中 $\boldsymbol{\epsilon}$ 是加噪时采样的标准高斯噪声。因此，预测 score 等价于预测噪声（除以 $\sigma_t$ 的差别）。这就是为什么 DDPM 的"噪声预测"训练目标和 Score Matching 的训练目标本质上是一回事。
+\end{knowledgebox}
+
+\subsection{反向过程的离散化实现}
+
+虽然反向 SDE 是连续的，实际计算中需要离散化。给定反向 SDE，我们将时间 $[0, T]$ 划分为 $N$ 个步骤，在每一步中：
+
+$$
+\mathbf{x}_{t-\Delta t} \approx \mathbf{x}_t + \left[f(\mathbf{x}_t, t) - g(t)^2 \mathbf{s}_\theta(\mathbf{x}_t, t)\right](-\Delta t) + g(t)\sqrt{\Delta t}\;\boldsymbol{\epsilon}
+$$
+
+这与 DDPM 的离散反向过程完全一致：每一步使用 score（或噪声预测）修正均值，再添加适当的随机噪声。
+
+\begin{warningbox}{离散化步数与生成质量}
+SDE 的离散化本质上是 Euler-Maruyama 方法。步数越多，近似越精确，生成质量越好——但计算成本也越高。DDPM 需要约 1000 步才能获得良好质量，而 DDIM（对应确定性 ODE 的离散化）只需约 50 步。后续讲座将介绍更高效的 SDE/ODE solver（如 DPM-Solver），可以将步数进一步减少到 10--15 步。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Anderson 定理保证了：给定任意前向 SDE，反向 SDE 自动确定——唯一需要学习的就是 score function。离散化反向 SDE 后，我们恢复了经典扩散模型的采样算法。
+
+
+\section{Variational Diffusion Models：统一框架}
+
+\subsection{一般形式}
+
+Variational Diffusion Models 定义了一个通用的扩散模型家族。跳跃分布的一般形式为：
+
+$$
+q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\!\left(\mathbf{x}_t;\, \alpha_t \mathbf{x}_0,\, \sigma_t^2 \mathbf{I}\right)
+$$
+
+其中 $\alpha_t$ 和 $\sigma_t$ 是关于时间 $t$ 的可微函数，满足：
+
+\begin{enumerate}
+    \item $\alpha_0 = 1$，$\sigma_0 = 0$（初始时刻为原始数据）；
+    \item $\alpha_T \approx 0$，$\sigma_T \approx 1$（终止时刻近似标准高斯）；
+    \item \textbf{信噪比 SNR$(t) = \alpha_t^2/\sigma_t^2$ 关于 $t$ 单调递减}。
+\end{enumerate}
+
+\begin{importantbox}{SNR 单调递减的含义}
+SNR 单调递减意味着：随着前向过程的推进，信号成分（$\alpha_t \mathbf{x}_0$）相对于噪声成分（$\sigma_t \boldsymbol{\epsilon}$）持续减弱。这是扩散模型"加噪"的本质——信息逐渐被噪声淹没，最终数据分布退化为纯噪声分布。
+\end{importantbox}
+
+\subsection{SMLD 和 DDPM 作为特例}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{模型} & $\alpha_t$ & $\sigma_t$ & \textbf{SDE 类型} \\
+\midrule
+SMLD / NCSN & $1$ & $\sigma(t)$ & VE-SDE \\
+DDPM & $e^{-\frac{1}{2}\int_0^t \beta(s)\,\mathrm{d}s}$ & $\sqrt{1 - e^{-\int_0^t \beta(s)\,\mathrm{d}s}}$ & VP-SDE \\
+\bottomrule
+\end{tabular}
+\caption{SMLD 和 DDPM 在 Variational Diffusion Models 框架下的参数}
+\end{table}
+
+\begin{knowledgebox}{设计空间的开放性}
+VE-SDE 和 VP-SDE 只是两个具体例子。任何满足 SNR 单调递减条件的 $(\alpha_t, \sigma_t)$ 对都定义了一个合法的扩散模型。这为研究者提供了巨大的设计空间——可以通过选择不同的噪声调度来优化生成质量、采样速度或其他指标。例如，EDM（Elucidating the Design Space of Diffusion-Based Generative Models, Karras et al. 2022）就系统性地探索了这一设计空间。
+\end{knowledgebox}
+
+\subsection{从 SDE 到跳跃分布}
+
+给定前向 SDE 的 $f(\mathbf{x}, t)$ 和 $g(t)$，可以推导出对应的 $\alpha_t$ 和 $\sigma_t$：
+
+$$
+\alpha_t = e^{\int_0^t f(s)\,\mathrm{d}s}, \qquad \sigma_t^2 = \alpha_t^2 \int_0^t \frac{g^2(s)}{\alpha_s^2}\,\mathrm{d}s
+$$
+
+反过来，给定 $\alpha_t$ 和 $\sigma_t$，也可以反推出 $f(t)$ 和 $g(t)$：
+
+$$
+f(t) = \frac{\mathrm{d} \ln \alpha_t}{\mathrm{d}t}, \qquad g^2(t) = \frac{\mathrm{d}\sigma_t^2}{\mathrm{d}t} - 2\frac{\mathrm{d}\ln \alpha_t}{\mathrm{d}t}\sigma_t^2
+$$
+
+这种双向转化意味着\textbf{三种等价描述}——转移分布、跳跃分布、SDE——可以自由互换。
+
+\begin{warningbox}{符号混淆警告}
+不同论文使用不同的符号约定。例如，Song et al. 的 $\sigma$ 指 VE-SDE 中的噪声调度（即 SMLD 的 $\sigma_i$），而 Variational Diffusion Models 中的 $\sigma_t$ 是跳跃分布的标准差。在同一个推导中可能同时出现两种 $\sigma$，需要根据上下文区分。Minhyuk Sung 教授在授课时也特别提醒了这一点。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Variational Diffusion Models 通过 $(\alpha_t, \sigma_t)$ 参数化提供了一个通用框架，SMLD 和 DDPM 是其特例。三种描述（转移分布、跳跃分布、SDE）之间存在精确的双向对应关系。
+
+
+\section{VE-SDE 与 VP-SDE 的对比分析}
+
+\subsection{两种 SDE 的核心差异}
+
+在深入学习 Probability Flow ODE 之前，让我们系统对比 VE-SDE 和 VP-SDE 的差异，这有助于理解不同扩散模型的设计取舍。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{特性} & \textbf{VE-SDE (SMLD)} & \textbf{VP-SDE (DDPM)} \\
+\midrule
+漂移项 $f(\mathbf{x},t)$ & $0$ & $-\frac{1}{2}\beta(t)\mathbf{x}$ \\
+扩散系数 $g(t)$ & $\sqrt{\mathrm{d}[\sigma^2]/\mathrm{d}t}$ & $\sqrt{\beta(t)}$ \\
+均值衰减 & 无 ($\alpha_t = 1$) & 有 ($\alpha_t < 1$) \\
+方差行为 & 单调递增 (exploding) & 保持恒定 (preserving) \\
+终态分布 & $\mathcal{N}(0, \sigma_T^2 \mathbf{I})$ & $\mathcal{N}(0, \mathbf{I})$ \\
+SNR 衰减方式 & $1/\sigma^2(t)$ & $\alpha_t^2/(1-\alpha_t^2)$ \\
+\bottomrule
+\end{tabular}
+\caption{VE-SDE 与 VP-SDE 的系统对比}
+\end{table}
+
+\begin{knowledgebox}{物理直觉}
+\textbf{VE-SDE} 的物理图像是：每个数据点"原地不动"，但周围弥漫的噪声雾越来越浓厚，方差不断增大直到完全淹没数据结构。\textbf{VP-SDE} 的物理图像则是一个 Ornstein-Uhlenbeck 过程：数据点同时被一个弹性力拉向原点（均值衰减），并受到随机扰动（噪声注入），两者平衡使得总方差保持不变。
+\end{knowledgebox}
+
+\subsection{实验性能对比}
+
+Song et al. (2021) 的实验表明，在 CIFAR-10 数据集上：
+\begin{itemize}
+    \item 使用 1000 步 DDPM 采样时，FID（Frechet Inception Distance，越低越好）约为 3--4；
+    \item 使用 DDIM 只需约 50 步就能达到类似 FID；
+    \item 使用改进的 SDE solver（如基于 Predictor-Corrector 方法），10--15 步即可达到较好质量。
+\end{itemize}
+
+\begin{warningbox}{FID 并非唯一指标}
+FID 同时衡量生成质量和多样性，但不能完全反映人类对图像质量的感知。在实际应用中，还需要考虑生成速度、模式覆盖率（diversity）、以及下游任务的表现。VE-SDE 和 VP-SDE 在不同设置下各有优劣。
+\end{warningbox}
+
+\subsection{本章小结}
+
+VE-SDE 和 VP-SDE 代表了两种不同的加噪策略：前者纯扩散无漂移，后者漂移与扩散平衡。理解它们的差异有助于在实际应用中做出合理的设计选择。
+
+
+\section{Probability Flow ODE}
+
+\subsection{从 SDE 到 ODE}
+
+前向 SDE 描述了一个随机过程，其轨迹是锯齿状的（因为 Wiener 过程的路径虽然连续但处处不可微）。一个自然的问题是：
+
+\textit{是否存在一个确定性 ODE，使得它产生的边际分布 $p_t(\mathbf{x})$ 与 SDE 完全相同？}
+
+\begin{importantbox}{Probability Flow ODE}
+给定前向 SDE：
+$$
+\mathrm{d}\mathbf{x} = f(\mathbf{x}, t)\,\mathrm{d}t + g(t)\,\mathrm{d}\mathbf{w}
+$$
+存在唯一的 ODE（称为 \textbf{Probability Flow ODE}）：
+$$
+\mathrm{d}\mathbf{x} = \left[f(\mathbf{x}, t) - \frac{1}{2}g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right]\mathrm{d}t
+$$
+使得该 ODE 的轨迹集合在每个时刻 $t$ 的边际分布与 SDE 的边际分布 $p_t(\mathbf{x})$ 一致。
+\end{importantbox}
+
+注意 Probability Flow ODE 与反向 SDE 的关系：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+& \textbf{漂移项修正} & \textbf{随机项} \\
+\midrule
+反向 SDE & $f - g^2 \nabla_{\mathbf{x}} \log p_t$ & $g(t)\,\mathrm{d}\bar{\mathbf{w}}$ \\
+Probability Flow ODE & $f - \frac{1}{2} g^2 \nabla_{\mathbf{x}} \log p_t$ & 无 \\
+\bottomrule
+\end{tabular}
+\caption{反向 SDE 与 Probability Flow ODE 的对比}
+\end{table}
+
+ODE 形式中 score 的系数从 $g^2$ 变为 $\frac{1}{2}g^2$，同时\textbf{去掉了 Wiener 过程项}。
+
+\subsection{ODE 的优势}
+
+Probability Flow ODE 带来了多项实际优势：
+
+\begin{enumerate}
+    \item \textbf{确定性采样}：给定初始噪声 $\mathbf{x}_T$，ODE 的解是确定的——同一个噪声总是生成同一张图像。这与 DDIM 的效果一致（事实上 DDIM 可以看作 Probability Flow ODE 的一种离散化）。
+    \item \textbf{更少的采样步数}：确定性 ODE 的轨迹平滑，允许使用更大的步长和更高阶的数值求解器（如 Runge-Kutta 方法），从而显著减少采样步数。
+    \item \textbf{精确的似然计算}：利用 instantaneous change of variables 公式，可以通过 ODE 精确计算数据的对数似然 $\log p(\mathbf{x}_0)$。
+    \item \textbf{语义插值}：由于 ODE 建立了数据空间和噪声空间之间的双射（bijection），可以在潜空间中插值来获得语义上有意义的中间结果。
+\end{enumerate}
+
+\begin{knowledgebox}{DDIM 与 Probability Flow ODE 的联系}
+DDIM 可以被理解为 VP-SDE 对应 Probability Flow ODE 的一种特殊离散化方案。这解释了 DDIM 的两个核心特性：（1）采样过程是确定性的（没有随机项），（2）可以使用远少于训练时的步数（如 50 步代替 1000 步）进行高质量生成。
+\end{knowledgebox}
+
+\subsection{ODE 轨迹 vs SDE 轨迹}
+
+\begin{itemize}
+    \item \textbf{SDE 轨迹}：锯齿状、随机，同一起点出发的不同轨迹到达不同终点。边际分布通过对所有可能轨迹取平均得到。
+    \item \textbf{ODE 轨迹}：光滑、确定性，每个起点唯一对应一个终点。边际分布由轨迹簇的整体变形（probability flow）给出。
+\end{itemize}
+
+两者的边际分布 $p_t(\mathbf{x})$ 在每个时刻 $t$ 完全一致，但\textbf{单条轨迹}是不同的。
+
+\begin{warningbox}{Probability Flow ODE 仍然需要 Score}
+尽管 ODE 去掉了随机项，但 score function $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$ 仍然出现在漂移项中。因此，训练过程不变——无论最终使用 SDE sampler 还是 ODE sampler 进行采样，模型训练都是学习 score function（或等价地，学习噪声预测）。
+\end{warningbox}
+
+\subsection{与 Neural ODE 和 Normalizing Flows 的联系}
+
+Probability Flow ODE 揭示了扩散模型与 Neural ODE（Chen et al., 2018）以及 Continuous Normalizing Flows（CNF）之间的深层联系。
+
+\begin{knowledgebox}{Continuous Normalizing Flows}
+CNF 通过一个由神经网络参数化的向量场 $v_\theta(\mathbf{x}, t)$ 定义 ODE $\mathrm{d}\mathbf{x}/\mathrm{d}t = v_\theta(\mathbf{x}, t)$，将简单分布（如高斯）映射到复杂数据分布。Probability Flow ODE 正是这种形式——其向量场为 $f(\mathbf{x}, t) - \frac{1}{2}g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$，其中 score 部分由神经网络近似。
+
+关键区别在于：CNF 直接训练向量场，而扩散模型先通过 score matching 训练 score 网络，然后利用 Probability Flow ODE 进行采样。后者的训练更加稳定，因为 score matching 有明确的去噪目标。
+\end{knowledgebox}
+
+\begin{importantbox}{Instantaneous Change of Variables}
+对于由 ODE $\mathrm{d}\mathbf{x}/\mathrm{d}t = \mathbf{v}(\mathbf{x}, t)$ 生成的流，对数密度的演化满足：
+$$
+\frac{\mathrm{d}\log p_t(\mathbf{x}_t)}{\mathrm{d}t} = -\mathrm{tr}\left(\frac{\partial \mathbf{v}}{\partial \mathbf{x}}\right)
+$$
+将 Probability Flow ODE 的向量场代入此公式，就可以精确计算数据的对数似然 $\log p_0(\mathbf{x}_0)$。这是扩散模型相比 GAN 的重要优势之一——GAN 无法提供精确的似然值。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Probability Flow ODE 是 SDE 的确定性"镜像"：它保留了相同的边际分布，但轨迹光滑、无随机性。这为确定性采样、高效求解和精确似然计算打开了大门，也建立了扩散模型与 Neural ODE / Continuous Normalizing Flows 之间的深层联系。
+
+
+\section{连续时间 Score Matching}
+
+\subsection{训练目标}
+
+在连续时间框架下，score matching 的训练目标可以统一写为：
+
+$$
+\mathcal{L} = \mathbb{E}_{t \sim \mathcal{U}(0,T)}\;\mathbb{E}_{\mathbf{x}_0 \sim p_{\text{data}}}\;\mathbb{E}_{\mathbf{x}_t \sim q(\mathbf{x}_t|\mathbf{x}_0)}\left[\lambda(t)\left\|\mathbf{s}_\theta(\mathbf{x}_t, t) - \nabla_{\mathbf{x}_t}\log q(\mathbf{x}_t|\mathbf{x}_0)\right\|^2\right]
+$$
+
+其中：
+\begin{itemize}
+    \item $t$ 从 $[0, T]$ 上均匀采样（连续时间）；
+    \item $\lambda(t)$ 是时间依赖的加权函数；
+    \item 条件 score $\nabla_{\mathbf{x}_t}\log q(\mathbf{x}_t|\mathbf{x}_0) = -\frac{\mathbf{x}_t - \alpha_t \mathbf{x}_0}{\sigma_t^2}$ 是已知的解析形式。
+\end{itemize}
+
+\begin{importantbox}{离散 vs 连续训练}
+在离散 DDPM 中，时间步 $t$ 从 $\{1, 2, \ldots, T\}$ 中均匀采样。在连续框架中，$t$ 从连续区间 $[0, T]$ 上采样。实际训练时，两者几乎没有区别——只需将离散的时间索引替换为连续的时间值即可。网络 $\mathbf{s}_\theta(\mathbf{x}, t)$ 接受连续的 $t$ 作为输入（通常通过正弦位置编码处理）。
+\end{importantbox}
+
+\subsection{加权函数 $\lambda(t)$ 的选择}
+
+不同的 $\lambda(t)$ 选择对应不同的训练策略：
+
+\begin{itemize}
+    \item $\lambda(t) = g(t)^2$：对应 SDE 的似然加权，与变分下界（VLB）最优化相关；
+    \item $\lambda(t) = \sigma_t^2$：最常见的选择，等价于噪声预测目标 $\|\boldsymbol{\epsilon}_\theta - \boldsymbol{\epsilon}\|^2$；
+    \item $\lambda(t) = 1$：直接匹配 score，在低噪声时刻（小 $t$）可能不稳定。
+\end{itemize}
+
+\begin{knowledgebox}{从 Score Matching 到噪声预测}
+利用 $\nabla_{\mathbf{x}_t}\log q(\mathbf{x}_t|\mathbf{x}_0) = -\boldsymbol{\epsilon}/\sigma_t$ 和 $\mathbf{s}_\theta = -\boldsymbol{\epsilon}_\theta / \sigma_t$，score matching loss 可以改写为：
+$$
+\left\|\mathbf{s}_\theta - \nabla_{\mathbf{x}_t}\log q\right\|^2 = \frac{1}{\sigma_t^2}\left\|\boldsymbol{\epsilon}_\theta - \boldsymbol{\epsilon}\right\|^2
+$$
+因此，选择 $\lambda(t) = \sigma_t^2$ 就恰好消除了 $1/\sigma_t^2$ 因子，得到简洁的噪声预测 MSE 损失——这正是 DDPM 原始论文中使用的简化目标。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+连续时间框架下的 score matching 训练目标与离散 DDPM 的训练实质相同，只是时间变量从离散变为连续。加权函数 $\lambda(t)$ 的选择影响训练动态，但最常用的噪声预测目标在两种视角下完全一致。
+
+
+\section{总结与延伸}
+
+\subsection{本讲核心要点}
+
+\begin{enumerate}
+    \item \textbf{SDE 统一框架}：离散的 DDPM 和 SMLD 都可以自然地推广到连续时间 SDE。前向过程由漂移系数 $f$ 和扩散系数 $g$ 完全确定。
+
+    \item \textbf{VE-SDE 与 VP-SDE}：
+    \begin{itemize}
+        \item VE-SDE（对应 SMLD）：$f = 0$，$g = \sqrt{\mathrm{d}[\sigma^2]/\mathrm{d}t}$，方差单调递增；
+        \item VP-SDE（对应 DDPM）：$f = -\frac{1}{2}\beta(t)\mathbf{x}$，$g = \sqrt{\beta(t)}$，方差保持恒定。
+    \end{itemize}
+
+    \item \textbf{反向 SDE}：由 Anderson 定理直接给出，只需额外知道 score function。训练一个 score 网络后，前向和反向过程就完全确定了。
+
+    \item \textbf{Variational Diffusion Models}：通过 $(\alpha_t, \sigma_t)$ 参数化，在 SNR 单调递减的条件下，定义了一个无限的扩散模型家族。VE-SDE 和 VP-SDE 只是其中两个实例。
+
+    \item \textbf{Probability Flow ODE}：每个 SDE 都有一个对应的 ODE，产生相同的边际分布但具有确定性轨迹。这为高效采样和精确似然计算提供了工具。
+\end{enumerate}
+
+\begin{importantbox}{连续时间视角的价值}
+连续时间 SDE 框架的价值不仅在于"统一"已有方法。更重要的是，它为我们提供了设计新型扩散模型的系统性方法论——只需定义 $f$ 和 $g$（或等价地，$\alpha_t$ 和 $\sigma_t$），剩下的（反向过程、ODE、训练目标）都自动确定。这种"plug and play"的灵活性催生了大量后续工作。
+\end{importantbox}
+
+\subsection{后续方向}
+
+本讲建立的连续时间框架是后续多个重要主题的理论基础：
+
+\begin{itemize}
+    \item \textbf{高效采样器}：基于 Probability Flow ODE 的高阶数值求解器（DPM-Solver, DEIS 等），可以在 10--15 步内生成高质量样本；
+    \item \textbf{Flow Matching / Rectified Flow}：一种更简洁的连续时间生成模型训练方法，可以看作对 Probability Flow ODE 的直接参数化；
+    \item \textbf{Consistency Models}：通过强制 ODE 轨迹上不同时刻的映射一致，实现单步生成；
+    \item \textbf{精确似然评估}：利用 ODE 和 Hutchinson trace estimator 计算对数似然。
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Song, Y., et al. (2021). ``Score-Based Generative Modeling through Stochastic Differential Equations.'' \textit{ICLR 2021.} ——本讲的核心参考文献。
+    \item Anderson, B. D. O. (1982). ``Reverse-time diffusion equation models.'' \textit{Stochastic Processes and their Applications.} ——反向 SDE 的经典理论。
+    \item Kingma, D. P., et al. (2021). ``Variational Diffusion Models.'' \textit{NeurIPS 2021.} ——Variational Diffusion Models 框架的提出。
+    \item Karras, T., et al. (2022). ``Elucidating the Design Space of Diffusion-Based Generative Models.'' \textit{NeurIPS 2022.} ——系统性探索连续时间扩散模型设计空间的重要工作。
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

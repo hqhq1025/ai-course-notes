@@ -1,0 +1,571 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 4: Score-Based Models}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{57分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=AG4qcza52yo}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{DDPM 回顾}
+
+本节课的主题是 Score-Based Models（基于分数的模型），但在展开新内容之前，讲者首先回顾了上节课介绍的 DDPM（Denoising Diffusion Probabilistic Models）的核心思想，为后续理解 score function 与扩散模型之间的深层联系打下基础。
+
+\subsection{扩散模型的基本框架}
+
+扩散模型的基本思路是将数据的生成过程定义为一个\textbf{序列化的过程}（sequential process）。与传统的 VAE 等模型只有单一隐变量不同，扩散模型将数据点 $x_0$ 逐步映射到一系列隐变量 $x_1, x_2, \ldots, x_T$，使得最终的隐变量 $x_T$ 服从一个已知的分布（通常是标准高斯分布）。生成过程则是这个前向过程的逆过程：从标准高斯样本 $x_T$ 出发，逐步还原到数据点 $x_0$。
+
+\begin{importantbox}{扩散模型的两个关键特征}
+\begin{enumerate}
+    \item \textbf{马尔可夫性}：前向过程中 $x_t$ 的采样仅依赖于 $x_{t-1}$，逆向过程中 $x_{t-1}$ 的采样仅依赖于 $x_t$。
+    \item \textbf{高斯前向转移}：前向转移分布被定义为特定形式的高斯分布，由参数 $\beta_t$ 控制：
+    $$q(x_t \mid x_{t-1}) = \mathcal{N}(x_t; \sqrt{1-\beta_t}\, x_{t-1},\; \beta_t I)$$
+\end{enumerate}
+\end{importantbox}
+
+\subsection{前向跳跃分布与训练}
+
+由于前向转移分布是带有线性均值的高斯分布，我们可以推导出\textbf{前向跳跃分布}（forward jump distribution）的解析形式，即直接从 $x_0$ 采样任意中间时刻 $x_t$ 的分布：
+
+$$q(x_t \mid x_0) = \mathcal{N}(x_t;\; \sqrt{\bar{\alpha}_t}\, x_0,\; (1-\bar{\alpha}_t) I)$$
+
+其中 $\bar{\alpha}_t = \prod_{s=1}^{t}(1-\beta_s)$。这意味着在训练时我们不需要逐步运行前向过程，可以直接``跳跃''采样 $x_t$。
+
+\begin{knowledgebox}{前向跳跃 vs. 逆向跳跃}
+在前向过程中，由于转移分布的均值是条件变量的线性函数，多步高斯分布的复合仍然是高斯分布，因此可以得到闭式的跳跃分布。但在逆向过程中，由于逆向转移分布的均值是神经网络输出的\textbf{非线性}函数，多步迭代的复合分布\textbf{不再是高斯}分布，因此逆向过程不能跳过中间步骤，必须逐步迭代采样。
+\end{knowledgebox}
+
+\subsection{三种预测目标}
+
+DDPM 框架中，训练神经网络有三种等价的预测目标：
+
+\begin{enumerate}
+    \item \textbf{均值预测器}（Mean Predictor）：直接预测逆向转移分布的均值 $\mu_\theta(x_t, t)$。
+    \item \textbf{干净样本预测器}（Clean Sample Predictor / $x_0$-prediction）：预测给定 $x_t$ 时原始数据点 $x_0$ 的期望值 $\hat{x}_\theta(x_t, t) \approx \mathbb{E}[x_0 \mid x_t]$。
+    \item \textbf{噪声预测器}（Noise Predictor / $\epsilon$-prediction）：预测从 $x_0$ 采样 $x_t$ 时使用的标准高斯噪声 $\epsilon_\theta(x_t, t) \approx \mathbb{E}[\epsilon_t \mid x_t]$。
+\end{enumerate}
+
+\begin{knowledgebox}{三种预测器之间的等价关系}
+已知 $x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1-\bar{\alpha}_t}\, \epsilon_t$，其中 $\epsilon_t \sim \mathcal{N}(0, I)$，则从任一预测器的输出都可以计算出其他两个的值，三者只是参数化方式不同。最终的训练损失在去掉时间步权重后都可以简化为形如 $\|f_\theta(x_t, t) - f_{\text{target}}\|^2$ 的简单 L2 损失。
+\end{knowledgebox}
+
+无论选择哪种预测目标，DDPM 的训练过程都是：采样 $x_0 \sim p_{\text{data}}$，采样 $t \sim \text{Uniform}(1,T)$，采样 $\epsilon \sim \mathcal{N}(0,I)$，计算 $x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1-\bar{\alpha}_t}\, \epsilon$，然后最小化对应的 L2 损失。
+
+\subsection{生成模型的必要性}
+
+讲者提出了一个发人深省的问题：如果我们已经拥有50亿张图片的数据集，为什么还需要生成模型？为什么不直接从中采样一张？
+
+\begin{importantbox}{生成模型相比直接检索的优势}
+\begin{enumerate}
+    \item \textbf{压缩}：一个预训练的扩散模型可能只有数百 MB，却编码了数十亿张图片中的分布信息，压缩比极高。
+    \item \textbf{新颖性与多样性}：生成模型能产生全新的、数据集中不存在的图片，而非简单复制。
+    \item \textbf{隐私保护}：生成模型有可能（虽然无法完全保证）不直接输出训练数据中的原始图片，在一定程度上保护数据隐私。
+    \item \textbf{条件生成}：生成模型可以根据输入条件（如文本描述）生成与条件对齐的新数据，这是简单检索难以做到的。
+\end{enumerate}
+\end{importantbox}
+
+\begin{warningbox}{隐私保护并非绝对}
+讲者明确指出，扩散模型\textbf{不能保证}不生成训练数据中的原始图片。实际上已有研究表明，某些预训练模型确实会生成几乎可在互联网上搜索到的图片。因此，隐私保护只是``潜力''，而非``保证''。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DDPM 通过定义高斯马尔可夫前向过程和可学习的逆向过程，将复杂的数据分布建模问题转化为简单的去噪任务。前向跳跃分布的闭式解使训练高效，三种等价的预测目标为实现提供了灵活性。但噪声预测器（$\epsilon$-prediction）的\textbf{物理含义}是什么？这正是本节课 Score-Based Models 要回答的核心问题。
+
+\section{Score Function 的定义与性质}
+
+\subsection{Score Function 的定义}
+
+Score function（分数函数）在统计学中有精确的定义，它是概率密度函数对数的梯度：
+
+\begin{importantbox}{Score Function 的定义}
+给定概率密度函数 $p(x)$，其 score function 定义为：
+$$s(x) = \nabla_x \log p(x)$$
+其中 $\nabla_x$ 表示关于数据点 $x$ 的梯度（而非关于模型参数的梯度）。
+\end{importantbox}
+
+需要特别注意的是，这里的``score''不是通常意义上的``分数''，而是一个在统计学中有特定含义的术语。Score function 是一个向量场——对于每一个数据空间中的点 $x$，它给出一个与 $x$ 同维度的向量，指向使对数概率增大最快的方向。
+
+\begin{knowledgebox}{Score Function 的直观理解}
+Score function $\nabla_x \log p(x)$ 可以理解为一个``指导方向''：
+\begin{itemize}
+    \item 在高概率密度区域附近，score 的大小较小（因为已接近``山顶''）。
+    \item 在低概率密度区域，score 指向高概率密度区域的方向。
+    \item score 为零的点对应概率密度的极值点。
+\end{itemize}
+直观地说，score function 告诉我们``应该往哪个方向走，才能到达概率更高的地方''。
+\end{knowledgebox}
+
+\subsection{高斯分布的 Score Function}
+
+为了建立直觉，我们来计算高斯分布的 score function。对于条件分布（即前向跳跃分布）：
+
+$$q(x_t \mid x_0) = \mathcal{N}(x_t;\; \sqrt{\bar{\alpha}_t}\, x_0,\; (1-\bar{\alpha}_t) I)$$
+
+其 score function 为：
+
+$$\nabla_{x_t} \log q(x_t \mid x_0) = -\frac{x_t - \sqrt{\bar{\alpha}_t}\, x_0}{1-\bar{\alpha}_t}$$
+
+这个推导很直接：先写出高斯分布的概率密度函数，取对数后只保留与 $x_t$ 相关的项（即二次型项），然后对 $x_t$ 求梯度即可。
+
+\begin{importantbox}{噪声预测与 Score Function 的关系}
+回顾 $x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1-\bar{\alpha}_t}\, \epsilon_t$，可以得到：
+$$\epsilon_t = \frac{x_t - \sqrt{\bar{\alpha}_t}\, x_0}{\sqrt{1-\bar{\alpha}_t}}$$
+因此：
+$$\nabla_{x_t} \log q(x_t \mid x_0) = -\frac{\epsilon_t}{\sqrt{1-\bar{\alpha}_t}}$$
+即 \textbf{DDPM 中的噪声预测器所预测的 $\epsilon_t$，与条件 score function 之间只差一个缩放因子！} 噪声预测的物理意义就是在学习 score function（up to scale）。
+\end{importantbox}
+
+这个发现揭示了 DDPM 噪声预测器的深层含义：表面上我们在``预测噪声''，实际上我们在学习前向跳跃分布的 score function。
+
+\subsection{从条件 Score 到边缘 Score}
+
+上面我们讨论的是\textbf{条件}分布 $q(x_t \mid x_0)$ 的 score function，因为我们知道 $x_0$。但在生成过程中，我们并不知道 $x_0$，我们真正需要的是\textbf{边缘}分布 $q(x_t)$ 的 score function：
+
+$$\nabla_{x_t} \log q(x_t) = ?$$
+
+其中 $q(x_t) = \int q(x_t \mid x_0)\, q(x_0)\, dx_0$。由于 $q(x_0)$（真实数据分布）通常未知且复杂，$q(x_t)$ 一般没有解析形式。
+
+然而，通过数学推导可以证明：
+
+$$\nabla_{x_t} \log q(x_t) = \mathbb{E}_{q(x_0 \mid x_t)}\left[\nabla_{x_t} \log q(x_t \mid x_0)\right]$$
+
+\begin{importantbox}{边缘 Score 是条件 Score 的后验期望}
+边缘分布的 score function 等于条件 score function 在后验分布 $q(x_0 \mid x_t)$ 下的期望。这意味着我们训练的噪声预测网络 $\epsilon_\theta(x_t, t)$ 实际上是在学习对所有可能的 $x_0$ 取后验平均的 score function。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Score function 定义为对数概率密度的梯度，它编码了关于概率分布的完整信息。高斯分布的 score function 有简洁的闭式解，而 DDPM 中的噪声预测器本质上是在学习前向跳跃分布的 score function（差一个缩放因子）。边缘分布的 score 等于条件 score 在后验下的期望，这为理解扩散模型中神经网络的学习目标提供了严格的数学解释。
+
+\section{Tweedie's Formula}
+
+\subsection{公式陈述与直觉}
+
+Tweedie's formula 是理解 score function 与扩散模型联系的关键数学工具。它回答了这样一个问题：如果我们知道边缘分布 $p(x)$ 和似然分布 $p(x \mid \mu)$，能否从观测 $x$ 推断出隐变量 $\mu$ 的期望？
+
+\begin{importantbox}{Tweedie's Formula}
+考虑以下生成过程：先从先验分布 $p(\mu)$ 采样均值 $\mu$，然后从似然分布 $p(x \mid \mu) = \mathcal{N}(x;\; \mu, \sigma^2 I)$ 采样观测 $x$。令边缘分布为 $p(x) = \int p(x \mid \mu)\, p(\mu)\, d\mu$，则后验均值为：
+$$\mathbb{E}[\mu \mid x] = x + \sigma^2 \nabla_x \log p(x)$$
+\end{importantbox}
+
+\begin{knowledgebox}{Tweedie's Formula 的直觉}
+这个公式有非常优美的直觉解释：
+\begin{itemize}
+    \item 如果我们只知道观测 $x$ 而没有其他信息，对 $\mu$ 的最朴素估计就是 $x$ 本身。
+    \item 但 score function $\nabla_x \log p(x)$ 提供了一个``修正方向''：它指向高概率密度区域。
+    \item Tweedie's formula 告诉我们，最优的后验均值估计就是在朴素估计 $x$ 的基础上，沿着 score 方向做一步校正，校正幅度与噪声方差 $\sigma^2$ 成正比。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{简单高斯案例验证}
+
+讲者用一个简单的例子来验证 Tweedie's formula 的正确性和直觉：
+
+设 $p(\mu) = \mathcal{N}(0, 1)$，$p(x \mid \mu) = \mathcal{N}(x;\; \mu, \sigma^2)$。由高斯分布的性质（先验和似然都是高斯时，边缘分布也是高斯），可得：
+
+$$p(x) = \mathcal{N}(0, 1 + \sigma^2)$$
+
+因此 score function 为：
+
+$$\nabla_x \log p(x) = -\frac{x}{1 + \sigma^2}$$
+
+代入 Tweedie's formula：
+
+$$\mathbb{E}[\mu \mid x] = x + \sigma^2 \cdot \left(-\frac{x}{1+\sigma^2}\right) = x \cdot \frac{1}{1+\sigma^2}$$
+
+\begin{knowledgebox}{直觉验证：收缩估计}
+结果 $\mathbb{E}[\mu \mid x] = \frac{x}{1+\sigma^2}$ 具有``收缩''（shrinkage）效应：
+\begin{itemize}
+    \item 当 $x > 0$ 时，$\mathbb{E}[\mu \mid x] < x$：估计的均值比观测值更靠近零（先验均值的方向）。
+    \item 当 $x < 0$ 时，$\mathbb{E}[\mu \mid x] > x$：同理，向零的方向收缩。
+    \item $\sigma^2$ 越大（噪声越大），收缩越强：在高噪声下，我们更信任先验。
+    \item $\sigma^2 \to 0$ 时，$\mathbb{E}[\mu \mid x] \to x$：噪声消失时，观测本身就是最好的估计。
+\end{itemize}
+这完全符合贝叶斯推断的直觉。
+\end{knowledgebox}
+
+\subsection{在扩散模型中的应用}
+
+将 Tweedie's formula 应用到扩散模型的前向跳跃分布 $q(x_t \mid x_0) = \mathcal{N}(\sqrt{\bar{\alpha}_t}\, x_0, (1-\bar{\alpha}_t)I)$，其中``均值''角色由 $\sqrt{\bar{\alpha}_t}\, x_0$ 扮演，``方差''为 $\sigma_t^2 = 1-\bar{\alpha}_t$，可以得到：
+
+$$\mathbb{E}[\sqrt{\bar{\alpha}_t}\, x_0 \mid x_t] = x_t + (1-\bar{\alpha}_t)\, \nabla_{x_t} \log q(x_t)$$
+
+整理后：
+
+\begin{importantbox}{Tweedie's Formula 在扩散模型中的形式}
+$$\mathbb{E}[x_0 \mid x_t] = \frac{1}{\sqrt{\bar{\alpha}_t}} \left(x_t + (1-\bar{\alpha}_t)\, \nabla_{x_t} \log q(x_t)\right)$$
+这表明：知道边缘 score function $\nabla_{x_t} \log q(x_t)$ 就等价于知道在给定 $x_t$ 下 $x_0$ 的最优估计。Score function 包含了``去噪''所需的全部信息。
+\end{importantbox}
+
+\begin{warningbox}{条件 Score 与边缘 Score 的区别}
+这里出现的 $\nabla_{x_t} \log q(x_t)$ 是\textbf{边缘}分布的 score，而非条件分布 $q(x_t \mid x_0)$ 的 score。条件 score 可以直接用高斯分布公式计算，但边缘 score 需要对所有可能的 $x_0$ 做积分平均。在训练时，神经网络通过大量样本的平均来隐式学习边缘 score。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Tweedie's formula 在``观测即均值加噪声''的模型中，给出了后验均值的优雅闭式解：只需在观测值上加上 score function 方向的校正。在扩散模型中，它将 score function 与去噪操作（从 $x_t$ 恢复 $x_0$ 的期望）紧密联系起来，提供了理解 score-based 方法的关键桥梁。
+
+\section{Langevin Dynamics：基于 Score 的采样}
+
+\subsection{核心思想}
+
+前面我们建立了 score function 的概念，并看到它编码了关于概率分布的丰富信息。现在的关键问题是：如果我们知道某个分布的 score function，能否从该分布中采样？
+
+答案是肯定的，Langevin dynamics（朗之万动力学）正是实现这一目标的方法。它源自统计物理学，核心思想是：通过 score function 引导的迭代过程，可以从\textbf{任意初始分布}出发，最终收敛到目标分布。
+
+\begin{importantbox}{Langevin Dynamics 采样过程}
+给定目标分布 $q(x)$ 的 score function $\nabla_x \log q(x)$，Langevin dynamics 的迭代更新公式为：
+$$x_{k+1} = x_k + \eta\, \nabla_x \log q(x_k) + \sqrt{2\eta}\, z_k, \quad z_k \sim \mathcal{N}(0, I)$$
+其中 $\eta > 0$ 是步长参数。当 $\eta \to 0$ 且迭代次数 $K \to \infty$ 时，$x_K$ 的分布收敛到 $q(x)$。
+\end{importantbox}
+
+\begin{knowledgebox}{Langevin Dynamics 的三个组成部分}
+Langevin dynamics 的更新公式由三部分组成：
+\begin{enumerate}
+    \item \textbf{当前位置} $x_k$：粒子的当前状态。
+    \item \textbf{Score 引导} $\eta\, \nabla_x \log q(x_k)$：将粒子推向高概率密度区域的确定性力。
+    \item \textbf{随机噪声} $\sqrt{2\eta}\, z_k$：防止粒子陷入局部极值，确保对目标分布的充分探索。
+\end{enumerate}
+如果只有 score 引导而没有噪声注入，粒子只会收敛到概率密度的极大值点（模式），而不会形成正确的分布。噪声项的存在确保了最终样本的多样性。
+\end{knowledgebox}
+
+\subsection{Langevin Dynamics 的关键性质}
+
+Langevin dynamics 有一个非凡的性质：它\textbf{不需要知道}概率密度函数 $q(x)$ 本身，只需要 score function $\nabla_x \log q(x)$。
+
+\begin{importantbox}{Score Function 足以完全描述分布}
+Score function $\nabla_x \log q(x)$ 在满足一定正则条件时，唯一确定了概率分布 $q(x)$（up to normalization constant）。这是因为：
+\begin{itemize}
+    \item $\nabla_x \log q(x) = \frac{\nabla_x q(x)}{q(x)}$，包含了 $q(x)$ 的局部梯度信息。
+    \item 通过 Langevin dynamics，我们可以从 score function 恢复出采样过程。
+    \item 这也意味着：即使不知道概率密度函数的归一化常数（这在高维空间中通常难以计算），只要知道 score function 就足以进行采样。
+\end{itemize}
+\end{importantbox}
+
+在传统的概率模型中，从复杂分布采样通常需要计算累积分布函数的逆（inverse CDF），这在高维空间中几乎不可行。Langevin dynamics 提供了一种替代方案：只需计算对数概率密度对数据点的梯度，然后通过迭代过程即可采样。
+
+\begin{warningbox}{Langevin Dynamics 的实践限制}
+理论上的收敛保证需要步长 $\eta \to 0$ 和无限次迭代，实践中两者都无法满足。有限步长和有限迭代次数会引入近似误差。此外，在多模态分布中，Langevin dynamics 可能需要很长时间才能在不同模式之间跳转（mixing problem）。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Langevin dynamics 是一种基于 score function 的采样方法，它通过``score 引导 + 随机噪声注入''的迭代过程，可以从任意初始分布出发收敛到目标分布。这个方法的核心优势在于：只需要 score function 而非概率密度函数本身就可以进行采样，从而避免了高维空间中归一化常数难以计算的问题。
+
+\section{Score Matching：学习 Score Function}
+
+\subsection{问题设定}
+
+前面我们看到：（1）score function 完全描述了概率分布；（2）通过 Langevin dynamics 可以利用 score function 采样。那么关键问题变成了：\textbf{如何从数据中学习 score function？}
+
+最直接的想法是定义一个 score 匹配目标：
+
+$$\mathcal{L}_{\text{SM}} = \mathbb{E}_{q(x)}\left[\left\| s_\theta(x) - \nabla_x \log q(x) \right\|^2\right]$$
+
+其中 $s_\theta(x)$ 是我们用神经网络参数化的 score estimator。
+
+\begin{warningbox}{直接 Score Matching 的困难}
+上面的损失函数有一个根本性的问题：它需要知道真实分布 $q(x)$ 的 score function $\nabla_x \log q(x)$，而这正是我们要学习的目标。这似乎陷入了``鸡生蛋、蛋生鸡''的循环。
+\end{warningbox}
+
+\subsection{Denoising Score Matching}
+
+解决这个问题的关键洞察是：虽然我们不知道原始数据分布 $q(x)$ 的 score function，但如果我们定义一个\textbf{加噪版本}的分布 $q_\sigma(x_t)$：
+
+$$q_\sigma(x_t) = \int q(x_t \mid x_0)\, q(x_0)\, dx_0$$
+
+其中 $q(x_t \mid x_0) = \mathcal{N}(x_t;\; x_0, \sigma^2 I)$，那么\textbf{条件 score} $\nabla_{x_t} \log q(x_t \mid x_0)$ 是已知的：
+
+$$\nabla_{x_t} \log q(x_t \mid x_0) = -\frac{x_t - x_0}{\sigma^2}$$
+
+\begin{importantbox}{Denoising Score Matching (DSM) 损失}
+经过数学推导（省略恒等变换的细节），可以证明 score matching 目标等价于：
+$$\mathcal{L}_{\text{DSM}} = \mathbb{E}_{q(x_0)}\, \mathbb{E}_{q(x_t \mid x_0)}\left[\left\| s_\theta(x_t) - \nabla_{x_t} \log q(x_t \mid x_0) \right\|^2\right]$$
+由于 $\nabla_{x_t} \log q(x_t \mid x_0)$ 有闭式解，这个损失是可计算的！
+\end{importantbox}
+
+\begin{knowledgebox}{DSM 的训练过程}
+Denoising Score Matching 的训练步骤极其简单：
+\begin{enumerate}
+    \item 采样一个数据点 $x_0 \sim q(x_0)$（即取一个训练样本）。
+    \item 采样噪声 $\epsilon \sim \mathcal{N}(0, I)$，得到 $x_t = x_0 + \sigma\, \epsilon$。
+    \item 计算 score 目标 $\nabla_{x_t} \log q(x_t \mid x_0) = -\epsilon / \sigma$。
+    \item 最小化 $\|s_\theta(x_t) + \epsilon/\sigma\|^2$。
+\end{enumerate}
+可以看到，这与 DDPM 的噪声预测训练在本质上是\textbf{完全相同}的。
+\end{knowledgebox}
+
+\subsection{与 DDPM 训练的等价性}
+
+在 DDPM 中，噪声预测器的训练目标是：
+
+$$\mathcal{L}_{\text{DDPM}} = \mathbb{E}_{x_0, t, \epsilon}\left[\left\| \epsilon_\theta(x_t, t) - \epsilon \right\|^2\right]$$
+
+而在 denoising score matching 中，score 网络的训练目标是：
+
+$$\mathcal{L}_{\text{DSM}} = \mathbb{E}_{x_0, t, \epsilon}\left[\left\| s_\theta(x_t, t) + \frac{\epsilon}{\sqrt{1-\bar{\alpha}_t}} \right\|^2\right]$$
+
+两者的关系是 $s_\theta(x_t, t) = -\epsilon_\theta(x_t, t) / \sqrt{1-\bar{\alpha}_t}$，即 score 网络和噪声预测网络只差一个与时间步相关的缩放因子。
+
+\begin{importantbox}{DDPM 与 Score-Based Models 的统一}
+DDPM 的噪声预测框架和 score-based 的 score matching 框架是\textbf{同一枚硬币的两面}：
+\begin{itemize}
+    \item DDPM 视角：训练一个神经网络来预测加在数据上的噪声。
+    \item Score-based 视角：训练一个神经网络来估计加噪数据分布的 score function。
+    \item 两种视角在数学上完全等价，只差一个缩放因子。
+\end{itemize}
+\end{importantbox}
+
+\subsection{本章小结}
+
+Score matching 通过巧妙地将不可计算的边缘 score matching 目标转化为可计算的 denoising score matching 目标，解决了``如何从数据中学习 score function''的问题。这个训练目标与 DDPM 的噪声预测训练在数学上完全等价，从而将两个看似不同的研究方向统一起来。
+
+\section{Noise-Conditioned Score Networks (NCSN)}
+
+\subsection{低密度区域的 Score 估计问题}
+
+直接用 score matching 学习原始数据分布 $p_{\text{data}}(x)$ 的 score function 存在一个严重的问题。
+
+\begin{warningbox}{低密度区域的 Score 不准确}
+在多模态分布中，不同模式之间存在\textbf{低概率密度区域}（low density regions）。在这些区域：
+\begin{enumerate}
+    \item 训练数据极少，因此 score 的估计非常不准确。
+    \item 然而，Langevin dynamics 的采样起点往往落在这些低密度区域（因为初始分布通常是均匀的或高斯的）。
+    \item 不准确的 score 会导致采样过程的初始阶段充满噪声，粒子在低密度区域``乱跑''，难以有效到达高密度区域。
+\end{enumerate}
+\end{warningbox}
+
+讲者通过一个二维分布的动画生动地说明了这个问题：当从均匀分布的采样点出发，如果低密度区域的 score 不准确，粒子在采样初期会做随机运动而非有方向地向高密度区域移动。
+
+\subsection{多尺度噪声的解决方案}
+
+解决低密度区域 score 不准确问题的核心思想是：对数据添加\textbf{不同级别的高斯噪声}，从而``填充''低密度区域。
+
+当噪声方差 $\sigma^2$ 较大时，加噪后的分布 $q_\sigma(x)$ 变得更加``平滑''：
+\begin{itemize}
+    \item 原本的低密度区域被噪声``填充''，不再有近零概率密度的区域。
+    \item Score function 在整个空间上都能被准确估计。
+    \item 但代价是分布变得模糊，丧失了细节信息。
+\end{itemize}
+
+当噪声方差 $\sigma^2$ 较小时：
+\begin{itemize}
+    \item 加噪后的分布更接近原始数据分布，包含精细的结构信息。
+    \item 但低密度区域的 score 仍然不准确。
+\end{itemize}
+
+\begin{importantbox}{NCSN 的核心思想：多尺度 Score 学习}
+NCSN（Noise-Conditioned Score Networks）的核心思想是同时学习多个噪声级别下的 score function：
+$$s_\theta(x, \sigma) \approx \nabla_x \log q_\sigma(x)$$
+其中 $\sigma$ 取一系列递减的值 $\sigma_1 > \sigma_2 > \cdots > \sigma_L$。网络以 $x$ 和 $\sigma$ 为输入，输出对应噪声级别下的 score。
+\end{importantbox}
+
+\subsection{退火 Langevin Dynamics}
+
+有了多尺度的 score function，采样时使用\textbf{退火 Langevin dynamics}（Annealed Langevin Dynamics）：
+
+\begin{importantbox}{退火 Langevin Dynamics 采样算法}
+\begin{enumerate}
+    \item 从高方差（$\sigma_1$ 大，分布模糊）开始：score 在整个空间上都较准确，引导粒子从初始位置向高密度区域移动。
+    \item 逐步降低噪声级别（$\sigma_2, \sigma_3, \ldots$）：score 变得越来越精确，引导粒子向真实分布的高密度区域细化。
+    \item 在最低噪声级别（$\sigma_L$ 小，接近原始分布）收敛：粒子位于原始分布的高密度区域。
+\end{enumerate}
+在每个噪声级别上运行若干步 Langevin dynamics，然后切换到下一个（更低的）噪声级别。
+\end{importantbox}
+
+\begin{knowledgebox}{退火 Langevin Dynamics 的物理类比}
+这个过程类似于金属退火（annealing）：
+\begin{itemize}
+    \item 高温阶段（大噪声）：分子可以自由移动，跨越势垒，探索能量全景。
+    \item 缓慢冷却（逐步减噪）：分子逐渐稳定在能量最低的构型。
+    \item 低温阶段（小噪声）：分子被锁定在精确的低能量状态。
+\end{itemize}
+类似于模拟退火（simulated annealing）中的温度调度。
+\end{knowledgebox}
+
+\subsection{与扩散模型逆向过程的联系}
+
+退火 Langevin dynamics 的多尺度降噪过程，实际上与扩散模型的逆向过程有着深刻的联系：
+
+\begin{importantbox}{Score-Based Model 与 DDPM 的对应关系}
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{概念} & \textbf{DDPM 视角} & \textbf{Score-Based 视角} \\
+\midrule
+前向过程 & 逐步加噪（方差递增） & 数据分布逐步模糊 \\
+逆向过程 & 逐步去噪 & 退火 Langevin dynamics \\
+网络输出 & 噪声 $\epsilon_\theta$ & Score $s_\theta$ \\
+训练目标 & 噪声预测 L2 & Denoising score matching \\
+$\sigma_t$ 大 & 前向过程早期 & 退火初期（粗导航） \\
+$\sigma_t$ 小 & 前向过程后期 & 退火末期（精细化） \\
+\bottomrule
+\end{tabular}
+\end{center}
+DDPM 中前向过程的方差递增恰好对应 score-based 模型中从小噪声到大噪声的多尺度分布；DDPM 的逆向去噪过程恰好对应退火 Langevin dynamics 中从大噪声到小噪声的逐步精化。
+\end{importantbox}
+
+\subsection{本章小结}
+
+NCSN 通过引入多尺度噪声来解决 score function 在低密度区域估计不准确的问题。退火 Langevin dynamics 从高噪声（粗导航）开始逐步降低到低噪声（精细化），使采样过程既能有效跨越低密度区域，又能在最终收敛到准确的目标分布。这个框架与 DDPM 的逆向去噪过程在数学上完全等价，只是提供了不同的视角和直觉。
+
+\section{Score-Based Models 与 DDPM 的统一视角}
+
+\subsection{两条研究路径的汇合}
+
+历史上，DDPM 和 score-based models 是两条独立发展的研究路径：
+
+\begin{knowledgebox}{两条路径的发展历程}
+\begin{itemize}
+    \item \textbf{DDPM 路径}：Ho et al. (2020) 基于变分推断和 ELBO 推导出训练目标。从概率图模型和变分自编码器的传统出发，定义前向/逆向马尔可夫链，通过最大化 ELBO 来训练逆向过程。
+    \item \textbf{Score-Based 路径}：Song \& Ermon (2019, 2020) 基于 score matching 和 Langevin dynamics。从统计学中的 score function 出发，通过 denoising score matching 训练 score estimator，用退火 Langevin dynamics 采样。
+\end{itemize}
+两条路径最终在 Song et al. (2021) 的 Score-Based SDE 框架中被统一。
+\end{knowledgebox}
+
+\subsection{等价关系的数学总结}
+
+我们已经在前面的各节中逐步建立了所有等价关系，这里做一个系统性的总结：
+
+\begin{enumerate}
+    \item \textbf{训练目标等价}：DDPM 的 $\epsilon$-prediction 损失 $\equiv$ Denoising Score Matching 损失（差缩放因子）。
+    \item \textbf{网络输出等价}：$\epsilon_\theta(x_t, t) = -\sqrt{1-\bar{\alpha}_t}\, s_\theta(x_t, t)$。
+    \item \textbf{采样过程等价}：DDPM 的逆向采样 $\equiv$ 退火 Langevin dynamics（离散化形式）。
+    \item \textbf{Tweedie 连接}：$\mathbb{E}[x_0 \mid x_t]$ 可以用 score function 表示，也可以用噪声预测器表示。
+\end{enumerate}
+
+\begin{importantbox}{统一视角的实际意义}
+理解这种等价性不仅是学术上的优雅，更有重要的实际意义：
+\begin{itemize}
+    \item 可以借用 score-based 理论来分析 DDPM 的性质（如收敛性、采样质量）。
+    \item 可以借用 DDPM 的实践技巧来改进 score-based 采样（如 schedule 设计）。
+    \item Score function 的视角为条件生成（classifier guidance, classifier-free guidance）提供了自然的理论基础。
+    \item Song et al. 的连续时间 SDE 框架将离散步骤推广到连续过程，开启了更灵活的采样器设计（如 DDIM, DPM-Solver 等）。
+\end{itemize}
+\end{importantbox}
+
+\subsection{本章小结}
+
+DDPM 和 score-based models 虽然从不同的出发点和动机发展而来，但在数学上完全等价。DDPM 提供了概率图模型和变分推断的视角，而 score-based models 提供了 score function 和 Langevin dynamics 的物理直觉。理解两种视角对于深入掌握扩散模型理论至关重要。
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本节课围绕 Score-Based Models 展开，系统地建立了以下核心概念：
+
+\begin{enumerate}
+    \item \textbf{Score Function}：定义为 $\nabla_x \log p(x)$，它是一个向量场，指向概率增大的方向，完全编码了概率分布的信息。
+
+    \item \textbf{噪声预测即 Score 学习}：DDPM 中的噪声预测器 $\epsilon_\theta$ 与 score function 之间只差一个缩放因子，揭示了噪声预测的深层物理意义。
+
+    \item \textbf{Tweedie's Formula}：提供了从 score function 到后验均值估计（去噪）的直接公式：$\mathbb{E}[\mu \mid x] = x + \sigma^2 \nabla_x \log p(x)$。
+
+    \item \textbf{Langevin Dynamics}：一种仅依赖 score function 的采样方法，通过``梯度上升 + 噪声注入''的迭代过程收敛到目标分布。
+
+    \item \textbf{Denoising Score Matching}：将不可计算的 score matching 目标转化为可计算的去噪目标，其训练过程与 DDPM 完全等价。
+
+    \item \textbf{多尺度噪声与退火策略}：通过多个噪声级别的 score function 和退火 Langevin dynamics 解决低密度区域 score 不准确的问题，这与 DDPM 的逆向去噪过程等价。
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item \textbf{Song \& Ermon (2019)}：\textit{Generative Modeling by Estimating Gradients of the Data Distribution} -- 提出 NCSN，首次将 score matching 与退火 Langevin dynamics 结合用于图像生成。
+    \item \textbf{Ho et al. (2020)}：\textit{Denoising Diffusion Probabilistic Models (DDPM)} -- 从变分推断角度推导扩散模型训练目标。
+    \item \textbf{Song et al. (2021)}：\textit{Score-Based Generative Modeling through Stochastic Differential Equations} -- 提出 Score SDE 框架，将 DDPM 和 NCSN 统一为连续时间过程。
+    \item \textbf{Vincent (2011)}：\textit{A Connection Between Score Matching and Denoising Autoencoders} -- 首次建立 denoising score matching 的理论基础。
+    \item \textbf{Efron (2011)}：\textit{Tweedie's Formula and Selection Bias} -- Tweedie's formula 在统计学中的经典论述。
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

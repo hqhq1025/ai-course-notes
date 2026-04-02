@@ -1,0 +1,669 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 11: Inference-Time Guided Generation 1}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{58分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=AjrLJeWKf3M}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+% Footer with repo info
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
+}
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：推理时引导生成的动机}
+
+在前几周的课程中，我们讨论了扩散模型（Diffusion Model）和流模型（Flow Model）的基本训练和生成过程，以及如何通过推理时技术或微调来加速生成。本节课的核心问题转向另一个方向：\textbf{如何利用预训练模型，在推理时注入引导信号，使生成结果满足特定的用户偏好或约束条件？}
+
+\begin{importantbox}{本讲核心问题}
+给定一个预训练的（无条件）扩散/流模型，如何在不重新训练的前提下，在推理时引导生成过程，使输出的数据点满足特定条件——例如与给定的部分观测一致、服从某种布局约束或风格约束？
+\end{importantbox}
+
+当前存在大量预训练的扩散模型，涵盖图像生成、视频生成、分子设计、机器人运动规划等多种模态。这些模型通常需要海量数据和算力来训练，普通研究者难以从头训练。因此，一个自然的问题是：\textbf{能否仅利用预训练模型做更多事情？}
+
+扩散/流模型的一个关键优势在于其\textbf{迭代生成}的特性。与 GAN 和 VAE 等一步生成模型不同，扩散模型在从噪声 $x_T$ 到干净数据 $x_0$ 的轨迹中，每一步都可以被"操控"：我们可以修改预测的速度或噪声，使轨迹弯曲到我们期望的终点。
+
+\begin{knowledgebox}{回顾：Classifier Guidance 与 Classifier-Free Guidance}
+在之前的课程中，我们已经见过两种在生成过程中注入引导的方法：
+\begin{itemize}
+    \item \textbf{Classifier Guidance}：训练一个额外的分类器网络，利用其对中间噪声数据 $x_t$ 的梯度来提供似然分数（likelihood score），从而调整生成轨迹。
+    \item \textbf{Classifier-Free Guidance (CFG)}：用同一个网络同时学习条件噪声和无条件噪声，通过两者的差异隐式地计算似然分数，并用引导强度 $w$ 控制条件信号的强弱。
+\end{itemize}
+这两种方法都需要\textbf{训练}——要么训练额外的分类器，要么在训练噪声预测器时加入条件-无条件的配对数据。本讲讨论的是\textbf{无需额外训练}的推理时引导方法。
+\end{knowledgebox}
+
+\subsection{推理时引导的三大类别}
+
+讲者将推理时引导技术分为三大类：
+
+\begin{enumerate}
+    \item \textbf{Score Manipulation（分数操控）}：直接对去噪过程中的分数函数进行实用性修改，无严格理论保证，但在实践中效果良好。
+    \item \textbf{基于逆问题框架的引导}：将条件生成建模为逆问题（Inverse Problem），利用贝叶斯公式对似然分数进行近似计算，具有一定的理论基础。
+    \item \textbf{其他高级技术}：将在下一讲（Lecture 12）讨论。
+\end{enumerate}
+
+本讲主要覆盖前两类方法。
+
+\subsection{本章小结}
+
+推理时引导生成是扩散模型的一个核心优势，源于其迭代生成的特性。本讲将从实用的分数操控技术出发，逐步深入到具有理论支撑的逆问题求解框架。
+
+
+\section{Score Manipulation：实用的分数操控}
+
+第一类方法是直接操控去噪过程中的分数函数。这类方法没有严格的理论解释，但在实践中往往效果不错，尤其在图像和视频领域已有大量成功案例。
+
+\subsection{RePaint：图像修复的经典案例}
+
+\textbf{RePaint} 是分数操控的一个典型例子，它解决的是\textbf{图像修复（Inpainting）}问题：给定一张部分被遮挡的图像，填补缺失区域，使结果自然且与已知背景一致。
+
+\begin{importantbox}{RePaint 的核心思想}
+在每个去噪步骤中，将中间数据点 $x_t$ 分为两部分处理：
+\begin{itemize}
+    \item \textbf{前景区域}（待填补区域）：执行正常的\textbf{逆过程}（reverse process），从噪声中逐步生成内容。
+    \item \textbf{背景区域}（已知区域）：执行\textbf{前向过程}（forward process），从已知的干净图像加噪到对应时间步 $t-1$ 的噪声水平。
+\end{itemize}
+然后将两部分拼合，得到 $x_{t-1}$，重复此过程直到 $t=0$。
+\end{importantbox}
+
+具体算法流程如下：
+\begin{enumerate}
+    \item 给定当前中间数据 $x_t$，执行一步逆过程，得到前景区域的 $x_{t-1}^{\text{fg}}$。
+    \item 对已知的干净背景图像执行一步前向过程到时间步 $t-1$，得到 $x_{t-1}^{\text{bg}}$。
+    \item 用掩码（mask）将两者组合：前景取 $x_{t-1}^{\text{fg}}$，背景取 $x_{t-1}^{\text{bg}}$。
+    \item 重复上述过程。
+\end{enumerate}
+
+\begin{warningbox}{RePaint 缺乏理论保证}
+为什么背景能被保留是直观的——我们在每一步都从干净图像重新加噪。但前景和背景之间的\textbf{无缝衔接}并没有理论保证。实际使用中确实存在前景与背景不匹配的失败案例。讲者强调：``No theory here, just practical ideas.''
+\end{warningbox}
+
+\subsection{Attention Map 操控}
+
+除了直接操控分数/噪声外，还可以通过操控噪声预测网络内部的\textbf{注意力图}（Attention Maps）来实现引导，包括：
+
+\begin{itemize}
+    \item \textbf{Self-Attention 操控}：修改自注意力模块中的注意力权重，影响图像内部不同区域之间的关联。
+    \item \textbf{Cross-Attention 操控}：修改交叉注意力中文本 token 与图像区域的对应关系，从而控制特定对象的位置和属性。
+\end{itemize}
+
+\begin{knowledgebox}{Cross-Attention 操控的应用示例}
+通过操控交叉注意力，可以实现以下任务（均无需重新训练扩散模型）：
+\begin{itemize}
+    \item \textbf{风格迁移}：从一张图像提取结构信息，从另一张提取风格/外观信息，生成新图像。
+    \item \textbf{布局控制}：给定文本描述和 2D 边界框，控制各对象在图像中的位置。例如，指定``黄色汽车''在右侧黄色框中，``城堡''在左侧绿色框中。
+    \item \textbf{视频编辑}：通过反转（inversion）和注意力操控，将视频中的对象移动到新位置，同时保持视频的自然性。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{Score Manipulation 的优缺点}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.45\textwidth}p{0.45\textwidth}}
+\toprule
+\textbf{优点} & \textbf{缺点} \\
+\midrule
+直接、直观、易于实现 & 没有理论保证 \\
+在图像/视频领域有大量成功案例 & 存在失败案例，结果不可预测 \\
+无需额外训练或数据 & 多为针对特定任务设计的 ad-hoc 方法 \\
+可拓展到其他数据模态 & 难以泛化到新的引导类型 \\
+\bottomrule
+\end{tabular}
+\caption{Score Manipulation 方法的优缺点对比}
+\end{table}
+
+\subsection{本章小结}
+
+Score Manipulation 是一类高度实用的推理时引导技术。它的核心思想是在去噪的每一步中，直接修改分数函数或注意力图，使生成轨迹偏向期望的方向。虽然缺乏理论保证，但在图像修复、风格迁移、布局控制、视频编辑等任务上已有大量成功案例。接下来我们将讨论一类更加系统化、具有理论基础的方法——基于逆问题的引导。
+
+
+\section{逆问题框架（Inverse Problems）}
+
+第二类引导技术的核心思想是将条件生成建模为\textbf{逆问题}（Inverse Problem）。这是一个更加结构化和通用的框架，适用于更广泛的应用场景。
+
+\subsection{逆问题的定义}
+
+\begin{importantbox}{逆问题的形式化定义}
+给定：
+\begin{itemize}
+    \item 一个\textbf{前向映射函数} $\mathcal{A}$，将干净数据 $x$ 映射到部分观测 $y$：$y = \mathcal{A}(x) + n$，其中 $n$ 是可能的观测噪声。
+    \item 一个\textbf{观测值} $y$。
+\end{itemize}
+目标：找到一个合理的 $x$，使得 $\mathcal{A}(x) \approx y$。
+
+由于 $\mathcal{A}$ 通常\textbf{不可逆}（non-invertible），给定 $y$ 可能存在多个合理的 $x$，因此这本质上是一个\textbf{条件生成}问题。
+\end{importantbox}
+
+\subsection{逆问题的典型应用}
+
+逆问题在图像处理中有大量应用，也可扩展到其他数据模态：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{任务} & \textbf{前向映射 $\mathcal{A}$} & \textbf{说明} \\
+\midrule
+高斯去模糊 & 高斯卷积核 & 从模糊图像恢复清晰图像 \\
+超分辨率 & 下采样操作 & 从低分辨率恢复高分辨率 \\
+图像修复 & 掩码操作 & 从部分观测恢复完整图像 \\
+CT/MRI 重建 & 投影操作 & 从多角度 2D 投影重建 3D \\
+图像着色 & 去色操作 & 从灰度图恢复彩色图 \\
+\bottomrule
+\end{tabular}
+\caption{逆问题的典型应用场景}
+\end{table}
+
+\begin{knowledgebox}{逆问题的广泛性}
+逆问题不仅存在于图像领域。在分子设计、蛋白质折叠、机器人规划等领域，任何``从部分观测推断完整信息''的问题都可以建模为逆问题。如果你能为某个新领域定义合理的前向映射 $\mathcal{A}$，就可以利用本讲介绍的技术来解决。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+逆问题提供了一个统一的框架，将推理时引导生成与经典的信号处理/计算成像问题联系起来。关键要素是：已知的前向映射 $\mathcal{A}$、观测值 $y$、以及预训练的无条件生成模型。接下来我们推导如何利用贝叶斯公式将逆问题求解转化为对分数函数的修改。
+
+
+\section{贝叶斯公式与条件分数分解}
+
+解决逆问题的核心数学工具是\textbf{贝叶斯公式}，它将条件分数分解为边际分数和似然分数的和。
+
+\subsection{条件分数的贝叶斯分解}
+
+我们的目标是计算条件分数 $\nabla_{x_t} \log p(x_t | y)$，以便在去噪过程中引导生成。利用贝叶斯公式：
+
+$$
+p(x_t | y) = \frac{p(y | x_t) \cdot p(x_t)}{p(y)}
+$$
+
+两边取对数再求梯度：
+
+$$
+\nabla_{x_t} \log p(x_t | y) = \underbrace{\nabla_{x_t} \log p(x_t)}_{\text{边际分数（已知）}} + \underbrace{\nabla_{x_t} \log p(y | x_t)}_{\text{似然分数（待计算）}}
+$$
+
+\begin{importantbox}{条件分数 = 边际分数 + 似然分数}
+\begin{itemize}
+    \item \textbf{边际分数} $\nabla_{x_t} \log p(x_t)$：这正是预训练扩散模型已经学会预测的分数函数，可以直接从模型中获得。
+    \item \textbf{似然分数} $\nabla_{x_t} \log p(y | x_t)$：衡量在当前中间状态 $x_t$ 下，观测 $y$ 出现的可能性有多大。这是需要额外计算（或近似）的部分。
+\end{itemize}
+因此，整个问题归结为：\textbf{如何在不训练额外网络的情况下，近似计算似然分数？}
+\end{importantbox}
+
+\subsection{与 Classifier Guidance 的对比}
+
+\begin{knowledgebox}{统一视角下的已有方法}
+之前学过的引导方法可以在此框架下统一理解：
+\begin{itemize}
+    \item \textbf{Classifier Guidance}：通过训练一个额外的分类器网络来直接估计似然分数 $\nabla_{x_t} \log p(y | x_t)$。
+    \item \textbf{Classifier-Free Guidance}：用同一个网络联合学习条件和无条件噪声，隐式地通过两者的差异来计算似然分数。
+\end{itemize}
+这两种方法都需要训练。我们现在要做的是\textbf{无需训练地近似似然分数}。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+贝叶斯分解告诉我们，条件生成只需要在预训练模型的边际分数之上，额外添加一个似然分数即可。剩下的核心挑战是：如何高效地近似这个似然分数。
+
+
+\section{似然分数的近似：从理想到可行}
+
+直接计算 $\nabla_{x_t} \log p(y | x_t)$ 是不可行的，因为 $p(y | x_t)$ 涉及从含噪中间数据 $x_t$ 到观测 $y$ 的复杂映射。我们需要一系列近似来使计算变得可行。
+
+\subsection{关键困难：$x_t$ vs. $x_0$}
+
+我们可以直接写出 $p(y | x_0)$ 的表达式——当 $\mathcal{A}$ 是线性函数时，$y | x_0 \sim \mathcal{N}(\mathcal{A} x_0, \sigma^2 I)$，这是一个简单的高斯分布。
+
+但我们需要的是 $p(y | x_t)$，而不是 $p(y | x_0)$。问题在于：\textbf{如何建立 $x_t$ 和 $x_0$ 之间的联系？}
+
+\begin{warningbox}{不能直接用 $p(y|x_0)$ 替代 $p(y|x_t)$}
+最粗暴的近似是假设 $p(y|x_t) \approx p(y|x_0)$，即把中间噪声数据当作干净数据来计算。这是极差的近似——如果 $p(x_0|x_t)$ 真的是 delta 分布（即从 $x_t$ 可以确定性地恢复 $x_0$），那我们根本不需要迭代去噪过程了。
+\end{warningbox}
+
+\subsection{Tweedie 公式：连接 $x_t$ 与 $x_0$}
+
+\textbf{Tweedie 公式}提供了从 $x_t$ 估计 $x_0$ 的均值的方法：
+
+$$
+\hat{x}_0 = \mathbb{E}[x_0 | x_t] = \frac{1}{\sqrt{\bar{\alpha}_t}} \left( x_t + (1 - \bar{\alpha}_t) \nabla_{x_t} \log p(x_t) \right)
+$$
+
+其中 $\nabla_{x_t} \log p(x_t)$ 正是预训练模型预测的分数（或等价地，通过预测噪声 $\epsilon_\theta(x_t, t)$ 得到）。
+
+\begin{importantbox}{Tweedie 公式的核心作用}
+Tweedie 公式告诉我们：给定 $x_t$，我们可以计算 $x_0$ 的\textbf{后验均值} $\hat{x}_0$（也称为去噪估计）。虽然这只是均值而非完整分布，但它为近似似然分数提供了关键的桥梁。
+\end{importantbox}
+
+\subsection{高斯近似：$p(x_0 | x_t)$ 的简化}
+
+为了使计算可行，我们做出一个关键（但粗糙的）近似假设：
+
+$$
+p(x_0 | x_t) \approx \mathcal{N}(\hat{x}_0, r_t^2 I)
+$$
+
+即将 $x_0$ 在给定 $x_t$ 下的后验分布近似为一个以 Tweedie 估计 $\hat{x}_0$ 为均值、以某个标量方差 $r_t^2$ 为方差的高斯分布。
+
+\begin{warningbox}{高斯近似的局限性}
+这个近似是相当粗糙的。如果 $p(x_0|x_t)$ 真的是高斯分布，我们就不需要迭代去噪了——直接从 $x_t$ 采样 $x_0$ 即可。真实的 $p(x_0|x_t)$ 是一个远比高斯复杂的多模态分布。但在没有额外训练的情况下，这是我们能做到的最好近似之一。
+\end{warningbox}
+
+\subsection{本章小结}
+
+通过 Tweedie 公式和高斯近似，我们建立了从 $x_t$ 到 $x_0$ 的桥梁，将不可直接计算的 $p(y|x_t)$ 转化为可以解析计算的高斯分布。接下来我们将基于此推导出具体的引导算法。
+
+
+\section{线性逆问题的解析解：伪逆引导}
+
+当前向映射 $\mathcal{A}$ 是线性函数时（这涵盖了去模糊、超分辨率、修复、CT 重建等大量实际应用），我们可以得到似然分数的解析表达式。
+
+\subsection{线性前向模型的设定}
+
+假设 $\mathcal{A}$ 是线性的，即 $y = A x_0 + n$，其中 $A$ 是矩阵，$n \sim \mathcal{N}(0, \sigma_y^2 I)$ 是观测噪声。此时：
+
+$$
+p(y | x_0) = \mathcal{N}(y; A x_0, \sigma_y^2 I)
+$$
+
+\begin{knowledgebox}{常见线性逆问题中的 $A$ 矩阵}
+\begin{itemize}
+    \item \textbf{高斯去模糊}：$A$ 是高斯卷积核对应的矩阵。
+    \item \textbf{超分辨率}：$A$ 是下采样矩阵。
+    \item \textbf{图像修复}：$A$ 是掩码对角矩阵（已知区域为 1，未知区域为 0）。
+    \item \textbf{CT/MRI 重建}：$A$ 是投影/傅里叶采样矩阵。
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{高斯共轭先验的推导}
+
+利用高斯分布的共轭性质，当先验 $p(x_0 | x_t)$ 和似然 $p(y|x_0)$ 都是高斯分布时，边际分布 $p(y | x_t)$ 也是高斯分布。具体地：
+
+\textbf{先验}（高斯近似后）：
+$$
+p(x_0 | x_t) \approx \mathcal{N}(\hat{x}_0, r_t^2 I)
+$$
+
+\textbf{似然}：
+$$
+p(y | x_0) = \mathcal{N}(A x_0, \sigma_y^2 I)
+$$
+
+\textbf{边际}（对 $x_0$ 积分后）：
+$$
+p(y | x_t) = \int p(y | x_0) p(x_0 | x_t) \, dx_0 = \mathcal{N}(A \hat{x}_0, \; r_t^2 A A^\top + \sigma_y^2 I)
+$$
+
+\begin{importantbox}{伪逆引导公式（Pseudo-Inverse Guidance）}
+基于上述高斯边际分布，似然分数可以解析计算：
+$$
+\nabla_{x_t} \log p(y | x_t) \approx -\frac{1}{2} \nabla_{x_t} \left\| y - A \hat{x}_0 \right\|^2_{(r_t^2 A A^\top + \sigma_y^2 I)^{-1}}
+$$
+其中 $\hat{x}_0$ 是通过 Tweedie 公式从 $x_t$ 计算得到的去噪估计。
+
+当观测无噪声（$\sigma_y = 0$）时，公式简化为需要计算 $A$ 的\textbf{伪逆}（pseudo-inverse），因此被称为伪逆引导。
+\end{importantbox}
+
+\begin{warningbox}{伪逆引导仅适用于线性 $\mathcal{A}$}
+此解析公式的推导依赖于 $\mathcal{A}$ 的线性性。对于非线性前向映射（如涉及神经网络的渲染、复杂物理模拟等），需要使用更一般（但近似更粗糙）的方法。
+\end{warningbox}
+
+\subsection{本章小结}
+
+对于线性逆问题，通过高斯共轭先验的性质，我们可以得到似然分数的解析表达式。该方法需要计算前向映射矩阵的伪逆，因此称为伪逆引导。它为去模糊、超分辨率、修复等经典图像处理任务提供了理论上较为严谨的解法。
+
+
+\section{DPS：Diffusion Posterior Sampling}
+
+当我们愿意接受更粗糙的近似以换取更广泛的适用性时，就得到了 \textbf{DPS（Diffusion Posterior Sampling）} 方法。
+
+\subsection{更粗糙的 Delta 近似}
+
+DPS 使用比高斯更极端的近似：直接将 $p(x_0 | x_t)$ 近似为 Delta 分布：
+
+$$
+p(x_0 | x_t) \approx \delta(x_0 - \hat{x}_0)
+$$
+
+其中 $\hat{x}_0$ 是 Tweedie 估计。这意味着我们假定从 $x_t$ 可以确定性地恢复 $x_0$。
+
+\begin{warningbox}{Delta 近似的代价与收益}
+\textbf{代价}：这是比高斯近似更差的近似。如果 $p(x_0|x_t)$ 真的是 Delta 分布，就不需要迭代去噪了。
+
+\textbf{收益}：计算变得极其简单，而且\textbf{不再要求 $\mathcal{A}$ 是线性的}——任何可微的前向映射都可以使用。
+\end{warningbox}
+
+\subsection{DPS 的似然分数}
+
+在 Delta 近似下：
+
+$$
+p(y | x_t) \approx p(y | x_0 = \hat{x}_0) = \mathcal{N}(y; \mathcal{A}(\hat{x}_0), \sigma_y^2 I)
+$$
+
+\begin{importantbox}{DPS 引导公式}
+DPS 的似然分数为：
+$$
+\nabla_{x_t} \log p(y | x_t) \approx -\frac{1}{\sigma_y^2} \nabla_{x_t} \left\| y - \mathcal{A}(\hat{x}_0) \right\|_2^2
+$$
+其中 $\hat{x}_0 = \hat{x}_0(x_t)$ 是通过 Tweedie 公式从 $x_t$ 计算的去噪估计，$\nabla_{x_t}$ 表示对 $x_t$ 求梯度（需要通过 $\hat{x}_0$ 对 $x_t$ 的依赖关系进行反向传播）。
+
+\textbf{直观含义}：比较 Tweedie 估计经过前向映射后的结果 $\mathcal{A}(\hat{x}_0)$ 与实际观测 $y$ 之间的差异，计算 L2 损失关于 $x_t$ 的梯度，作为引导信号。
+\end{importantbox}
+
+\subsection{DPS 的算法流程}
+
+DPS 的实现极其简洁——只需在标准 DDPM 采样循环中添加一行代码：
+
+\begin{lstlisting}[caption={DPS 引导的伪代码}]
+# Standard DDPM sampling loop
+for t in reversed(range(T)):
+    # 1. Standard denoising step
+    eps_pred = model(x_t, t)           # predict noise
+    x0_hat = tweedie_estimate(x_t, eps_pred, t)  # Tweedie
+    x_t_minus_1 = ddpm_step(x_t, eps_pred, t)    # standard step
+
+    # 2. DPS guidance (just one extra line!)
+    loss = torch.norm(y - A(x0_hat)) ** 2
+    grad = torch.autograd.grad(loss, x_t)[0]
+    x_t_minus_1 = x_t_minus_1 - step_size * grad
+\end{lstlisting}
+
+\begin{importantbox}{DPS 的两种等价实现}
+在 DDPM 框架下，以下两种实现是等价的：
+\begin{enumerate}
+    \item 修改噪声预测 $\epsilon$，然后执行去噪步骤。
+    \item 先执行标准去噪步骤得到 $x_{t-1}'$，然后直接在 $x_{t-1}'$ 上加引导项。
+\end{enumerate}
+这是因为 $x_{t-1}$ 是 $\epsilon$ 的仿射函数，两种方式在数学上完全等价。第二种实现更加直观和简洁。
+\end{importantbox}
+
+\subsection{DPS 的适用范围}
+
+\begin{knowledgebox}{DPS 支持非线性前向映射}
+DPS 的一个关键优势是它\textbf{不要求} $\mathcal{A}$ 是线性的。只要 $\mathcal{A}$ 是可微的（以便反向传播计算梯度），DPS 就可以应用。这使得 DPS 可以处理更广泛的逆问题，例如：
+\begin{itemize}
+    \item 非线性失真的图像恢复
+    \item 涉及神经网络渲染器的 3D 重建
+    \item 基于非线性物理模型的信号恢复
+\end{itemize}
+代价是近似精度更低（Delta 近似），但实践中仍然能产生很好的结果。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DPS 通过采用最简单的 Delta 近似，将似然分数计算转化为一个简单的 L2 损失梯度。它的实现只需在标准采样循环中增加一行梯度更新代码。虽然近似更粗糙，但换来了对非线性前向映射的支持，大大拓宽了适用范围。
+
+
+\section{方法对比与设计权衡}
+
+\subsection{三种似然分数近似的对比}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.2\textwidth}p{0.25\textwidth}p{0.2\textwidth}p{0.2\textwidth}}
+\toprule
+\textbf{方法} & \textbf{$p(x_0|x_t)$ 的近似} & \textbf{$\mathcal{A}$ 的要求} & \textbf{近似精度} \\
+\midrule
+最粗暴近似 & $p(y|x_t) = p(y|x_0)$ & 任意 & 最差 \\
+DPS & $\delta(x_0 - \hat{x}_0)$ & 可微即可 & 较差 \\
+伪逆引导 & $\mathcal{N}(\hat{x}_0, r_t^2 I)$ & 必须线性 & 相对较好 \\
+\bottomrule
+\end{tabular}
+\caption{三种似然分数近似方法的对比}
+\end{table}
+
+\begin{importantbox}{近似精度 vs. 适用范围的权衡}
+这三种方法体现了一个核心设计权衡：
+\begin{itemize}
+    \item 更精确的近似（如伪逆引导）需要更强的假设（$\mathcal{A}$ 必须是线性的），但理论上更可靠。
+    \item 更粗糙的近似（如 DPS）对 $\mathcal{A}$ 的要求更低（只需可微），适用范围更广，但近似误差更大。
+\end{itemize}
+没有一种方法在所有情况下都最优，选择取决于具体的应用场景和前向映射的性质。
+\end{importantbox}
+
+\subsection{所有方法的共同局限}
+
+\begin{warningbox}{近似引导的固有局限}
+无论采用哪种近似，这些推理时引导方法都有以下共同局限：
+\begin{enumerate}
+    \item \textbf{不保证收敛到正确的后验分布}：所有近似都引入了误差，生成结果可能不完全满足约束条件。
+    \item \textbf{需要调节超参数}：引导强度（step size / guidance scale）需要手动调整，不同任务和不同数据可能需要不同的值。
+    \item \textbf{计算开销}：DPS 需要对 Tweedie 估计进行反向传播，增加了每步的计算成本。
+    \item \textbf{高噪声时间步近似更差}：在早期（高噪声）时间步，$\hat{x}_0$ 的估计质量很差，导致引导信号不可靠。
+\end{enumerate}
+\end{warningbox}
+
+\subsection{本章小结}
+
+不同的似然分数近似方法在精度和适用范围之间形成了一个谱系。实际应用中，需要根据前向映射的性质、计算预算和结果质量要求来选择合适的方法。
+
+
+\section{DDPM 框架下的引导实现细节}
+
+为了帮助读者理解 DPS 在代码层面的工作原理，本节详细展开 DDPM 去噪步骤与引导项的结合方式。
+
+\subsection{DDPM 逆过程回顾}
+
+DDPM 的逆过程（reverse process）定义了如何从 $x_t$ 采样 $x_{t-1}$：
+
+$$
+x_{t-1} = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}} \epsilon_\theta(x_t, t) \right) + \sigma_t z
+$$
+
+其中 $z \sim \mathcal{N}(0, I)$ 是随机噪声项，$\sigma_t$ 是对应时间步的噪声标准差，$\epsilon_\theta$ 是预训练的噪声预测网络。
+
+可以将此公式改写为关于 Tweedie 估计 $\hat{x}_0$ 的形式：
+
+$$
+x_{t-1} = c_1(t) \cdot x_t + c_2(t) \cdot \hat{x}_0 + \sigma_t z
+$$
+
+其中 $c_1(t)$ 和 $c_2(t)$ 是仅依赖于噪声调度（noise schedule）的系数。关键点是：\textbf{$x_{t-1}$ 是 $\hat{x}_0$ 的仿射函数，而 $\hat{x}_0$ 又是 $x_t$ 的函数}。
+
+\subsection{引导项的注入方式}
+
+引导的核心操作是在每一步的 $x_{t-1}$ 上添加一个修正项：
+
+$$
+x_{t-1}^{\text{guided}} = x_{t-1}^{\text{unguided}} - \zeta_t \cdot \nabla_{x_t} \left\| y - \mathcal{A}(\hat{x}_0) \right\|_2^2
+$$
+
+其中 $\zeta_t$ 是时间步相关的步长（step size）。
+
+\begin{warningbox}{梯度计算需要反向传播}
+注意 $\nabla_{x_t} \| y - \mathcal{A}(\hat{x}_0) \|_2^2$ 中的梯度是对 $x_t$ 求的，而 $\hat{x}_0$ 依赖于 $x_t$（通过 Tweedie 公式和噪声预测网络 $\epsilon_\theta$）。因此计算此梯度需要通过 $\epsilon_\theta$ 进行反向传播，这意味着：
+\begin{enumerate}
+    \item 每步引导需要一次额外的反向传播，计算开销约为正向传播的 2-3 倍。
+    \item 噪声预测网络的参数不被更新——我们只是利用梯度信息来修改采样轨迹。
+    \item 需要在 PyTorch 中开启 \texttt{x\_t.requires\_grad\_(True)} 以启用梯度追踪。
+\end{enumerate}
+\end{warningbox}
+
+\subsection{步长调度的实践考虑}
+
+\begin{knowledgebox}{步长 $\zeta_t$ 的选择策略}
+引导步长 $\zeta_t$ 的选择对结果质量至关重要：
+\begin{itemize}
+    \item \textbf{过大}：生成结果严格满足约束 $\mathcal{A}(x_0) = y$，但可能偏离数据流形，产生伪影。
+    \item \textbf{过小}：结果逼真但不充分满足约束条件。
+    \item \textbf{常见策略}：使用恒定步长，或根据时间步线性衰减（早期步长小，因为 $\hat{x}_0$ 估计不准；晚期步长大，因为估计更精确）。
+    \item \textbf{自适应策略}：根据 $\| y - \mathcal{A}(\hat{x}_0) \|$ 的大小动态调整步长。
+\end{itemize}
+实践中通常需要在具体任务上进行网格搜索来确定最佳步长。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+在 DDPM 框架下，DPS 引导的实现归结为在每个去噪步骤后添加一个梯度修正项。关键的实现细节包括梯度的反向传播、步长的选择以及计算开销的管理。
+
+
+\section{推理时引导的直觉理解}
+
+\subsection{轨迹弯曲的几何图景}
+
+从几何直觉上理解，推理时引导的本质是\textbf{弯曲去噪轨迹}：
+
+\begin{enumerate}
+    \item 无引导时，从 $x_T$（纯噪声）出发，扩散模型沿着边际分数 $\nabla_{x_t} \log p(x_t)$ 指示的方向，将轨迹引向数据流形上的某个点 $x_0$。
+    \item 加入引导后，似然分数 $\nabla_{x_t} \log p(y|x_t)$ 在每一步给轨迹施加一个额外的``推力''，使其偏向那些满足条件 $\mathcal{A}(x_0) \approx y$ 的数据点。
+    \item 最终，轨迹到达的 $x_0$ 既是数据流形上的合理点（由边际分数保证），又满足条件约束（由似然分数引导）。
+\end{enumerate}
+
+\begin{knowledgebox}{为什么扩散模型特别适合推理时引导？}
+GAN 和 VAE 是一步生成模型——从噪声到数据的映射是单次前向传播。一旦这个映射固定了，就很难在推理时施加额外控制。
+
+而扩散/流模型的生成过程是一系列\textbf{小步迭代}，每一步都可以被微调。这就像导航：一步走到目的地的话，只能走直线；但如果分很多步走，每一步都可以根据新信息调整方向——这正是推理时引导的本质。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+推理时引导的几何本质是在去噪轨迹的每一步施加额外的方向修正力，使最终生成结果同时满足``逼真''和``符合条件''两个目标。扩散模型的迭代特性使其天然适合这种操作。
+
+
+\section{总结与延伸}
+
+\subsection{各方法适用场景指南}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.22\textwidth}p{0.35\textwidth}p{0.33\textwidth}}
+\toprule
+\textbf{场景} & \textbf{推荐方法} & \textbf{理由} \\
+\midrule
+图像修复 & Score Manipulation (RePaint) 或 DPS & 掩码操作简单，两类方法均可 \\
+超分辨率 & 伪逆引导 & 下采样是线性操作，可利用解析解 \\
+高斯去模糊 & 伪逆引导 & 卷积是线性操作 \\
+CT/MRI 重建 & 伪逆引导 & 投影操作是线性的 \\
+非线性失真恢复 & DPS & 需要处理非线性 $\mathcal{A}$ \\
+布局控制生成 & Attention Map 操控 & 需要操控空间对应关系 \\
+风格迁移 & Score Manipulation & 涉及跨图像的特征交换 \\
+\bottomrule
+\end{tabular}
+\caption{不同应用场景下推理时引导方法的选择指南}
+\end{table}
+
+\subsection{本讲核心内容回顾}
+
+本讲系统介绍了\textbf{推理时引导生成}的基本框架和方法，涵盖以下核心内容：
+
+\begin{enumerate}
+    \item \textbf{动机}：利用预训练扩散模型的迭代生成特性，在推理时注入引导信号，无需重新训练即可实现条件生成。
+    \item \textbf{Score Manipulation}：直接操控去噪分数/注意力图的实用方法（如 RePaint），无理论保证但广泛有效。
+    \item \textbf{逆问题框架}：将条件生成建模为逆问题 $y = \mathcal{A}(x) + n$，提供了系统化的分析工具。
+    \item \textbf{贝叶斯分解}：$\nabla_{x_t} \log p(x_t|y) = \nabla_{x_t} \log p(x_t) + \nabla_{x_t} \log p(y|x_t)$，将问题归结为近似似然分数。
+    \item \textbf{伪逆引导}：基于高斯近似，适用于线性前向映射，近似精度相对较好。
+    \item \textbf{DPS}：基于 Delta 近似，适用于任意可微前向映射，实现极简但近似更粗糙。
+\end{enumerate}
+
+\subsection{与下一讲的衔接}
+
+本讲覆盖了三大类推理时引导技术中的前两类。下一讲（Lecture 12: Inference-Time Guided Generation 2）将讨论第三类更高级的技术，可能包括：
+\begin{itemize}
+    \item 更精确的似然分数近似方法
+    \item 基于优化的推理时引导（如 DDRM、MCG 等）
+    \item 推理时引导在 3D 生成、视频生成等领域的具体应用
+\end{itemize}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item \textbf{RePaint}: Lugmayr et al., ``RePaint: Inpainting using Denoising Diffusion Probabilistic Models,'' CVPR 2022.
+    \item \textbf{DPS}: Chung et al., ``Diffusion Posterior Sampling for General Noisy Inverse Problems,'' ICLR 2023.
+    \item \textbf{DDRM}: Kawar et al., ``Denoising Diffusion Restoration Models,'' NeurIPS 2022.
+    \item \textbf{Classifier Guidance}: Dhariwal \& Nichol, ``Diffusion Models Beat GANs on Image Synthesis,'' NeurIPS 2021.
+    \item \textbf{关于逆问题与扩散模型的综述}：讲者在课上推荐查阅 survey paper，了解更多分数操控和逆问题求解的技术。
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

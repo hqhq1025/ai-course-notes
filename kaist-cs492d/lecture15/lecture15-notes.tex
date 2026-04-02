@@ -1,0 +1,542 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Guest Lecture 2: 3D生成方法与视频模型}
+\newcommand{\noteauthors}{基于公开课程资料整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Philipp Henzler (Guest Lecture)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{35分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=4fD2yLXo97U}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+% Footer with repo info
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
+}
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：从3D重建到生成式3D}
+
+Philipp Henzler 自2018年攻读博士期间便开始从事3D重建与生成方向的研究，主要工作包括自监督3D重建（self-supervised 3D reconstruction）和外观建模（appearance modeling）。2022年加入 Google 后，他致力于生成式3D重建和3D重光照（relighting），其团队成功将研究成果应用于 Google Shopping 产品中——先从鞋类3D重建开始，后借助视频模型扩展到任意物体品类。
+
+本次演讲的核心主题是：\textbf{3D生成方法如何与通用视频模型相结合}，以及在视频模型日益强大的今天，显式3D建模为何依然不可或缺。
+
+\begin{importantbox}{演讲核心问题}
+在2D视频模型已经能够生成高度逼真视频的今天，我们为什么还需要显式建模3D？3D方法与2D生成模型各自的优势和劣势是什么？如何将二者结合以获得最佳效果？
+\end{importantbox}
+
+\section{3D生成方法的演进}
+
+\subsection{早期方法：3D GAN（2016）}
+
+最早的生成式3D建模方法使用生成对抗网络（GAN）。在2016年的工作中，研究者构建了一个纯生成模型：从噪声隐变量出发，训练模型生成3D体素（voxel）表示，并使用\textbf{3D判别器}进行对抗训练。
+
+该方法的两个主要限制：
+\begin{itemize}
+    \item \textbf{无法精确控制输入}：生成过程完全随机，无法指定生成特定物体
+    \item \textbf{需要3D真值数据}：训练依赖于3D ground truth，而高质量3D数据极为稀缺
+\end{itemize}
+
+\subsection{PlatonicGAN：摆脱3D数据依赖}
+
+PlatonicGAN 的核心创新在于引入了\textbf{可微渲染器}（differentiable renderer）和\textbf{2D判别器}，从而消除了对3D真值数据的依赖。这使得模型可以直接在互联网上的2D图像数据上进行训练。此外，PlatonicGAN 还引入了\textbf{图像编码器}，实现了从单张图像进行3D重建的能力。
+
+\begin{knowledgebox}{可微渲染的意义}
+可微渲染（differentiable rendering）是连接3D表示与2D监督信号的桥梁。通过使渲染过程可微分，梯度可以从2D图像空间的损失函数反向传播到3D表示的参数上，从而允许使用大量的2D图像数据来训练3D生成模型，而无需昂贵的3D标注。
+\end{knowledgebox}
+
+\subsection{PixelNeRF：多视角融合}
+
+在基于图像的重建思路基础上，PixelNeRF 专注于\textbf{多视角输入}。其核心创新是将来自多张输入图像的编码特征聚合（aggregate），融合为一个一致的3D表示——具体形式为 NeRF（Neural Radiance Field）。
+
+\subsection{共同特征与局限}
+
+上述所有方法都有一个共同特点：它们直接预测一个\textbf{显式的、3D一致的}表示。
+
+\begin{importantbox}{显式3D表示的优势与劣势}
+\textbf{优势}：一旦获得3D模型，可以从任意视角快速、低成本地渲染，非常适合手机和平板等移动端的实时应用。
+
+\textbf{劣势}：整体生成质量较低。原因有二：（1）高质量3D数据极度稀缺；（2）这些方法不应使用过强的归纳偏置（如渲染），但避免归纳偏置又限制了模型能力。
+\end{importantbox}
+
+\subsection{本章小结}
+
+3D生成方法从依赖3D真值数据的3D GAN，发展到利用可微渲染和2D判别器的 PlatonicGAN，再到支持多视角输入的 PixelNeRF。这些方法的共同优势在于生成显式3D表示、渲染成本低，但受限于3D数据的稀缺性，整体质量不及2D生成模型。
+
+\section{视频模型的3D理解能力}
+
+\subsection{2D生成模型的优势}
+
+与3D生成模型形成鲜明对比的是，2D图像和视频生成模型能够很好地随数据和计算资源扩展（scale）：互联网上有数十亿张2D图像和视频可供训练，且这些模型直接生成2D像素，归纳偏置有限。随着算力不断增长，这些模型产出的视频质量越来越高——例如 V3 模型已能生成具有多样相机运动、场景运动以及高度逼真物理效果的视频。
+
+\subsection{视频模型是否理解3D？}
+
+一个自然的问题是：这些视频模型生成的结果是否在物理上是正确的？
+
+Henzler 团队设计了一个实验来探究这个问题：
+
+\begin{enumerate}
+    \item 给定两张重叠区域很少的场景图像 A 和 B
+    \item 使用现成的位姿估计器（如 DUSt3R）预测相机位姿——由于图像重叠少，基于视觉对应关系的估计器效果很差
+    \item 使用多种视频生成模型在两张图像之间插值生成中间帧
+    \item 将生成的中间帧连同原始两张图像一起输入位姿估计器
+\end{enumerate}
+
+\begin{importantbox}{关键发现：视频模型隐式理解3D}
+实验结果表明，视频模型生成的中间帧显著提升了位姿估计器的精度。这意味着视频模型确实能够隐式地建模物理世界——它们生成的帧之间存在合理的3D几何关系，即使模型从未被显式训练去理解3D结构。
+\end{importantbox}
+
+\subsection{交互式视频模型}
+
+更进一步，类似 Genie 2 的交互式视频模型已经允许用户实时导航3D世界。用户可以通过键盘输入（前进、左转、右转）来控制模型生成新帧，自由地在虚拟场景中探索不同视角。更关键的是，当用户转身回看时，场景保持了\textbf{一致性}——教室看起来与之前完全相同。
+
+\subsection{为何仍需显式3D建模？}
+
+既然纯2D视频模型已经如此强大，为什么还需要显式建模3D？
+
+\begin{warningbox}{视频模型的根本瓶颈：推理成本}
+虽然视频模型能随数据和计算扩展，但其推理成本也会相应上升。这使得这些模型目前无法在手机和平板等移动设备上运行。而显式3D表示（如 NeRF、3D Gaussian Splatting）一旦构建完成，渲染成本极低，完全可以在移动端实时运行。
+\end{warningbox}
+
+\subsection{两块拼图的组合}
+
+Henzler 指出，我们其实已经拥有了两块互补的拼图：
+
+\begin{itemize}
+    \item \textbf{生成式图像/视频模型}：产出高度逼真的2D图像
+    \item \textbf{NeRF/3DGS 重建方法}：将多张图像蒸馏为高效的3D表示，支持快速渲染
+\end{itemize}
+
+将二者组合——用生成模型产出多视角图像，再用3D重建方法将其蒸馏为高效3D表示——正是后续工作 CAT3D 和 B3D 的核心思路。
+
+\subsection{本章小结}
+
+视频模型已经展现出隐式的3D理解能力，但其推理成本限制了在移动端的部署。显式3D表示提供了低成本渲染的优势，因此「2D生成 + 3D蒸馏」成为兼顾质量与效率的最优策略。
+
+\section{CAT3D：多视角扩散模型 + NeRF 蒸馏}
+
+\subsection{方法概述}
+
+CAT3D 是一种可以接受文本提示、单张图像或多张图像作为输入，生成完整3D场景的方法。其核心思想是将多视角扩散模型与 NeRF 重建流程相结合。
+
+\subsection{模型架构}
+
+CAT3D 的输入包含两类视角：
+
+\begin{itemize}
+    \item \textbf{已观察视角（Observed Views）}：包含输入图像及其对应的相机参数。图像通过预训练的 VAE 编码为图像隐变量（image latent），相机信息编码为逐像素的射线坐标图（per-pixel ray coordinate map），包含每个像素的射线原点和方向。
+    \item \textbf{新视角（Novel Views）}：没有真实图像，取而代之的是噪声隐变量，同时附带目标视角的相机位姿信息。
+\end{itemize}
+
+为帮助模型区分两类视角，还会输入一个\textbf{掩码}（mask），标识哪些视角是已观察的、哪些是待生成的。
+
+\begin{knowledgebox}{射线坐标图（Ray Coordinate Map）}
+射线坐标图是一种将相机位姿信息编码为空间表示的方式。对于图像中的每个像素，计算其对应的射线原点（ray origin）和射线方向（ray direction），将这些信息存储为与图像尺寸相同的坐标图。这种表示方式允许模型直接在像素级别理解3D几何关系。
+\end{knowledgebox}
+
+模型在所有帧之间使用\textbf{注意力机制}（attention），因此能够生成多视角一致的输出。训练数据为大量带位姿标注的多视角图像，监督模型在给定已知视角的条件下生成一致的新视角。
+
+\subsection{两阶段流程}
+
+CAT3D 采用两阶段流程：
+
+\begin{enumerate}
+    \item \textbf{多视角生成}：给定少量输入视角，使用多视角扩散模型生成场景的\textbf{密集}视角集
+    \item \textbf{NeRF 重建}：将生成的所有视角输入标准 NeRF 管线进行3D重建
+\end{enumerate}
+
+\begin{warningbox}{生成的多视角并非完美3D一致}
+多视角扩散模型生成的图像并非完全3D一致——不同视角之间可能存在微小的不一致。但关键洞察是：这些图像\textbf{足够一致}，使得 NeRF 重建管线能够将它们整合为一个一致的3D输出。NeRF 本质上充当了一个「平均化」的角色，将多视角中的不一致性消解掉。
+\end{warningbox}
+
+\subsection{性能}
+
+端到端地，CAT3D 能够在约 \textbf{1分钟} 内从任意数量的输入（甚至仅一张图像）生成完整的3D场景。
+
+\subsection{本章小结}
+
+CAT3D 验证了「2D生成 + 3D蒸馏」范式的可行性：多视角扩散模型负责高质量图像生成，NeRF 负责将这些图像蒸馏为一致的3D表示。但 NeRF 优化步骤仍然是推理速度的瓶颈。
+
+\section{B3D：前馈式3D生成}
+
+\subsection{动机：消除优化瓶颈}
+
+CAT3D 中的 NeRF 优化步骤虽然有效，但仍需数十秒的迭代优化。一个自然的问题是：\textbf{能否用前馈模型替代优化步骤？}
+
+B3D（Both3D）给出了肯定的回答——它能在单个 GPU 上\textbf{不到7秒}内生成完整3D场景。
+
+\subsection{核心思想：Splatter Image}
+
+B3D 的关键思想基于 Splatter Image：为每个像素预测一个 3D Gaussian Splat 的参数。Splatter Image 本身是一种纯重建方法，无法处理未观察区域。B3D 在此基础上引入了\textbf{生成模型}，使其能够「幻想」（hallucinate）未见区域的内容。
+
+\begin{importantbox}{B3D 的两阶段生成流程}
+\textbf{第一阶段——扩散生成}：一个多视角隐扩散模型（multi-view latent diffusion model）同时生成多视角的 RGB 图像和 XYZ 点图（point map）。\\
+\textbf{第二阶段——Gaussian 回归}：一个 Gaussian Head 网络接收生成的 RGB 图像和点图，回归每个像素对应 3D Gaussian 的剩余属性（opacity 和 scale），输出多视角 Splatter Image。
+\end{importantbox}
+
+\subsection{为什么采用两阶段设计？}
+
+这一设计选择有深刻的技术原因：
+
+\begin{itemize}
+    \item RGB 颜色和 XYZ 位置可以从多视角数据集中可靠地获得监督信号——位置信息通过在现有多视角数据集上运行 Structure-from-Motion（SfM）管线获得
+    \item 但像素级 Gaussian 的 opacity 和 scale 很难获得可靠的真值，因此\textbf{不适合直接用扩散模型生成}
+    \item 已有研究表明，给定颜色和位置信息后，\textbf{回归} opacity 和 scale 比\textbf{生成}它们容易得多
+\end{itemize}
+
+\subsection{多视角 Gaussian Head}
+
+Gaussian Head 网络的关键设计要素：
+
+\begin{itemize}
+    \item 接收所有视角的预测点图和 RGB 图像
+    \item 将每个视角转换为对应的 Splatter Image（即每个像素一个 3D Gaussian）
+    \item 使用\textbf{跨视角注意力}（cross-view attention）让网络能够联合推理所有 Splatter Image，确保3D一致性
+    \item 最终的多视角 Splatter Image 组合在一起，代表完整的3D场景
+\end{itemize}
+
+\subsection{训练数据}
+
+B3D 的训练需要大规模多视角数据集，团队使用 MASt3R（一种3D Structure-from-Motion 管线）处理了以下数据集的所有场景：
+
+\begin{itemize}
+    \item CO3D
+    \item RealEstate10K (R10K)
+    \item MVImgNet
+    \item DL3DV
+\end{itemize}
+
+这确保了所有训练数据都具有密集的 XYZ 标注。结合合成物体数据集，构建了大规模训练集。
+
+\begin{knowledgebox}{训练数据的构建策略}
+虽然互联网上的3D数据稀缺，但多视角图像数据较为丰富。通过在多视角数据集上运行 SfM 管线，可以自动获得每张图像的密集深度/点图标注，从而为扩散模型的训练提供足够的监督信号。这种「利用2D数据间接获得3D监督」的策略是当前3D生成研究的重要范式。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+B3D 通过引入前馈 Gaussian Head 替代 NeRF 优化步骤，将3D生成速度从约1分钟提升到7秒以内。其两阶段设计（扩散生成 RGB+XYZ，回归 opacity+scale）巧妙地利用了不同属性在可监督性上的差异。
+
+\section{几何自编码器：关键技术挑战}
+
+\subsection{问题：图像 VAE 不适用于几何数据}
+
+B3D 使用隐扩散模型同时生成 RGB 图像和 XYZ 点图，这要求对两种模态都进行自编码。然而，Henzler 发现\textbf{直接使用预训练的图像 VAE 来编解码点图会产生极差的结果}，且场景越大效果越差。
+
+原因分析：
+\begin{itemize}
+    \item \textbf{损失函数不匹配}：图像压缩常用的感知损失（perceptual loss）对几何数据毫无意义
+    \item \textbf{数据范围不匹配}：图像像素值始终在 $[0, 1]$ 范围内，但几何坐标的取值范围完全不同，且随场景规模变化
+\end{itemize}
+
+\begin{warningbox}{图像 VAE 用于几何编码的陷阱}
+将为图像设计的 VAE（使用感知损失、GAN 损失等训练）直接应用于几何数据（XYZ 点图）是行不通的。几何数据与图像数据在统计分布、值域范围和语义含义上都有本质区别。必须设计专门的几何自编码器。
+\end{warningbox}
+
+\subsection{解码器架构：Transformer vs. 卷积}
+
+另一个有趣的发现是关于解码器架构的选择：
+
+\begin{itemize}
+    \item 从定量指标看，卷积解码器和 Transformer 解码器的几何重建质量相当
+    \item 但\textbf{定性观察}揭示了关键差异：卷积解码器会产生感知上令人不适的伪影，例如无法保持直线的平直性
+    \item 因此 B3D 选择了 \textbf{Transformer 解码器}来处理 XYZ 数据
+\end{itemize}
+
+\begin{warningbox}{定量指标 vs. 定性评估的差异}
+这是一个典型案例：定量指标（如 MSE）可能无法完全反映实际的视觉质量。两种解码器在数值指标上表现相似，但卷积解码器的输出存在结构性伪影（如弯曲的直线），这在实际应用中是不可接受的。这提醒我们在评估几何重建质量时，不能仅依赖传统指标。
+\end{warningbox}
+
+\subsection{本章小结}
+
+几何自编码器是3D隐扩散模型的关键组件，但其设计面临与图像自编码器截然不同的挑战。数据分布差异、损失函数选择和解码器架构都需要针对几何数据特点重新考量。
+
+\section{VLM 引导的感知对齐图像压缩}
+
+\subsection{背景：传统图像压缩的感知失配}
+
+Henzler 在这一部分介绍了一项关于自编码器训练的相关研究——虽不直接关于3D生成，但对理解自编码器设计有重要启发。
+
+传统自编码器训练使用 PSNR 或 SSIM 等损失函数，但这些指标与人类感知的对齐程度很差。例如：
+
+\begin{itemize}
+    \item 人类对\textbf{面部}和\textbf{文字}的失真非常敏感
+    \item 但对草地、毛皮等自然纹理的失真不太在意
+\end{itemize}
+
+\subsection{方法：VLM 作为感知评判者}
+
+该方法使用视觉语言模型（VLM）作为感知评判者，通过 Diffusion DPO（Direct Preference Optimization）来改善扩散自编码器的训练。
+
+流程如下：
+
+\begin{enumerate}
+    \item 给定原始图像，使用扩散自编码器以两个不同的噪声种子解码两次，得到解码 A 和解码 B
+    \item 将原始图像、解码 A 和解码 B 同时输入 VLM，提示其评判哪个解码更接近原始图像
+    \item VLM 输出 $-5$ 到 $+5$ 之间的数值评分（负值表示 A 更好，正值表示 B 更好）
+    \item 基于评判结果，使用 Diffusion DPO 更新自编码器
+\end{enumerate}
+
+\begin{importantbox}{三重鲁棒性策略}
+由于 VLM 容易产生幻觉，研究者采用了三种策略提高评判的可靠性：
+
+\textbf{1. 顺序翻转}：不仅以 (A, B) 顺序输入，还以 (B, A) 顺序输入 VLM，消除位置偏差。
+
+\textbf{2. 多种子聚合}：对 A 和 B 分别使用多个噪声种子，将多次评判结果求和，降低 VLM 输出的噪声。
+
+\textbf{3. LPIPS 交叉验证}：额外使用 LPIPS 指标判断哪个解码更准确，仅当 VLM 和 LPIPS 的判断一致时才将该样本用于 DPO 训练，否则丢弃。
+\end{importantbox}
+
+\subsection{实验结果}
+
+\begin{itemize}
+    \item \textbf{PSNR 指标}：该方法在 PSNR 上表现最差（最低分）——但这\textbf{不是}优化目标
+    \item \textbf{感知指标}（FID、FID-DINOv2、LPIPS）：在多个数据集上表现优异
+    \item \textbf{用户研究}（ELO 评分）：在 MSCOCO 和 CLIC 2020 数据集上获得高 ELO 分数
+\end{itemize}
+
+\begin{knowledgebox}{感知质量 vs. 信号保真度的权衡}
+该工作精确地揭示了一个重要的设计选择：追求人类感知质量（perceptual quality）往往需要牺牲像素级保真度（pixel-level fidelity）。一面旗帜上的星星可能位于略微不同的位置，但整体看起来「对」；文字可能不是逐像素精确匹配，但人类能正确识读。这种权衡在图像压缩和生成任务中非常普遍。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+利用 VLM 作为感知评判者进行 DPO 训练，可以使自编码器的输出更加符合人类感知偏好，尤其在面部和文字等人类敏感区域显著改善。这一思路有望推广到3D生成领域。
+
+\section{ROAR：3D 重光照}
+
+\subsection{动机：细粒度控制}
+
+除了生成3D内容本身，对输出进行细粒度控制也至关重要——\textbf{光照}是其中最重要的控制维度之一。ROAR 方法解决的问题是：给定一组带位姿的图像和一个目标光照条件，生成该光照下的3D模型。
+
+\subsection{方法设计}
+
+ROAR 训练了一个\textbf{多视角重光照模型}，其架构类似于 CAT3D 和 B3D 中的多视角模型，但增加了光照条件作为输入。
+
+具体而言：
+\begin{itemize}
+    \item 输入：一组图像、对应位姿 + 目标光照条件
+    \item 输出：每个视角在目标光照下的重光照图像
+    \item 目标：对于 $N$ 个视角和 $M$ 个光照条件，生成 $N \times M$ 张重光照图像
+    \item 这些图像随后用于训练一个\textbf{光照条件 NeRF}
+\end{itemize}
+
+核心思路类似虚拟光舞台（light stage）——通过模拟不同光照条件下的物体外观，训练 NeRF 对任意目标光照进行泛化。
+
+\subsection{光照表示：环境贴图 + 镜面反射嵌入}
+
+光照的编码是一个非平凡的问题。ROAR 采用了双重光照表示：
+
+\begin{importantbox}{ROAR 的双重光照编码}
+\textbf{1. 全局光照嵌入}：将环境贴图（environment map）通过 Transformer 编码器转换为光照嵌入向量。
+
+\textbf{2. 镜面反射嵌入}：由于全局编码器不够强大，无法完全捕获镜面高光细节，ROAR 额外引入了一个镜面反射嵌入（specular embedding），从镜面反射方向对环境贴图进行局部采样。为了处理不同粗糙度，采用预模糊的环境贴图，从而只需采样单个位置即可获得镜面反射信息。
+\end{importantbox}
+
+\subsection{实验效果}
+
+实验表明，ROAR 能够忠实地恢复不同目标光照下的镜面高光效果，而竞争方法要么遗漏镜面高光，要么过度补偿。
+
+\subsection{本章小结}
+
+ROAR 将「2D生成 + 3D蒸馏」范式扩展到了光照控制维度，通过训练多视角重光照模型生成丰富的光照-视角数据，再蒸馏为光照条件 NeRF，实现了3D物体的任意重光照。
+
+\section{Captive：360度全景生成}
+
+\subsection{问题与挑战}
+
+360度全景图像的生成面临一个严峻的数据问题：真实的360度全景数据\textbf{非常有限}。如何在有限数据下训练高质量的全景生成模型？
+
+\subsection{核心思想：立方体贴图表示}
+
+Captive 的关键洞察是将360度全景表示为\textbf{立方体贴图}（cube map），即6个面的透视图像。每个单独的面都是标准透视图像，属于互联网图像的正常分布范围。
+
+\begin{importantbox}{Captive 的架构设计}
+\textbf{编码}：将6张立方体面沿通道维度堆叠，输入2D编码器。
+
+\textbf{生成}：几乎完全复用预训练 Stable Diffusion 模型的架构。由于预训练模型已具备生成任意透视图像的能力，\textbf{冻结现有层}，仅训练新增的注意力层。
+
+\textbf{新增层的作用}：学习6张图像之间的空间关系，即立方体各面如何在3D空间中关联。
+
+\textbf{数据效率}：由于核心生成能力来自预训练的大规模2D模型，仅需\textbf{数万张}全景图像即可训练出高质量的全景生成模型。
+\end{importantbox}
+
+\subsection{分布外泛化}
+
+尽管训练数据仅限于自然场景的全景图，Captive 能够生成超出训练分布的内容。这得益于冻结了2D基础模型——它保留了生成任意类型透视图像的能力，而新增的注意力层只需学习视角间的空间关系。
+
+\begin{knowledgebox}{冻结基础模型 + 轻量适配层的范式}
+Captive 的成功体现了一个重要范式：冻结强大的预训练基础模型，只训练少量的适配层来学习新的约束（如多视角一致性、360度空间关系）。这样既能利用基础模型在大规模数据上学到的强大生成先验，又能在小数据集上快速适配新任务，且保持了基础模型的分布外泛化能力。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Captive 通过立方体贴图表示和冻结基础模型的策略，在有限全景数据下实现了高质量的360度全景生成，并展现了良好的分布外泛化能力。
+
+\section{苦涩的教训与3D的未来}
+
+\subsection{Bitter Lesson 视角下的3D生成}
+
+Henzler 引用了 Richard Sutton 的「苦涩的教训」（The Bitter Lesson）来审视3D生成领域的发展趋势：
+
+\begin{quote}
+\textit{假设数据和计算资源充裕，减少归纳偏置。}
+\end{quote}
+
+在这一框架下：
+\begin{itemize}
+    \item \textbf{真正的生成方法}（2D图像/视频模型）\textbf{能够扩展}（scale）：数据充裕、归纳偏置有限
+    \item \textbf{3D模型无法同样扩展}：高质量3D数据极度稀缺
+    \item 但3D模型在\textbf{成本和时间效率}上具有显著优势
+\end{itemize}
+
+\begin{importantbox}{3D在内容生成中的持续重要性}
+虽然2D方法已能生成高度逼真的视频并展现了交互能力（如相机控制），但：
+
+\textbf{1. 控制精度不足}：我们尚未获得对2D视频模型的完全、精确的控制能力。
+
+\textbf{2. 部署困难}：这些大型模型目前无法在消费级设备上实时运行。
+
+\textbf{3. 3D蒸馏不可或缺}：为了在移动端部署，仍然需要将生成结果蒸馏为高效的3D表示。
+
+这些限制意味着3D建模在可预见的未来仍是内容生成流程中的关键一环。
+\end{importantbox}
+
+\subsection{World Labs 的启示}
+
+World Labs 正在开发能够在\textbf{单个 GPU} 上实现\textbf{实时下一帧预测}的交互式3D模型。虽然结果尚不完美，但这是一个非常有前景的方向——预示着2D生成与3D表示之间的边界可能进一步模糊。
+
+\subsection{本章小结}
+
+3D生成的未来可能在于「2D负责质量、3D负责效率」的分工协作模式。3D方法的不可替代性在于其极低的渲染成本和在移动端的可部署性。
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+本次演讲系统地梳理了生成式3D方法的演进脉络和当前格局：
+
+\begin{enumerate}
+    \item \textbf{3D生成方法的演进}：从需要3D真值的3D GAN，到利用可微渲染摆脱3D数据依赖的 PlatonicGAN，再到多视角融合的 PixelNeRF
+    \item \textbf{视频模型的3D理解}：实验证实视频模型能隐式建模3D几何，但推理成本限制了部署
+    \item \textbf{CAT3D}：「多视角扩散 + NeRF 蒸馏」范式，约1分钟生成3D场景
+    \item \textbf{B3D}：前馈 Gaussian Head 替代 NeRF 优化，7秒内生成3D场景
+    \item \textbf{几何 VAE}：图像 VAE 不适用于几何数据，需要专门的架构和损失函数设计
+    \item \textbf{VLM 感知对齐}：用 VLM 作为评判者进行 DPO 训练，改善自编码器的感知质量
+    \item \textbf{ROAR}：将重光照作为额外控制维度引入3D生成框架
+    \item \textbf{Captive}：立方体贴图 + 冻结基础模型实现数据高效的全景生成
+\end{enumerate}
+
+\subsection{关键设计原则}
+
+\begin{importantbox}{3D生成方法的设计原则}
+\textbf{1. 2D生成 + 3D蒸馏}：利用2D模型的强大生成能力，通过3D重建获得高效可渲染的3D表示。
+
+\textbf{2. 分阶段设计}：将容易获得监督的属性（如 RGB、XYZ）用扩散模型生成，将难以获得真值的属性（如 opacity、scale）用前馈网络回归。
+
+\textbf{3. 冻结 + 适配}：在基础模型上冻结已学习的强大先验，仅训练少量适配层来学习新约束。
+
+\textbf{4. 跨视角注意力}：通过全局注意力机制确保多视角生成的3D一致性。
+\end{importantbox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item CAT3D: Create Anything in 3D with Multi-View Diffusion Models (Gao et al., Google, 2024)
+    \item B3D: 快速前馈3D场景生成方法 (Google Research)
+    \item Splatter Image: Ultra-Fast Single-View 3D Reconstruction (Szymanowicz et al., 2024)
+    \item MASt3R: 3D Structure-from-Motion 管线
+    \item ROAR: 3D重光照方法 (Google Research)
+    \item The Bitter Lesson --- Richard Sutton, 2019
+    \item Genie 2: 交互式视频生成模型 (Google DeepMind)
+    \item World Labs: 实时3D世界模型
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

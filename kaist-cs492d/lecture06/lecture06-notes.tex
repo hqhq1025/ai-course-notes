@@ -1,0 +1,645 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D: 条件生成与潜在扩散模型}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{65分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=elW_X0ezM70}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言：从无条件到条件生成}
+
+本讲是 KAIST CS492D（Diffusion Models and Their Applications）的第六讲，由 Minhyuk Sung 教授讲授。前几讲已经介绍了 DDPM 和 DDIM 等扩散模型的基本原理，学生已具备实现基础扩散模型的能力。本讲将"换挡"，讨论如何在实际应用中引入\textbf{条件信息}（class label、文本描述、图像等），以及如何\textbf{高效微调}大规模预训练扩散模型。
+
+\begin{knowledgebox}{前置知识回顾}
+在 DDPM/DDIM 框架中，噪声预测网络 $\epsilon_\theta(x_t, t)$ 的输出与 score function 之间存在确定性关系：
+$$
+\nabla_{x_t} \log p(x_t) \;\propto\; -\frac{1}{\sqrt{1-\bar\alpha_t}}\,\epsilon_\theta(x_t, t)
+$$
+其中 $\bar\alpha_t$ 为噪声调度的累积乘积。这一关系是所有条件生成方法的数学基础——通过修改 score function 来引导生成轨迹。
+\end{knowledgebox}
+
+本讲覆盖以下核心主题：
+\begin{enumerate}
+    \item \textbf{Classifier Guidance}：利用外部分类器引导条件生成
+    \item \textbf{Classifier-Free Guidance (CFG)}：无需分类器的条件引导，工业标配
+    \item \textbf{DDIM Inversion}：确定性反演与图像编辑
+    \item \textbf{Latent Diffusion Models}：在潜在空间运行扩散以降低计算开销
+    \item \textbf{ControlNet}：高效微调实现图像条件控制
+    \item \textbf{LoRA}：低秩适应用于扩散模型个性化
+\end{enumerate}
+
+\newpage
+\section{Classifier Guidance：分类器引导}
+
+\subsection{从联合分布到条件分布}
+
+条件生成的目标是学习条件分布 $p(x|y)$，其中 $y$ 是条件信息（如类别标签）。关键洞察在于，联合分布和条件分布的 score function 之间存在简单关系：
+
+$$
+\nabla_{x_t}\log p(x_t, y) = \nabla_{x_t}\log p(x_t) + \nabla_{x_t}\log p(y|x_t)
+$$
+
+这是因为 $p(x_t, y) = p(x_t)\cdot p(y|x_t)$，取对数后对 $x_t$ 求梯度，$\log p(y)$ 项为关于 $x_t$ 的常数而消失。
+
+\begin{importantbox}{Classifier Guidance 核心公式}
+在扩散模型的每一步去噪中，修改 score function：
+$$
+\tilde{\nabla}_{x_t}\log p(x_t, y) = \underbrace{\nabla_{x_t}\log p(x_t)}_{\text{无条件 score（预训练模型）}} + \underbrace{\nabla_{x_t}\log p(y|x_t)}_{\text{分类器梯度引导}}
+$$
+对应到噪声预测，更新规则为：
+$$
+\tilde{\epsilon}(x_t, t) = \epsilon_\theta(x_t, t) - \sqrt{1-\bar\alpha_t}\;\nabla_{x_t}\log p_\phi(y|x_t)
+$$
+其中 $p_\phi(y|x_t)$ 是在带噪数据上训练的分类器。
+\end{importantbox}
+
+\subsection{噪声分类器的训练}
+
+这里有一个关键细节：分类器 $p_\phi(y|x_t)$ 不是普通的图像分类器，而是需要能处理\textbf{任意噪声水平}的中间数据点 $x_t$。训练方法如下：
+
+\begin{enumerate}
+    \item 对于数据集中的每一对 $(x_0, y)$，随机采样时间步 $t$
+    \item 通过前向过程 $q(x_t|x_0)$ 得到带噪图像 $x_t$
+    \item 训练分类器以 $x_t$ 和 $t$ 为输入，预测类别 $y$ 的概率
+\end{enumerate}
+
+\begin{warningbox}{分类器必须处理带噪输入}
+不能直接使用在干净图像上训练的 ImageNet 分类器！分类器必须在各种噪声水平的 $x_t$ 上训练，否则梯度信号在高噪声步骤时完全不可靠。这是 Classifier Guidance 的一个额外训练成本。
+\end{warningbox}
+
+\subsection{引导强度的控制}
+
+通过引入权重 $w$ 来控制条件的强度：
+
+$$
+\tilde{\epsilon}(x_t, t) = \epsilon_\theta(x_t, t) - w\cdot\sqrt{1-\bar\alpha_t}\;\nabla_{x_t}\log p_\phi(y|x_t)
+$$
+
+\begin{itemize}
+    \item $w = 0$：纯无条件生成
+    \item $w = 1$：标准条件生成（对应联合分布的 score）
+    \item $w > 1$：增强条件效果——输出更忠于条件，但多样性降低
+\end{itemize}
+
+\begin{knowledgebox}{引导强度的直觉理解}
+从轨迹的角度看，无条件扩散模型的去噪轨迹从 $x_T$ 到 $x_0$ 遵循无条件 score field。增加分类器梯度项相当于在每一步\textbf{偏转}轨迹，使其朝向满足条件 $y$ 的数据流形区域移动。增大 $w$ 使偏转更剧烈，输出更"典型"但更缺乏多样性。
+\end{knowledgebox}
+
+\subsection{Classifier Guidance 的优势与不足}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{6cm}p{6cm}}
+\toprule
+\textbf{优势} & \textbf{不足} \\
+\midrule
+可复用预训练的无条件模型 & 需要额外训练噪声分类器 \\
+灵活控制引导强度 & 推理时需运行两个网络 \\
+不需要重训扩散模型 & 分类器梯度可能不稳定 \\
+数学推导清晰 & 仅限于有分类器可用的条件类型 \\
+\bottomrule
+\end{tabular}
+\caption{Classifier Guidance 优缺点对比}
+\end{table}
+
+这些不足直接促成了 Classifier-Free Guidance 的提出。
+
+\subsection{本章小结}
+
+Classifier Guidance 的核心思想是：利用贝叶斯分解，将条件生成分解为无条件 score 加上分类器梯度。这一思想揭示了扩散模型相较于 GAN 和 VAE 的独特优势——可以在\textbf{不重训}生成模型的情况下，通过修改 score function 实现条件引导。这种 score manipulation 的范式将贯穿整个课程的后续内容。
+
+\newpage
+\section{Classifier-Free Guidance (CFG)：无分类器引导}
+
+\subsection{动机：消除对外部分类器的依赖}
+
+Classifier Guidance 虽然优雅，但在实际部署中需要额外训练并维护一个噪声分类器网络，这增加了系统复杂度和计算成本。Classifier-Free Guidance (CFG) 的目标是：\textbf{在不使用任何外部分类器的情况下，实现与 Classifier Guidance 等效的条件引导效果}。
+
+\begin{importantbox}{CFG 的核心思路}
+不再分别训练无条件模型和分类器，而是训练一个\textbf{单一}的扩散模型，使其同时具备条件预测和无条件预测的能力。在推理时，通过两次前向传播（条件 + 无条件）的\textbf{外推}来增强条件效果。
+\end{importantbox}
+
+\subsection{训练策略：Null Label 与条件 Dropout}
+
+CFG 的训练非常简单：在标准的条件扩散模型训练中，以一定概率（通常 10\%--20\%）将条件信息 $y$ 替换为一个特殊的 null label $\varnothing$：
+
+$$
+\epsilon_\theta(x_t, t, y) = \begin{cases}
+\text{条件预测} & \text{概率 } 1-p_{\text{uncond}} \\
+\epsilon_\theta(x_t, t, \varnothing) & \text{概率 } p_{\text{uncond}}
+\end{cases}
+$$
+
+\begin{itemize}
+    \item 对于类别标签：null label 可以是一个特殊的 index 0
+    \item 对于文本条件：null label 是空字符串 ""  的 embedding
+    \item 对于图像条件：null label 可以是全零张量
+\end{itemize}
+
+这样，单个网络可以同时学习：
+\begin{itemize}
+    \item 输入条件 $y$ 时：$\epsilon_\theta(x_t, t, y) \;\longleftrightarrow\;$ 条件 score $\nabla_{x_t}\log p(x_t|y)$
+    \item 输入 $\varnothing$ 时：$\epsilon_\theta(x_t, t, \varnothing) \;\longleftrightarrow\;$ 无条件 score $\nabla_{x_t}\log p(x_t)$
+\end{itemize}
+
+\subsection{推理公式：条件与无条件的外推}
+
+在推理时，CFG 通过对条件预测和无条件预测做\textbf{外推}（extrapolation）来增强条件效果：
+
+$$
+\tilde{\epsilon}(x_t, t, y) = \epsilon_\theta(x_t, t, \varnothing) + w \cdot \bigl[\epsilon_\theta(x_t, t, y) - \epsilon_\theta(x_t, t, \varnothing)\bigr]
+$$
+
+等价形式：
+
+$$
+\tilde{\epsilon}(x_t, t, y) = (1-w)\,\epsilon_\theta(x_t, t, \varnothing) + w\,\epsilon_\theta(x_t, t, y)
+$$
+
+\begin{importantbox}{CFG 引导强度参数 $w$ 的含义}
+\begin{itemize}
+    \item $w = 0$：完全无条件生成（忽略条件 $y$）
+    \item $w = 1$：标准条件生成（无外推增强）
+    \item $w > 1$：条件增强——外推到条件方向更远处
+    \item $w < 1$ 且 $w > 0$：插值——弱化条件影响
+\end{itemize}
+在实际应用中，$w$ 通常设为 5--15，具体值取决于任务和模型。
+\end{importantbox}
+
+\subsection{CFG 与 Classifier Guidance 的等价性}
+
+CFG 的外推公式可以改写为：
+
+$$
+\tilde{\epsilon}(x_t, t, y) = \epsilon_\theta(x_t, t, y) + (w-1)\bigl[\epsilon_\theta(x_t, t, y) - \epsilon_\theta(x_t, t, \varnothing)\bigr]
+$$
+
+对比 Classifier Guidance 的公式：
+
+$$
+\tilde{\epsilon}(x_t, t) = \epsilon_\theta(x_t, t) - w'\cdot\sqrt{1-\bar\alpha_t}\;\nabla_{x_t}\log p_\phi(y|x_t)
+$$
+
+可以证明，当 $\lambda = w - 1$ 时，两者在数学上是等价的。差异 $\epsilon_\theta(x_t, t, y) - \epsilon_\theta(x_t, t, \varnothing)$ 隐式地编码了分类器梯度 $\nabla_{x_t}\log p(y|x_t)$ 的信息。
+
+\begin{warningbox}{CFG 的计算代价}
+CFG 需要在每个去噪步骤运行\textbf{两次}前向传播（一次有条件、一次无条件），因此推理时间约为无引导情况的 2 倍。在实际部署中，可以通过 batched inference 将两次预测打包为一个 batch 来缓解。一些近期工作（如 distillation 方法）试图将 CFG 的效果蒸馏进单次前向传播中。
+\end{warningbox}
+
+\subsection{Negative Prompt：CFG 的创意应用}
+
+CFG 框架还支持一个有趣的扩展——\textbf{负向提示词}（Negative Prompt）。在标准 CFG 中，无条件预测使用 null label $\varnothing$。如果将 $\varnothing$ 替换为一个具体的"不想要的"条件 $y_{\text{neg}}$，则公式变为：
+
+$$
+\tilde{\epsilon} = \epsilon_\theta(x_t, t, y_{\text{neg}}) + w\bigl[\epsilon_\theta(x_t, t, y) - \epsilon_\theta(x_t, t, y_{\text{neg}})\bigr]
+$$
+
+这意味着生成的图像会\textbf{远离} $y_{\text{neg}}$ 描述的概念。例如，设 $y_{\text{neg}} =$ ``male''，则生成的人像会偏向女性特征。
+
+\begin{knowledgebox}{CFG 的广泛适用性}
+CFG 的条件不限于类别标签，可以是：文本描述（text-to-image）、音频信号（audio-to-image）、视角信息（novel view synthesis）、其他图像（image-to-image）等任意模态。这使得 CFG 成为现代扩散模型中最通用的条件引导机制，几乎所有主流模型（Stable Diffusion、DALL-E、Imagen 等）都采用 CFG。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Classifier-Free Guidance 是扩散模型领域最重要的实用技术之一。其核心创新在于通过条件 dropout 训练策略，让单个模型同时学习条件和无条件分布，再通过推理时的外推实现可控的条件增强。相比 Classifier Guidance，CFG 无需额外分类器、支持任意条件类型、实现简单，已成为工业界的标准配置。
+
+\newpage
+\section{DDIM Inversion：确定性反演与图像编辑}
+
+\subsection{DDIM 的确定性采样回顾}
+
+DDIM（Denoising Diffusion Implicit Models）的核心特性是将反向过程变为\textbf{确定性}的。在 DDPM 中，反向过程的每一步都注入随机噪声；而在 DDIM 中，设方差 $\sigma_t = 0$，则更新公式变为：
+
+$$
+x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,\hat{x}_0(x_t) + \sqrt{1-\bar\alpha_{t-1}}\,\epsilon_\theta(x_t, t)
+$$
+
+其中 $\hat{x}_0(x_t) = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\epsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}$ 是对干净图像的估计。
+
+\begin{importantbox}{DDIM 确定性性质}
+在 DDIM 中，从 $x_T$ 到 $x_0$ 的映射是确定性的：给定相同的初始噪声 $x_T$ 和模型参数，总是生成完全相同的 $x_0$。这意味着存在一个隐式的\textbf{双射映射} $x_T \leftrightarrow x_0$。
+\end{importantbox}
+
+\subsection{反演：从 $x_0$ 找回 $x_T$}
+
+DDIM 的确定性特性使得一个重要操作成为可能——\textbf{反演}（inversion）。给定一张真实图像 $x_0$，我们希望找到对应的噪声向量 $x_T$，使得 DDIM 的确定性反向过程能精确重建 $x_0$。
+
+\begin{warningbox}{反演并非简单的前向过程}
+直觉上，前向过程 $q(x_T|x_0) = \mathcal{N}(\sqrt{\bar\alpha_T}\,x_0,\, (1-\bar\alpha_T)\,I)$ 可以直接计算 $x_T$。但这是\textbf{随机}的前向过程，得到的 $x_T$ 并不保证通过 DDIM 确定性反向过程回到 $x_0$。DDIM Inversion 需要沿着\textbf{确定性}路径反向计算。
+\end{warningbox}
+
+反演的近似方法：将 DDIM 更新公式中的 $t-1$ 替换为 $t+1$，利用噪声函数的平滑性假设（$\epsilon_\theta(x_t, t) \approx \epsilon_\theta(x_{t+1}, t+1)$），逐步从 $x_0$ 计算到 $x_T$：
+
+$$
+x_{t+1} = \sqrt{\bar\alpha_{t+1}}\,\hat{x}_0(x_t) + \sqrt{1-\bar\alpha_{t+1}}\,\epsilon_\theta(x_t, t)
+$$
+
+\begin{knowledgebox}{近似精度与时间步数}
+DDIM Inversion 的精度取决于时间步间隔的大小。时间步数越多（间隔越小），$\epsilon_\theta(x_t, t) \approx \epsilon_\theta(x_{t+1}, t+1)$ 的近似越准确，反演重建越精确。实践中通常需要 50--200 步才能获得高质量的反演结果。
+\end{knowledgebox}
+
+\subsection{DDIM Inversion + CFG = 图像编辑}
+
+DDIM Inversion 与 CFG 结合可以实现强大的图像编辑功能。流程如下：
+
+\begin{enumerate}
+    \item \textbf{反演阶段}：给定输入图像 $x_0$ 和原始文本描述 $y_{\text{src}}$（如 ``a photograph of a puppy''），通过 DDIM Inversion 得到 $x_T$
+    \item \textbf{生成阶段}：从相同的 $x_T$ 出发，使用新的文本描述 $y_{\text{tgt}}$（如 ``a photograph of a gray cat''）进行 DDIM 确定性采样
+    \item \textbf{结果}：输出图像在整体构图和风格上与原图相似，但内容符合新的文本描述
+\end{enumerate}
+
+这种方法可以实现：
+\begin{itemize}
+    \item 物体替换：将水果替换为蛋糕
+    \item 属性修改：给人物戴上太阳镜
+    \item 风格变换：将照片变为特定绘画风格
+\end{itemize}
+
+\subsection{本章小结}
+
+DDIM Inversion 利用 DDIM 采样的确定性特性，实现了从真实图像到噪声空间的近似映射。与 CFG 结合后，只需更换文本条件即可实现语义级别的图像编辑，而无需任何额外训练。这展示了扩散模型不仅能生成图像，还能作为强大的图像编辑工具。
+
+\newpage
+\section{Latent Diffusion Models：潜在扩散模型}
+
+\subsection{像素空间扩散的计算瓶颈}
+
+在之前讨论的所有扩散模型中，扩散过程直接在\textbf{像素空间}进行：所有中间变量 $x_t$ 与原始图像具有相同的维度。对于高分辨率图像（如 $512\times512\times3$ 或更大），这带来了巨大的计算和内存开销。
+
+\begin{warningbox}{直接在像素空间训练的代价}
+以 Stable Diffusion 为例，其训练数据集 LAION-5B 包含约 58 亿张图像。如果直接在像素空间训练高分辨率扩散模型：
+\begin{itemize}
+    \item 使用\textbf{单张 GPU}训练需要约 \textbf{2--3 年}
+    \item 生成 10,000 张图像（单张 GPU）需要约\textbf{一天}
+\end{itemize}
+所有中间变量与输出必须保持相同维度，这是扩散模型相比 GAN 的一个结构性劣势。
+\end{warningbox}
+
+\subsection{两阶段架构：压缩 + 扩散}
+
+Latent Diffusion Models (LDM) 的核心思想是将扩散过程从像素空间移到\textbf{低维潜在空间}：
+
+\textbf{第一阶段：训练图像自编码器}
+\begin{itemize}
+    \item 编码器 $\mathcal{E}$：将高分辨率图像 $x \in \mathbb{R}^{H\times W\times 3}$ 压缩为低维潜在表示 $z = \mathcal{E}(x) \in \mathbb{R}^{h\times w\times c}$
+    \item 解码器 $\mathcal{D}$：从潜在表示重建图像 $\hat{x} = \mathcal{D}(z) \approx x$
+    \item 压缩率：通常 $h = H/8$, $w = W/8$，空间维度缩小 64 倍
+\end{itemize}
+
+\textbf{第二阶段：在潜在空间训练扩散模型}
+\begin{itemize}
+    \item 所有扩散操作（加噪、去噪、score 计算）都在 $z$ 空间进行
+    \item 噪声预测网络输入 $z_t$（而非 $x_t$），输出与 $z_t$ 同维度的噪声估计
+    \item 生成完成后，通过解码器 $\mathcal{D}$ 将结果映射回像素空间
+\end{itemize}
+
+\begin{importantbox}{Latent Diffusion 的关键优势}
+\begin{enumerate}
+    \item \textbf{计算效率}：在 $64\times64$ 的潜在空间运行扩散，比在 $512\times512$ 的像素空间快约 64 倍
+    \item \textbf{语义丰富}：潜在空间通过自编码器训练已编码了高层语义信息，扩散模型可以更关注语义结构而非像素细节
+    \item \textbf{模块化}：自编码器和扩散模型可以独立训练和更换
+\end{enumerate}
+\end{importantbox}
+
+\subsection{自编码器的选择}
+
+LDM 中使用的自编码器并非标准 VAE（其 KL 散度正则化权重较高会牺牲重建质量），而是更接近\textbf{普通自编码器}（autoencoder），重点优化重建质量：
+
+\begin{itemize}
+    \item 使用较低权重的 KL 散度正则化，保证潜在空间的正则性
+    \item 加入感知损失（perceptual loss）和对抗损失（adversarial loss）提升重建质量
+    \item 编码器-解码器通常采用卷积架构，支持任意分辨率输入
+\end{itemize}
+
+\begin{knowledgebox}{为什么不用标准 VAE？}
+标准 VAE 的 KL 正则化鼓励潜在空间接近标准正态分布，这会损害重建质量。在 LDM 中，自编码器的主要目标是\textbf{无损压缩}——在大幅降低维度的同时尽可能保持图像信息。因此更倾向于使用较弱的正则化，让潜在空间保留更多细节。
+\end{knowledgebox}
+
+\subsection{条件注入机制}
+
+在 LDM 的架构中，条件信息（文本、图像、语义图等）通过\textbf{交叉注意力}（cross-attention）机制注入 U-Net：
+
+\begin{enumerate}
+    \item 条件信息 $y$（如文本）首先通过条件编码器（如 CLIP text encoder）映射为 embedding 向量
+    \item 在 U-Net 的每个 attention block 中，$z_t$ 的特征作为 Query，条件 embedding 作为 Key 和 Value
+    \item 交叉注意力的输出融合了 $z_t$ 的空间信息和条件的语义信息
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{组件} & \textbf{输入维度} & \textbf{功能} \\
+\midrule
+图像编码器 $\mathcal{E}$ & $512\times512\times3 \to 64\times64\times4$ & 像素$\to$潜在空间 \\
+噪声预测 U-Net & $64\times64\times4 + \text{time} + \text{cond}$ & score 估计 \\
+条件编码器（CLIP） & text $\to \mathbb{R}^{77\times768}$ & 文本$\to$embedding \\
+图像解码器 $\mathcal{D}$ & $64\times64\times4 \to 512\times512\times3$ & 潜在空间$\to$像素 \\
+\bottomrule
+\end{tabular}
+\caption{Stable Diffusion 核心组件及其维度}
+\end{table}
+
+\subsection{Stable Diffusion 架构}
+
+Stable Diffusion 是 LDM 最知名的实现，由 CompVis（LMU Munich）和 Stability AI 合作开发。其完整架构包含：
+
+\begin{enumerate}
+    \item \textbf{VAE 编码器/解码器}：8 倍空间下采样，4 通道潜在空间
+    \item \textbf{U-Net with cross-attention}：约 860M 参数，包含 ResNet blocks + Transformer blocks
+    \item \textbf{CLIP text encoder}：将文本 prompt 编码为 $77\times768$ 的 token embedding 序列
+    \item \textbf{CFG 支持}：训练时使用 10\% 的概率将文本条件替换为空字符串
+\end{enumerate}
+
+\begin{knowledgebox}{从 U-Net 到 Transformer}
+早期 LDM（包括 Stable Diffusion v1/v2）使用 U-Net 作为噪声预测网络。近期趋势是转向纯 Transformer 架构（如 DiT），因其更易扩展、与 NLP 技术栈一致。Stable Diffusion 3 已采用 MM-DiT（多模态 Diffusion Transformer）架构。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Latent Diffusion Models 通过"先压缩再扩散"的两阶段设计，将高维像素空间的扩散问题转化为低维潜在空间的扩散问题，在大幅降低计算成本的同时保持了生成质量。这一架构已成为现代图像/视频生成模型的标准范式（Stable Diffusion、DALL-E 3、Sora 等），是将扩散模型从学术原型推向工业应用的关键技术创新。
+
+\newpage
+\section{ControlNet：高效条件控制微调}
+
+\subsection{问题设定：利用预训练模型实现新条件}
+
+当我们拥有一个在数十亿图像上预训练的扩散模型（如 Stable Diffusion），想让它接受新的条件输入（如边缘图、人体姿态、深度图等），面临一个核心困境：
+
+\begin{warningbox}{从头训练条件模型的代价}
+如果用 Classifier-Free Guidance 从头训练一个新的条件模型：
+\begin{itemize}
+    \item 需要数十亿规模的\textbf{配对数据}（条件图像 + 真实图像），收集成本极高
+    \item 需要从零开始训练完整的扩散模型，计算成本巨大
+    \item 无法复用已有预训练模型学到的丰富视觉知识
+\end{itemize}
+例如，要训练一个「边缘图 $\to$ 真实图像」的模型，理论上需要 50 亿对（边缘图, 真实图像）的配对数据，这在实践中几乎不可能获得高质量的大规模配对。
+\end{warningbox}
+
+ControlNet 的目标是：\textbf{冻结预训练模型的参数，仅用少量配对数据（如 50K--100K 对）和少量额外参数，就能让模型接受新的条件输入}。
+
+\subsection{ControlNet 的架构设计}
+
+ControlNet 的设计遵循两个关键原则：
+
+\textbf{原则一：保持初始输出不变（Zero Convolution）}
+
+在微调开始时，新增模块的输出应为零，使得整个网络的行为与预训练模型完全一致。这通过\textbf{零卷积}（zero convolution）实现——将连接层的权重和偏置都初始化为零。
+
+\textbf{原则二：复用预训练编码器（Trainable Copy）}
+
+ControlNet 创建预训练 U-Net 编码器部分的一个\textbf{可训练副本}（trainable copy），用于处理条件输入：
+
+\begin{enumerate}
+    \item \textbf{原始 U-Net}：参数冻结，继续处理 $z_t$ 和 $t$（保证生成质量）
+    \item \textbf{ControlNet 编码器副本}：参数可训练，额外接收条件图像 $c$
+    \item \textbf{零卷积连接}：副本编码器的输出通过零卷积层与原始 U-Net 的 skip connections 相加
+\end{enumerate}
+
+\begin{importantbox}{ControlNet 的零卷积初始化策略}
+在训练开始时：
+\begin{itemize}
+    \item 零卷积的所有权重和偏置均为 0
+    \item ControlNet 副本的输出被零卷积"屏蔽"，对原始 U-Net 无影响
+    \item 整个系统的输出\textbf{恰好等于}预训练模型的输出——不会因为新增模块而破坏已学到的生成能力
+\end{itemize}
+随着训练进行，零卷积逐渐学到非零权重，条件信息被平滑地融入生成过程。
+\end{importantbox}
+
+\subsection{ControlNet 的训练}
+
+训练只更新 ControlNet 编码器副本和零卷积层的参数，原始 U-Net 完全冻结：
+
+\begin{itemize}
+    \item 训练数据：少量配对数据（如 50K 对边缘图-真实图像）
+    \item 训练目标：标准扩散损失 $\|\epsilon - \epsilon_\theta(z_t, t, c)\|^2$
+    \item 训练成本：远低于从头训练，通常 8 张 GPU 训练几天即可
+\end{itemize}
+
+\begin{knowledgebox}{ControlNet 的多种条件类型}
+由于 ControlNet 的条件编码器可以处理与原始图像同分辨率的任意图像输入，它已被成功应用于：
+\begin{itemize}
+    \item \textbf{Canny 边缘图}：控制轮廓和边缘
+    \item \textbf{人体姿态（OpenPose）}：控制人物动作
+    \item \textbf{深度图}：控制空间结构和远近关系
+    \item \textbf{语义分割图}：控制区域内容
+    \item \textbf{涂鸦/草图}：从简笔画生成真实图像
+    \item \textbf{法线图}：控制表面朝向和光照
+\end{itemize}
+每种条件类型需要单独训练一个 ControlNet 模块，但可以共用同一个冻结的基础模型。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+ControlNet 通过三个关键设计——冻结预训练模型、可训练编码器副本、零卷积初始化——实现了在少量数据和计算资源下为预训练扩散模型添加新条件类型的能力。它完美解决了"不想从头训练"和"不想丢失预训练知识"的矛盾，是扩散模型微调领域最成功的方法之一。
+
+\newpage
+\section{LoRA：低秩适应}
+
+\subsection{全参数微调的困境}
+
+当我们希望让预训练扩散模型适应特定风格或特定主体（如生成特定人物的照片），最直接的方法是微调模型的全部参数。然而这面临严重问题：
+
+\begin{itemize}
+    \item Stable Diffusion U-Net 约有 860M 参数，全参数微调需要大量显存
+    \item 用少量数据（如 5--20 张图）微调大模型极易\textbf{过拟合}
+    \item 每个定制版本都需要存储完整的模型权重（几 GB），部署成本高
+    \item 微调可能破坏预训练模型学到的通用能力（\textbf{灾难性遗忘}）
+\end{itemize}
+
+\subsection{LoRA 的核心思想}
+
+LoRA（Low-Rank Adaptation）基于一个关键假设：\textbf{微调引起的权重更新存在于低秩子空间中}。
+
+对于预训练模型中的权重矩阵 $W_0 \in \mathbb{R}^{d \times k}$，LoRA 将更新分解为两个低秩矩阵的乘积：
+
+$$
+W = W_0 + \Delta W = W_0 + B \cdot A
+$$
+
+其中 $B \in \mathbb{R}^{d \times r}$，$A \in \mathbb{R}^{r \times k}$，$r \ll \min(d, k)$ 是秩。
+
+\begin{importantbox}{LoRA 的参数效率}
+以一个 $1024 \times 1024$ 的权重矩阵为例：
+\begin{itemize}
+    \item 全参数微调：$1024 \times 1024 = 1,048,576$ 个可训练参数
+    \item LoRA（$r=4$）：$1024 \times 4 + 4 \times 1024 = 8,192$ 个可训练参数
+    \item 参数缩减：\textbf{128 倍}
+\end{itemize}
+在扩散模型中，通常只对 attention 层的 $W_Q$, $W_K$, $W_V$, $W_O$ 矩阵应用 LoRA，进一步减少可训练参数总量。
+\end{importantbox}
+
+\subsection{LoRA 在扩散模型中的应用}
+
+LoRA 的初始化和训练策略：
+
+\begin{itemize}
+    \item $A$ 使用高斯随机初始化，$B$ 初始化为零矩阵
+    \item 训练开始时 $\Delta W = BA = 0$，保证初始输出与预训练模型一致
+    \item 只训练 $A$ 和 $B$，冻结所有原始参数 $W_0$
+    \item 推理时可将 $\Delta W$ 合并回 $W_0$，\textbf{不增加任何推理延迟}
+\end{itemize}
+
+典型应用场景：
+\begin{itemize}
+    \item \textbf{风格适应}：用某位画家的作品训练 LoRA，生成该风格的图像
+    \item \textbf{主体定制}（DreamBooth + LoRA）：用特定物体/人物的几张照片训练，生成该主体的新图
+    \item \textbf{概念注入}：教模型理解新的视觉概念（如特定品牌 logo）
+\end{itemize}
+
+\begin{warningbox}{LoRA 的秩选择}
+秩 $r$ 是 LoRA 最关键的超参数：
+\begin{itemize}
+    \item $r$ 太小（如 1--2）：表达能力不足，微调效果差
+    \item $r$ 太大（如 128+）：接近全参数微调，失去参数效率优势
+    \item 实践推荐：对于扩散模型，$r = 4 \sim 32$ 通常是好的选择
+    \item 风格适应任务 $r$ 可以小一些（4--8），复杂条件任务 $r$ 需要大一些（16--32）
+\end{itemize}
+\end{warningbox}
+
+\begin{knowledgebox}{LoRA 的可组合性}
+LoRA 的一个优雅特性是\textbf{可组合性}：多个 LoRA 模块可以在推理时动态组合。例如，一个 LoRA 控制风格、另一个控制主体，两者可以同时加载并通过权重混合实现"特定风格画特定人物"。这使得 LoRA 成为社区驱动的个性化生态的基础——Civitai 等平台上有数以万计的 LoRA 模型。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+LoRA 通过低秩分解极大地减少了微调所需的参数量和计算量，使得在消费级 GPU 上用少量数据定制大规模扩散模型成为可能。它的零初始化策略（与 ControlNet 异曲同工）保证了微调不会破坏预训练能力，而推理时的参数合并则消除了额外的延迟开销。
+
+\newpage
+\section{总结与延伸}
+
+\subsection{核心技术脉络}
+
+本讲从条件生成的基本问题出发，系统介绍了将扩散模型推向实际应用的关键技术栈：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lp{4.5cm}p{4.5cm}}
+\toprule
+\textbf{技术} & \textbf{解决的问题} & \textbf{核心思想} \\
+\midrule
+Classifier Guidance & 条件生成 & score = 无条件 score + 分类器梯度 \\
+CFG & 去掉外部分类器 & 条件 dropout + 推理时外推 \\
+DDIM Inversion & 图像编辑 & 确定性反演 + 换条件重生成 \\
+Latent Diffusion & 降低计算成本 & 先压缩到潜在空间再做扩散 \\
+ControlNet & 少样本条件控制 & 冻结基础模型 + 可训练编码器副本 \\
+LoRA & 高效个性化 & 低秩权重更新 \\
+\bottomrule
+\end{tabular}
+\caption{本讲核心技术总览}
+\end{table}
+
+\subsection{统一视角：Score Manipulation}
+
+一个贯穿本讲（乃至整个扩散模型应用领域）的统一视角是 \textbf{score manipulation}——通过修改 score function（或等价的噪声预测），引导生成轨迹朝向目标方向。无论是 Classifier Guidance、CFG、还是后续课程将讨论的更多应用，其本质都是：
+
+$$
+\tilde{s}(x_t, t) = s_{\text{base}}(x_t, t) + \text{引导项}
+$$
+
+这是扩散模型区别于 GAN 和 VAE 的核心优势——生成过程的每一步都可以被外部信号灵活调控。
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item \textbf{Classifier Guidance}：Dhariwal \& Nichol, ``Diffusion Models Beat GANs on Image Synthesis,'' NeurIPS 2021
+    \item \textbf{Classifier-Free Guidance}：Ho \& Salimans, ``Classifier-Free Diffusion Guidance,'' NeurIPS Workshop 2022
+    \item \textbf{Latent Diffusion / Stable Diffusion}：Rombach et al., ``High-Resolution Image Synthesis with Latent Diffusion Models,'' CVPR 2022
+    \item \textbf{ControlNet}：Zhang et al., ``Adding Conditional Control to Text-to-Image Diffusion Models,'' ICCV 2023
+    \item \textbf{LoRA}：Hu et al., ``LoRA: Low-Rank Adaptation of Large Language Models,'' ICLR 2022
+    \item \textbf{DDIM}：Song et al., ``Denoising Diffusion Implicit Models,'' ICLR 2021
+    \item \textbf{HuggingFace Diffusers}：\href{https://huggingface.co/docs/diffusers}{huggingface.co/docs/diffusers}——预训练扩散模型的标准库
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

@@ -1,0 +1,646 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{DDPM: 去噪扩散概率模型（第一部分）}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{58分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=qiFZQvcqTOo}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.5cm}
+{\large KAIST CS492D: Diffusion Models and Their Applications\par}
+\vspace{0.5cm}
+{\large Lecture 02\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\textbf{视频链接}：
+\ifdefempty{\videourl}{
+未填写
+}{
+\href{\videourl}{\nolinkurl{\videourl}}
+}
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言与课程回顾}
+
+本讲是 KAIST CS492D ``Diffusion Models and Their Applications'' 课程的第二讲，由 Minhyuk Sung 教授讲授。本讲从上一讲（Lecture 01）介绍的生成模型基础出发，逐步引出\textbf{去噪扩散概率模型}（Denoising Diffusion Probabilistic Models, DDPM）的核心思想。
+
+在上一讲中，我们已经回顾了以下关键概念：
+\begin{itemize}
+    \item 给定数据集 $\{x^{(i)}\}$，如何将数据视为某未知概率分布 $p_{\text{data}}(x)$ 的样本；
+    \item 生成模型的核心任务：学习一个从简单分布（通常是标准高斯 $\mathcal{N}(0, I)$）到数据分布的映射；
+    \item GAN 和 VAE 两种生成模型范式的基本思路。
+\end{itemize}
+
+\begin{knowledgebox}{生成模型的统一框架}
+所有生成模型的核心思想可以概括为：找到一个从简单的\textbf{先验分布}（prior distribution）$p(z) = \mathcal{N}(0, I)$ 到\textbf{数据分布}（data distribution）$p_{\text{data}}(x)$ 的映射。生成过程即为：先从 $p(z)$ 采样得到 $z$，再通过映射函数将 $z$ 变换为数据空间中的样本 $x$。
+\end{knowledgebox}
+
+\subsection{关键术语回顾}
+
+在进入 DDPM 之前，需要牢记以下贝叶斯框架中的术语，它们贯穿整个课程：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{术语} & \textbf{符号} & \textbf{含义} \\
+\midrule
+先验分布（Prior） & $p(z)$ & 潜变量的分布，通常设为 $\mathcal{N}(0, I)$ \\
+似然（Likelihood） & $p_\theta(x|z)$ & 给定潜变量生成数据的条件分布 \\
+边际分布（Marginal） & $p_\theta(x)$ & 数据的边际概率 $\int p_\theta(x|z)p(z)dz$ \\
+后验分布（Posterior） & $p_\theta(z|x)$ & 给定数据推断潜变量的分布 \\
+\bottomrule
+\end{tabular}
+\caption{贝叶斯框架中的关键术语}
+\end{table}
+
+\subsection{本章小结}
+
+本节回顾了生成模型的基本框架和关键术语，为后续引入 VAE 的 ELBO 推导和扩散模型的层级化扩展打下基础。
+
+
+\section{变分自编码器（VAE）回顾}
+
+\subsection{VAE 的核心思想}
+
+VAE 的目标是学习解码器（decoder）$p_\theta(x|z)$ 以最大化数据的边际似然 $p_\theta(x)$。然而，直接计算边际似然需要对所有可能的 $z$ 做积分，这在计算上是不可行的：
+
+$$p_\theta(x) = \int p_\theta(x|z) p(z) \, dz$$
+
+虽然我们可以通过蒙特卡洛估计来近似该积分，但这需要采样大量的 $z$，计算代价极高。
+
+\begin{warningbox}{边际似然不可直接计算}
+通过贝叶斯公式 $p_\theta(x) = \frac{p_\theta(x|z) p(z)}{p_\theta(z|x)}$，计算边际似然还需要知道后验分布 $p_\theta(z|x)$，但后验本身也是未知的。这构成了一个``鸡生蛋、蛋生鸡''的困境，正是 VAE 引入变分后验 $q_\phi(z|x)$ 的根本原因。
+\end{warningbox}
+
+\subsection{ELBO：证据下界}
+
+由于无法直接最大化 $\log p_\theta(x)$，VAE 转而最大化其下界——\textbf{证据下界}（Evidence Lower Bound, ELBO）。
+
+ELBO 的推导基于 Jensen 不等式。对于任意分布 $q_\phi(z|x)$：
+
+$$\log p_\theta(x) = \log \int p_\theta(x|z) p(z) \, dz$$
+
+在积分中引入 $q_\phi(z|x)$：
+
+$$= \log \int \frac{p_\theta(x|z) p(z)}{q_\phi(z|x)} q_\phi(z|x) \, dz = \log \mathbb{E}_{q_\phi(z|x)} \left[ \frac{p_\theta(x|z) p(z)}{q_\phi(z|x)} \right]$$
+
+由 Jensen 不等式（$\log$ 是凹函数）：
+
+$$\geq \mathbb{E}_{q_\phi(z|x)} \left[ \log \frac{p_\theta(x|z) p(z)}{q_\phi(z|x)} \right] = \text{ELBO}$$
+
+\begin{importantbox}{ELBO 的分解}
+ELBO 可以分解为两项：
+$$\text{ELBO} = \underbrace{\mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)]}_{\text{重构项（Reconstruction Term）}} - \underbrace{D_{\text{KL}}(q_\phi(z|x) \| p(z))}_{\text{KL 正则项}}$$
+
+\begin{itemize}
+    \item \textbf{重构项}：鼓励解码器从潜变量 $z$ 准确重构输入 $x$，本质上等价于自编码器的重构损失。
+    \item \textbf{KL 正则项}：鼓励变分后验 $q_\phi(z|x)$ 尽可能接近先验 $p(z) = \mathcal{N}(0, I)$。
+\end{itemize}
+\end{importantbox}
+
+\subsection{VAE 的训练过程}
+
+VAE 同时训练编码器和解码器：
+
+\begin{itemize}
+    \item \textbf{编码器}（Encoder）：参数化变分后验 $q_\phi(z|x) = \mathcal{N}(\mu_\phi(x), \sigma^2_\phi(x) I)$，将数据映射到潜变量空间的均值和方差。
+    \item \textbf{解码器}（Decoder）：参数化似然 $p_\theta(x|z) = \mathcal{N}(\mu_\theta(z), \sigma^2 I)$，将潜变量映射回数据空间。
+\end{itemize}
+
+\begin{knowledgebox}{重参数化技巧（Reparameterization Trick）}
+采样操作 $z \sim q_\phi(z|x)$ 本身不可微分，但通过重参数化可以绕过这个问题：
+
+$$z = \mu_\phi(x) + \sigma_\phi(x) \odot \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+这样，$z$ 关于 $\mu_\phi$ 和 $\sigma_\phi$ 是可微的，梯度可以正常反向传播到编码器参数 $\phi$。
+\end{knowledgebox}
+
+在生成阶段，只需使用解码器：从 $p(z) = \mathcal{N}(0, I)$ 采样 $z$，然后通过解码器 $p_\theta(x|z)$ 生成 $x$。编码器仅在训练阶段用于学习更好的似然分布。
+
+\subsection{VAE 的两个高斯 KL 散度}
+
+在 VAE 的训练中，需要计算两个各向同性高斯分布之间的 KL 散度。对于 $p = \mathcal{N}(\mu, \sigma^2 I)$ 和 $q = \mathcal{N}(0, I)$：
+
+$$D_{\text{KL}}(p \| q) = \frac{1}{2} \left( \|\mu\|^2 + \text{tr}(\sigma^2 I) - d - \log \det(\sigma^2 I) \right)$$
+
+$$= \frac{1}{2} \sum_{i=1}^{d} \left( \mu_i^2 + \sigma_i^2 - 1 - \log \sigma_i^2 \right)$$
+
+其中 $d$ 是潜变量的维度。
+
+\subsection{ELBO 的紧致性与 VAE 的局限}
+
+\begin{importantbox}{ELBO 紧致条件}
+ELBO 等于真实的对数似然，当且仅当变分后验与真实后验完全一致：
+$$\text{ELBO} = \log p_\theta(x) \iff q_\phi(z|x) = p_\theta(z|x)$$
+
+两者之间的差距恰好是：$\log p_\theta(x) - \text{ELBO} = D_{\text{KL}}(q_\phi(z|x) \| p_\theta(z|x))$，这个差距被称为\textbf{松弛度}（tightness gap）。
+\end{importantbox}
+
+\begin{warningbox}{VAE 的根本局限}
+VAE 将似然分布 $p_\theta(x|z)$ 和变分后验 $q_\phi(z|x)$ 都建模为高斯分布。然而，对于复杂的数据分布（如自然图像），\textbf{同时使似然和后验都为高斯分布在数学上通常是不可能的}。这种过度简化导致 VAE 生成的图像往往较为模糊。
+\end{warningbox}
+
+VAE 的这一局限直接激发了对更复杂生成模型的探索——特别是通过引入\textbf{层级化结构}来增加模型的表达能力。
+
+\subsection{本章小结}
+
+VAE 通过 ELBO 绕过了边际似然不可计算的问题，但其高斯假设过于简单，限制了生成质量。为了在保持计算可行性的同时提高表达能力，下一步是引入层级化的 VAE 结构。
+
+
+\section{从 VAE 到层级化 VAE}
+
+\subsection{增加层级的动机}
+
+VAE 的局限在于单一高斯分布难以拟合复杂的数据分布。一个自然的思路是：不再使用单一的潜变量 $z$，而是引入\textbf{多层潜变量} $x_1, x_2, \ldots, x_T$，形成层级化结构。
+
+\begin{knowledgebox}{层级化提升表达能力的直觉}
+单个高斯分布只有均值和方差两组参数，表达能力有限。但如果我们将多个高斯转移分布的乘积作为整体的似然分布，那么虽然每一步的转移仍是简单的高斯，\textbf{整体分布可以远比单个高斯复杂}。这就像一条简单的直线路径可以通过多次小的方向调整来逼近任意复杂的曲线。
+\end{knowledgebox}
+
+\subsection{符号切换}
+
+从这里开始，我们切换符号体系以适应扩散模型的框架：
+
+\begin{itemize}
+    \item $x_0$：原始数据点（之前的 $x$）
+    \item $x_1, x_2, \ldots, x_T$：多层潜变量（之前的 $z$）
+    \item $x_T$：最终的纯噪声，服从 $\mathcal{N}(0, I)$
+\end{itemize}
+
+\begin{warningbox}{符号变化提醒}
+注意从 VAE 到扩散模型的符号切换：之前用 $z$ 表示潜变量、$x$ 表示数据，现在统一用 $x_t$ 表示不同时间步的变量。这是因为在扩散模型中，所有中间变量与数据具有\textbf{相同的维度}，它们处于同一空间中。不同论文可能使用不同的符号体系，阅读时需要注意。
+\end{warningbox}
+
+\subsection{马尔可夫假设}
+
+为了简化层级 VAE 的训练，我们引入\textbf{马尔可夫假设}：每个 $x_t$ 的采样仅依赖于前一步 $x_{t-1}$，而不依赖于更早的状态。
+
+$$q(x_t | x_{t-1}, x_{t-2}, \ldots, x_0) = q(x_t | x_{t-1})$$
+
+在马尔可夫假设下，整个联合分布可以分解为转移分布的乘积：
+
+\textbf{生成过程}（似然/逆过程）：
+$$p_\theta(x_0, x_1, \ldots, x_T) = p(x_T) \prod_{t=1}^{T} p_\theta(x_{t-1} | x_t)$$
+
+\textbf{编码过程}（变分后验/前向过程）：
+$$q(x_1, \ldots, x_T | x_0) = \prod_{t=1}^{T} q(x_t | x_{t-1})$$
+
+\begin{importantbox}{马尔可夫假设的重要性}
+如果不假设马尔可夫性质，$x_t$ 的采样可能依赖于 $x_0, x_1, \ldots, x_{t-1}$ 的所有历史状态，这将使训练变得极其复杂。马尔可夫假设极大地简化了计算，使得 ELBO 可以被有效分解和优化。后续课程将讨论非马尔可夫的情况（如 DDIM）。
+\end{importantbox}
+
+\subsection{层级 VAE 的挑战}
+
+虽然层级结构增加了表达能力，但在标准 VAE 框架下仍面临挑战：
+
+\begin{enumerate}
+    \item \textbf{联合训练困难}：需要同时训练编码器（学习变分后验 $q_\phi$）和解码器（学习似然 $p_\theta$），层级越多训练越不稳定。
+    \item \textbf{计算代价高}：ELBO 中的一致性项（consistency term）涉及多个随机变量，计算昂贵。
+\end{enumerate}
+
+这些挑战催生了扩散模型的核心设计选择：\textbf{固定前向过程，只学习逆过程}。
+
+\subsection{本章小结}
+
+通过引入多层潜变量和马尔可夫假设，层级化 VAE 增强了表达能力。然而，联合训练编码器和解码器仍然困难，这促使我们寻找一种无需学习编码器的方案——即扩散模型。
+
+
+\section{扩散模型：前向过程}
+
+\subsection{两个关键设计选择}
+
+从层级 VAE 到 DDPM，有两个关键的简化设计：
+
+\begin{enumerate}
+    \item \textbf{维度匹配}：所有潜变量 $x_t$ 与数据 $x_0$ 具有相同的维度。在标准 VAE 中，潜空间维度通常低于数据空间，但扩散模型选择相同维度。
+    \item \textbf{固定前向过程}：变分后验（前向过程）$q(x_t|x_{t-1})$ 不通过神经网络参数化，而是预先定义好的。这意味着只需要学习逆过程 $p_\theta(x_{t-1}|x_t)$。
+\end{enumerate}
+
+\begin{importantbox}{扩散模型 vs. VAE 的本质区别}
+在 VAE 中，编码器（前向过程）和解码器（逆过程）\textbf{都需要学习}。在扩散模型中，前向过程是\textbf{预先定义}的——它只是简单地逐步添加噪声，无需任何训练。唯一需要学习的是逆过程（去噪过程）。这大大简化了训练，因为不再需要联合优化两个网络。
+\end{importantbox}
+
+\subsection{前向过程的定义}
+
+前向过程（Forward Process）是从数据 $x_0$ 逐步添加高斯噪声直到变成纯噪声 $x_T$ 的过程。其转移分布定义为：
+
+$$q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{1 - \beta_t} \, x_{t-1}, \, \beta_t I)$$
+
+其中 $\beta_t \in (0, 1)$ 是\textbf{噪声调度}（noise schedule）参数。
+
+\begin{importantbox}{前向转移分布的物理含义}
+每一步前向过程做了两件事：
+\begin{enumerate}
+    \item \textbf{缩放}：将 $x_{t-1}$ 乘以 $\sqrt{1-\beta_t}$（小于 1），使信号逐步衰减，均值向零靠近。
+    \item \textbf{加噪}：添加方差为 $\beta_t$ 的高斯噪声。
+\end{enumerate}
+随着 $t$ 增大，$\beta_t$ 逐渐增大（但始终为小数），信号逐步被噪声淹没。
+\end{importantbox}
+
+用采样的形式来写，前向过程等价于：
+
+$$x_t = \sqrt{1 - \beta_t} \, x_{t-1} + \sqrt{\beta_t} \, \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0, I)$$
+
+\subsection{噪声调度（Noise Schedule）}
+
+参数 $\beta_t$ 需要满足以下条件：
+
+\begin{itemize}
+    \item $\beta_t \in (0, 1)$ 对所有 $t$ 成立
+    \item $\beta_t$ 是关于 $t$ 的\textbf{非递减}函数（或至少不递减）
+    \item $\beta_t$ 的值应保持较小（如 $10^{-4}$ 到 $0.02$ 量级）
+\end{itemize}
+
+常见的噪声调度方案包括：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{方案} & \textbf{描述} \\
+\midrule
+线性调度（Linear） & $\beta_t$ 从 $\beta_1$ 到 $\beta_T$ 线性增长 \\
+余弦调度（Cosine） & 基于余弦函数设计，在两端变化缓慢 \\
+常数调度 & $\beta_t$ 保持不变 \\
+可学习调度 & $\beta_t$ 作为可学习参数 \\
+\bottomrule
+\end{tabular}
+\caption{常见的噪声调度方案}
+\end{table}
+
+\begin{knowledgebox}{为什么 $\beta_t$ 需要非递减？}
+直觉上，前向过程应该``越来越快地''破坏信息。在早期步骤中，信号仍然很强，少量噪声即可；在后期步骤中，需要更多噪声来确保 $x_T$ 充分接近纯高斯噪声。非递减的 $\beta_t$ 保证了噪声添加的速率不会``倒退''，这在理论上保证了前向过程最终收敛到标准高斯分布。
+\end{knowledgebox}
+
+\subsection{$\alpha_t$ 符号简化}
+
+为了后续推导的方便，定义：
+
+$$\alpha_t = 1 - \beta_t$$
+
+由于 $\beta_t$ 是非递减的正数，$\alpha_t$ 是非递增的，且满足 $0 < \alpha_t < 1$。
+
+前向转移分布可以改写为：
+
+$$q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{\alpha_t} \, x_{t-1}, \, (1 - \alpha_t) I)$$
+
+进一步定义\textbf{累积乘积}：
+
+$$\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$$
+
+由于每个 $\alpha_s < 1$，随着 $t$ 增大，$\bar{\alpha}_t$ 单调递减并趋向于零。
+
+\subsection{前向过程的闭式解}
+
+层级化前向过程的一个关键优势是：从 $x_0$ 到任意时刻 $x_t$ 的条件分布有\textbf{闭式解}，无需逐步采样。
+
+\begin{importantbox}{前向过程闭式解（核心公式）}
+$$q(x_t | x_0) = \mathcal{N}(x_t; \sqrt{\bar{\alpha}_t} \, x_0, \, (1 - \bar{\alpha}_t) I)$$
+
+等价的采样形式：
+$$x_t = \sqrt{\bar{\alpha}_t} \, x_0 + \sqrt{1 - \bar{\alpha}_t} \, \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+这意味着我们可以\textbf{一步到位}地从 $x_0$ 采样任意时刻的 $x_t$，无需经历所有中间步骤。
+\end{importantbox}
+
+\textbf{推导思路}：利用高斯分布的可加性。将 $x_t = \sqrt{\alpha_t} x_{t-1} + \sqrt{1-\alpha_t} \epsilon_t$ 递归展开：
+
+$$x_t = \sqrt{\alpha_t} (\sqrt{\alpha_{t-1}} x_{t-2} + \sqrt{1-\alpha_{t-1}} \epsilon_{t-1}) + \sqrt{1-\alpha_t} \epsilon_t$$
+
+$$= \sqrt{\alpha_t \alpha_{t-1}} x_{t-2} + \sqrt{\alpha_t(1-\alpha_{t-1})} \epsilon_{t-1} + \sqrt{1-\alpha_t} \epsilon_t$$
+
+由于两个独立高斯噪声的线性组合仍是高斯噪声：
+
+$$\sqrt{\alpha_t(1-\alpha_{t-1})} \epsilon_{t-1} + \sqrt{1-\alpha_t} \epsilon_t \sim \mathcal{N}(0, (1-\alpha_t\alpha_{t-1}) I)$$
+
+反复应用这个过程，最终得到：
+
+$$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1-\bar{\alpha}_t} \epsilon$$
+
+\begin{knowledgebox}{闭式解的实际意义}
+闭式解在训练中至关重要：在每次训练迭代中，我们需要对 $x_0$ 施加噪声得到 $x_t$，然后让神经网络学习去噪。如果必须按顺序逐步施加噪声，训练效率将极低。闭式解使我们可以直接通过一次采样得到任意时刻的噪声版本。
+\end{knowledgebox}
+
+\subsection{前向过程的极限行为}
+
+当 $t \to T$（$T$ 足够大）时，$\bar{\alpha}_T \to 0$，因此：
+
+$$q(x_T | x_0) \approx \mathcal{N}(x_T; 0, I)$$
+
+这意味着前向过程最终将任何数据点 $x_0$ 转化为接近标准高斯分布的纯噪声。这一性质保证了前向过程的\textbf{变分后验}自然地最大化了 ELBO 中的先验匹配项。
+
+\begin{warningbox}{$T$ 必须足够大}
+如果 $T$ 不够大或 $\beta_t$ 设置不当，$x_T$ 可能还保留着 $x_0$ 的信息，不够接近 $\mathcal{N}(0, I)$。这会导致 ELBO 中先验匹配项的损失较大，影响生成质量。在实践中，DDPM 原论文使用 $T = 1000$。
+\end{warningbox}
+
+\subsection{本章小结}
+
+扩散模型的前向过程通过预定义的噪声调度 $\{\beta_t\}$ 逐步向数据添加高斯噪声。其关键优势在于：(1) 无需训练，完全预定义；(2) 具有闭式解 $q(x_t|x_0)$，可以一步采样；(3) 当 $T$ 足够大时，$x_T$ 自然趋近标准高斯分布。
+
+
+\section{逆过程（Reverse Process）}
+
+\subsection{逆过程的定义}
+
+逆过程（Reverse Process）是生成过程的核心——从纯噪声 $x_T \sim \mathcal{N}(0, I)$ 出发，逐步去噪直到得到数据样本 $x_0$。
+
+逆过程的联合分布定义为：
+
+$$p_\theta(x_0, x_1, \ldots, x_T) = p(x_T) \prod_{t=1}^{T} p_\theta(x_{t-1} | x_t)$$
+
+其中每一步的逆转移分布参数化为高斯：
+
+$$p_\theta(x_{t-1} | x_t) = \mathcal{N}(x_{t-1}; \mu_\theta(x_t, t), \sigma_t^2 I)$$
+
+\begin{importantbox}{逆过程的物理含义}
+逆过程是前向过程的``时间反演''。前向过程逐步加噪，逆过程逐步去噪。神经网络 $\mu_\theta(x_t, t)$ 的任务是：给定当前的噪声图像 $x_t$ 和时间步 $t$，预测去噪一步后的均值。注意神经网络需要知道 $t$ 的信息，因为不同时间步的噪声水平不同。
+\end{importantbox}
+
+\subsection{逆过程的生成流程}
+
+给定训练好的模型，生成过程如下：
+
+\begin{enumerate}
+    \item 从标准高斯分布采样 $x_T \sim \mathcal{N}(0, I)$
+    \item 对于 $t = T, T-1, \ldots, 1$：
+    \begin{itemize}
+        \item 使用神经网络计算 $\mu_\theta(x_t, t)$ 和 $\sigma_t$
+        \item 采样 $x_{t-1} \sim \mathcal{N}(\mu_\theta(x_t, t), \sigma_t^2 I)$
+    \end{itemize}
+    \item 最终得到生成样本 $x_0$
+\end{enumerate}
+
+\begin{warningbox}{生成速度问题}
+逆过程需要执行 $T$ 步顺序采样（DDPM 中 $T = 1000$），每一步都需要一次神经网络前向传播。这使得 DDPM 的生成速度远慢于 GAN（仅需一次前向传播）。这也是后续 DDIM、一致性模型等工作要解决的核心问题。
+\end{warningbox}
+
+\subsection{本章小结}
+
+逆过程是扩散模型中唯一需要学习的部分。通过参数化每一步的逆转移为高斯分布，并用神经网络预测其均值，模型学会了从噪声中逐步恢复数据。
+
+
+\section{ELBO 在扩散模型中的推导}
+
+\subsection{扩散模型的 ELBO}
+
+与 VAE 类似，扩散模型的训练目标是最大化数据的对数似然的下界。对于层级化的 VAE，ELBO 为：
+
+$$\log p_\theta(x_0) \geq \mathbb{E}_{q(x_{1:T}|x_0)} \left[ \log \frac{p_\theta(x_{0:T})}{q(x_{1:T}|x_0)} \right]$$
+
+\subsection{ELBO 的第一种分解}
+
+将 ELBO 展开，可以得到三类项：
+
+$$-\text{ELBO} = \underbrace{-\mathbb{E}_{q(x_1|x_0)}[\log p_\theta(x_0|x_1)]}_{\text{重构项 } L_0} + \underbrace{D_{\text{KL}}(q(x_T|x_0) \| p(x_T))}_{\text{先验匹配项 } L_T} + \underbrace{\sum_{t=2}^{T} L_{t-1}}_{\text{一致性项}}$$
+
+其中一致性项为：
+
+$$L_{t-1} = D_{\text{KL}}(q(x_{t-1}|x_t, x_0) \| p_\theta(x_{t-1}|x_t))$$
+
+\begin{importantbox}{ELBO 三项的含义}
+\begin{enumerate}
+    \item \textbf{重构项 $L_0$}：衡量从 $x_1$ 重构 $x_0$ 的质量，与 VAE 的重构损失类似。在实践中，$x_1$ 与 $x_0$ 非常接近（仅加了很少的噪声），因此这一项通常很小。
+    \item \textbf{先验匹配项 $L_T$}：衡量前向过程的终点 $q(x_T|x_0)$ 与先验 $p(x_T) = \mathcal{N}(0, I)$ 的距离。由于前向过程是固定的，且当 $T$ 足够大时 $q(x_T|x_0) \approx \mathcal{N}(0,I)$，这一项接近零且不依赖于 $\theta$。
+    \item \textbf{一致性项 $L_{t-1}$}：这是\textbf{核心训练项}，衡量学习的逆过程 $p_\theta(x_{t-1}|x_t)$ 与真实的``一步逆过程'' $q(x_{t-1}|x_t, x_0)$ 之间的差距。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{马尔可夫假设的简化}
+
+在马尔可夫假设下，ELBO 的分解可以进一步简化。关键是以下等式成立：
+
+$$q(x_t | x_{t-1}, x_0) = q(x_t | x_{t-1})$$
+
+这是因为在马尔可夫链中，给定 $x_{t-1}$ 后，$x_t$ 与 $x_0$ 条件独立。这一性质使得一致性项中出现的后验条件分布 $q(x_{t-1}|x_t, x_0)$ 可以通过贝叶斯公式计算（这将在后续讲座中详细推导）。
+
+\begin{knowledgebox}{条件后验分布的可计算性}
+虽然 $q(x_{t-1}|x_t)$ 本身是难以计算的（需要对所有可能的 $x_0$ 做积分），但条件版本 $q(x_{t-1}|x_t, x_0)$（同时给定 $x_t$ 和 $x_0$）却有闭式高斯解。这是因为：
+\begin{itemize}
+    \item $q(x_t|x_{t-1})$ 是高斯（前向转移）
+    \item $q(x_{t-1}|x_0)$ 是高斯（前向过程闭式解）
+    \item 高斯的条件仍然是高斯
+\end{itemize}
+这使得一致性项可以精确计算为两个高斯之间的 KL 散度。
+\end{knowledgebox}
+
+\subsection{先验匹配项的自然满足}
+
+前向过程的闭式解告诉我们：
+
+$$q(x_T | x_0) = \mathcal{N}(\sqrt{\bar{\alpha}_T} x_0, (1-\bar{\alpha}_T) I)$$
+
+当 $T$ 足够大时，$\bar{\alpha}_T = \prod_{t=1}^T \alpha_t \to 0$（因为每个 $\alpha_t < 1$），所以：
+
+$$q(x_T | x_0) \to \mathcal{N}(0, I) = p(x_T)$$
+
+因此 $L_T = D_{\text{KL}}(q(x_T|x_0) \| p(x_T)) \to 0$。
+
+\begin{importantbox}{前向过程的设计目标}
+前向过程被精心设计为：通过逐步添加噪声并缩放信号，使得经过足够多步后，\textbf{无论初始数据 $x_0$ 是什么}，最终的 $x_T$ 都接近标准高斯分布。这是非递减 $\beta_t$ 和 $T$ 足够大的共同要求。前向过程的设计使得 ELBO 中的先验匹配项自动被满足，无需额外优化。
+\end{importantbox}
+
+\subsection{本章小结}
+
+扩散模型的 ELBO 可以分解为重构项、先验匹配项和一致性项。前向过程的巧妙设计使先验匹配项自动趋近零，重构项通常也很小。因此，训练的核心在于最小化一致性项——即让逆过程 $p_\theta$ 逐步匹配真实的条件后验 $q(x_{t-1}|x_t, x_0)$。
+
+
+\section{前向过程设计的数学验证}
+
+\subsection{从一步到多步：闭式解的推导}
+
+我们已经知道单步转移为：
+
+$$x_t = \sqrt{\alpha_t} x_{t-1} + \sqrt{1 - \alpha_t} \epsilon_t$$
+
+以 $t=2$ 为例，展开两步：
+
+$$x_2 = \sqrt{\alpha_2} x_1 + \sqrt{1-\alpha_2} \epsilon_2$$
+
+$$= \sqrt{\alpha_2}(\sqrt{\alpha_1} x_0 + \sqrt{1-\alpha_1} \epsilon_1) + \sqrt{1-\alpha_2} \epsilon_2$$
+
+$$= \sqrt{\alpha_1 \alpha_2} x_0 + \sqrt{\alpha_2(1-\alpha_1)} \epsilon_1 + \sqrt{1-\alpha_2} \epsilon_2$$
+
+由于 $\epsilon_1, \epsilon_2$ 独立同分布于 $\mathcal{N}(0, I)$：
+
+$$\sqrt{\alpha_2(1-\alpha_1)} \epsilon_1 + \sqrt{1-\alpha_2} \epsilon_2 \sim \mathcal{N}(0, [\alpha_2(1-\alpha_1) + (1-\alpha_2)] I)$$
+
+$$= \mathcal{N}(0, (1 - \alpha_1 \alpha_2) I)$$
+
+因此 $q(x_2 | x_0) = \mathcal{N}(\sqrt{\alpha_1 \alpha_2} x_0, (1 - \alpha_1 \alpha_2) I) = \mathcal{N}(\sqrt{\bar{\alpha}_2} x_0, (1-\bar{\alpha}_2) I)$。
+
+\begin{knowledgebox}{高斯分布的可加性}
+如果 $a \sim \mathcal{N}(0, \sigma_1^2 I)$ 和 $b \sim \mathcal{N}(0, \sigma_2^2 I)$ 独立，则 $a + b \sim \mathcal{N}(0, (\sigma_1^2 + \sigma_2^2) I)$。这一性质是闭式解推导的核心工具。
+\end{knowledgebox}
+
+\subsection{验证极限行为}
+
+当 $\bar{\alpha}_T \to 0$ 时：
+
+$$q(x_T | x_0) = \mathcal{N}(\sqrt{\bar{\alpha}_T} x_0, (1-\bar{\alpha}_T)I) \to \mathcal{N}(0, I)$$
+
+这验证了前向过程最终将数据完全转化为标准高斯噪声，与 ELBO 中先验匹配项的要求一致。
+
+\subsection{本章小结}
+
+通过逐步展开前向过程的递推关系并利用高斯分布的可加性，我们验证了闭式解的正确性，并确认了当 $T$ 足够大时，前向过程输出趋近标准高斯分布。
+
+
+\section{扩散模型的完整图景}
+
+\subsection{前向过程与逆过程的对称性}
+
+扩散模型的完整框架可以用以下对称结构概括：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+ & \textbf{前向过程（加噪）} & \textbf{逆过程（去噪）} \\
+\midrule
+方向 & $x_0 \to x_1 \to \cdots \to x_T$ & $x_T \to x_{T-1} \to \cdots \to x_0$ \\
+分布 & $q(x_t | x_{t-1})$，预定义 & $p_\theta(x_{t-1} | x_t)$，需学习 \\
+是否训练 & 否 & 是 \\
+终点 & $x_T \approx \mathcal{N}(0, I)$ & $x_0 \sim p_{\text{data}}$ \\
+作用 & 训练时产生噪声样本 & 生成时产生数据样本 \\
+\bottomrule
+\end{tabular}
+\caption{前向过程与逆过程的对比}
+\end{table}
+
+\subsection{为什么扩散模型有效？}
+
+\begin{knowledgebox}{从 VAE 的视角理解扩散模型}
+扩散模型可以被理解为一种特殊的层级 VAE，具有以下关键特性：
+\begin{itemize}
+    \item 编码器（前向过程）是固定的，不需要学习
+    \item 所有层级的维度相同
+    \item 每一步的转移都是简单的高斯扰动
+    \item 通过足够多的步骤，简单的高斯转移的乘积可以表达非常复杂的分布
+\end{itemize}
+这种设计在简单性和表达能力之间取得了优雅的平衡。
+\end{knowledgebox}
+
+\subsection{后续内容预告}
+
+本讲建立了 DDPM 的概念框架，下一讲（Lecture 03：DDPM Part 2）将继续深入：
+
+\begin{itemize}
+    \item 一致性项 $L_{t-1}$ 的详细推导
+    \item $q(x_{t-1}|x_t, x_0)$ 的闭式高斯表达式
+    \item 从预测均值到\textbf{预测噪声} $\epsilon_\theta$ 的简化
+    \item DDPM 的最终训练目标：简单的加权 MSE 损失
+    \item 实际训练和采样算法
+\end{itemize}
+
+\subsection{本章小结}
+
+扩散模型通过固定前向过程（加噪）和学习逆过程（去噪），在层级 VAE 的框架内实现了强大的生成能力。前向过程的精巧设计使得 ELBO 的多个项自动满足或可以高效计算，将训练聚焦于核心的一致性项。
+
+
+\section{总结与延伸}
+
+\subsection{核心要点}
+
+本讲从 VAE 出发，逐步推导出扩散模型的基本框架，核心要点包括：
+
+\begin{enumerate}
+    \item \textbf{VAE 的局限}：将似然和后验都建模为高斯过于简化，导致生成质量受限。
+    \item \textbf{层级化思路}：引入多层潜变量，每层仍是简单高斯，但整体分布更复杂。
+    \item \textbf{马尔可夫假设}：简化了层级化 VAE 的计算，使 ELBO 可以高效分解。
+    \item \textbf{前向过程设计}：通过预定义的噪声调度 $\{\beta_t\}$ 逐步添加噪声，具有闭式解。
+    \item \textbf{逆过程学习}：只需要学习去噪过程 $p_\theta(x_{t-1}|x_t)$，避免了联合训练的困难。
+    \item \textbf{ELBO 分解}：先验匹配项自动满足，训练聚焦于一致性项。
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Ho, J., Jain, A., \& Abbeel, P. (2020). \textit{Denoising Diffusion Probabilistic Models}. NeurIPS 2020. --- DDPM 原论文。
+    \item Sohl-Dickstein, J., et al. (2015). \textit{Deep Unsupervised Learning using Nonequilibrium Thermodynamics}. ICML 2015. --- 扩散模型的理论基础论文。
+    \item Kingma, D. P. \& Welling, M. (2014). \textit{Auto-Encoding Variational Bayes}. ICLR 2014. --- VAE 原论文。
+    \item Luo, C. (2022). \textit{Understanding Diffusion Models: A Unified Perspective}. arXiv:2208.11970. --- 统一视角的综述。
+    \item Nichol, A. Q. \& Dhariwal, P. (2021). \textit{Improved Denoising Diffusion Probabilistic Models}. ICML 2021. --- 关于余弦噪声调度等改进。
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}

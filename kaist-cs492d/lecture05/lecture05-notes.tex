@@ -1,0 +1,647 @@
+\documentclass[a4paper]{article}
+
+% Basic packages
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{float}
+
+% Highlight boxes
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+% Listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
+}
+
+% Front-page metadata
+\newcommand{\notetitle}{KAIST CS492D Lecture 5: Denoising Diffusion Implicit Models (DDIM)}
+\newcommand{\noteauthors}{基于 Minhyuk Sung 授课内容整理}
+\newcommand{\notedate}{2025年秋季}
+\newcommand{\videochannel}{Minhyuk Sung (KAIST)}
+\newcommand{\videopublishdate}{2025}
+\newcommand{\videoduration}{57分钟}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=vRvT1NOKsxw}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+% Footer with repo info
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+
+\ifdefempty{\videocoverpath}{
+{\small 请在生成笔记时填入视频封面图的本地路径。\par}
+}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{视频作者/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{视频时长}：\videoduration\par
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
+}
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%% --- 正文内容开始 --- %%
+
+\section{引言与背景回顾}
+
+本节课是 KAIST CS492D ``Design and Learning of Visual Generative Models'' 课程的第五讲，由 Minhyuk Sung 教授主讲。课程的核心主题是 \textbf{Denoising Diffusion Implicit Models (DDIM)}，这是加速扩散模型生成过程的里程碑式工作（Song et al., ICLR 2021）。
+
+\subsection{从 DDPM 到加速采样的动机}
+
+在前几讲中，我们已经学习了 DDPM（Denoising Diffusion Probabilistic Models）的基本框架：通过逐步添加高斯噪声的前向过程（forward process），将数据分布转化为标准高斯分布；再通过训练神经网络学习逆过程（reverse process），从噪声逐步恢复出干净数据。
+
+\begin{importantbox}{DDPM 的核心瓶颈：采样速度}
+DDPM 通常需要 $T=1000$ 步的迭代去噪过程来生成一张高质量图像。每一步都需要一次完整的神经网络前向传播，这使得生成速度远慢于 GAN 等单步生成模型。如何在不牺牲质量的前提下减少采样步数，是扩散模型研究的核心挑战之一。
+\end{importantbox}
+
+讲者通过对比三类主流生成模型的优劣来引出 DDIM 的研究动机：
+
+\begin{table}[H]
+\centering
+\caption{主流生成模型特性对比}
+\begin{tabular}{lccc}
+\toprule
+\textbf{模型} & \textbf{样本质量} & \textbf{多样性} & \textbf{生成速度} \\
+\midrule
+GAN & 高 & 低（模式崩塌） & 快（单步） \\
+VAE & 低 & 高 & 快（单步） \\
+DDPM & 高 & 高 & 慢（$\sim$1000步） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+扩散模型在质量和多样性上都表现优异，唯一的短板在于生成速度。DDIM 正是解决这一问题的第一个重要突破。
+
+\subsection{Score-Based Models 与 DDPM 的联系}
+
+讲者在开场部分简要回顾了 score-based generative models 与 DDPM 的关系。两者的核心思想高度相似：
+
+\begin{knowledgebox}{Score Function（得分函数）的核心角色}
+对于数据分布 $q(\mathbf{x}_t)$，其 score function 定义为：
+$$
+\nabla_{\mathbf{x}_t} \log q(\mathbf{x}_t)
+$$
+在 score-based models 中，我们训练一个神经网络 $s_\theta(\mathbf{x}_t, t)$ 来近似这个 score function。通过 Langevin dynamics 迭代采样，可以从任意先验分布出发，逐步趋近数据分布的高密度区域。
+\end{knowledgebox}
+
+Score-based models 的基本流程是：
+\begin{enumerate}
+    \item 对原始数据分布 $q(\mathbf{x}_0)$ 添加不同程度的高斯噪声，得到一系列模糊分布 $q(\mathbf{x}_t)$
+    \item 训练 score predictor 网络，通过最小化 L2 损失来匹配每个噪声水平下的 score function
+    \item 采样时从高噪声水平开始，利用 annealed Langevin dynamics 逐步降低噪声水平
+\end{enumerate}
+
+\begin{warningbox}{多尺度噪声的必要性}
+如果只添加少量噪声（小方差），score function 在远离数据点的低密度区域几乎为零，网络既难以准确学习、也无法提供有效的梯度引导采样点移动。如果只添加大量噪声（大方差），虽然覆盖范围广，但模糊后的分布与原始分布偏差很大。因此，必须使用从大到小的多尺度噪声调度（noise schedule），先粗略定位、再精细恢复——这正是 DDPM 和 score-based models 共享的核心设计思想。
+\end{warningbox}
+
+讲者指出，DDPM 的训练目标（噪声预测损失 $\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\|^2$）实际上等价于 score matching 的目标。Score function 与噪声预测器之间存在如下关系：
+
+$$
+\nabla_{\mathbf{x}_t} \log q(\mathbf{x}_t | \mathbf{x}_0) = -\frac{\boldsymbol{\epsilon}}{\sqrt{1 - \bar{\alpha}_t}}
+$$
+
+其中 $\boldsymbol{\epsilon}$ 是添加的噪声，$\bar{\alpha}_t$ 是累积噪声调度参数。因此，噪声预测网络 $\boldsymbol{\epsilon}_\theta$ 本质上就是在学习 score function 的缩放版本。
+
+\subsection{连续时间视角的预告}
+
+讲者还提到，当我们将扩散过程推广到连续时间域时，前向过程可以描述为随机微分方程（SDE）：
+$$
+d\mathbf{x} = f(\mathbf{x}, t)\,dt + g(t)\,d\mathbf{w}
+$$
+其逆过程同样有闭式 SDE 表达，且核心仍依赖 score function。DDPM 和 score-based models 都可视为对这个连续过程的不同离散化方案。
+
+\begin{knowledgebox}{统一框架下的不同视角}
+DDPM 从概率图模型（马尔可夫链）出发定义前向和逆向过程；score-based models 从 Langevin dynamics 出发学习 score function。两者在数学上等价，仅是同一框架的不同参数化。这一统一视角（Song et al., ICLR 2021, ``Score-Based Generative Modeling through Stochastic Differential Equations''）为后续的 DDIM、DPM-Solver 等加速方法奠定了理论基础。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+本节回顾了 DDPM 与 score-based models 的等价性，明确了扩散模型面临的采样速度瓶颈。DDPM 需要约 1000 步迭代才能生成高质量样本，而本讲将介绍的 DDIM 通过重新定义前向过程（从马尔可夫过程推广到非马尔可夫过程），可以将步数降低到 50 步左右而几乎不损失质量。
+
+
+\section{DDIM 的核心思想：非马尔可夫前向过程}
+
+\subsection{DDPM 前向过程的回顾}
+
+在 DDPM 中，前向过程被定义为一个\textbf{马尔可夫链}：
+
+$$
+q(\mathbf{x}_{1:T} | \mathbf{x}_0) = \prod_{t=1}^{T} q(\mathbf{x}_t | \mathbf{x}_{t-1})
+$$
+
+其中每一步的转移分布为：
+$$
+q(\mathbf{x}_t | \mathbf{x}_{t-1}) = \mathcal{N}(\mathbf{x}_t; \sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\, \beta_t \mathbf{I})
+$$
+
+由此可以推导出两个关键分布：
+\begin{itemize}
+    \item \textbf{跳跃分布}（marginal）：$q(\mathbf{x}_t | \mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0, (1-\bar{\alpha}_t)\mathbf{I})$
+    \item \textbf{后验分布}（posterior）：$q(\mathbf{x}_{t-1} | \mathbf{x}_t, \mathbf{x}_0)$，也是高斯分布（闭式可解）
+\end{itemize}
+
+\begin{importantbox}{ELBO 中真正需要的分布}
+在推导变分下界（ELBO）时，我们需要的并不是前向转移分布 $q(\mathbf{x}_t|\mathbf{x}_{t-1})$ 本身，而是：
+\begin{enumerate}
+    \item 跳跃分布 $q(\mathbf{x}_t | \mathbf{x}_0)$——用于采样训练数据
+    \item 后验分布 $q(\mathbf{x}_{t-1} | \mathbf{x}_t, \mathbf{x}_0)$——逆过程的匹配目标
+\end{enumerate}
+这一观察是 DDIM 的关键出发点：既然 ELBO 只依赖这两个分布，我们是否可以跳过定义前向转移分布，直接定义这两个分布？
+\end{importantbox}
+
+\subsection{DDIM 的思路：直接定义跳跃与后验分布}
+
+DDIM 的核心创新在于\textbf{颠倒了推导顺序}：
+
+\begin{table}[H]
+\centering
+\caption{DDPM 与 DDIM 的推导顺序对比}
+\begin{tabular}{ll}
+\toprule
+\textbf{DDPM} & \textbf{DDIM} \\
+\midrule
+先定义 $q(\mathbf{x}_t|\mathbf{x}_{t-1})$ & 直接定义 $q(\mathbf{x}_t|\mathbf{x}_0)$ \\
+推导 $q(\mathbf{x}_t|\mathbf{x}_0)$ & 直接定义 $q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0)$ \\
+推导 $q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0)$ & 前向转移分布由上述两个隐含确定 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+具体来说，DDIM 做了以下设定：
+
+\paragraph{保持跳跃分布不变。} 对于所有 $t$，DDIM 要求：
+$$
+q(\mathbf{x}_t | \mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\, (1-\bar{\alpha}_t)\mathbf{I})
+$$
+这与 DDPM 完全相同。
+
+\paragraph{重新定义后验分布。} DDIM 将后验分布参数化为：
+$$
+q_\sigma(\mathbf{x}_{t-1} | \mathbf{x}_t, \mathbf{x}_0) = \mathcal{N}\left(\mathbf{x}_{t-1};\, \sqrt{\bar{\alpha}_{t-1}}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_{t-1}-\sigma_t^2}\cdot\frac{\mathbf{x}_t - \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0}{\sqrt{1-\bar{\alpha}_t}},\, \sigma_t^2\mathbf{I}\right)
+$$
+
+其中 $\sigma_t$ 是一个可自由选择的超参数，控制每步逆过程中注入噪声的程度。
+
+\begin{warningbox}{非马尔可夫性的含义}
+在 DDIM 的前向过程中，$\mathbf{x}_{t-1}$ 的采样依赖于 $\mathbf{x}_t$ \textbf{和} $\mathbf{x}_0$（而不仅仅是 $\mathbf{x}_t$）。这打破了马尔可夫假设——当前状态不仅依赖于前一步，还依赖于原始数据。这就是 ``Implicit'' 一词的来源：前向转移分布 $q(\mathbf{x}_t|\mathbf{x}_{t-1})$ 不再被显式定义，而是由跳跃分布和后验分布隐式（implicitly）确定。
+\end{warningbox}
+
+\subsection{推导过程：归纳法确定系数}
+
+讲者详细展示了如何通过数学归纳法确定后验分布中的系数。
+
+\paragraph{核心约束。} 我们需要满足：对于所有 $t$，通过后验分布 $q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0)$ 和跳跃分布 $q(\mathbf{x}_t|\mathbf{x}_0)$ 导出的 $q(\mathbf{x}_{t-1}|\mathbf{x}_0)$ 必须与 DDPM 中的跳跃分布一致。
+
+\paragraph{高斯分布的闭式合成。} 讲者利用了一个关键的数学事实：
+
+\begin{knowledgebox}{高斯分布的边缘化性质}
+如果先验分布 $p(\mathbf{z})$ 和似然分布 $p(\mathbf{x}|\mathbf{z})$ 都是高斯分布，且似然的均值是 $\mathbf{z}$ 的线性函数，那么边缘分布 $p(\mathbf{x}) = \int p(\mathbf{x}|\mathbf{z})\,p(\mathbf{z})\,d\mathbf{z}$ 也是高斯分布，且均值和方差可以通过闭式表达计算。这是整个推导能够进行的数学基础。
+\end{knowledgebox}
+
+假设后验分布的均值为 $\mathbf{x}_0$ 和 $\mathbf{x}_t$ 的线性组合：
+$$
+\mu_{t-1}(\mathbf{x}_t, \mathbf{x}_0) = w_0 \cdot \mathbf{x}_0 + w_t \cdot \mathbf{x}_t
+$$
+
+通过匹配 $q(\mathbf{x}_{t-1}|\mathbf{x}_0)$ 的均值和方差，可以解出：
+$$
+w_0 = \sqrt{\bar{\alpha}_{t-1}} - \sqrt{\bar{\alpha}_t} \cdot \frac{\sqrt{1-\bar{\alpha}_{t-1}-\sigma_t^2}}{\sqrt{1-\bar{\alpha}_t}}, \quad
+w_t = \frac{\sqrt{1-\bar{\alpha}_{t-1}-\sigma_t^2}}{\sqrt{1-\bar{\alpha}_t}}
+$$
+
+\begin{warningbox}{方差约束：$\sigma_t$ 不能任意大}
+由于方差必须非负，$\sigma_t^2$ 有一个上界：
+$$
+\sigma_t^2 \leq 1 - \bar{\alpha}_{t-1}
+$$
+当 $\sigma_t^2$ 取到上界时，后验分布的方差部分恰好与 DDPM 的后验分布一致。这表明 DDPM 是 DDIM 在特定方差选择下的特殊情况。
+\end{warningbox}
+
+\subsection{ELBO 的不变性}
+
+\begin{importantbox}{训练目标保持不变——无需重新训练}
+由于 DDIM 保持了跳跃分布 $q(\mathbf{x}_t|\mathbf{x}_0)$ 与 DDPM 完全一致，两者的 ELBO（变分下界）在相差一个与模型参数无关的常数因子下是等价的。这意味着：
+\begin{enumerate}
+    \item 用 DDPM 目标训练的噪声预测网络 $\boldsymbol{\epsilon}_\theta$ 可以直接用于 DDIM 的采样过程
+    \item 不需要任何额外的微调或重新训练
+    \item 仅通过改变推理时的采样策略即可获得加速
+\end{enumerate}
+这是 DDIM 最具实用价值的特性：\textbf{训练一次，多种方式推理}。
+\end{importantbox}
+
+这一点在深度学习中是相当罕见的——通常我们训练一个模型后，推理方式是固定的。但对于扩散模型，由于其迭代采样的特殊结构，我们可以在推理阶段灵活选择采样策略（马尔可夫 vs 非马尔可夫、随机 vs 确定性），而不需要修改训练过程。
+
+\subsection{本章小结}
+
+DDIM 的核心思想是：直接定义跳跃分布和后验分布（而非前向转移分布），由此构建一个非马尔可夫的前向过程。通过数学归纳法和高斯分布的闭式合成性质，可以推导出后验分布中系数的解析表达式。关键在于，DDIM 的跳跃分布与 DDPM 完全一致，因此 ELBO 不变，已训练的 DDPM 模型可以直接用于 DDIM 采样。
+
+
+\section{DDIM 的采样过程}
+
+\subsection{通用采样公式}
+
+给定当前时间步 $t$ 的含噪样本 $\mathbf{x}_t$，DDIM 的单步更新公式为：
+
+$$
+\mathbf{x}_{t-1} = \sqrt{\bar{\alpha}_{t-1}}\,\underbrace{\hat{\mathbf{x}}_0(\mathbf{x}_t)}_{\text{预测的干净数据}} + \sqrt{1-\bar{\alpha}_{t-1}-\sigma_t^2}\cdot\underbrace{\frac{\mathbf{x}_t - \sqrt{\bar{\alpha}_t}\,\hat{\mathbf{x}}_0(\mathbf{x}_t)}{\sqrt{1-\bar{\alpha}_t}}}_{\text{``方向''指向 } \mathbf{x}_t} + \underbrace{\sigma_t\,\boldsymbol{\epsilon}_t}_{\text{随机噪声}}
+$$
+
+其中 $\hat{\mathbf{x}}_0(\mathbf{x}_t)$ 是通过噪声预测网络对 $\mathbf{x}_0$ 的估计：
+$$
+\hat{\mathbf{x}}_0(\mathbf{x}_t) = \frac{\mathbf{x}_t - \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}
+$$
+
+$\boldsymbol{\epsilon}_t \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ 是独立采样的高斯噪声。
+
+\begin{importantbox}{采样公式的直观解读}
+DDIM 的单步更新可以分解为三个组成部分：
+\begin{enumerate}
+    \item \textbf{信号分量}：$\sqrt{\bar{\alpha}_{t-1}}\,\hat{\mathbf{x}}_0$——根据当前对干净数据的最佳估计，按 $t-1$ 时刻的信噪比进行缩放
+    \item \textbf{方向分量}：指向从 $\hat{\mathbf{x}}_0$ 到 $\mathbf{x}_t$ 方向的向量，保留了噪声的``方向信息''
+    \item \textbf{随机分量}：$\sigma_t \boldsymbol{\epsilon}_t$——额外注入的噪声，其大小由 $\sigma_t$ 控制
+\end{enumerate}
+当 $\sigma_t=0$ 时，随机分量消失，整个过程变为确定性的。
+\end{importantbox}
+
+\subsection{三种预测器的等价性}
+
+讲者指出，在实现 DDIM 采样时，可以使用三种等价的网络参数化：
+
+\begin{enumerate}
+    \item \textbf{噪声预测器}（$\boldsymbol{\epsilon}$-prediction）：$\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t) \approx \boldsymbol{\epsilon}$，预测添加的噪声
+    \item \textbf{干净数据预测器}（$\mathbf{x}_0$-prediction）：$\hat{\mathbf{x}}_{0,\theta}(\mathbf{x}_t, t) \approx \mathbf{x}_0$，直接预测原始数据
+    \item \textbf{均值预测器}（$\boldsymbol{\mu}$-prediction）：$\boldsymbol{\mu}_\theta(\mathbf{x}_t, t) \approx \boldsymbol{\mu}_{t-1}$，预测后验均值
+\end{enumerate}
+
+\begin{knowledgebox}{预测器之间的转换关系}
+三种预测器之间可以通过简单的线性变换相互转换：
+$$
+\hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t - \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon}_\theta}{\sqrt{\bar{\alpha}_t}}, \quad
+\boldsymbol{\epsilon}_\theta = \frac{\mathbf{x}_t - \sqrt{\bar{\alpha}_t}\,\hat{\mathbf{x}}_0}{\sqrt{1-\bar{\alpha}_t}}
+$$
+无论网络内部使用哪种参数化，DDIM 的采样算法只需要 $\hat{\mathbf{x}}_0$ 的估计值即可。在实践中，$\boldsymbol{\epsilon}$-prediction 是最常用的参数化方式（DDPM 原始论文所采用），而 $\mathbf{x}_0$-prediction 在某些改进方法中也有应用。
+\end{knowledgebox}
+
+\subsection{$\sigma_t$ 参数化与特殊情况}
+
+$\sigma_t$ 的选择控制了采样过程中随机性的程度。DDIM 论文中引入了参数 $\eta \geq 0$ 来统一参数化：
+
+$$
+\sigma_t(\eta) = \eta \cdot \sqrt{\frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}} \cdot \sqrt{1 - \frac{\bar{\alpha}_t}{\bar{\alpha}_{t-1}}}
+$$
+
+\begin{table}[H]
+\centering
+\caption{$\eta$ 参数的特殊取值及对应的采样行为}
+\begin{tabular}{cll}
+\toprule
+$\eta$ & \textbf{采样性质} & \textbf{等价模型} \\
+\midrule
+$0$ & 完全确定性采样 & DDIM（纯确定性） \\
+$1$ & 随机采样，方差与 DDPM 一致 & 等价于 DDPM \\
+$>1$ & 更大的随机性 & 超越 DDPM 的噪声注入 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warningbox}{DDPM 是 DDIM 的特殊情况}
+当 $\eta = 1$ 时，DDIM 的后验分布 $q_\sigma(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0)$ 的方差恰好等于 DDPM 中推导出的后验方差 $\tilde{\beta}_t = \frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}\beta_t$。此时 DDIM 退化为 DDPM 的马尔可夫采样过程。然而，由于两者的 ELBO 是等价的，使用不同的 $\eta$ 值采样不会影响训练目标——这是训练与推理解耦的关键。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DDIM 的采样公式由三个分量组成：信号项、方向项和随机项。超参数 $\sigma_t$（或等价地 $\eta$）控制随机性的大小。$\eta=0$ 给出确定性采样，$\eta=1$ 退化为 DDPM。无论选择哪个 $\eta$，都不需要重新训练模型。
+
+
+\section{确定性采样：$\sigma_t = 0$ 的特殊情况}
+
+\subsection{从随机过程到确定性映射}
+
+当 $\sigma_t = 0$（即 $\eta = 0$）时，DDIM 的采样公式退化为：
+
+$$
+\mathbf{x}_{t-1} = \sqrt{\bar{\alpha}_{t-1}}\,\hat{\mathbf{x}}_0(\mathbf{x}_t) + \sqrt{1-\bar{\alpha}_{t-1}}\cdot\frac{\mathbf{x}_t - \sqrt{\bar{\alpha}_t}\,\hat{\mathbf{x}}_0(\mathbf{x}_t)}{\sqrt{1-\bar{\alpha}_t}}
+$$
+
+这个更新规则是完全确定性的——没有任何随机噪声注入。这意味着：
+
+\begin{importantbox}{确定性采样的核心性质}
+在 DDIM 确定性采样模式下：
+\begin{enumerate}
+    \item 从\textbf{相同的初始噪声} $\mathbf{x}_T$ 出发，经过整个逆过程后\textbf{一定得到相同的输出} $\mathbf{x}_0$
+    \item 噪声空间 $\mathbf{x}_T$ 到数据空间 $\mathbf{x}_0$ 之间建立了一个\textbf{确定性的双射映射}
+    \item 生成结果完全可复现：只需记住初始噪声 $\mathbf{x}_T$
+\end{enumerate}
+这与 DDPM 的随机采样形成鲜明对比——DDPM 中即使从相同的 $\mathbf{x}_T$ 出发，由于每步都注入随机噪声，最终生成的结果每次都不同。
+\end{importantbox}
+
+\subsection{确定性采样的实际意义}
+
+确定性采样带来了若干重要的实际好处：
+
+\paragraph{可复现性。} 在实际应用中（如 Stable Diffusion），用户生成了一张满意的图片后，若想再次生成完全相同的结果，在随机采样模式下几乎不可能。而使用 DDIM 确定性采样，只需记录初始噪声种子（seed），即可精确复现任意生成结果。
+
+\paragraph{语义隐空间。} 确定性映射意味着 $\mathbf{x}_T$ 空间中的每个点都唯一对应数据空间中的一张图片。这为隐空间中的操作（如插值、编辑）提供了基础。
+
+\paragraph{与 Neural ODE 的联系。} 确定性 DDIM 可以被理解为 neural ODE 的一种离散化：
+
+\begin{knowledgebox}{DDIM 与概率流 ODE 的关系}
+当 $\sigma_t = 0$ 时，DDIM 的迭代更新对应于以下常微分方程（ODE）的 Euler 离散化：
+$$
+d\mathbf{x} = \left[f(\mathbf{x}, t) - \frac{1}{2}g(t)^2 \nabla_\mathbf{x} \log q_t(\mathbf{x})\right] dt
+$$
+这就是 Song et al. (2021) 提出的\textbf{概率流 ODE}（probability flow ODE）。ODE 的解轨迹是确定性的，且保持了与 SDE（随机微分方程）相同的边缘分布。使用更高阶的 ODE 求解器可以进一步减少采样步数。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+$\sigma_t=0$ 的确定性 DDIM 建立了噪声空间到数据空间的确定性映射，实现了生成结果的精确可复现性，并为隐空间操作提供了基础。它可以被理解为概率流 ODE 的 Euler 离散化，这一联系为后续使用更高阶 ODE 求解器加速采样提供了理论依据。
+
+
+\section{加速生成：减少采样步数}
+
+\subsection{子序列采样策略}
+
+DDIM 的另一个核心贡献是提出了\textbf{步数跳跃}（stride / subsequence sampling）策略。在训练时，模型可能使用了 $T=1000$ 个时间步。但在采样时，我们不必遍历所有时间步，而是选择一个子序列。
+
+具体来说，设原始时间步集合为 $\{1, 2, \ldots, T\}$，我们选择一个大小为 $S < T$ 的子序列 $\tau = \{\tau_1, \tau_2, \ldots, \tau_S\}$，其中 $\tau_S = T$。采样时只在子序列 $\tau$ 的时间步上执行逆过程更新。
+
+\begin{importantbox}{步数跳跃的数学合理性}
+DDIM 的采样公式只依赖于 $\bar{\alpha}_t$ 和 $\bar{\alpha}_{t-1}$ 的值，而不要求时间步必须是连续的整数。因此我们可以将公式中的 $t \to \tau_i$，$t-1 \to \tau_{i-1}$ 进行替换：
+$$
+\mathbf{x}_{\tau_{i-1}} = \sqrt{\bar{\alpha}_{\tau_{i-1}}}\,\hat{\mathbf{x}}_0(\mathbf{x}_{\tau_i}) + \sqrt{1-\bar{\alpha}_{\tau_{i-1}}-\sigma_{\tau_i}^2}\cdot\frac{\mathbf{x}_{\tau_i} - \sqrt{\bar{\alpha}_{\tau_i}}\,\hat{\mathbf{x}}_0(\mathbf{x}_{\tau_i})}{\sqrt{1-\bar{\alpha}_{\tau_i}}} + \sigma_{\tau_i}\boldsymbol{\epsilon}
+$$
+这本质上是在一个更粗粒度的噪声调度上执行 DDIM 更新，数学上完全合法。
+\end{importantbox}
+
+例如，从 $T=1000$ 步的模型中，我们可以均匀选取 $S=50$ 步：
+$$
+\tau = \{20, 40, 60, \ldots, 980, 1000\}
+$$
+这将采样步数从 1000 减少到 50，加速 20 倍。
+
+\subsection{确定性采样在步数减少时的优势}
+
+讲者展示了 DDIM 论文中的实验结果，揭示了一个重要的经验规律：
+
+\begin{importantbox}{确定性采样对步数减少更鲁棒}
+实验表明（以 CIFAR-10 上的 FID 分数为例）：
+\begin{itemize}
+    \item 当使用完整的 1000 步时，DDPM（$\eta=1$，随机采样）和 DDIM（$\eta=0$，确定性采样）性能相当
+    \item 当步数减少到 50-100 步时，确定性 DDIM 的质量退化明显小于随机 DDPM
+    \item 当步数进一步减少到 10-20 步时，确定性 DDIM 仍能保持可接受的质量，而随机采样的质量急剧下降
+\end{itemize}
+直观解释：随机采样中每步注入的噪声在步数较少时会累积更大的误差；而确定性采样不注入额外噪声，误差累积更可控。
+\end{importantbox}
+
+\subsection{FID 评估指标}
+
+讲者在展示实验结果时介绍了 FID（Fr\'{e}chet Inception Distance）指标：
+
+\begin{knowledgebox}{FID 指标简介}
+FID 衡量生成图像分布与真实图像分布之间的距离。具体步骤：
+\begin{enumerate}
+    \item 用预训练的 Inception 网络提取真实图像和生成图像的特征向量
+    \item 分别拟合两组特征的高斯分布（均值 $\boldsymbol{\mu}$、协方差 $\boldsymbol{\Sigma}$）
+    \item 计算两个高斯分布之间的 Fr\'{e}chet 距离
+\end{enumerate}
+FID \textbf{越低越好}，表示生成分布越接近真实分布。FID 同时衡量了样本质量（保真度）和多样性。
+\end{knowledgebox}
+
+\subsection{加速采样的里程碑}
+
+讲者提到了扩散模型加速采样的发展路线：
+
+\begin{table}[H]
+\centering
+\caption{扩散模型加速采样的发展历程}
+\begin{tabular}{lcl}
+\toprule
+\textbf{方法} & \textbf{典型步数} & \textbf{策略} \\
+\midrule
+DDPM (2020) & $\sim$1000 & 马尔可夫随机采样 \\
+DDIM (2021) & $\sim$50 & 非马尔可夫确定性/半确定性采样 \\
+DPM-Solver (2022) & $\sim$10-20 & 高阶 ODE 求解器 \\
+Consistency Models / 蒸馏 & $\sim$1-4 & 蒸馏 + 一致性约束 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{knowledgebox}{从 1000 步到 1 步：开放问题}
+讲者指出，如果能在无需微调的前提下实现单步高质量生成，将具有巨大的商业和学术价值。目前的现状是：
+\begin{itemize}
+    \item 从 1000 步降到 10-50 步可以仅通过改变采样策略实现（如 DDIM、DPM-Solver）
+    \item 进一步降到 1-4 步则需要额外的蒸馏训练（如 Consistency Distillation、Progressive Distillation）
+    \item 单阶段训练就能实现单步高质量生成仍是一个开放问题
+\end{itemize}
+以 Flux 模型为例，其标准版本使用约 20 步，而 Schnell 版本通过蒸馏实现了 1-4 步生成。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DDIM 通过子序列采样策略，可以在不重新训练的前提下将采样步数从 1000 降低到约 50。确定性采样模式（$\eta=0$）在步数减少时表现出更强的鲁棒性。这一方法是扩散模型加速采样领域的开创性工作，后续的 DPM-Solver、一致性模型等方法在此基础上进一步将步数降低到了个位数。
+
+
+\section{隐空间中的语义操作}
+
+\subsection{确定性编码与解码}
+
+DDIM 确定性采样建立的 $\mathbf{x}_T \leftrightarrow \mathbf{x}_0$ 双射映射，使得我们不仅可以从 $\mathbf{x}_T$ 生成 $\mathbf{x}_0$（解码），还可以从 $\mathbf{x}_0$ 恢复 $\mathbf{x}_T$（编码）。编码过程通过运行 DDIM 的前向方向实现：
+
+$$
+\mathbf{x}_{t+1} = \sqrt{\bar{\alpha}_{t+1}}\,\hat{\mathbf{x}}_0(\mathbf{x}_t) + \sqrt{1-\bar{\alpha}_{t+1}}\cdot\frac{\mathbf{x}_t - \sqrt{\bar{\alpha}_t}\,\hat{\mathbf{x}}_0(\mathbf{x}_t)}{\sqrt{1-\bar{\alpha}_t}}
+$$
+
+这意味着对于任意真实图片 $\mathbf{x}_0$，我们可以找到其在噪声空间中的``对应点'' $\mathbf{x}_T$，从该点出发再执行 DDIM 解码可以精确恢复原图。
+
+\begin{importantbox}{DDIM 隐空间的语义结构}
+由于确定性映射的存在，噪声空间 $\mathbf{x}_T$ 实际上成为了一个具有语义结构的隐空间。在这个空间中：
+\begin{itemize}
+    \item 相似的图像在隐空间中的表示也相近
+    \item 隐空间中的线性运算（如插值）在数据空间中对应有意义的语义变化
+    \item 不同于 VAE 的隐空间（低维），DDIM 的隐空间与数据空间维度相同
+\end{itemize}
+\end{importantbox}
+
+\subsection{隐空间插值}
+
+DDIM 论文展示了隐空间插值的有趣应用。给定两张真实图片 $\mathbf{x}_0^{(1)}$ 和 $\mathbf{x}_0^{(2)}$：
+
+\begin{enumerate}
+    \item 通过 DDIM 编码分别得到 $\mathbf{x}_T^{(1)}$ 和 $\mathbf{x}_T^{(2)}$
+    \item 在隐空间中进行球面线性插值（SLERP）：
+    $$
+    \mathbf{x}_T^{(\lambda)} = \frac{\sin((1-\lambda)\theta)}{\sin\theta}\,\mathbf{x}_T^{(1)} + \frac{\sin(\lambda\theta)}{\sin\theta}\,\mathbf{x}_T^{(2)}, \quad \lambda \in [0, 1]
+    $$
+    其中 $\theta = \arccos\left(\frac{\langle\mathbf{x}_T^{(1)}, \mathbf{x}_T^{(2)}\rangle}{\|\mathbf{x}_T^{(1)}\|\,\|\mathbf{x}_T^{(2)}\|}\right)$
+    \item 对插值点 $\mathbf{x}_T^{(\lambda)}$ 执行 DDIM 解码得到插值图片
+\end{enumerate}
+
+\begin{knowledgebox}{为什么使用球面插值（SLERP）而非线性插值}
+由于隐空间中的噪声向量 $\mathbf{x}_T$ 是从标准高斯分布中采样的，在高维空间中，这些向量近似均匀分布在一个超球面上（范数集中在 $\sqrt{d}$ 附近）。线性插值（LERP）会产生范数较小的中间点，偏离高斯分布的典型集合（typical set），可能导致质量下降。球面插值（SLERP）保持向量范数不变，生成的中间点仍在超球面上，因此更合理。
+\end{knowledgebox}
+
+\subsection{与其他隐空间的对比}
+
+\begin{table}[H]
+\centering
+\caption{不同模型隐空间特性对比}
+\begin{tabular}{lccc}
+\toprule
+\textbf{模型} & \textbf{隐空间维度} & \textbf{编码确定性} & \textbf{插值质量} \\
+\midrule
+VAE & 低维 & 随机 & 中等 \\
+GAN & 低维 & 通常无编码器 & 好 \\
+DDIM & 与数据等维 & 确定性 & 好 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warningbox}{DDIM 编码的精度依赖步数}
+DDIM 编码过程本质上是 ODE 积分的数值近似。使用的步数越少，数值误差越大，``编码$\to$解码''的重建质量越低。在需要精确重建的应用（如图像编辑）中，通常需要使用较多的步数（如 100-200 步）来保证编码精度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DDIM 的确定性采样构建了噪声空间到数据空间的双射映射，使噪声空间获得了语义结构。通过编码-插值-解码的流程，可以实现高质量的图像插值。球面线性插值（SLERP）比线性插值更适合高斯分布的隐空间。
+
+
+\section{实验结果与分析}
+
+\subsection{不同 $\eta$ 和步数下的 FID 对比}
+
+DDIM 论文在 CIFAR-10 数据集上进行了系统性的消融实验，考察 $\eta$ 和采样步数 $S$ 对 FID 的影响。
+
+关键观察如下：
+
+\begin{enumerate}
+    \item \textbf{全步数（$S=1000$）}：所有 $\eta$ 值的 FID 都相当，约为 3-4。DDPM（$\eta=1$）略优于确定性 DDIM（$\eta=0$）
+    \item \textbf{中等步数（$S=50\sim100$）}：确定性 DDIM（$\eta=0$）显著优于 DDPM（$\eta=1$），FID 差距可达 5-10
+    \item \textbf{少步数（$S=10\sim20$）}：确定性 DDIM 仍能保持较好的质量（FID $\sim$10-15），而 DDPM 的 FID 急剧恶化（$>$50）
+\end{enumerate}
+
+\begin{warningbox}{步数减少时的质量-速度权衡}
+虽然确定性 DDIM 在减少步数时更为鲁棒，但步数减少到一定程度后，质量仍会不可避免地下降。这是因为较大的时间步跨度使得每步更新的``跳跃''更大，噪声预测网络在远离训练分布的区域的预测准确性会降低。DDIM 论文的实验表明，在 CIFAR-10 上约 $S=50$ 步即可达到与 1000 步 DDPM 相当的质量。
+\end{warningbox}
+
+\subsection{样本质量的定性观察}
+
+讲者还讨论了 DDIM 生成样本的一些定性特征：
+
+\begin{itemize}
+    \item 确定性 DDIM 生成的图像通常比 DDPM 略微``锐利''（sharper），因为没有额外噪声的注入
+    \item DDPM 的随机性有时反而能带来更多的多样性和``自然感''
+    \item 在步数充足（$\geq$50）的情况下，两者的视觉质量差异不大
+\end{itemize}
+
+\subsection{本章小结}
+
+实验结果验证了 DDIM 在减少采样步数方面的优势：确定性采样在步数减少时质量退化更缓慢。约 50 步的 DDIM 即可匹配 1000 步 DDPM 的质量，实现约 20 倍加速。
+
+
+\section{总结与延伸}
+
+\subsection{核心要点回顾}
+
+DDIM 是扩散模型加速采样的奠基性工作，其核心贡献可以归纳为以下几点：
+
+\begin{enumerate}
+    \item \textbf{非马尔可夫前向过程}：通过直接定义跳跃分布和后验分布（而非前向转移分布），构建了比 DDPM 更通用的扩散框架。后验分布中引入了自由参数 $\sigma_t$，控制采样的随机性程度。
+
+    \item \textbf{ELBO 不变性}：由于跳跃分布与 DDPM 保持一致，DDIM 的训练目标与 DDPM 完全等价。这意味着已有的 DDPM 模型可以直接用于 DDIM 采样，无需任何重新训练。
+
+    \item \textbf{确定性采样}：当 $\sigma_t = 0$ 时，采样过程变为完全确定性的，建立了噪声空间到数据空间的双射映射。这带来了可复现性、语义隐空间、以及与 ODE 求解器的联系。
+
+    \item \textbf{加速生成}：通过子序列采样策略，可以将步数从 1000 降低到约 50，实现 20 倍加速。确定性采样模式在步数减少时表现出更强的鲁棒性。
+
+    \item \textbf{隐空间操作}：确定性 DDIM 的编码-解码对称性使得隐空间插值等语义操作成为可能。
+\end{enumerate}
+
+\begin{importantbox}{DDIM 的深远影响}
+DDIM 不仅本身是一个实用的加速采样方法，更重要的是它揭示了扩散模型一个关键的设计原则：\textbf{训练与推理的解耦}。模型训练一次后，可以在推理时自由选择不同的采样策略（步数、随机性程度、ODE 求解器等）。这一原则被后续的几乎所有扩散模型加速工作所继承，包括 DPM-Solver、Consistency Models、Progressive Distillation 等。
+\end{importantbox}
+
+\subsection{后续发展方向}
+
+基于 DDIM 的框架，后续研究从多个方向进一步推进了扩散模型的采样效率：
+
+\begin{enumerate}
+    \item \textbf{高阶 ODE 求解器}（DPM-Solver, DPM-Solver++）：将确定性 DDIM 视为概率流 ODE 的 Euler 方法，使用更高阶（2阶、3阶）的求解器可以在相同步数下获得更高精度，或在更少步数下达到相同质量
+    \item \textbf{连续时间 SDE/ODE 框架}（Score SDE）：将离散时间的 DDPM/DDIM 推广到连续时间，统一了 score-based models 和扩散模型
+    \item \textbf{知识蒸馏}（Progressive Distillation, Consistency Distillation）：通过蒸馏进一步将步数降低到 1-4 步
+    \item \textbf{Flow Matching}：从最优传输的角度重新设计扩散路径，实现更直的采样轨迹和更少的步数
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+    \item Song, J., Meng, C., \& Ermon, S. (2021). Denoising Diffusion Implicit Models. \textit{ICLR 2021}. \href{https://arxiv.org/abs/2010.02502}{arXiv:2010.02502}
+    \item Song, Y., Sohl-Dickstein, J., Kingma, D. P., Kumar, A., Ermon, S., \& Poole, B. (2021). Score-Based Generative Modeling through Stochastic Differential Equations. \textit{ICLR 2021}. \href{https://arxiv.org/abs/2011.13456}{arXiv:2011.13456}
+    \item Ho, J., Jain, A., \& Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. \textit{NeurIPS 2020}. \href{https://arxiv.org/abs/2006.11239}{arXiv:2006.11239}
+    \item Lu, C., Zhou, Y., Bao, F., Chen, J., Li, C., \& Zhu, J. (2022). DPM-Solver: A Fast ODE Solver for Diffusion Probabilistic Model Sampling. \textit{NeurIPS 2022}. \href{https://arxiv.org/abs/2206.00927}{arXiv:2206.00927}
+    \item Song, Y., \& Dhariwal, P. (2023). Consistency Models. \textit{ICML 2023}. \href{https://arxiv.org/abs/2303.01469}{arXiv:2303.01469}
+\end{itemize}
+
+%% --- 正文内容结束 --- %%
+
+\end{document}
