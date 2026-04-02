@@ -168,6 +168,10 @@ graph LR
 
 ---
 
+## 🙏 致谢
+
+讲义生成工具链基于 [wdkns-skills](https://github.com/wdkns/wdkns-skills)（五道口纳什）改进，在此基础上增加了模块化重构、批量处理脚本、文章整理 skill 等扩展。
+
 ## 📜 License
 
 讲义内容基于公开课程资料整理，仅供学习使用。原始课程版权归各学校和讲者所有。
