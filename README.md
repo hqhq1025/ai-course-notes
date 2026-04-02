@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-**220+ 份 AI / LLM 公开课中文讲义 PDF**
+**239 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-229份-blue?style=for-the-badge)](.)
-[![Courses](https://img.shields.io/badge/课程系列-15个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-239份-blue?style=for-the-badge)](.)
+[![Courses](https://img.shields.io/badge/课程系列-13个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
 </div>
@@ -73,7 +73,7 @@
 | **AGI 峰会** ×4 | 张钹 / 林俊旸 / 姚顺雨 / 阿里圆桌 | AITIME / 阿里云 |
 | **Greg Isenberg** | Claude Cowork & Code | YouTube |
 
-### 📝 技术文章笔记 (15 篇)
+### 📝 技术文章笔记 (14 篇)
 
 | 文章 | 来源 |
 |------|------|
@@ -91,7 +91,6 @@
 | [50 Claude Tips](articles/vishwas-50-claude-tips/) | @vishwas_ai |
 | [Claude Code Best Practices](articles/panda-claude-code-best-practices/) | @panda_quant |
 | [Cowork Starter](articles/corey-cowork-starter/) | @corey_latislaw |
-| [丁一: 设计 Skills](articles/dingyi-design-skills/) | @dingyi |
 
 </details>
 
