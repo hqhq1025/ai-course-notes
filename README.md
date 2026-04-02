@@ -73,6 +73,26 @@
 | **AGI 峰会** ×4 | 张钹 / 林俊旸 / 姚顺雨 / 阿里圆桌 | AITIME / 阿里云 |
 | **Greg Isenberg** | Claude Cowork & Code | YouTube |
 
+### 📝 技术文章笔记 (15 篇)
+
+| 文章 | 来源 |
+|------|------|
+| [Anthropic Harness Design](articles/anthropic-harness-design/) | Anthropic Blog |
+| [Karpathy: Vibe Coding](articles/dotey-karpathy-translation/) | @kabornethy (宝玉译) |
+| [Claude Code Skills 指南](articles/dotey-claude-code-skills-translation/) | @dotey (宝玉译) |
+| [Google Agent Skill Patterns](articles/google-agent-skill-patterns/) | Google Blog |
+| [OpenAI Codex Best Practices](articles/openai-codex-best-practices/) | OpenAI |
+| [OpenAI Codex Datasets](articles/openai-codex-datasets/) | OpenAI |
+| [Claude vs Codex](articles/hesamation-claude-vs-codex/) | @hesamation |
+| [Claude Architect 模式](articles/hooeem-claude-architect/) | @hooeem |
+| [Agentic Memory](articles/ram-agentic-memory/) | @ramfromindia |
+| [林俊旸: Agentic Thinking](articles/junyang-lin-agentic-thinking/) | @junyang_lin |
+| [10x Skills 指南](articles/minli-10x-skills-translation/) | @MinLiBuilds (实践哥译) |
+| [50 Claude Tips](articles/vishwas-50-claude-tips/) | @vishwas_ai |
+| [Claude Code Best Practices](articles/panda-claude-code-best-practices/) | @panda_quant |
+| [Cowork Starter](articles/corey-cowork-starter/) | @corey_latislaw |
+| [丁一: 设计 Skills](articles/dingyi-design-skills/) | @dingyi |
+
 </details>
 
 ---
@@ -134,7 +154,7 @@ graph LR
     A[YouTube/Bilibili 视频] --> B[yt-dlp 下载]
     B --> C{有字幕?}
     C -->|是| D[下载 SRT]
-    C -->|否| E[Whisper large-v3<br/>双 V100 多路并行]
+    C -->|否| E[Whisper large-v3]
     E --> D
     D --> F[Claude 智能整理]
     G[官方 Slides PDF] --> F
