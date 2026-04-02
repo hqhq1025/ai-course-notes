@@ -2,11 +2,11 @@
 
 # 📚 AI Course Notes
 
-**248 份 AI / LLM 公开课中文讲义 PDF**
+**258 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-248份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-258份-blue?style=for-the-badge)](.)
 [![Courses](https://img.shields.io/badge/课程系列-13个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
@@ -36,6 +36,12 @@
 | [**CS146S**](cs146s/) | The Modern Software Developer | 10 | Mihail Eric + 业界嘉宾 |
 | [**CS224N**](cs224n/) | NLP with Deep Learning | 17 | Chris Manning |
 | [**CS231N**](cs231n/) | Deep Learning for Computer Vision | 18 | — |
+
+### 🏛 MIT 课程 (10 份)
+
+| 课程 | 主题 | 讲数 | 讲者 |
+|------|------|------|------|
+| [**6.S191**](6s191/) | Introduction to Deep Learning | 10 | Alexander Amini + 业界嘉宾 |
 
 ### 🐻 Berkeley 课程 (35 份)
 
