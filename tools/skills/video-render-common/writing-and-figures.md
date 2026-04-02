@@ -1,5 +1,38 @@
 # Shared Writing & Figure Rules for Video-to-PDF Skills
 
+## Subtitle Preprocessing
+
+YouTube auto-generated subtitles contain massive redundancy — each caption line repeats the tail of the previous line, causing the same sentence to appear 3-4 times. A raw 5-hour video can produce 80,000+ SRT lines, but only ~8,000 lines of unique content.
+
+**Always clean subtitles before reading.** Use this Python snippet:
+
+```python
+import re
+with open('subs.en.srt') as f:
+    content = f.read()
+blocks = re.split(r'\n\n+', content.strip())
+texts, prev = [], ''
+for block in blocks:
+    lines = block.strip().split('\n')
+    if len(lines) >= 3:
+        timestamp = lines[1].split(' --> ')[0][:8]
+        text = ' '.join(lines[2:]).strip()
+        if text and text not in prev:
+            texts.append(f'[{timestamp}] {text}')
+            prev = text
+# Second pass: merge lines where text is substring of previous
+merged, prev = [], ''
+for line in texts:
+    text = line.split('] ', 1)[-1]
+    if text and text not in prev:
+        merged.append(line)
+        prev = text
+with open('subs_clean.txt', 'w') as f:
+    f.write('\n'.join(merged))
+```
+
+This typically achieves **10x compression** (86k → 8k lines) with zero information loss. Save the result as `subs_clean.txt` next to the original SRT. For videos over 2 hours, this step is essential to avoid agent timeouts.
+
 ## Writing Rules
 
 1. Write the notes in Chinese unless the user explicitly requests another language.
