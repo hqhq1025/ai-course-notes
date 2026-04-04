@@ -48,7 +48,7 @@
 \textbf{视频作者/频道}：\videochannel\par
 \textbf{发布日期}：\videopublishdate\par
 \textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}
+\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
 \textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
 \end{tcolorbox}
 \end{titlepage}
@@ -204,6 +204,52 @@ GPU 利用 & 算力充分利用 & 算力严重闲置 \\
 Decode 阶段每步只生成一个 token，但需要加载整个模型权重和 KV-Cache。GPU 的算力大量闲置，内存带宽成为瓶颈。这就是为什么 Apple M5 Max 的统一内存架构（高带宽）在 Decode 阶段表现突出。
 \end{warningbox}
 
+\section{系统调优：指标、硬件与服务策略}
+
+\subsection{TTFT 与 TPS 的不同优化目标}
+从服务视角看，Prefill 和 Decode 对应着两类完全不同的用户体验指标。Prefill 更直接影响首 token 延迟（TTFT），决定“用户是否觉得系统响应够快”；Decode 更直接影响每秒输出速度（TPS），决定长回答时的体感流畅度。理解两者差异，才能正确设置批处理、并发度和硬件预算。
+
+\begin{table}[H]
+\centering
+\caption{推理服务中最常见的两类目标}
+\begin{tabular}{p{3.2cm}p{4.8cm}p{4.5cm}}
+\toprule
+指标 & 更受哪个阶段影响 & 典型优化手段 \\
+\midrule
+TTFT & Prefill & 提高 GEMM 吞吐、减少 prompt 冗余、提前编译 kernel \\
+TPS & Decode & 提升内存带宽、优化 KV cache、增大 decode batching \\
+成本/吞吐比 & 两者共同作用 & 调整并发、batch、上下文长度与量化策略 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{为什么同一块硬件会出现“两张脸”}
+一块 GPU 在 Prefill 阶段可能表现得像“算力怪兽”，在 Decode 阶段却像“带宽受限的搬运工”。这并不是硬件突然变差，而是工作负载结构发生了变化。课程的真正启发在于：评估推理硬件时，不能只看单一 FLOPs 指标，还要看带宽、缓存层次和访问模式是否匹配 Decode 的内存密集特征。
+
+\begin{knowledgebox}{部署时最容易被忽略的一点}
+很多团队只看 benchmark 平均吞吐，却忽略了 prompt 长短分布和用户请求类型。如果业务以长 prompt、短回答为主，Prefill 可能是主瓶颈；如果业务以短 prompt、长回答为主，Decode 的带宽瓶颈会更加突出。
+\end{knowledgebox}
+
+\subsection{本章小结}
+Prefill/Decode 的差异不只是算法知识，而是服务架构设计知识。只有把指标、硬件和工作负载类型放在一起看，推理调优才不会跑偏。
+
+\newpage
+\section{部署核对清单}
+真正把课程里的分析落到服务侧，团队通常要在上线前回答几个问题：当前业务的 prompt 长短分布是什么？主要优化 TTFT 还是 TPS？KV cache 是否会在高并发时触发显存抖动？这些问题如果不提前梳理，往往会让系统在真实流量下暴露出与 benchmark 完全不同的瓶颈。
+
+\begin{importantbox}{上线前至少核对四件事}
+\begin{itemize}
+  \item 用户请求以长 prompt 还是长回答为主
+  \item 现有硬件瓶颈更偏向算力还是带宽
+  \item KV cache 和 batch 策略是否匹配目标并发
+  \item 监控面板是否同时覆盖 TTFT、TPS 与显存占用
+\end{itemize}
+\end{importantbox}
+
+\subsection{本章小结}
+Prefill/Decode 的理论差异最终都会回到部署清单上。只有把工作负载、硬件和指标统一到一个核对流程里，推理优化才真正可执行。
+
+\newpage
 \section{总结与延伸}
 
 \begin{enumerate}

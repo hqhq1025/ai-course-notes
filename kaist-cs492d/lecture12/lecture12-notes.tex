@@ -80,11 +80,8 @@
 \textbf{视频作者/频道}：\videochannel\par
 \textbf{发布日期}：\videopublishdate\par
 \textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{
-未填写
-}{
-\href{\videourl}{\nolinkurl{\videourl}}
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
 }
 \end{tcolorbox}
 \end{titlepage}
@@ -568,6 +565,109 @@ $$r = -\sum_{i < j} \sum_{p \in \text{overlap}(v_i, v_j)} \| I_i(\pi_i(p)) - I_j
 
 推理时引导方法具有通用性强、无需训练、实现简单等优势，但受限于奖励函数必须可微以及真实性-条件满足度的固有权衡。
 
+\section{实践落地：如何把推理时引导做成可复现实验}
+
+\subsection{实验设计的四个关键旋钮}
+
+从课程内容往工程落地推进时，最重要的不是再发明一个公式，而是把几个核心旋钮系统化管理起来。
+
+\begin{enumerate}
+    \item \textbf{采样器选择}：DDPM、SDE、ODE 各自对应不同的速度与稳定性权衡
+    \item \textbf{引导强度调度}：固定权重最简单，但常常不如随时间步变化的 schedule 稳定
+    \item \textbf{验证器质量}：reward / verifier 是否可信，直接决定引导方向是否正确
+    \item \textbf{候选筛选策略}：单次采样、best-of-$N$、重排序（reranking）会显著改变最终效果
+\end{enumerate}
+
+\begin{importantbox}{很多实验失败并不是模型不行，而是 verifier 不够好}
+一旦 verifier 本身与人类偏好不一致，或者只会奖励一些容易作弊的局部模式，扩散模型就会学会``投机取巧''。这与 RLHF 中 reward hacking 的问题完全同构。
+\end{importantbox}
+
+\subsection{推荐的实验日志模板}
+
+为了让不同方法能被公平比较，课程内容很适合落成统一的实验记录模板：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.18\textwidth} p{0.22\textwidth} p{0.42\textwidth}}
+\toprule
+实验项 & 需要记录的字段 & 说明 \\
+\midrule
+基础模型 & 预训练模型、分辨率、训练域 & 影响 Tweedie 估计质量与可迁移性 \\
+采样设置 & 步数、采样器、随机种子 & 决定速度与结果波动范围 \\
+引导设置 & reward 类型、权重、schedule & 决定条件满足度与真实性平衡 \\
+验证方式 & 自动指标、人工偏好、失败样例 & 防止只看平均分，忽略模式性崩坏 \\
+计算开销 & 单样本耗时、显存、best-of-$N$ 次数 & 便于和训练时方法做成本比较 \\
+\bottomrule
+\end{tabular}
+\caption{推理时引导实验的最小记录模板}
+\end{table}
+
+\begin{knowledgebox}{为什么 ``失败案例库'' 很重要}
+扩散模型的引导方法往往在平均案例上看起来不错，但在某些条件组合或高分辨率场景下会系统性失真。为失败样例单独建库，比单纯汇报均值更有助于下一轮研究。
+\end{knowledgebox}
+
+\subsection{从单奖励到多奖励组合}
+
+实际应用 rarely 只有一个目标。图像既要符合文本，又要满足几何一致性、风格约束、编辑指令、物理约束等。于是总奖励常写成：
+
+$$r_{\text{total}}(x) = \lambda_1 r_{\text{text}}(x) + \lambda_2 r_{\text{consistency}}(x) + \lambda_3 r_{\text{physics}}(x) + \cdots$$
+
+这带来两个新问题：
+
+\begin{itemize}
+    \item 不同奖励尺度不同，直接相加会让某一项支配优化
+    \item 各奖励目标可能彼此冲突，例如更强的几何约束可能压缩图像细节与多样性
+\end{itemize}
+
+\begin{warningbox}{多奖励组合最常见的错误：权重凭直觉乱调}
+如果没有做 reward normalization、梯度裁剪或时间步分配，不同约束会相互干扰，结果既不真实也不满足条件。一个更稳妥的做法是让不同奖励在不同时间段接管主导权，例如前期强调全局结构，后期强调细节和一致性。
+\end{warningbox}
+
+\subsection{研究前沿：从 hand-crafted guidance 到 learned verifier}
+
+讲座的隐含趋势是：短期内，Tweedie 近似配合手工奖励函数仍然是性价比最高的路径；但长期来看，更可能的方向是训练更强的 verifier 或 value model：
+
+\begin{itemize}
+    \item \textbf{Learned reward model}：让 verifier 更接近人类偏好或下游任务成功率
+    \item \textbf{Temporal value model}：不只评估最终 $x_0$，还评估中间状态 $x_t$ 的未来潜力
+    \item \textbf{Adaptive compute}：把更多推理步数分配给困难样本，而不是平均对待所有输入
+    \item \textbf{Hybrid pipeline}：训练时控制模型负责大方向，推理时引导负责末端精修
+\end{itemize}
+
+\subsection{评测协议：不要只看单一视觉指标}
+
+课程虽然以方法推导为主，但从研究方法论上看，推理时引导尤其需要多维评测。一个更完整的 protocol 至少应包含：
+
+\begin{enumerate}
+    \item \textbf{条件满足度}：逆问题重建误差、约束满足率、任务成功率
+    \item \textbf{真实性}：FID、CLIP score、人工主观评分或任务特定 perceptual metric
+    \item \textbf{稳定性}：不同随机种子下结果波动是否可控
+    \item \textbf{成本}：每次采样的 wall-clock time、显存、best-of-$N$ 带来的额外开销
+\end{enumerate}
+
+\begin{warningbox}{只汇报 ``最好的一张图'' 会严重夸大方法效果}
+推理时引导很容易通过多次采样挑出漂亮案例，但如果不报告平均表现、失败率和计算成本，就无法公平比较不同方法。test-time scaling 的优势与代价必须同时披露。
+\end{warningbox}
+
+\subsection{为什么这条路线对中小团队尤其重要}
+
+讲者强调的一个现实判断是：在大模型训练门槛持续升高的背景下，test-time 方法给了中小实验室另一条竞争路径。
+
+\begin{itemize}
+    \item 不需要从头训练大型生成模型
+    \item 可直接复用公开权重与开源采样器
+    \item 研究重点转移到 verifier 设计、奖励构造和 compute allocation
+    \item 更适合快速试错，因为每次实验的反馈周期比重新训练短得多
+\end{itemize}
+
+\begin{knowledgebox}{扩散模型社区可能复制 LLM 社区的演化}
+LLM 已经走出一条很清晰的路径：预训练模型商品化后，真正拉开差距的是后训练、评测和 test-time orchestration。扩散模型很可能也会沿着类似路线演进，未来竞争重点会越来越偏向 verifier、tooling 和 system design。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+把推理时引导真正做成研究或产品系统，关键在于统一实验记录、设计稳定的 reward 组合、并把 verifier 质量视为第一等公民。很多看似算法层的问题，本质上是实验设计和评测设计的问题。
+
 \section{总结与延伸}
 
 \subsection{核心要点回顾}
@@ -583,6 +683,59 @@ $$r = -\sum_{i < j} \sum_{p \in \text{overlap}(v_i, v_j)} \| I_i(\pi_i(p)) - I_j
 \subsection{与 LLM Test-Time Scaling 的呼应}
 
 本讲将扩散模型的推理时引导置于更宏大的 AI 趋势中——test-time scaling。LLM 领域通过 O1/O3/DeepSeek R1 展示了在推理时花费更多计算的巨大潜力。扩散模型的推理时引导本质上也是一种 test-time scaling 技术，它不增加训练成本，而是通过推理时的额外计算来提升输出质量。
+
+\subsection{总结表：方法、价值与风险}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.22\textwidth} p{0.21\textwidth} p{0.23\textwidth} p{0.22\textwidth}}
+\toprule
+主题 & 核心价值 & 主要风险 & 实践建议 \\
+\midrule
+DPS / 逆问题引导 & 无需重训即可处理观测约束 & 高噪声阶段近似误差大 & 采用较多步数并做 guidance schedule \\
+RL 视角奖励引导 & 把问题统一到 verifier + reward 框架 & reward hacking、价值近似粗糙 & 先做 verifier 校验，再谈更强引导 \\
+同步化生成 & 用 2D 预训练模型外推到 panorama / 3D / illusion & 多实例间约束冲突，易失真 & 在 canonical / instance space 间显式记录投影与重叠区域 \\
+Test-time scaling & 以较低训练成本换更高推理质量 & 计算开销上升，延迟更高 & 用 best-of-$N$ 或自适应算力分配控制成本 \\
+\bottomrule
+\end{tabular}
+\caption{Lecture 12 的方法总览}
+\end{table}
+
+\subsection{给研究者的三个行动点}
+
+\begin{enumerate}
+    \item 先在一个简单、可微、可评测的 reward 上建立稳定基线，再扩展到多约束设置
+    \item 为每种方法建立统一的失败案例库，特别记录高引导权重与低步数下的退化模式
+    \item 把扩散模型的推理时引导和 LLM 的 verifier / reranking / adaptive compute 方法对照研究，而不是分开看待
+\end{enumerate}
+
+\subsection{进一步延伸的问题}
+
+\begin{itemize}
+    \item 是否能训练一个统一 verifier，同时服务逆问题、编辑任务与美学偏好？
+    \item 是否可以让模型动态决定哪些样本值得更多推理步数，从而做到真正的 adaptive test-time scaling？
+    \item 对于 3D、视频和机器人轨迹等更复杂模态，canonical space / instance space 的同步化是否还能保持稳定？
+\end{itemize}
+
+\subsection{与训练时控制方法的分工}
+
+把本讲内容放回更完整的生成系统视角，可以得到一个很实用的判断：推理时引导并不是要取代 ControlNet、LoRA 或条件扩散模型，而是与它们分工协作。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.22\textwidth} p{0.24\textwidth} p{0.22\textwidth} p{0.2\textwidth}}
+\toprule
+路线 & 最擅长的问题 & 主要代价 & 更适合的场景 \\
+\midrule
+训练时控制 & 固定且高频的条件类型 & 需要数据、训练和维护多个模型 & 稳定生产环境、低延迟服务 \\
+推理时引导 & 临时、多变、组合式约束 & 采样更慢、调参更敏感 & 研究探索、长尾需求、复杂约束拼装 \\
+混合路线 & 训练时给粗结构，推理时做精修 & 系统设计更复杂 & 高质量生成与灵活控制同时要求较高的任务 \\
+\bottomrule
+\end{tabular}
+\caption{训练时控制与推理时引导的职责边界}
+\end{table}
+
+这张表的核心启示是：如果某种条件几乎每次都出现，最好把它吸收到训练阶段；如果条件是临时的、跨任务的、难以收集监督数据的，就更适合保留到推理阶段解决。
 
 \subsection{拓展阅读}
 

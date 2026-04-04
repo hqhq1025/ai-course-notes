@@ -113,6 +113,25 @@ Keep the speaker's closing discussion when it carries actual teaching value, suc
 
 Select figures by necessity and teaching value, not by an arbitrary quota or a bias toward keeping the document visually sparse.
 
+### Slides-First Rule
+
+If official slides, lecture deck pages, or course handout pages are available, treat them as the **primary** visual source for the PDF.
+
+- Prefer slide screenshots for definitions, taxonomies, architecture diagrams, benchmark tables, roadmap charts, and any content that was clearly authored as a teaching slide.
+- Use video frames as the fallback when slides are unavailable.
+- When both exist, mix them deliberately:
+  - use slides for static explanatory content
+  - use video frames for live demos, product UIs, code walkthroughs, whiteboard builds, and dynamic reveals
+- If a lecture has slides and the note contains no slide screenshots, treat that as a quality gap unless there is a clear reason not to use them.
+- If standalone slide files are unavailable but the video clearly shows slide pages, it is acceptable to capture slide screenshots from the video and use them as slide evidence.
+
+### 幻灯片与关键帧实践
+
+- 除了确保每个核心概念至少有一张幻灯片证据外，如果讲义本身没有 deck 就额外准备关键视频帧：任何讲述定义、公式、架构、对比、示意图的段落都应该配图，并在图题或正文中标明时间区间（例：`图3：00:26:03--00:27:40`）。
+- 对于每个 section，展示幻灯片/画面时要说明其来源：如果是官方 PDF，将其导出成高分辨率 JPEG；如果是视频帧，生成 contact sheet 确保选中最终完整状态、用中性时间命名，随后在 LaTeX 中附 footnote 说明区间。
+- 将 slide 与 frame 搭配使用：静态理论用 slides，动态演示、代码、一次性 whiteboard 依赖 video frames。若一个概念既有 slides 又有 frame，可先用 slides 讲基础，再用 frame 展示细节或者演示结果。
+- 当假设某一节没有 slides 时，也要尽量挑图：通过 subtitles 定位，抓取多帧候选、再选最完整的一个，同样注明时间。缺失 slides 的情况需在简述中注明“视频帧来源：00:41:00--00:41:20”并且确保这一页已包含图像/表格。
+
 When locating candidate frames, bias strongly toward recall before precision.
 It is better to inspect too many nearby candidates first than to miss the one frame where the slide, formula, table, or diagram is finally fully revealed and readable.
 

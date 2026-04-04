@@ -31,7 +31,7 @@ Before downloading the video, search for official slides, lecture notes, or othe
 5. **Google Slides / Google Docs**: some courses host slides on Google Slides instead of PDF. Strategy:
    - Try appending `/export/pdf` to the Google Slides URL to download as PDF (e.g., `https://docs.google.com/presentation/d/XXXXX/export/pdf`)
    - If export fails, note the URL in the metadata and fall back to video frame extraction
-6. When slides are available, use them as primary figure source; still download video for supplementary frames
+6. When slides are available, use them as the primary figure source and make sure slide screenshots appear in the final PDF; still download video for supplementary frames
 7. When official lecture notes are available, use them to verify formula accuracy and fill in details the speaker glossed over verbally
 8. If no materials found, proceed with video-only mode
 

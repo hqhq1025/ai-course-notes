@@ -37,6 +37,7 @@ Additional Bilibili-specific notes:
 - Many Chinese courses host slides on their own course websites or Gitee/GitHub repos
 - Some courses have companion textbooks or reading lists — check the video description
 - Google Slides/Docs strategy: try `/export/pdf` URL pattern; fall back to video frames if export fails
+- If slides are found, use slide screenshots as the primary figure source and ensure they appear in the final PDF rather than relying on video frames alone
 - Official lecture notes are especially valuable for Bilibili courses where subtitles may be auto-generated and formula accuracy is lower
 
 ### Metadata Inspection

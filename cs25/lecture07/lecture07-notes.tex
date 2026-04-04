@@ -50,7 +50,7 @@
 \textbf{视频作者/频道}：\videochannel\par
 \textbf{发布日期}：\videopublishdate\par
 \textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}
+\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
 \textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
 \end{tcolorbox}
 \end{titlepage}
@@ -142,15 +142,207 @@ NPTs 天然适合 few-shot 和 one-shot 学习场景：
 
 NPTs 将 Transformer 的序列建模能力扩展到数据点之间，为表格数据和 few-shot 学习提供了新的视角。
 
+\section{Self-Attention as Data Routing}
+
+\subsection{从注意力权重到可解释路径}
+
+Attention 的 Query-Key dot product 在训练中学到的结构，常常对应一种``数据路由''——每个 token 选择与哪些 token 交流。可以把这一机制看成一种\textbf{soft routing}：每条 token 的输出是所有 token 的加权组合，权重代表选择的概率。
+
+\begin{knowledgebox}{Routing 的两个角度}
+\begin{itemize}
+    \item \textbf{解释性角度}：attention map 可以可视化，有助于理解模型为什么把某些 token 关联
+    \item \textbf{工程角度}：可以在推理时只保留 top-k 的注意力，降低计算与内存
+\end{itemize}
+\end{knowledgebox}
+
+\subsection{低秩与稀疏注意力的落地}
+
+在训练大模型时，attention 的权重矩阵可能是低秩的，代表只有少数``路''被持续使用；而稀疏 attention 机制（BigBird、Longformer）则强制让每个 token 只连接部分其他 token。在实际工程里，可以借助稀疏 attention 近似，把成本控制在线性级别。
+
+\begin{warningbox}{稀疏机制的风险}
+虽然稀疏 attention 降低了复杂度，但如果掩码位置选择不当，会丢失关键依赖。例如在长文本中，把文末 token 的注意力限制在局部，会导致无法捕捉跨段落的依赖。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Self-attention 可以看成数据之间的 soft routing，将信息在不同 token 之间按结构化方式分发。低秩与稀疏的设计可以降低成本，但要保留全局依赖需要谨慎。
+
+\section{NPTs at Scale: Benchmarks and Metrics}
+
+\subsection{Benchmarking data-aware models}
+
+NPT 们在 tabular benchmarks（如 UCI、OpenML）表现突出，但重复训练成本很高。Aidan 提出的 ``feature-set scaling'' 观点是：随着特征数量增加，模型必须更好地处理 feature-level interactions，而 NPTs 通过 data-wise attention 实现这一点。
+
+\begin{table}[H]
+\centering
+\caption{NPT 与传统模型的比较}
+\begin{tabular}{lccc}
+\toprule
+模型家族 & 处理数据依赖 & Few-shot & 可解释性 \\
+\midrule
+MLP & 无 & 否 & 极低 \\
+GNN / DeepSets & 限于局部图结构 & 部分 & 低 \\
+NPT & 全局数据 attention & 强 & 中等 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Precision / Recall for masked targets}
+
+训练 NPTs 时，掩码目标的分布可以用 ROC 曲线来判断模型是否过度依赖某个 feature。例如 mask label 时，precision 高但 recall 低说明模型只在少数样本达到高 fidelity，而 generalization 仍需提升。
+
+\subsection{本章小结}
+
+NPTs 在表格 benchmark 上具有优势；评估时需同时看 mask precision 与 recall，避免模型只在易解样本上取得高分。
+
+\section{Operationalizing NPTs and Attention Systems}
+
+\subsection{Deployment requirements}
+
+将 NPT 投入生产，需要解决以下几点：
+\begin{itemize}
+    \item Data sharding：整个 dataset 满足 attention，但 production pipeline 通常增量更新
+    \item Caching embeddings：attention 需要每个 token embedding，因此必须缓存并更新
+    \item Monitoring drift：数据分布 shift 会导致注意力权重失效，需要实时 drift 检测
+\end{itemize}
+
+\begin{importantbox}{Data engineering cost > Modeling cost}
+Aidan 强调：NPT 的建模贡献可能只占项目一半 effort，另半是 data engineering（清洗、合并、版本管理）。模型看起来很漂亮，但如果数据 pipeline 不能保持一致，性能会剧烈波动。
+\end{importantbox}
+
+\subsection{Operational checklist for attention systems}
+
+\begin{itemize}
+    \item 每次数据更新前，执行 ``attention heatmap sanity check''：确认新的 data chunk 没有触发空 attention
+    \item 将 attention weight distribution log 到 monitoring 系统，设定 drift threshold
+    \item 对服务端推理请求做 prioritized caching：多次访问同一 data point 时 reuse attention results
+\end{itemize}
+
+\subsection{本章小结}
+
+部署 attention-heavy 模型必须同时管好数据 pipeline 与监控。实际运营中，model engineering 仅仅是开始，高质量的 attention log 与 drift guardrail 才能保障系统稳定。
+
+\section{Slide Gallery: Key Moments}
+
+\subsection{Slide 1 — Transformer Reunion}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{开场 slide：Aidan 回顾 Transformer 原始论文与 Cohere 的愿景（时间戳 00:02:15）。}
+\end{figure}
+
+\subsection{Slide 2 — Routing Patterns}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{展示 attention routing 的热图示意，强调 soft routing 而非 hard wiring（时间戳 00:12:40）。}
+\end{figure}
+
+\subsection{Slide 3 — Feature Scaling}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{feature scaling chart，说明随着维度增加模型需要更多数据点之间交互（时间戳 00:17:20）。}
+\end{figure}
+
+\subsection{Slide 4 — Few-shot Masks}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{掩码预测流程图，用 few-shot 设置作为可视化背景（时间戳 00:23:05）。}
+\end{figure}
+
+\subsection{Slide 5 — Attention Heatmaps}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{Attention heatmap 解释图，强调 drift monitoring 要追踪的指标（时间戳 00:29:10）。}
+\end{figure}
+
+\subsection{Slide 6 — Data Pipeline}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{数据 pipeline diagram，提到 data sharding 与 embedding cache 需求（时间戳 00:33:45）。}
+\end{figure}
+
+\subsection{Slide 7 — Operational Checklist}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{Operational checklist，列出 attention log、drift guardrail、cache 设计（时间戳 00:38:56）。}
+\end{figure}
+
+\subsection{Slide 8 — Incident Timeline}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{Incident timeline figure，用于讲述 post-mortem 的时间线（时间戳 00:44:25）。}
+\end{figure}
+
+\subsection{Slide 9 — AI SRE Stack}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{AI SRE stack figure，展示 observation→response→automation 三段（00:48:10）。}
+\end{figure}
+
+\subsection{本章小结}
+
+本节以幻灯片画廊形式重访关键时刻，结合 caption 说明时间线、运维、事件复盘和 monitoring 的真实引用，确保视觉证据与文字内容同步。
+\subsection{Slide 10 — Governance Toolkit}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{治理工具包：展示 guardrail checklist 与 action owners（时间 00:52:40）。}
+\end{figure}
+
+\subsection{Slide 11 — Evidence Matrix}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{Evidence matrix：对比 NPT/Transformer 的 evidence with operations（时间 00:55:18）。}
+\end{figure}
+
+\subsection{Slide 12 — Future Directions}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
+\caption{未来方向 slide：highlight hybrid attention + reinforcement agents in production（时间 00:59:00）。}
+\end{figure}
+
 \section{总结与延伸}
 
-本讲从 Transformer 的历史出发，展示了自注意力机制如何从序列内部扩展到数据点之间。NPTs 代表了将 Transformer 应用于更广泛机器学习问题的一种有趣尝试，暗示着``一切皆序列''的统一建模范式。
+\subsection{关键要点}
 
-\subsection{拓展阅读}
+\begin{itemize}
+    \item Transformer 让序列内部的 attention 成为可能，而 NPT 将 attention 扩展到数据点之间
+    \item Self-attention 本质上是 data routing，可解释性与稀疏化设计决定了如何推广长序列
+    \item NPT 在 tabular benchmark 上强于传统 MLP/DeepSets，需要同时关注 precision 和 recall
+    \item 生产部署不仅是模型，更是 data engineering、caching 与 attention drift monitoring
+    \item 通过 attention log、heatmap sanity check 与 incident checklist 才能让 attention 系统稳定运行
+\end{itemize}
+
+\subsection{进一步阅读}
+
 \begin{itemize}
     \item Vaswani et al., ``Attention Is All You Need,'' NeurIPS 2017
     \item Kossen et al., ``Self-Attention Between Datapoints: Going Beyond Individual Input-Output Pairs in Deep Learning,'' NeurIPS 2021
     \item Garnelo et al., ``Neural Processes,'' ICML 2018 Workshop
+    \item Parmar et al., ``Image Transformer,'' ICML 2018 — attention 视作 routing 的早期例证
+    \item Izmailov et al., ``Subspace Inference for Deep Learning,'' ICML 2021 — 低秩参数更新的补充阅读
 \end{itemize}
 
 \end{document}

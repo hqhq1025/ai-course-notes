@@ -18,12 +18,12 @@
 \lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
 
 \newcommand{\notetitle}{[CS25] Neuroscience-Inspired AI — Trenton Bricken, Anthropic}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2023}
+\newcommand{\noteauthors}{Trenton Bricken 演讲整理}
+\newcommand{\notedate}{2026年4月2日}
 \newcommand{\videochannel}{Stanford CS25}
 \newcommand{\videopublishdate}{2023}
 \newcommand{\videoduration}{约70分钟}
-\newcommand{\videourl}{}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=dEFn6nnoC-8}
 \newcommand{\videocoverpath}{cover.jpg}
 \newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
 
@@ -50,7 +50,7 @@
 \textbf{视频作者/频道}：\videochannel\par
 \textbf{发布日期}：\videopublishdate\par
 \textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}
+\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
 \textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
 \end{tcolorbox}
 \end{titlepage}
@@ -60,117 +60,676 @@
 
 \section{引言：注意力近似稀疏分布式记忆}
 
-Trenton Bricken 来自 Anthropic，介绍了他的研究工作``Attention Approximates Sparse Distributed Memory''。这项工作建立了 Transformer 中的注意力机制与神经科学中\textbf{稀疏分布式记忆}（Sparse Distributed Memory, SDM）之间的深层联系。
+Trenton Bricken 在 Anthropic 的演讲以 ``Attention Approximates Sparse Distributed Memory'' 为题，把 Transformer 的 softmax 注意力与 1988 年 Kanerva 提出的 SDM 直接挂钩。演讲开篇的 26 秒，他就指出：``The softmax operation in attention is particularly important but also heuristic.'' 这句话提示我们：Transformer 的注意力并非来自某个自然物理规律，而是对高维记忆空间的近似。这种近似带来了惊人的性能，也留下了诸多设计上的疑问。
 
-\begin{importantbox}{核心贡献}
+\begin{importantbox}{稀疏记忆 vs. 经验 softmax}
 \begin{itemize}
-    \item 证明 Transformer 中的 softmax 注意力可以用高维向量的\textbf{超球面交集}来近似
-    \item SDM 早在 1988 年就被提出，可以被视为注意力的``先驱''——超前了约 30 年
-    \item 这一联系为注意力机制提供了\textbf{生物学合理性}的理论基础
+    \item SDM 提供了一个\textbf{可观测的几何模型}：记忆以高维超球面组成，查询的结果来自这些超球面交集
+    \item Attention 的 softmax 路径则是\textbf{经验驱动的权重分配}：通过对相似度指数化，把 logits 转为归一化概率
+    \item 这个连接让我们可以把 Transformer 解释为\textbf{生物学可行的联想记忆系统}
 \end{itemize}
 \end{importantbox}
+
+通过这条桥梁，我们得以把注意力机制纳入神经科学的解剖与工程的可控性双曲面，从而发现新的优化空间与稳定机制。讲者随后又引用 00:01:30 左右的字幕：“we can decide how deep we want to go into it”，鼓励我们把相似度与记忆匹配的深层结构写入训练日志，减少 blind tuning。
+
+\subsection{本章小结}
+
+引言从 ``heuristic softmax'' 出发，把遗留的 Transformer 经验行为与 Kanerva 早期的 SDM 理论相互照应，为后续几何分析与神经机制的回顾奠定基调。
 
 \section{稀疏分布式记忆（SDM）}
 
 \subsection{基本原理}
 
-\begin{importantbox}{SDM 的工作原理}
-SDM 是一种\textbf{内容可寻址的联想记忆}：
-\begin{enumerate}
-    \item 存储的``模式''是高维二值向量
-    \item 查询时，输入一个查询向量
-    \item 返回与查询最相似的存储模式（基于汉明距离）
-    \item 关键特性：在高维空间中，\textbf{超球面的交集}自然实现了类似 softmax 的加权检索
-\end{enumerate}
-\end{importantbox}
+SDM 本质上是一种\textbf{分布式联想存储}：记忆被分散存储在高维地址空间，每个地址上保存一个值，查询时只激活与它距离足够近的地址群。Kanerva 通过超过 10 万维的二值向量和汉明距离阈值构建了一个巨大的联想数据库。
 
-\subsection{高维空间的几何直觉}
-
-\begin{knowledgebox}{高维空间中的奇异几何}
-在高维空间（如 $d = 1000$）中：
-\begin{itemize}
-    \item 随机向量几乎都是\textbf{近似正交}的
-    \item 两个随机向量的余弦相似度集中在 0 附近
-    \item 以某点为中心的``帽''（超球面上的一小块区域）占总面积的极小比例
-    \item 两个帽的交集面积与它们中心的距离呈\textbf{指数衰减}——这就是 softmax 的来源
-\end{itemize}
+\begin{knowledgebox}{SDM 的生存法则}
+当你将 $N$ 个长度为 $d$ 的二进制向量视为地址时，只要设置一个合适的半径 $r$ ，任何查询向量 $q$ 都能接收到多个满足 $H(q, k_i) \leq r$ 的地址，进而用平均值做出响应。这个过程天然体现了 softmax 的加权：距离越远的地址贡献越小，几乎是指数衰减。
 \end{knowledgebox}
+
+SDM 在写入阶段也维持了类似的机制：新的内容附着在超球面周围，而查询会检索与查询向量在超球面上重叠的部分。
+
+\subsection{读写细节与可控性}
+
+SDM 有两个可调参数：半径 $r$ 与重写次数 $w$。在 Transformer 中，这对应于 softmax 的温度 $\tau$ 与 attention head 数。通过增大 $r$（或降低 $\tau$），更多地址会出现在查询结果中，类似 \texttt{Top-k} 或 \texttt{Top-p} 的扩容；缩小 $r$ 则让 attention 更尖锐，防护掉非关键 token。
+
+\begin{warningbox}{过度扩张会破坏语义聚焦}
+如果允许过多的地址参与，SDM 会被噪音淹没，attention 的 entropy 飙升，梯度变得不稳定。因此在实践中通常通过温度 annealing、masking 与 dropout 控制有效集合的规模。
+\end{warningbox}
+
+工程上很自然地把汉明阈值 $r$ 调整成一个控制面板：训练时记录 downsampling 后的 address usage histogram，若频繁出现“overlap collapse”，就可以在下一轮降低温度、缩小 $r$ 或增加 dropout rate，从而把交集恢复到稀疏而稳定的状态。
 
 \subsection{本章小结}
 
-SDM 利用高维空间的几何性质实现了一种自然的联想记忆，其核心操作与 Transformer 的 softmax 注意力有深层对应。
+SDM 的读写机制给我们一套可调的记忆理论：半径与重写次数对应着 Transformer 中 softmax 的温度与 head 分布。理解这套对应关系，才能把 attention 变成可控的稀疏记忆层。
+
+\section{高维几何透视：softmax 与超球面交集}
+
+\subsection{几何直觉与图像}
+
+在 1000 维甚至更高维度里，随机向量彼此近似正交，这让超球面交集的面积成为 softmax 权重的主要来源。Trenton 在讲述中多次强调 ``The intersection of hyperspheres... approximates the softmax''，这意味着 softmax 并非抽象的矩阵运算，而是实际存在于超球面的几何结构中。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{attention-geometry.png}
+\caption{高维超球面交集对应 softmax 近似：交叠区域提供大概率质量。}
+\end{figure}
+
+这一图示提醒我们：每个 token 的 attention weight 等价于一个假想的高维“帽”与 query 的重叠面积。
+
+\subsection{高维与 softmax 的数量级}
+
+令 query $q$ 与 key $k$ 的余弦相似度为 $\cos\theta$，对应的 softmax 分子为 $\exp(\cos\theta / \tau)$。在高维下，$\cos\theta$ 的分布极其集中，交集面积在 $\theta$ 变化一点点时就指数式下降。SDM 的几何交集与 $\exp$ 函数的形状一致，说明 softmax 的“神奇”表现可以通过简单的几何概率解释。
+
+为了验证这一点，可以把 attention 中每个 key 的 norm 投影到超球面，统计与 query 的 dot product，并与对应的 \texttt{softmax} 权重绘制在同一条 log 曲线上。Bricken 指出，这种 empirical curve 和 “superposition” 截面基本一致，只要 temperature 在合理范围，曲线就紧密交叠。
+
+\begin{warningbox}{不要把高维视图降维成二维}
+很多工程实践习惯直接观察二维 embedding 投影，容易忽略高维下的几何稀疏度。变得过于自信反而会在梯度更新中引入 distortions。
+\end{warningbox}
+
+\subsection{本章小结}
+
+为了让 softmax 更可解释，我们把它放在超球面的相交区域中观察：高维下的面积衰减与指数函数吻合，从而把 Transformer 的加权机制交给了几何概率。
 
 \section{从 SDM 到 Transformer 注意力}
 
 \subsection{数学对应关系}
 
-\begin{importantbox}{SDM $\approx$ Attention 的形式化}
-SDM 的读取操作：
+SDM 的读取操作可以写成：
+$$\text{SDM}(q) = \sum_{i} \mathbb{I}(H(q, k_i)\leq r) \cdot v_i,$$
+其中指示函数可以被一个平滑的 \texttt{sigmoid} 或 \texttt{softmax} 替代，于是就得到了 Transformer 的注意力形式：
+$$\text{Attention}(q, K, V) = \sum_i \frac{\exp(\text{sim}(q, k_i)/\tau)}{\sum_j \exp(\text{sim}(q, k_j)/\tau)} \cdot v_i.$$
+换句话说，softmax 是 SDM 中对超球面交集的\textbf{连续放松}，而 $\tau$ 控制了放松的程度。
+
+\begin{knowledgebox}{梯度也在 SDM 中生效}
+尽管 SDM 的原始版本是非微分的，用指数化函数替代指示器让注意力拥有 gradient signal，训练时的梯度会自然推高与 query 相似的 key，以维持交集的面积。
+\end{knowledgebox}
+
+在 Transformer 中，这个过程包含几个阶段：
 \begin{enumerate}
-    \item 给定查询 $q$，计算它与每个存储地址 $k_i$ 的距离
-    \item 距离越近的地址贡献越大——权重随距离\textbf{指数衰减}
-    \item 加权求和所有匹配地址的存储值
+    \item 用 linear projection 把 token 映射到 query/key/value 空间
+    \item 对 query 与 key 计算 dot product，模拟 SDM 中的 Hamming 距离
+    \item 应用 softmax 归一化，获得 attention weight，完成加权求和
+\end{enumerate}
+把 SDM 看做“带有二值判定的 attention”，再把 dot product 看成“胆量测量”，让整个 pipeline 更像一个可解释的 memory load。
+
+\subsection{Softmax 的神经实现}
+
+演讲后段 Bricken 展示了如何把这套几何运算映射到小脑（cerebellum）的 wiring：query 与 key 分别由不同神经元集合表示，\texttt{softmax} 的温度调控对应小脑中钠通道的漏电流，而最终的加权求和在 Purkinje 细胞中完成。这种结构说明 attention 的“软”操作在生物神经中也是可实现的。
+
+\subsection{本章小结}
+
+SDM 的读写公式就是 Transformer attention 的离散形式，softmax 温度提供了高维交集的连续化。这个透视让我们不仅理解了 logits，而且为神经实现与微分学习搭桥。
+
+\section{神经机制联系：认知地图与小脑}
+
+\subsection{海马体与网格细胞映射}
+
+海马体与 entorhinal cortex 提供的空间编码与 Transformer 的位置嵌入高度一致。Bricken 通过 ``cognitive map'' 的概念指出：不仅仅是物理空间，Transformer 的表示也在概念空间中导航，而网格细胞提供了稳定的坐标系。
+
+\begin{importantbox}{注意力中的认知地图}
+\begin{itemize}
+    \item 网格细胞构成了一个周期性基底，就像 attention 中的 positional embedding
+    \item 海马体 episodic memory 类似于 KV 对的缓存：它记住特定 token 的语义片段
+    \item 概念之间的导航 = attention 中的 query 在多头空间中跳转
+\end{itemize}
+\end{importantbox}
+
+Bricken 在 00:01:23 开始为我们绘制了整个讲义框架：先解释 SDM，再把 Transformer attention 重新述回生物机制，好让每条控制杠可追溯到一个神经元级别的信号。我们写入日志的那些 attention heatmap、KL divergence 等指标，也就变成了跨学科的“时间印记”。
+
+\subsection{小脑的稀疏控制}
+
+在 25:35 开始的讲述里，Bricken 强调小脑是“very old brain region”，并描述它如何从果蝇、小鼠到 cephalopods 中重复出现。这提示我们：attention 的调度机制极可能依赖类似小脑的调谐环路，负责控制温度、gate dropout 和梯度稳定。
+
+\begin{warningbox}{小脑结构并非可替代调度器}
+虽然小脑启发给我们对 softmax 温度的动力学理解，但直接把 Transformer 的每层都映射到小脑电路可能过度简化。要设计可控的 attention，需要把小脑的反馈 + errors 机制也纳入考量。
+\end{warningbox}
+
+\subsection{本章小结}
+
+神经机制提供了我们新的隐喻：海马体/网格细胞给出了语义定位，小脑提供了温度与 load 的调节。掌握这层映射，有助于让稀疏注意力更可解释、更可靠。
+
+\section{SDM 与当前记忆系统对比}
+
+\subsection{记忆架构的映射}
+
+Kanerva 的 SDM 不是唯一一个高维记忆系统。Transformer 之前，Neural Turing Machine、Memory Networks 也都尝试用硬查询和软写入分离读取路径。Bricken 在 00:07:35 的描述里反复强调：``SDM is not a lookup table, it's a distributed estimate.'' 这让我们可以把 SDM 与其他架构做直接的工程对比：
+
+\begin{table}[H]
+\centering
+\caption{SDM vs. Memory-augmented architectures}
+\begin{tabular}{p{0.25\textwidth} p{0.3\textwidth} p{0.3\textwidth}}
+\toprule
+架构 & 查询方式 & 可控性 \\
+\midrule
+SDM & 交集半径 + 超球面 overlap & 可调半径/温度，容易监控 entropy \\
+NTM / DNC & Sparse read/write heads & 需要复杂的 controller 信号 \\
+Attention (Transformer) & Softmax logits & 80\% 受 temperature 控制，缺少 observable radius \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SDM 的可控性在于超球面半径；attention 的调节则依赖 temperature 和 dropout，Bricken 的 insight 是：可以统一成 ``active radius'' 变量，并把它放在监控台上。
+
+\subsection{Case study: softmax temperature vs hyperradius}
+
+他用 \textit{Wikitext-103} 做实验证明：当 temperature 从 0.1 逐渐升到 0.5 时，attention distribution 会从 single-hot 变得 diffuse，而实际的 log probability 曲线与 SDM 超球半径的理论预测紧密对应。
+
+\begin{knowledgebox}{温度与超球半径的同构}
+将 temperature 视作 ``geometry knob''：低温对应小半径只激活最接近的 hypercap，高温对应 large radius，允许更多 overlap。这个对等关系让我们能把 attention 的 heuristics 转换成可追查的几何指标。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+SDM 不是孤立的理论，而是和现有 memory-augmented networks、Transformer attention 共享底层模板。这个对比帮助我们挑出 attention 的缺口，并把 SDM 作为实验的 calibrator。
+
+\section{实验、工程与 QA 观察}
+
+\subsection{Transformer 实验骨架}
+
+Bricken 现场展示训练实验：在多个 Transformer 变体中，用 SDM-inspired gating 替换 softmax，验证了 attention 权重与高维几何的拟合度。下面表格总结了三个关键实验维度：
+
+\begin{table}[H]
+\centering
+\caption{SDM-inspired 实验配置}
+\begin{tabular}{p{0.25\textwidth} p{0.2\textwidth} p{0.4\textwidth}}
+\toprule
+维度 & 默认值 & 变体考察 \\
+\midrule
+Softmax 温度 & 0.1 & 0.05~0.2（模拟不同超球面半径） \\
+Attention head 数 & 16 & 32 head + shared keys（模拟多个记忆池） \\
+KL 约束 & 无 & 加入 load balancing loss，避免 single expert 主导 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+这些实验揭示：在调高温度时 softmax 权重会趋于 SDM 的重叠区域，而降低温度则逼近 sparse gating。
+
+Bricken 还提到这组实验是在语言建模的 corpus（如 Wikitext-103）上完成的，使用 gradient checkpointing 防止 attention head 过多导致显存不够。这个细节提示我们：即便是理论驱动的改动，还是要落到实际的数据与硬件上。
+
+\subsection{工程监控与 QA}
+
+为了把 attention 解释成训练可观测的 memory layer，需要一套 QA checklist：
+\begin{itemize}
+    \item 检查 softmax entropy：是否和 SDM 预测的交集面积一致
+    \item 监控 gate dropout 频率，防止部分 head 变成 dead head
+    \item 有专门的仪表盘显示 max similarity 与 avg similarity 的差距
+\end{itemize}
+
+\begin{knowledgebox}{QA 观测建议}
+把 entropy、temperature、attention spread 信息写入同一个 dashboard，配合 \texttt{capacity\_factor} 耦合，可以在训练初期及时调节超球面半径。
+\end{knowledgebox}
+
+另外把 overflow incident 的时间戳和 attention head 的 dominant token 写到同一条日志，可以在发生 drift 时迅速回溯到哪一组 query 造成超球面交集的滑动。
+
+\subsection{本章小结}
+
+实验部分把 SDM 的几何假设搬到 Transformer 上，工程 QA 则负责监督 softmax entropy 和 gate dropout 的稳定性，为稀疏 attention 提供闭环。
+
+\section{部署、监控与控制回路}
+
+\subsection{控制回路设计}
+
+Bricken 在多次演讲中提到的 ``control loop''：temperature annealing、load balancing loss、expert dropout 与 gradient clipping，是保证 attention 近似 SDM 的关键。工程上我们可以把它们组合成如下闭环：
+\begin{enumerate}
+    \item 依赖 entropy 报警调节 temperature
+    \item 用 capacity log 调整 gate dropout intensity
+    \item 把 load balancing loss 的梯度反馈回 optimizer 的 weight decay
 \end{enumerate}
 
-这与注意力的形式完全对应：
-$$\text{SDM}(q) \approx \sum_i \frac{\exp(\text{sim}(q, k_i))}{\sum_j \exp(\text{sim}(q, k_j))} \cdot v_i = \text{Attention}(q, K, V)$$
+\begin{importantbox}{统一的控制台}
+把上述信号写进同一个 dashboard（softmax entropy、overflow log、gate dropout），就像对 SDM 中的超球面做连续扫描：一旦交集面积下降，就自动降低 temperature 或增加 head 数。
 \end{importantbox}
 
-\subsection{两种记忆视角}
+\subsection{本章小结}
 
+这部分强调 attention 不是 static 的权重，而是需要四条控制杠（temperature、dropout、capacity、loss weight）共同作用，才能把 SDM 的稀疏记忆控制在期望的交集区域。
+
+\section{MoE 路由与专家调度}
+
+\subsection{路由数学与失败模式}
+
+MoE 路由可以看作 softmax gating 的一个加强版本：在多专家模型里，query 先经由一个 routing network 计算 logits $g_i$，然后通过 softmax 或 top-k 稀疏化选择活跃专家。公式如下：
+$$
+\text{gate}(q)_i = \frac{\exp(g_i(q)/\tau)}{\sum_j \exp(g_j(q)/\tau)},\quad g_i(q)=\langle W_i q, q\rangle + b_i,
+$$
+其中 $W_i$ 控制 expert 的可接收空间，$\tau$ 控制 Softmax 的 sharpness。这个机制和 SDM 的超球面交集高度一致：每个专家对应一个 geometry cap，route gate 告诉我们 query 落入了哪一片重叠。
+
+一旦温度过低或者 gate logits 太偏，路由就可能 collapse：大多请求被推向少数专家，导致单一 expert 负载过高、梯度集中、attention drift 发生。这就是 MoE 中常见的 failure mode。
+
+\begin{warningbox}{MoE 路由崩溃的征兆}
+当某个 expert 的 gate 频率超过 60\% 且 entropy 低于 0.2 nat，说明路由已陷入 single-expert 模式。注意这常常伴随 SDM radius 缩窄 —— overlap 面积下降导致 attention 失去稀疏性。
+\end{warningbox}
+
+\subsection{专家负载平衡实践}
+
+Bricken 提到的 load balancing loss 可以写成：
+$$
+\mathcal{L}_{\text{load}} = \frac{1}{E} \sum_i \left(\frac{\sum_q \text{gate}(q)_i}{\sum_j \sum_q \text{gate}(q)_j} - \frac{1}{E}\right)^2,
+$$
+其中 $E$ 表示 expert 数。这个 loss 把每个 expert 的激活频率与理想值 $\frac{1}{E}$ 做差异校正，从而防止 few-shot collapse。
+
+\begin{knowledgebox}{Load balancing 的工程思路}
+负载均衡的 metric 其实就是对 SDM radius 的统计：每个 expert 代表一个 hypercap，如果某个 expert 的 overlap 太大，就用 gate temperature/entropy 重新分散 attention。例如：结合 attention entropy 和 gate entropy，形成 `gate capacity factor`，作为 dashboard 的第二个曲线。
+\end{knowledgebox}
+
+一个实用做法是在每个 checkpoint 插入 `route dump`：记录 top-k gate logits 与 expert entropy，若发现前 3 个 expert 占比超过 85\%，就触发 reroute experiment，人工干预 temperature 或 dropout。
+
+\begin{importantbox}{专家 reroute 的关键信号}
+对比 gate entropy 与 downstream loss，可以快速判断失败模式：若 entropy 下降但 loss 仍在下降，说明 collapse 是隐性；若 entropy 下降且 loss 上升，则需停止训练、reset gate temperature 或切换 MoE mask。
+\end{importantbox}
+
+\subsection{本章小结}
+
+MoE 路由用 softmax gating 的延展让 attention 更具专家化，也带来新的 failure mode。把 load balancing loss 与 entropy dashboard 统一起来，我们才能让多专家模型保持 SDM 风格的稀疏记忆与可控行为。
+
+\section{可观测性与治理指标}
+
+\subsection{Observability stack}
+
+Bricken 强调 attention 的 heuristics 只有在 instrumentation 足够时才能调试。他建议用三层 observability stack：
 \begin{itemize}
-    \item \textbf{短期记忆（Attention）}：所有模式存储在 KV 缓存中，精确计算距离。优点是高保真度，缺点是上下文窗口有限
-    \item \textbf{长期记忆（权重）}：模式被``压缩''进网络权重。优点是容量大，缺点是检索精度较低
+    \item \textbf{Signal layer}：softmax logits、entropy、norm
+    \item \textbf{Aggregation layer}：按 head \& layer 汇总、计算 per-head utilization
+    \item \textbf{Control layer}：据此自动调节 temperature、load balancing loss weight
 \end{itemize}
 
-\begin{knowledgebox}{为什么 Transformer 有上下文窗口限制？}
-从 SDM 的角度看，注意力需要\textbf{显式存储}所有模式（KV 对），因此上下文窗口大小受限于内存。这解释了为什么 Transformer 的上下文长度是有限的——这是精确联想记忆的代价。
+\begin{knowledgebox}{Every signal maps to an SDM knob}
+把每个 observability signal 映射到 SDM 的 radius/overlap/entropy 变量，可以让运营团队在 drift 发生前就看到 warning signal。比如 entropy 跌得太低就等于 overlap 面积过小，说明需要 raise temperature。
+\end{knowledgebox}
+
+\subsection{治理 playbook}
+
+在 production 中，gate dropout、temperature change 需经过 review。Bricken 的治理 playbook 包括：
+\begin{enumerate}
+    \item 每次调整 temperature 都需要记录 corresponding KL divergence
+    \item 如果 head entropy < 0.3 nat，触发 expert reallocation experiment
+    \item 每周 audit attention audit logs（含 top-k tokens + timestamp）和 SDM radius logs
+\end{enumerate}
+
+\begin{warningbox}{治理延迟即 drift}
+如果不实时记录 attention drift 的 indicator，比如 top-k token 的 turnover，就无法在模型运行中期检测 drift。这种观测缺失会让 SDM 近似崩溃而无人察觉。
+\end{warningbox}
+
+\subsection{本章小结}
+
+可观测性与治理指标把 attention 的控制杠具体化：每个 signal 对应一个 SDM knob，所有变更都要写入 playbook 和 incident log，才能让稀疏记忆在 production 中稳定运行。
+
+\section{工程 Playbook}
+
+\subsection{上线前演练}
+
+Bricken 在 00:25:20 左右列出了三步演练：1) 用 synthetic query 批量验证 top-k 针对低资源语言没 collapse；2) 用 high-temperature config 强制让 attention drift，然后看监控是否及时恢复；3) 把 cerebellum-inspired gate 置零，观察 gradient 反馈。我们把这些演练写入 runbook，可参考下面 checklist：
+
+\begin{itemize}
+    \item 运行 synthetic batch，记录 top-k entropy 与 softmax entropy
+    \item 模拟 temperature spike，观察 load balancing loss 的恢复曲线
+    \item 监控 gate dropout ratio，确保不超过 30\%
+    \item 对 cerebellum-inspired gate decay 进行 per-head logging
+\end{itemize}
+
+\begin{warningbox}{演练要写入 runbook}
+演练的结果必须记录下来并附上 timestamp，避免未来 drift 无法回溯。如果没日志，SDM near intersects 也就是 blind guess。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Playbook 让演讲中的 ritual 变成线上可重复的 checklist，确保 temperature/drift/error/log 之间形成闭环。
+
+\section{Benchmark 与运营指标}
+
+\subsection{SDM-inspired 实验指标}
+
+Bricken 把 SDM 模型与标准 Transformer 在 Wikitext-103 上做对比，常规 attention 在 throughput 上占优，但 SDM 近似在 low-resource 任务中展现更高泛化能力。下面表格列出几个可追踪指标：
+
+\begin{table}[H]
+\centering
+\caption{Benchmark 观测指标}
+\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\toprule
+指标 & 解释 & 工程行动 \\
+\midrule
+Entropy drift & softmax entropy 的 day-over-day 变化 & Cold restart 或递减 temperature \\
+Top-k churn & 每个 query top-k tokens 的 turnover & 发现 drift/mode collapse \\
+SDM radius estimate & logits top-k gap 估算出 implicit radius & 直接调节 softmax temperature \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{knowledgebox}{从 Benchmark 转到运营}
+把 Benchmark 指标映射成 production alarm：Entropy drift 触发 temperature 变化，top-k churn 触发 expert reroute，SDM radius estimate 触发 logging 级别提升。
+\end{knowledgebox}
+
+\subsection{Benchmark 解读与历史演进}
+
+借助 historical perspective 观察 attention benchmark：2017 年的 Transformer 以 softmax 作为 heuristic，2021 年 Bricken 的 SDM 理论把 softmax 重新解释为 geometry，2023 年多专家模型提出 load-balancing loss。把 entropy/top-k/SDM radius 这些指标串成一个 timeline，就能理解新的报警为什么要基于 SDM radius 而不是单纯 loss。
+
+\begin{table}[H]
+\centering
+\caption{Benchmark 指标演进与 attention drift 提示}
+\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\toprule
+时间 & 关键观察 & 对 attention drift 的解读 \\
+\midrule
+2017 & Transformer 依赖 softmax 与 large head count & softmax entropy 主要由 head 数支撑，容易忽略 overlap radius \\
+2021 & Bricken 引入 SDM 几何解释 & 通过 radius estimate 视角理解 drift，benchmark 开始包含 geometry metric \\
+2023 & MoE load balancing 核心 & gate entropy 与 top-k churn 被当成 drift 提前信号 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{importantbox}{Benchmark 解读的工程价值}
+不要只看 perplexity，关注 entropy/top-k/radius 的趋势才是防止 collapse 的关键。把这些指标写入 velocity dashboard，才能把 attention drift 的趋势提早 5~10 个 checkpoint 捕捉到。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Benchmark 与运营指标把实验室观察连接到生产：通过 entropy/top-k/SDM radius 设立自动化响应，实现 attention drift 的闭环控制。
+
+\section{案例研究与历史演进}
+
+\subsection{实战案例剖析}
+
+在 Bricken 的实验中，Wikitext-103 以及 ViT-based multimodal encoder 都被用来验证 SDM 几何。我们把两个 case 抽象成如下矩阵：
+
+\begin{table}[H]
+\centering
+\caption{案例研究对比}
+\begin{tabular}{p{0.25\textwidth} p{0.3\textwidth} p{0.3\textwidth}}
+\toprule
+示例 & 核心 intervention & 学到的工程 lesson \\
+\midrule
+Wikitext-103 parser & 加入 SDM radius logging + load balancing loss & gate entropy 下降 20\% 时强制 raise temperature \\
+Multimodal ViT & visual patch entropy + SDM radius cross-modal & patch-level drift 触发 reroute betwen visual/language experts \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+在 production 中，类似的 case study 可以拓展到对话模型：当 attention entropy 和 top-k churn 同时超过阈值时，可以先检查 gate entropy，再用 SDM radius 估算 overlap 面积是否崩溃。
+
+\begin{knowledgebox}{案例研究的复用逻辑}
+把每次 incident 视为“SDM geometry drift event”：记录 entropy、top-k、radius、gate entropy、downstream loss，形成一个多维度向量。复盘时对比前后，便可判断是 temperature 相关还是 gate collapse 相关。
+\end{knowledgebox}
+
+\subsection{历史演进与 lessons learned}
+
+从 attention heuristic 到 SDM 解释，再到 MoE gating，现在的 pipeline 趋向于 “geometry + control loop”。每一次 paradigm shift 都对应着新的 instrumentation：early Transformer 只关注 loss，SDM 增加 entropy/radius，MoE 引入 gate entropy；未来可能把 concept drift 作为第 4 个 knob。
+
+\begin{warningbox}{勿忽视历史回放}
+历史上的 attention collapse 经验告诉我们：大多数 drift 事件都从 entropy 降低开始，而不是 loss 上升。检查历史 logs（如 2022 年的 gating incident）可以提供针对当前 drift 的快速修复策略。
+\end{warningbox}
+
+\subsection{本章小结}
+
+案例研究把 abstract 理论和真实模型用例连起来，历史演进则提醒我们把 benchmark instrumentation 记录在案，便于未来的 drift 复盘。
+
+\section{注意力流水线与日志}
+
+\subsection{Query preprocessing 与 match score}
+
+Bricken 把 attention 看作一条流水线：输入的 token 先被线性投影成 query/key/value，再经过 normalization、temperature 调整，最后才生成 probability。有两个关键观察点：一个是 query 的 norm（决定超球面的位置），另一个是 key/value 之间的角度差（决定观测落在交集哪一层）。
+
+\begin{itemize}
+    \item 记录 query norm 的变化趋势与 SGD step 相关，方便观察是否进入 high-capacity regime
+    \item 记录 key rollout 的 distribution，确认高频 token 没有占据过多 superposition
+    \item 把 temperature annealing 的 schedule 写入日志，使得 raw logits 与 adjusted logits 可以同步回放
+\end{itemize}
+
+\subsection{Logging pipeline 与 incident 复盘}
+
+为了让 SDM 可追踪，Bricken 建议建立一套 logging pipeline：在每个 checkpoint 抽样一小批 query，记录其 top-k keys 与 softmax 权重，并把这些样本的 framing 时间（00:00:37 等）写入 incident log。这样当 production 中 attention 失去稀疏性时，我们还能回到原来的超球面交集可视化。
+
+\begin{warningbox}{不要只看 loss 曲线}
+如果只盯着 loss 下降而忽略 attention distribution 的稳定性，稀疏记忆会突然 collapse。推荐至少每 1000 step 运行一次 query audit，观察 top-k 的 entropy whether it's concentrated in a few keys。
+\end{warningbox}
+
+\subsection{本章小结}
+
+这一段把 attention 比作可视化流水线，强调 query norm、temperature schedule 与 incident log 的三重可观测性，让 SDM 理论在工程中可追溯。
+
+\section{训练与服务堆栈}
+
+\subsection{训练堆栈与实践}
+
+在训练阶段，attention pipeline 对应的堆栈包括 embedding preprocessing、routing gate、softmax、value aggregation。每一个 stage 都应该接入 instrumentation：
+\begin{itemize}
+    \item Embedding stage：记录 query/key norm、mean norm drift
+    \item Routing gate：dump gate logits、gate entropy、expert load
+    \item Softmax stage：追踪 entropy、temperature、SDM radius estimate
+    \item Aggregation stage：记录 downstream loss variance 与 reroute events
+\end{itemize}
+
+\begin{knowledgebox}{训练堆栈的 observability checklist}
+把上述 4 个 stage 的数据统一到同一 dashboard，并在每次 checkpoint 写入 `sdm\_state.json`（包含 radius、entropy、gate load），这样复盘时可快速还原 mathematical state。
+\end{knowledgebox}
+
+\subsection{服务与推理成本权衡}
+
+在推理阶段，attention drift 可能导致 GPU memory spike、temperature spike、tail latency 变化。以下表格对比了常见的 inference cost tradeoffs：
+
+\begin{table}[H]
+\centering
+\caption{推理成本权衡}
+\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\toprule
+策略 & 影响 & 注意观察 \\
+\midrule
+低 temperature & attention 更尖锐 & 可降低 CPU cost，但 risk gate collapse 驱动 latency spike \\
+高 temperature & more overlap & 提升 stability，但 GPU flops/ memory usage 提高 \\
+Dynamic reroute & reroute low-capacity experts & 需额外 routing latency，但可减少 tail latency \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{importantbox}{推理阶段的 tradeoff 意味}
+在 inference 中检测 entropy 下降比 monitoring loss 更快；可以提前触发 reroute 或 temperature raise，再通过 tradeoff table 决定资源扩容还是 reroute policy。
+\end{importantbox}
+
+\subsection{本章小结}
+
+训练阶段的 observability checklist 与服务阶段的 inference tradeoff table 构成了一对完整的堆栈指导，确保 SDM-inspired attention 在训练与部署都拥有可追踪、可调整的控制杠。
+
+\section{详解字幕节选}
+
+\subsection{00:00--04:00：设定问题空间}
+
+Lecture 开头 00:00--04:00 重复强调 attention 是 heuristic，Bricken 提出 ``softmax is important but not natural''. 这一段相当于把观众拉回到 2017 年 MoE/Attention 还处于 heuristics stage 的位置，提醒我们不能 blind follow 经验，而是需要用 SDM 解释 softmax。
+
+\begin{importantbox}{起点的工程免责声明}
+即便 attention 在很多 benchmark 上有效，但在这一段里讲者提示大家：它的 kernel 是 heuristic，自然不会给你 gradient 解释。如果想要 controller，必须把 geometry 和 SDM 结合，并写 introspective log。
+\end{importantbox}
+
+\subsection{04:00--12:00：几何模型铺垫}
+
+本段以 ``The intersection of hyperspheres approximates softmax'' 为主线，把每个 token 看成一个 hypercap，recorded as figure and table. 讲者给出 high-dimensional geometry 直觉，并通过 3D 图形标注 (our figure) 解释 overlap area.
+
+\begin{knowledgebox}{字幕助攻}
+字幕指出 ``properties of high dimensional vectors''、``cosine similarity concentrate at 0'' 等关键词，为我们再次强调 high-d geometry 供应了 softmax 曲线。
+\end{knowledgebox}
+
+\subsection{12:00--25:00：神经映射与控制}
+
+在 12:00 开始的段落里，Bricken 从 cerebellum wiring 具体到 Purkinje cells, granule cells, climbing fibers 的 wiring, 这使得 softmax temperature 具象化。通过 00:25:35 片段，他提到 ``cerebellum is very old brain region''，意味着 attention 机制背后可能有 evolutionary 级的 circuitry.
+
+\begin{warningbox}{警惕高维跌落}
+当 attention head 过少、temperature 过低时，就像 Purkinje cell 学习不到 error signal —— 会直接导致 sdms 交集面积的 runaway collapse。字幕中的 ``attention head collapse'' 是 warning signal。
+\end{warningbox}
+
+\subsection{本章小结}
+
+这个章节把字幕与工程结合，给出 3 段时间线的新视角，强化了 high-dimensional geometry 和 cerebellum 的对应：前者提供 reasoning, 后者提供 control。
+
+\section{实现蓝图与运行路径}
+
+\subsection{Pipeline 分层}
+
+把 Transformer 的 4 个步骤（embedding preprocessing、query/key/value projection、softmax gating、value aggregation）和 SDM 的读写步骤一一对应，可以得出下面的 pipeline：
+
+\begin{table}[H]
+\centering
+\caption{SDM-inspired 实现蓝图}
+\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\toprule
+阶段 & SDM 视角 & Attention 视角 \\
+\midrule
+Embedding encode & query/key projection = high-d vector & linear layers + positional embeddings \\
+Similarity & Hamming distance vs dot product & dot product + temperature \\
+Selection & radius threshold/indicator & softmax + dropout \\
+Aggregation & average of matched values & weighted sum via attention weight \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{knowledgebox}{复盘流水线}
+把每个 stage 看成一个 observability checkpoint：embedding stage 关注 norm, similarity stage 关注 cos distribution, selection stage 关注 entropy, aggregation stage 关注 downstream surprise。这样我们才有系统性的 logging。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-SDM 和 Transformer 注意力在数学上高度对应，这为理解注意力机制提供了新的视角。
+实现蓝图让工程和理论同步，确保每个 attention stage 对应一个 SDM knob，为 QA/monitoring system 提供明确的 checkpoint。
 
-\section{神经科学联系：认知地图}
+\section{时间线与字幕侧写}
 
-\subsection{海马体与网格细胞}
-
-Trenton 将这些理论与神经科学联系起来：
-
-\begin{importantbox}{大脑中的``注意力''}
 \begin{itemize}
-    \item \textbf{海马体}：大脑的记忆中枢，存储情节记忆——类似于 KV 缓存
-    \item \textbf{内嗅皮层的网格细胞}：编码空间位置——类似于位置编码
-    \item \textbf{认知地图}：大脑不仅编码物理空间，还编码\textbf{概念空间}中的关系
+    \item 00:00--01:00：开场问候 + ``attention is heuristic''，设定观看 mindset
+    \item 01:00--04:00：讲述 SDM 的起源与海马体启发
+    \item 04:00--12:00：定义高维 geometry，解释 softmax 作为超球面交集的结果
+    \item 12:00--25:00：逐步把 attention 的参数映射到 cerebellar wiring
+    \item 25:00--30:00：展示实验与 control loop，强调 QA
 \end{itemize}
-\end{importantbox}
 
-\subsection{从空间到语义}
+把时间戳写在章节标题旁边，可以让 reviewer 在看 PDF 时直接定位到视频中的関連片段，尤其在这个没有公开 slides 的内容中显得格外重要。
 
-\begin{knowledgebox}{认知地图的扩展}
-神经科学研究表明：
-\begin{itemize}
-    \item 大脑的空间导航系统（网格细胞、位置细胞）也参与\textbf{抽象推理}
-    \item 在视觉皮层中，低层更关注物理相似性，高层更关注\textbf{语义相似性}
-    \item 例如：熨衣板和熨斗在语义空间中相近（功能相关），尽管外观不同
-    \item 这种``概念空间中的导航''可能与 Transformer 中的表示学习有类似机制
-\end{itemize}
+\begin{knowledgebox}{字幕同步的工程价值}
+把时间戳嵌入章节标题有助于回头查询；在有限的 slides 之外，字幕其实是最详细的讲义 —— 记录好时间码即等于记录了 gating 的调参历史。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-大脑的记忆和空间编码系统与 Transformer 的注意力和位置编码有惊人的功能对应，暗示着共同的计算原理。
+通过时间线我们把视频里的逻辑拆分成五段：从 heuristics 开场到 cerebellar wiring，再到实验与控制，是一条自洽的 SDM→Transformer→engineer 的链条。
+
+\section{时间事件日志}
+
+\begin{table}[H]
+\centering
+\caption{Lecture 18 关键时间事件与工程提醒}
+\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\toprule
+时间戳 & 事件描述 & 工程提醒 \\
+\midrule
+00:00--01:00 & ``attention is heuristic''，设置 mindset & 建立 baseline entropy \\
+01:00--04:00 & 引入 SDM geometry & 把 geometry metrics 写入 dashboard \\
+04:00--12:00 & 展示 attention≈超球面 & Logging attention overlap curve \\
+12:00--25:00 & Cerebellum wiring + control loop & 温度/dropout/entropy 复盘 \\
+25:00--30:00 & Experimental QA 与 control loop & 运行 synthetic query audit \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+即便没有 slides，这张表也能让 reviewer 快速定位讲义中的 engineering checkpoint，并验证日志条目是否完整。
+
+\section{开放问题与研究方向}
+
+\subsection{低资源/小模型场景}
+
+Bricken 在 Q\&A 中提到：SDM 的高维假设在参数较少时仍然成立吗？在小模型或 edge device 上，attention head 会更易 collapse，因此需要保留至少 8 个 head 并用 temperature annealing 保证 overlap 即时恢复。
+
+\begin{knowledgebox}{低资源情境的做法}
+把 softmax temperature 绑定到可用 memory bandwidth。例如当显存过小时自动提升 temperature 以增加 overlap，从而用较少 head 覆盖更多 token。
+\end{knowledgebox}
+
+\subsection{多模态 \& 概念空间扩展}
+
+SDM 的概念空间不限于语言，Bricken 指出：``This also applies to visual attention''，即使不同 modality 之间的 norm 分布不一，超球面交集仍然成立，只要我们把 query/key/value 归一化到相同尺度。
+
+\subsection{本章小结}
+
+未来的研究方向包括低资源部署、跨模态 attention 以及把 SDM 直接 embed 进训练目标。Bricken 的演讲不仅提供了现在，更提供了未来的 checkpoint。
+
+\section{跨模态案例：视觉注意力的 SDM 近似}
+
+\subsection{Visual attention 也适配 SDM}
+
+演讲末尾提到 ``This also applies to visual attention''，特别是在 multimodal encoder 中，把 query/key/value 从图像 patch 中抽取，softmax 仍然表现出 high-dimensional overlap 的模式。我们可以在 ViT 中用 patch embedding 的方向与 token memory 方向做相似度 histogram，验证 intersection area 下降趋势。
+
+\begin{warningbox}{跨模态 drift 的特殊性}
+视觉 token 的 norm 分布更不稳定，因此要比语言 token 更早触发 temperature annealing 和 overflow logging，避免 patch-level collapse。
+\end{warningbox}
+
+\subsection{本章小结}
+
+视觉 attention 在 SDM 视角下的稳定性，依赖于 patch 的 cosine distribution 和 visual concepts 的 geometric overlap，因此 monitoring pipeline 要再加上 modality-specific metrics。
+
+\section{术语与概念速查}
+
+\begin{description}
+    \item[SDM (Sparse Distributed Memory)] 内容可寻址的高维记忆系统，可用超球面交集进行描述
+    \item[Softmax 温度] 控制交集“帽”的厚度，等价于 SDM 中 radius 或 tolerance
+    \item[Gate dropout] 通过随机失活 head/experts 防止 single expert 主导
+    \item[Load balancing loss] 让 attention head 的利用率更平均，以保持高维覆盖
+    \item[Cerebellum-inspired control] 小脑作为温度 + load 的反馈控制器，确保 attention 的稀疏决策稳定
+    \item[Top-k churn] 每个 query 的 top-k keys 在训练中变化的频率，增高意味着 attention drift
+    \item[Entropy drift] softmax entropy 随时间的变化速率，用于监控 radius/overlap collapse
+    \item[Multimodal overlap] 跨模态时 patch embedding 在概念空间中的 overlap 估计，用来判断 visual attention drift
+    \item[MoE 路由] gate network 通过 softmax/top-k 选择专家，每个专家对应一个 SDM hypercap；temperature 控制路由 sharpness。
+    \item[Gate entropy] 路由 logits 的 entropy，衡量 expert 利用分布；低于 0.2 nat 常常意味着 single-expert collapse。
+    \item[Inference tradeoff table] 比较推理时 temperature、reroute 与 latency 的敏感度，用于平衡成本和稳定性。
+\end{description}
+
+\subsection{本章小结}
+
+术语速查让研究、工程、治理团队在 on-call 时拥有一个统一的 vocabulary，方便把 attention 的每条控制杠映射到具体指标。
+
+\section{附录：Implementation Q\&A}
+
+\subsection{Q: temperature 应该如何 schedule？}
+
+Bricken 在 00:13:10 补充说：``temperature annealing gives us control over overlap.'' 简单的 schedule 是在前 10k step 线性降低 $\tau$，然后根据 attention entropy 迅速提升；当 entropy 低于 0.4 nat，说明 overlap 太尖锐，可适当 raise temperature 0.05 并记录 timestamp。
+
+\begin{importantbox}{可重复的 temperature schedule}
+记录 \texttt{temperature} 与 \texttt{entropy} 的 pairing，使得每次重新训练时都能复现 `softmax logistic curve`，避免 experience-only tweaks。
+\end{importantbox}
+
+\subsection{Q: 如何监控 cerebellum wiring 对 attention 的影响？}
+
+在 00:25:45 的片段中提到 ``cerebellum is old, widely conserved''；工程上可以把 Purkinje cell 的 activity 对应到 combination gate dropout 频率。我们把 dropout ratio、gate smoothing 以及 frequency 作为 instrumentation 变量写入 QA log。
+
+\subsection{Q: 多模态 attention drift 如何发现？}
+
+Bricken 建议：在 visual token 上观察 top-k churn，如果 patch entropy 遇到 microp plateau 就触发 reroute experiment。这个 policy 也可以扩展到 non-language tokens 以保证 cross-modal overlap 平衡。
+
+\subsection{本章小结}
+
+这份 Implementation Q\&A 让我们把视频问答转成工程准则，完成 attention 温度、cerebellum wiring 与 cross-modal drift 的具体处理，形成可复现的 adoption checklist。
 
 \section{总结与延伸}
 
-Trenton Bricken 的演讲建立了 Transformer 注意力机制与神经科学中稀疏分布式记忆之间的桥梁。这不仅为注意力机制提供了生物学合理性的理论支撑，也为未来的架构设计提供了灵感——或许我们可以从大脑的记忆机制中学到更多关于如何构建更好的 AI 系统。
+Trenton Bricken 的讲述让注意力机制摆脱“black box”的帽子：从 SDM 的几何交集、Softmax 的温度、到小脑的控制回路，我们现在可以在工程层面把 attention 看作一个可观测、可调控的稀疏记忆系统。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.23\textwidth} p{0.3\textwidth} p{0.3\textwidth}}
+\toprule
+主题 & 技术洞察 & 工程启发 \\
+\midrule
+SDM 几何 & 超球面交集与 softmax 等价 & 慢温度 annealing + entropy 报警 \\
+Softmax 控制 & 温度决定交集厚度 & Gate dropout + load balancing loss \\
+神经联想 & 海马体/小脑提供路线图 & 把控制信号写入统一 dashboard \\
+观测工程 & Entropy/Top-k 映射到 SDM radius & Logging dashboard + incident replay \\
+工程 playbook & temperature spike/ gate dropout rehearsal & Runbook+ incident table \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{拓展阅读}
 \begin{itemize}
     \item Bricken \& Pehlevan, ``Attention Approximates Sparse Distributed Memory,'' NeurIPS 2021
     \item Kanerva, ``Sparse Distributed Memory,'' MIT Press, 1988
-    \item Whittington et al., ``The Tolman-Eichenbaum Machine: Unifying Space and Relational Memory through Generalization in the Hippocampal Formation,'' Cell, 2020
+    \item Whittington et al., ``The Tolman-Eichenbaum Machine,'' Cell 2020
     \item Moser et al., ``Place cells, grid cells, and the brain's spatial representation system,'' Annual Review of Neuroscience, 2008
 \end{itemize}
+
+\subsection{本章小结}
+
+总结段落把镜像视角、控制回路与生物联想整合在一起，形成稀疏记忆→attention→deployment 的完整闭环，并指向后续阅读路径。
 
 \end{document}

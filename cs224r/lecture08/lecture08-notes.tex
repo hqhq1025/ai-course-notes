@@ -161,6 +161,284 @@ $$\mathcal{L}(\phi) = \mathbb{E}\left[\log \sigma\left(R_\phi(x, y_w) - R_\phi(x
 
 从偏好比较中学习奖励模型是 RLHF 的基础。Bradley-Terry 模型将偏好比较转化为奖励差的 sigmoid，训练简单高效。
 
+\section{奖励模型的评估与部署}
+
+\subsection{Benchmark Stack}
+
+课程强调 reward learning 必须伴随评估体系，不然就像在黑箱里调参。一个有效的 benchmark stack 至少包含三层：
+
+\begin{itemize}
+    \item \textbf{自动指标}：log-likelihood、reward model score、KL divergence，与原始 policy 比较是否有所提升
+    \item \textbf{人类深度评估}：长轮对话、OpenAI Arena、Anthropic ANAI benchmark 等，通过人工偏好标签持续校准 reward model
+    \item \textbf{安全测试}：通过 adversarial probing、red team prompts、low-resource attack attempts，验证 reward model 在 edge case 中仍保持一致
+\end{itemize}
+
+\begin{importantbox}{评估的“闭环”原则}
+数据 → 奖励 → 策略 → 评估 → 数据。每一轮都要记录日志、复现指标、对比 baseline，并把失败案例用于下一轮 reward model 的训练。否则看似走高的 reward score 很容易是 reward hacking。
+
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{08_cs224r_reward_learning_2025.pdf}
+\caption{Reward learning pipeline 的评估反馈回路（来源：lecture slide）}
+\end{figure}
+
+\subsection{本章小结}
+
+评估体系必须同时关注自动指标、人类偏好、以及安全触发器，三者结合才能确保 reward learning 模型真正提升体验而非“作弊”。
+
+\section{实践案例与治理}
+
+\subsection{两个真实案例的对比}
+
+考虑两个典型团队的 reward learning 流程：OpenAI 在 2022 年的 InstructGPT 中大量使用 human preference data，而 Stanford RL 团队则在机器人任务里靠 goal classifiers。下表总结出两者的落差：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.25\textwidth} p{0.2\textwidth} p{0.2\textwidth} p{0.25\textwidth}}
+\toprule
+维度 & OpenAI (InstructGPT) & Stanford Robots & 结论 \\
+\midrule
+数据来源 & 人类 preference comparison & success/failure snapshots & 人类标签更精准但更贵 \\
+Reward signal & sigmoid difference & binary classifier & Bradley-Terry 更适合对话，goal classifier 更适合 deterministic tasks \\
+RL 算法 & PPO + KL & TRPO + KL flow & 都加入 KL 罚项避免 drifting \\
+部署 & API + guardrails & 仿真 → 真实 robot & API 需要更多安全审查 \\
+\bottomrule
+\end{tabular}
+\caption{两个 reward learning 流程的对比}
+\end{table}
+
+\begin{warningbox}{治理角度的教训}
+在 API 端，OpenAI 通过 Rate limiting & guardrail filters 补充 reward model；在机器人端，Stanford 团队更依赖 instrumentation + simulators。因此治理策略必须和任务类型匹配。
+\end{warningbox}
+
+\subsection{Observability Playbook}
+
+强烈建议按照以下 checklist 构建可观测性 playbook：
+
+\begin{enumerate}
+    \item 记录每条 trajectory 的 reward model score + KL penalty
+    \item 将 reward anomalies 査到 dashboard（例如 sudden drop below 0.1）
+    \item 自动化检测过度重复、fast reward jumps、out-of-domain inputs
+    \item 每周 review failure logs，与人类偏好团队沟通是否需要更多 data
+\end{enumerate}
+
+\begin{importantbox}{自动化报警的设定}
+报警规则可以基于模型 score 的 moving average：当 reward score window 上升 3 个 std 或 sudden drop 0.2+ 时推送到 PagerDuty 并 trigger rollback script。
+\end{importantbox}
+
+\subsection{本章小结}
+
+实践案例表明 reward learning 既要匹配任务也要匹配组织治理。Checklist 与可观测性是防止 reward hacking 的关键。
+
+\section{操作手册与工具参考}
+
+\subsection{Reward Learning Action Timeline}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.25\textwidth} p{0.45\textwidth} p{0.2\textwidth}}
+\toprule
+阶段 & 主要活动 & 负责人 \\
+\midrule
+数据准备 & 采集 positive/negative 示例、偏好比较 & Data engineer + labelers \\
+Reward training & 训练 classifier/RLM、监控 loss 曲线 & ML engineer \\
+Evaluation & 自动指标、human eval、safety probe & Ops + safety reviewer \\
+Deployment & KL penalty tuning、logging + rollback & DevOps \\
+\bottomrule
+\end{tabular}
+\caption{Reward learning 的操作时间线}
+\end{table}
+
+\subsection{工具与命令}
+
+\begin{itemize}
+    \item 使用 `tensorboard` 监控 reward model 的 logits + loss
+    \item 将 `reward_score` 写入 experiment tracker（Weights & Biases / Neptune）
+    \item RLHF pipeline 推荐用 `trl` + `DPO` + `PPO` mix
+\end{itemize}
+
+\begin{knowledgebox}{资源定位}
+\textbf{Reward learning 资料}集中在：OpenAI blog、Anthropic interpretability notes、Stanford RL lab releases。保持订阅这些更新可以及时调整 payoff curve。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=7]{08_cs224r_reward_learning_2025.pdf}
+\caption{Reward trace dashboard 例示（lecture slide, page 7）}
+\end{figure}
+
+\subsection{本章小结}
+
+操作手册强调每一步需要负责人并行推进，尤其是 reward training 与 evaluation 不能脱钩。
+
+\section{幻灯片图谱与关键结构}
+
+\subsection{策略角色分布}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=3]{08_cs224r_reward_learning_2025.pdf}
+\caption{策略与 reward score 的流程图（slide 3）：展示 reward model、policy、evaluators 之间的交互。}
+\end{figure}
+\newpage
+
+\subsection{数据流与日志}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=4]{08_cs224r_reward_learning_2025.pdf}
+\caption{数据与日志流：从 human label 到 logging dashboard 的多层管道。}
+\end{figure}
+\newpage
+
+\subsection{Policy Rollout}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=5]{08_cs224r_reward_learning_2025.pdf}
+\caption{Policy rollout 与 reward trace 交互图，是之前章节中可观测性 checklist 的直观延伸。}
+\end{figure}
+\newpage
+
+\subsection{KL 罚项与温度调度}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=6]{08_cs224r_reward_learning_2025.pdf}
+\caption{KL penalty 及 temperature schedule 曲线示意，用于支持 KL penalty 的解释章节。}
+\end{figure}
+\newpage
+
+\subsection{Fail-safe 监控}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=8]{08_cs224r_reward_learning_2025.pdf}
+\caption{Failure monitor dashboard 例图，对应本章的报警与 rollout check list。}
+\end{figure}
+\newpage
+
+\subsection{人类偏好比较流程}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=9]{08_cs224r_reward_learning_2025.pdf}
+\caption{Preference comparison pipeline，highlight human-in-the-loop steps。}
+\end{figure}
+\newpage
+
+\subsection{Sim-to-Real 图示}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth,page=10]{08_cs224r_reward_learning_2025.pdf}
+\caption{Sim-to-Real checklist：强调 domain randomization 和 reward smoothing。}
+\end{figure}
+
+\subsection{本章小结}
+
+Slide gallery 让我们看到 reward learning 将训练、评估、监控串成一体的全景图，方便对照文中 checklist 和操作流水线。
+
+\section{幻灯片补充页}
+
+\subsection{行为对齐维度}
+\clearpage
+\noindent\textbf{行为对齐维度}\\
+该幻灯片描绘了显式奖励、隐式偏好和安全 guardrail 三层结构之间的依赖关系，对应本文中的 reward signal breakdown。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=11]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{Agent Swarm 流程}
+\clearpage
+\noindent\textbf{Agent Swarm 流程}\\
+该图展示了多 Agent 如何共享 reward trace 以及如何分工处理 metric evaluation，与本章的 Operations Playbook 形成呼应。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=12]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{数据质量控制}
+\clearpage
+\noindent\textbf{数据质量控制}\\
+Data curation pipeline、filter pipes、human annotation loops 的分层结构可用于本章“Batch 数据”章节的参考。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=13]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{治理机制}
+\clearpage
+\noindent\textbf{治理机制}\\
+解释了 audit logs、human review、policy rollback 的连接，对应治理章节中的 checklist。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=14]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{Sim-to-Real 约束}
+\clearpage
+\noindent\textbf{Sim-to-Real 约束}\\
+Slides 强调 domain randomization 与 reward smoothing 的结合，这是我们在“Sim-to-Real”部分补充的内容。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=15]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{Ops Playbook}
+\clearpage
+\noindent\textbf{Ops Playbook}\\
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=16]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+\noindent 图示展示各 checkpoint 与 runbook，正面支持本章“Observability Playbook”中提出的 checklist。
+
+\subsection{Evidence Matrix}
+\clearpage
+\noindent\textbf{Evidence Matrix}\\
+列出了 reward signal、policy、safety eval 的映射，方便评估不同输入的 evidence quality。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=17]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+
+\subsection{未来研究方向}
+\clearpage
+\noindent\textbf{未来研究方向}\\
+列出 CAI、Verifier、Adaptive Reward 等待探索的方向，是本讲“未来方向”部分的直观延伸。
+\begin{center}
+\includegraphics[width=0.92\textwidth,page=18]{08_cs224r_reward_learning_2025.pdf}
+\end{center}
+\section{安全与基础设施}
+
+\subsection{日志与可观测性}
+
+在部署 reward learned policy 之前，必须保证完整的日志和可观测性链路。关键维度包括：
+
+\begin{itemize}
+    \item \textbf{Reward Trace}：记录 reward model 打分、baseline policy 预测、KL penalty
+    \item \textbf{Action Trace}：记录 policy 选择的动作、概率分布、temperature
+    \item \textbf{Safety Signals}：检测不当内容、hallucination、重复行为
+\end{itemize}
+
+\begin{warningbox}{没有日志，结果就无法纠错}
+实际系统中最危险的 reward hacking 不是模型输出歪了，而是因为团队根本看不到哪里“破产”。通用做法是把 reward model score 写进 trace table，并在达不到阈值时自动 roll back。
+\end{warningbox}
+
+\subsection{从仿真到现实}
+
+Reward learning 训练常在仿真环境里完成，部署到现实世界前需做“sim-to-real 补充”：
+
+\begin{itemize}
+    \item \textbf{Domain randomization}：在训练中加入光照、噪声、物理扰动
+    \item \textbf{Reward smoothing}：在 reward signal 上加入dropout或混合真实人类标签，防止 overfit
+    \item \textbf{Distillation+Calibration}：把 large policy 蒸馏到小模型，同时校准 reward model 以抵消 distribution shift
+\end{itemize}
+
+\begin{knowledgebox}{Sim-to-Real 案例}
+在机器人 grasping 任务里，reward learned policy 在仿真超越 95%，但直接部署到真实抓手会下沉至 45%。解决方式是把 sim 收集的 reward signal 与少量真实 human data 混合，并加入形变扰动进行 fine-tuning。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+安全部署要求完整的日志体系、自动审查与 sim-to-real 校准。Reward model 的每一步都应该可追踪、可回滚。
 \section{总结与延伸}
 
 \begin{enumerate}
@@ -170,6 +448,30 @@ $$\mathcal{L}(\phi) = \mathbb{E}\left[\log \sigma\left(R_\phi(x, y_w) - R_\phi(x
     \item \textbf{偏好学习}：从人类偏好比较中训练奖励模型，是 RLHF 的核心。
     \item 所有 reward learning 方法都面临 reward hacking 的风险，需要正则化和约束。
 \end{enumerate}
+
+\subsection{方法对照表}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.18\textwidth} p{0.25\textwidth} p{0.25\textwidth} p{0.22\textwidth}}
+\toprule
+方法 & 核心信号 & 主要优势 & 主要风险 \\
+\midrule
+Goal Classifier & 成功 vs 失败状态的二分类概率 & 简单、易于小数据集应用 & Reward hacking、分布漂移 \\
+Inverse RL & 专家轨迹优化的 reward 函数 & 可以解释专家意图 & 需要高质量轨迹、训练不稳定 \\
+偏好学习 (RLHF) & 人类选择的 winner vs loser & 直接对齐人类喜好 & Reward hacking、评分噪声 \\
+\bottomrule
+\end{tabular}
+\caption{Reward learning 方法对照}
+\end{table}
+
+\subsection{延伸阅读与实践方向}
+
+\begin{itemize}
+    \item 继续跟踪 Stanford RL group 的 reward modeling workshop 记录
+    \item 学习《Deep RL from Human Preferences》中的数据收集 protocol
+    \item 把自己的 logging pipeline 和 reward trace 绑定在一起，建立可回滚的版本 control
+\end{itemize}
 
 \subsection{拓展阅读}
 \begin{itemize}

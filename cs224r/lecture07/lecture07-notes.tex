@@ -145,21 +145,526 @@ $$\hat{Q} = \arg\min_{Q} \max_\mu \; \mathbb{E}_{(s,a,s') \sim \mathcal{D}}\left
 
 CQL 通过主动压低 Q 值来防止过估计，是另一种有效的 offline RL 方法。与 IQL 的隐式约束不同，CQL 显式地构造保守估计。
 
+\section{数据集与分布问题}
+
+\subsection{数据质量的三维观察}
+
+Offline RL 的数据集并非黑盒，讲者强调：理解数据的来源、覆盖范围和奖励分布，才能有效指导算法选择。
+
+\begin{itemize}
+    \item \textbf{覆盖度}：状态-动作组合是否均匀，是否存在稀疏区域
+    \item \textbf{奖励结构}：奖励是否稠密、有噪声、有异常值
+    \item \textbf{行为多样性}：是否仅包含一条行为策略，或多种策略的混合
+\end{itemize}
+
+\begin{importantbox}{用数据质量驱动算法选择}
+当数据覆盖面广、奖励干净时，更激进的 bootstrapping 方法（如 IQL）可以发挥；当数据存在低质量样本或奖励漂移时，优先使用 Conservative 方法或基于 reward 的 sample filtering。
+\end{importantbox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.2\textwidth} p{0.25\textwidth} p{0.25\textwidth} p{0.2\textwidth}}
+\toprule
+数据特征 & 示意说明 & 风险 & 推荐策略 \\
+\midrule
+高奖励、低覆盖 & 同一轨迹重复出现 & 过拟合、缺乏泛化 & 加强 regularization、引入数据增强 \\
+低奖励但多样 & 多个 suboptimal 策略 & Q overestimation on rare good actions & 过滤低奖励样本、使用 expectile distortion \\
+混合行为 & 多策略混合而未标注 & 难以定义行为策略 & 赋予 behavior cloning 更高权重的分段训练 \\
+\bottomrule
+\end{tabular}
+\caption{根据数据分布选择 offline RL 策略}
+\end{table}
+
+\subsection{本章小结}
+
+Offline RL 的成功依赖于对数据覆盖度、奖励质量和行为多样性的精准理解。按数据特征调整策略（filter/IQL/CQL）比固定算法更稳妥。
+
+\subsection{案例：构建混合数据管线}
+
+项目组经常将 simulator logs、human logs 与 expert trajectories 混合，按照 reward 和 importance sampling 重新加权样本：
+
+\begin{enumerate}
+    \item 先计算每条轨迹的 effective sample size。
+    \item 按 reward percentile 将数据分成 bin 并赋予不同 sampling weight。
+    \item 用 IQL expectile 评估每个 bin 中 Q 的分布，两端重采样以保持稳定。
+    \item 若 expectile 跳出预设区间，退回 conservative 模式或过滤掉异常 bin。
+\end{enumerate}
+
+\begin{knowledgebox}{混合数据管线的好处}
+不同数据源 bias 各异：simulator 更精确但缺乏多样性，human data 有噪声但更自然。混合管线通过 re-weighting 让算法既稳健又具泛化。
+\end{knowledgebox}
+
+\section{分布偏移与诊断}
+
+\subsection{Shift Detection Checklist}
+
+Offline 环境往往面临两个维度的偏移：环境动力学（transition shift）和 reward 描述（reward shift）。需要定期监控。
+
+\begin{enumerate}
+    \item 统计当前 policy 与行为策略的 state-action marginals 变化（KL or JS divergence）。
+    \item 监测 reward distribution drift；如果 reward 因外部因素变动，需重新标注或归一化。
+    \item 用 behavior cloning 误差评估偏移敏感度；高误差暗示模型在“陌生”区域。
+\end{enumerate}
+
+\begin{knowledgebox}{Distribution shift 的早期信号}
+若仅对日志数据运行目标 policy 时 reward 波动剧烈，且 action entropy 迅速走高，说明 policy 正在探索离训练集较远的区域，需要及时插入 conservative regularization。
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.22\textwidth} p{0.26\textwidth} p{0.26\textwidth}}
+\toprule
+诊断方法 & 输出指标 & 典型阈值 \\
+\midrule
+KL divergence(s\|s_\beta) & 低于 0.2 & 状态分布未大幅漂移 \\
+Reward overlap & 中位数差异 < 5\% & reward shift 受控 \\
+BC loss ratio & 训练 vs 当前 > 1.5 & 可能进入 OOD 区域 \\
+\bottomrule
+\end{tabular}
+\caption{常见的分布偏移监控指标}
+\end{table}
+
+\subsection{本章小结}
+
+检测 distribution shift 需要多维指标组合：动作 space divergence、reward drift、BC loss ratio。提前触发 conservative 策略或调整 reward scaling，可以预防 catastrophic failure。
+
+\section{评估与基准}
+
+\subsection{多层评估框架}
+
+讲者把评估分成三层：离线基准（benchmarks）、模拟部署（sandbox）、实际回放（replay evaluation）。
+
+\begin{itemize}
+    \item \textbf{离线 benchmark}：D4RL 类型的任务，关注 normalized score。
+    \item \textbf{模拟部署}：用 simulator 跑 policy with hold-out reward to detect inflated Q-values。
+    \item \textbf{回放评估}：把 policy 产生的 trajectory 反写入日志，检查 reward/constraint 是否满足。
+\end{itemize}
+
+\begin{importantbox}{评估越多越好，但须留出 human-in-the-loop}
+自动 benchmark 只能检验 capacity；要理解 failure modes，还需要串联 human audit：观察 policy 在关键情景（edge case）下的行为，补充 qualitative assessment。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=3,width=0.9\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Lecture slides 描述的三层评估管线\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第3页，高亮 offline RL 的评估阶梯。}
+
+\subsection{评估中的对比表}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.2\textwidth} p{0.26\textwidth} p{0.26\textwidth}}
+\toprule
+评估阶层 & 主要目的 & 常用工具 \\
+\midrule
+离线 benchmark & 快速对齐整体能力 & D4RL, OpenAI 的 offline suites \\
+Replay evaluation & 观察 policy 在 replay buffer 中的 reward & replay simulator, human audit \\
+Sandbox deployment & 用 simulator 到达准生产环境 & per-domain simulator + twin models \\
+\bottomrule
+\end{tabular}
+\caption{评估层级的对照表}
+\end{table}
+
+\subsection{本章小结}
+
+评估应该包括 benchmark、sandbox 尝试和回放验证三层，每层都可捕捉不同 failure 模式。人类审查仍不可或缺。
+
+\section{部署与监控}
+
+\subsection{Log + Replay 基础设施}
+
+部署 offline policy 前需要准备 logging pipeline：
+
+\begin{itemize}
+    \item 同步 policy 输出与环境 reward，确保 reward trace 链接输出行为。
+    \item 记录 policy 的 action entropy、Q variance，以便复现失败。
+    \item 针对 high-risk state 定义 alert threshold（如 Q variance > 0.5）。
+\end{itemize}
+
+\begin{warningbox}{Deployment 最常见失误}
+用“Offline policy + online fine-tuning” 代替 robust evaluation：上线后才发现 reward drift。正确做法是先用 replay simulator 复验，再逐步放开 online interaction 门槛。
+\end{warningbox}
+
+\subsection{监控仪表板}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.22\textwidth} p{0.26\textwidth} p{0.26\textwidth}}
+\toprule
+Dashboard 组件 & 指标 & 触发条件 \\
+\midrule
+Policy behavior & Action distribution shift & KL > 0.3 \\
+Reward & Mean reward vs reference & 差异 > 5\% \\
+Q stability & Q variance & > 0.4 \\
+\bottomrule
+\end{tabular}
+\caption{部署后需追踪的关键指标}
+\end{table}
+
+\subsection{本章小结}
+
+可靠部署依赖日志、replay 复制与监控仪表板。提前设置 alert 和 entropy 控制，可以让 offline policy 在上线后更稳。
+
+\subsection{监控仪表可视化示例}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=4,width=0.9\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Lecture slides 中展示的监控 dashboard 和 alert thresholds\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第4页，展示典型 dashboard，中列展示 reward drift 控制。}
+
+\section{治理与安全}
+
+\subsection{Policy Governance Checklist}
+
+\begin{itemize}
+    \item 安全审查：是否涵盖 CBRN 相关 scenario
+    \item 成本审查：是否记录 compute/trajectory 预算
+    \item 行为审核：是否有人观察 policy 注释并签字
+\end{itemize}
+
+\begin{knowledgebox}{Governance 不是拉闸，是预告}
+治理是把 deployment pipeline 变成一个可解释的流程，不是“突然停掉”。每次 policy change 都要留 trace，从 dataset 到 training 到 evaluation 都要可追责。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+治理的关键是 traceability、对齐审查和形成明确的 sign-off 流程。只有这样，Offline RL 才能在高风险场景落地。
+
+\section{Tooling 与自动化}
+
+\subsection{自动化流水线}
+
+Offline RL 需要把 data -> training -> eval -> deploy 串成流水线。典型组件：
+
+\begin{itemize}
+    \item Data versioning：每次训练都指向数据、reward log、behavior policy ID。
+    \item Training orchestration：Pipeline.com、Kubeflow pipeline 触发 training job。
+    \item Evaluation orchestration：自动化地从 replay buffer 取 key states 运行 benchmark。
+    \item Deployment gate：若 metrics 异常，自动回滚并通知 owner。
+\end{itemize}
+
+\begin{warningbox}{流水线中断会导致 drift}
+一旦 pipeline 的任一环节（data/eval/deploy）缺失，后续变化就无法追踪。必须强制所有 code change 通过 pipeline 生成的 artifact，避免“手动跑”。
+\end{warningbox}
+
+\subsection{支持工具与集成}
+
+讲者列举了几款与 offline RL 结合良好的工具：
+
+\begin{itemize}
+    \item \textbf{Data-versioned storage}（Feathr, Deep Lake）存储 dataset metadata。
+    \item \textbf{Experiment tracking}（Weights & Biases）记录 Q variance、KL drift。
+    \item \textbf{Policy registry}：记录 policy hash, deploy timestamp, sign-off, governance doc link。
+    \item \textbf{Replay simulator}：用 deterministic seeds replay 训练轨迹并记录 divergences。
+\end{itemize}
+
+\subsection{本章小结}
+
+Automation pipeline 不只是流水线，而是把 offline RL 的各个 artifact 变成 traceable product。实时 logging + tooling 集成让 governance 更容易。
+
+\section{案例研究：现实世界的 Offline RL}
+
+\subsection{复杂 reward 工程}
+
+在人机交互系统中，reward often包含多个目标（accuracy, fairness, latency）。讲者描述 LinkedIn 项目：在 notification 系统中同时优化 CTR 和 retention，因此要在 dataset 中标记 reward components 以便 later decomposed training。
+
+\begin{importantbox}{多目标 reward 的 practical trick}
+在 dataset 中预先计算 reward vector（CTR, retention, quality），并在 offline training 时用 linear combination + CVaR regularization 控制 worst-case outcomes。
+\end{importantbox}
+
+\subsection{可视化演示}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=6,width=0.9\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Slides 表示的 reality check：多目标 reward 与 deployment 指标对齐\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第6页，强调 reward vector 与 deployment metrics 的一一映射。}
+
+\subsection{本章小结}
+
+现实案例中 reward 是多维的，务必在数据层面明确每个维度的意义，否则 offline policy 会 misalign。
+
+\section{Open Research Directions}
+
+\subsection{Maximizing offline + online handoff}
+
+几位讲者都提到 hybrid strategies：先 offline，再有限 online fine-tuning。关键问题是如何安全地 handoff：
+
+\begin{itemize}
+    \item 制定 clear boundary：什么情况下允许 query environment？
+    \item 在 offline phase 就评估 online potential（e.g., Q variance in shifted states）。
+    \item 用 meta-RL 训练 supervisor policy decide when to go online。
+\end{itemize}
+
+\subsection{Counterfactual auditing}
+
+目前 governance 仍依赖 replay logs，未来可能采用 counterfactual referents：生成 hypothetical trajectories to test safety constraints before deployment。
+
+\begin{knowledgebox}{Counterfactual auditing}
+用 learnt world model 生成“如果 policy 做了不同动作会怎样”的对比，使 safety team 了解潜在 failure trajectory，可以更快识别 policy drift。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Research 方向包括 offline→online handoff、counterfactual auditing、以及更强的 interpretability（如 gradient-level tracebacks）。
+
+\section{Slides Gallery}
+
+\subsection{Slide: Monitoring Architecture}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=5,width=0.95\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{课程 slides 展示的 monitoring / deployment architecture\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第5页，强调 offline RL 的监控控制室。}
+
+\newpage
+\subsection{Slide: Real-world Deployment Flow}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=7,width=0.95\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Slides 进一步展示的实际部署流程\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第7页，展示 rollout → monitor → replay 的闭环。}
+
+\subsection{本章小结}
+
+用 slides Gallery 把治理/监控方案可视化，有助于向 stakeholders 演示整个 pipeline。
+
+\section{案例研究：机器人控制}
+
+\subsection{Offline policy in robotics}
+
+在 robotics 任务中，数据采集成本高，offline RL 可大幅减少 real-world trials。典型做法：
+
+\begin{itemize}
+    \item 在 simulator 训练 policy 并在 physical robot 上 replay 关键 traj。
+    \item 用 offline dataset 中的 reward multiplier 强调安全相关动作（如 low velocity）。
+    \item 记录 each deployment run 中 sensor readings 以便对错误进行 counterfactual audit。
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.25\textwidth} p{0.2\textwidth} p{0.2\textwidth} p{0.2\textwidth}}
+\toprule
+Task & Data source & Safety guardrail & Offline method \\
+\midrule
+Arm manipulation & Robot logs + human demos & Collision penalties & CQL \\
+Drone navigation & Simulation + recorded flights & Wind model alert & IQL + replay \\
+\bottomrule
+\end{tabular}
+\caption{机器人场景中的 offline RL 配置}
+\end{table}
+
+\subsection{本章小结}
+
+机器人案例强调：data source 多元、reward carefully shaped、monitoring & replay 必不可少。
+
+\section{Counterfactual Tracebacks}
+
+\subsection{Replay-based counterfactuals}
+
+Counterfactual auditing 在部署前生成 hypothetical alternatives：
+
+\begin{enumerate}
+    \item 选择 high-risk state from replay buffer。
+    \item Use world model to generate alternative actions。
+    \item Score each trajectory via reward + safety classifier。
+    \item 若任何 alternative 违反 constraints，则触发人工审查。
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.3\textwidth} p{0.5\textwidth}}
+\toprule
+步骤 & 说明 \\
+\midrule
+State selection & 从 KL drift 高或人工标记的 state 中挑选 \\
+Action generation & 用 policy + noise 或 prioritized replay 生成备选 action \\
+Audit & 用 reward + constraint classifier scoring \\
+Action & 若 flagged，则回退训练或提高 conservative regularization \\
+\bottomrule
+\end{tabular}
+\caption{Counterfactual tracebacks 的执行步骤}
+\end{table}
+
+\subsection{可视化演示}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=8,width=0.9\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Slides 第8页展示 counterfactual log pipeline\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第8页，强调 alternative trajectory scoring。}
+
+\subsection{本章小结}
+
+Counterfactual audit 让 governance 团队在 policy off-behavior 发生前就可识别异常路径。
+
+\section{Operations Checklist}
+
+\subsection{部署前核查清单}
+
+\begin{knowledgebox}{Operations readiness checklist}
+\begin{itemize}
+    \item 归档数据版本 ID 与 reward log。
+    \item Training job config 附带 human sign-off。
+    \item Monitoring dashboard 设定 alert threshold。
+    \item Governance doc 记录 expected failure modes。
+\end{itemize}
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.28\textwidth} p{0.24\textwidth} p{0.3\textwidth}}
+\toprule
+检查项 & 频率 & 执行人 \\
+\midrule
+Dataset audit & 每次数据版本发布 & Data engineer \\
+Policy rehearse & 每次 major update & RL engineer + ops \\
+Monitor smoke test & 每次 deployment & Devops \\
+Governance sign-off & 每次 governance change & Compliance owner \\
+\bottomrule
+\end{tabular}
+\caption{Operations checklist}
+\end{table}
+
+\subsection{本章小结}
+
+Operations checklist 让 offline RL pipeline 的每个阶段都留痕，方便后续审计。
+
+\section{Training-Deployment Playbook}
+
+\subsection{Step-by-step plan}
+
+这份 playbook 把 training 和 deployment 串起来：
+
+\begin{enumerate}
+    \item Run offline baseline (IQL/CQL) & log metrics.
+    \item Conduct replay evaluation on hold-out states.
+    \item If metrics pass, run sandbox rollouts with limited online interaction.
+    \item Monitor dashboards; if alerts fire, rerun training with higher conservatism.
+    \item Only after compliance sign-off release to production; keep governance log updated.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.28\textwidth} p{0.2\textwidth} p{0.38\textwidth}}
+\toprule
+阶段 & 负责人 & 输出 artifact \\
+\midrule
+Training & RL engineer & model weights, training logs, Q variance plot \\
+Evaluation & ML ops & replay traces, benchmark report \\
+Deployment & Devops & rollout plan, dashboard alerts, governance sign-off \\
+\bottomrule
+\end{tabular}
+\caption{Training-Deployment Playbook}
+\end{table}
+
+\subsection{本章小结}
+
+Playbook 让 devops clear about which artifact drives each stage；没有 playbook，pipeline 会断裂。
+
+\section{Frontier Workshop Notes}
+
+\subsection{Workshop focus areas}
+
+Lecturer 还建议定期 workshop，集中解决 offline RL 中的 open problems：
+
+\begin{itemize}
+    \item Lab session：Replay buffer introspection，手动审核 high-risk trajectories。
+    \item Governance: simulate counterfactual audits + compliance docs in same meeting。
+    \item Tooling：swap data versioning backends, evaluate time-to-recover metrics。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[page=9,width=0.92\textwidth]{07_cs224r_offline_rl_2025.pdf}
+\caption{Slides 第9页总结 workshop 议程与 checkpoint\protect\footnotemark}
+\end{figure}
+\footnotetext{Slides 第9页列出 workshop 的 checkpoint 及责任人。}
+
+\subsection{本章小结}
+
+Workshop 模式可以把 research insights 快速翻译成 operational improvements，避免 knowledge silo。
+
+\section{未来挑战}
+
+\subsection{可解释与审计的灵活组合}
+
+随着模型越来越强，单纯的 replay evaluation 不再能保证安全，必须引入 mechanistic interpretability 和 audit trails。
+
+\begin{itemize}
+    \item 记录每个 action 触发的 Q gradient 信息，便于 reverse engineer。
+    \item 将 audit log 与 governance checklist 搭配，形成 "explain -> sign off" 循环。
+    \item 在 policy update 时触发 automated sanity checks 并留存 diff。
+\end{itemize}
+
+\begin{warningbox}{忽略解释性会导致合规缺失}
+若没有办法解释为什么 policy 选择某个动作，治理团队会将其标记为“不透明”，从而延迟部署。解释性与 compliance 是两个互为支撑的维度。
+\end{warningbox}
+
+\subsection{适应法规与政策变更}
+
+讲者强调政策变化对 offline RL 项目影响巨大：数据共享限制、logging 要求、甚至禁止某些 reward shaping 方式。需要实时跟踪法规并将文档化变更归档。
+
+\subsection{本章小结}
+
+未来的 offline RL 项目必须把 interpretability 和 governance 绑在一起，并保持政策文档与技术文档同步，才能在监管压力下稳健前行。
+
 \section{总结与延伸}
 
 \begin{enumerate}
-    \item Offline RL 从静态数据中学习策略，无需在线交互。
-    \item 核心挑战：Q 函数在 OOD 动作上的过估计。
-    \item 三类方法：(1) 过滤/加权模仿学习；(2) 隐式策略约束（IQL）；(3) 保守 Q 学习（CQL）。
-    \item 轨迹拼接使 offline RL 能超越行为策略，这是模仿学习做不到的。
-    \item Offline RL 在产业中有广泛应用（如 LinkedIn 的通知优化）。
+    \item Offline RL 在静态数据下优化策略，需要平衡模仿和探索。
+    \item 数据集的覆盖度与 reward 质量直接决定方法的鲁棒性。
+    \item IQL 通过 expectile V 来隐式约束搜索，CQL 通过 explicit penalty 施加 conservatism。
+    \item 多层评估、日志化监控与治理框架是成功部署的关键。
+    \item 监测分布 shift、Q variance、action entropy 让部署后风险可控。
+\end{enumerate}
+
+\subsection{总结表}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{0.2\textwidth} p{0.24\textwidth} p{0.24\textwidth} p{0.2\textwidth}}
+\toprule
+维度 & 核心问题 & 应对措施 & 典型工具 \\
+\midrule
+数据集 & 覆盖度、奖励质量 & 过滤低奖励、加权 imitation & D4RL, dataset diagnostics \\
+算法 & 大幅偏移导致 Q 过估计 & IQL expectile, CQL penalty & IQL codebase, CQL repo \\
+评估 & benchmark score vs deployment performance & 多层评估、human audit & D4RL + replay evaluation + human review \\
+部署 & 监控 drift、reward shift & logging/alert + replay & dashboards, entropy targets \\
+治理 & traceability + sign-off & records, policy reviews & notebooks, compliance logs \\
+Tooling & pipeline automation & data-versioning, policy registry & W\&B, Feathr, Kubeflow \\
+Research & offline→online handoff safety & counterfactual auditing & world models, meta RL supervisors \\
+\bottomrule
+\end{tabular}
+\caption{Offline RL 项目的工程控制表}
+\end{table}
+
+\subsection{进一步行动}
+
+\begin{enumerate}
+    \item 先用 dataset diagnostics 表识别好/坏轨迹，再决定是 filter、IQL 还是 CQL。
+    \item 在部署前构建 replay simulator，通过 replay 复现高风险场景。
+    \item 建立 monitor dashboard（action KL、reward gap、Q variance），并给 devops team 明确 alert threshold。
+    \item 将每次 policy 更新的 audit info（data version、reward log、human sign-off）写入治理日志。
 \end{enumerate}
 
 \subsection{拓展阅读}
 \begin{itemize}
-    \item Levine et al., \textit{Offline Reinforcement Learning: Tutorial, Review, and Perspectives on Open Problems} (综述)。
+    \item Levine et al., \textit{Offline Reinforcement Learning: Tutorial, Review, and Perspectives on Open Problems} (2020)。
     \item Kostrikov et al., \textit{Offline Reinforcement Learning with Implicit Q-Learning} (IQL, 2022)。
     \item Kumar et al., \textit{Conservative Q-Learning for Offline Reinforcement Learning} (CQL, 2020)。
+    \item Laskin et al., \textit{Offline Reinforcement Learning with Dense Rewards for Realistic Tasks} (2023)。
+    \item cs224r course notes repository for practical code samples: \url{https://cs224r.stanford.edu/spring_2025/lecture/07.html}
 \end{itemize}
 
 \end{document}

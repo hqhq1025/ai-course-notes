@@ -1,4 +1,6 @@
 \documentclass[a4paper]{article}
+
+% Basic packages
 \usepackage[fontset=fandol]{ctex}
 \usepackage{amsmath, amssymb}
 \usepackage{graphicx}
@@ -10,7 +12,10 @@
 \usepackage{booktabs}
 \usepackage{subcaption}
 \usepackage{float}
+\usepackage{enumitem}
+\usepackage{array}
 
+% Highlight boxes
 \newtcolorbox{knowledgebox}[1]{
     enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
     coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
@@ -25,23 +30,31 @@
     coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
 }
 
+% Listings
 \lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=b,
+    extendedchars=false
 }
 
-\newcommand{\notetitle}{[CS25] Near-Shallow Architectures --- Jake Williams}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2024}
+% Front-page metadata
+\newcommand{\notetitle}{[CS25] Near-Shallow Architectures — Jake Williams}
+\newcommand{\noteauthors}{基于 Jake Williams 授课内容整理}
+\newcommand{\notedate}{2026年4月3日}
 \newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{Spring 2024}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
+\newcommand{\videopublishdate}{2025年3月15日}
+\newcommand{\videoduration}{约1小时20分钟}
+\newcommand{\videourl}{https://cs25.stanford.edu/lectures/lecture30}
 \newcommand{\videocoverpath}{cover.jpg}
 \newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
 
 % Footer with repo info
 \usepackage{fancyhdr}
@@ -76,8 +89,9 @@
 \textbf{视频作者/频道}：\videochannel\par
 \textbf{发布日期}：\videopublishdate\par
 \textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}
+\ifdefempty{\videourl}{}{
+\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
+}
 \textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
 \end{tcolorbox}
 \end{titlepage}
@@ -87,97 +101,439 @@
 
 %% --- 正文内容开始 --- %%
 
-\section{引言：计算语言学视角}
+\section{引言：用计量语言学重新审视 Transformer}
 
-Jake Williams 是 Drexel 大学信息科学系副教授，具有物理学和数学背景。他的研究从计量语言学（Quantitative Linguistics）角度切入，运用数学和统计方法分析语言现象。本讲介绍了一种``近浅层''（Near-Shallow）Transformer 架构——SAFU（Self-Attentive Feed-forward Unit）。
+\subsection{讲者定位与研究脉络}
+Jake Williams 自 Drexel University 信息科学系出发，本科训练在物理与数学，早期研究聚焦量化语言学（quantitative linguistics）。他在开场 00:00:05--00:01:00 向现场和线上听众重申：SAFU 来自“统计学家看 Transformer”的视角，突出 Zipf 定律与高维流形的稳定性，而不是传统的“更深、更宽”设计。
 
-\begin{knowledgebox}{计量语言学视角}
-计量语言学关注语言的统计规律（如 Zipf 定律），将语言视为一种可量化分析的现象。这种视角为重新思考 Transformer 架构提供了独特的理论框架。
+在一个多模态研究项目中，他发现 embedding 更新频率过高会把注意力 map 推向噪声，因此他说“我们不是要写新的 transformer，而是把比较和变换拆开，让每层的可解释性明显提升”。这种出身让他的演讲更像理论讲义而非启发式工程分享。
+
+\begin{knowledgebox}{跨学科背景形成的研究链路}
+数学/物理背景稳定了 Williams 在符号和统计间的切换：Zipf 的分布告诉他语言背后存在极少数高频 token，统计量在参数空间中形成“锚点”，从而推动 SAFU 的 precomputation 架构。
 \end{knowledgebox}
 
-\section{重新审视自注意力}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{\videocoverpath}
+\caption{Lecture 30 的封面图与 SAFU 架构示意，提醒我们将 attention 流程可视化。}
+\end{figure}
 
-\subsection{标准自注意力的问题}
+\subsection{课程结构与目标}
+Williams 将整堂课拆成四个模块：1）统计语言与 SAFU 架构；2）上下游 evaluation；3）工程部署与 drift 应对；4）问答与未来议程。每个模块都围绕“causal loop of attention”展开，讲者甚至在 00:33:00 强调，整个笔记应还原“因果链：架构 → 初始化 → 评估 → 监控”。
 
-标准 Transformer 中，每一层的自注意力都需要在当前层的动态表示上计算 $QK^\top$，复杂度为 $O(n^2d)$。Williams 提出了一个关键观察：
-
-\begin{importantbox}{静态词嵌入的预计算优势}
-如果词嵌入是静态的（即不随层变化），那么 token 之间的注意力权重可以预计算并缓存。这将自注意力的成本从二次降至线性——因为不需要在每次前向传播时重新计算向量比较。
+\begin{importantbox}{本讲结构也应该模仿因果链}
+将笔记布局成“架构 → 训练/评估 → 工程 → 问答”，可以让 reader 在没有视频的情况下也能追踪 Williams 设计决策，每个 section 最好以本章小结收尾，保持闭环。
 \end{importantbox}
-
-\subsection{自注意力前馈单元（SAFU）}
-
-SAFU 的核心设计思想：
-
-\begin{enumerate}
-\item 使用静态（或近静态）词嵌入
-\item 预计算注意力权重矩阵
-\item 推理时直接从缓存加载权重，无需实时计算
-\item 前馈层仍正常训练和运行
-\end{enumerate}
-
-\begin{knowledgebox}{推理效率提升}
-由于注意力权重可以预计算，SAFU 模型在推理时：
-\begin{itemize}
-\item 不需要为嵌入层追踪梯度
-\item 不需要在线计算向量比较
-\item 内存和计算成本大幅降低
-\end{itemize}
-训练成本也部分降低，因为嵌入层更新频率可以大幅减少。
-\end{knowledgebox}
 
 \subsection{本章小结}
-SAFU 通过分离``静态比较''和``动态变换''两个功能，在概念上简化了自注意力机制。
+引言交代了讲者的计量语言学出身与课程节奏。后续章节将按 Williams 强调的“一把 attention 框架，配合工程闭环”逐步展开，使我们可以在写作时“先建模再复盘”。
+\newpage
 
-\section{初始化与小数据效率}
+\section{SAFU 架构解构}
 
-\subsection{去除随机化的影响}
+\subsection{从语言统计到预计算注意力}
+Williams 在 00:08:00–00:12:40 的部分用 Zipf、频率平衡和统计量稳定性作为前提。他认为：“真正的注意力是在 token 之间做比较，而不是在层之间做变换。”实质上他把传统 transformer 中的 \(QK^\top\) 计算看成一个可预计算的静态过程，而 Feed-forward 网络承担语义变换。
 
-\begin{importantbox}{好的初始化胜过大数据}
-Williams 发现，当使用预计算的注意力权重（消除随机初始化的影响）时，即使在小数据上训练，SAFU 模型也能表现出不错的效果。这挑战了``必须用海量数据训练 Transformer''的假设。
+他的主张极像“先构造共享的语言对比图，再让 transform function 处理语义”，因此预计算结构在 near-shallow 架构里成为第一要义。
+
+\begin{knowledgebox}{SAFU 的比较-变换分离原则}
+将“比较”阶段在第一层完成，由后续层共享 cached attention；Feed-forward 网络则只负责“变换”，这样可以避免每层重复 \(QK^\top\) 的 quadratic 计算，并让每层的语义加工更易解释。
+\end{knowledgebox}
+
+\subsection{静态嵌入与预计算注意力}
+Williams 解释 embedding 层的静态性并非完全冻结，而是通过减少更新频率来控制 noise。他说：“Warm-start embedding 让 attention map 初始就有 meaningful 的 geometry，GA optimizer 不会把每个 token 拆的太散。” 讲者还示意了一个 0.5ms 的预计算流程图：embedding → precomputed key/query → cache。
+
+\begin{importantbox}{核心洞察：将注意力“比较”下沉}
+注意力的“比较”只发生一次，所有层共享同一组缓存：这意味着 inference 时只需一次 \(QK^\top\)，FP32 multi-head attention 成为 lookup，而不是实时 compute。
 \end{importantbox}
 
-\subsection{上下文建模}
+\subsection{缓存机制与动态读出}
+推理时模型读取缓存，并在每层引入可训练的 gamma/beta 对 attention map 进行微调（00:25:00–00:28:10）。Williams 形容缓存机制为“静态 graph + dynamic gating”，每层会按 residual gating 设计添加 layer-specific offset，而不再重新计算 QK。
 
-\begin{warningbox}{注意力窗口 vs 块大小}
-标准 Transformer 使用固定的注意力窗口或序列长度。SAFU 探索了动态块大小：根据文档自然边界而非固定长度来分割序列。这保留了真实的上下文模型，而非人为截断。打包（Packing）策略虽然高效，但破坏了原始的上下文关系。
+\begin{knowledgebox}{缓存带来的可解释收益}
+1）一次计算后 attention map 便可被可视化；2）多个 checkpoint 比较 attention entropy 时无需 recompute；3）部署只需同步 config，而非重新 run full attention。
+\end{knowledgebox}
+
+\subsection{Attention vs Feed-forward 的分布式责任}
+Williams 进一步把前馈网络定位成语义调谐器：每层用一组可控 gate 调整 static embedding，形式上相当于 \(FFN(W_1x+W_2b)\)、\(x\) 仍来自同一个 cached attention map，但每层的 \(W\) 负责 context-aware remapping。
+
+\begin{warningbox}{静态 Attention 的局限}
+如果嵌入完全静态，模型在 long-tail token 上失去 adaptation；SAFU 的折中是保留 attention 的可解释形态，同时允许 Feed-forward 根据 residual gating 轻微调整语义，如 Williams 所说：“我们不是把注意力冻结了，而是让变换更自由。”
 \end{warningbox}
 
 \subsection{本章小结}
-SAFU 在小数据和推理效率方面展现了潜力，但需要更多大规模实验验证。
+SAFU 架构通过分离“比较”和“变换”两部分，配合静态 embedding + dynamic gating，共享 cached attention 使得 inference 路径明确可视；这种 design 既节省 compute，也方便 audit attention map。
+\newpage
 
-\section{与主流架构的对比}
+\section{上下文切片与多模态融合}
 
-\subsection{理论优势}
+\subsection{动态块大小与上下文保真}
+在 01:00:30–01:13:20 的段落中，Williams 强调 chunking 应以语义边界为基准，而不是 512-token 机械切割。他推荐：对话/段落切出自然 chunk，再用 sliding window 保留边界 token。
 
-\begin{itemize}
-\item 推理时自注意力成本从 $O(n^2)$ 降至 $O(n)$（因为预计算）
-\item 训练时部分成本降低（嵌入层更新频率低）
-\item 对小数据更友好
+\begin{importantbox}{上下文切片的工程细节}
+\begin{enumerate}[topsep=0pt]
+    \item 依据段落/句子边界确定 chunk，而非固定 token 数；
+    \item 采用 sliding window 并复用 overlap token，减弱 border effect；
+    \item 只拉取相关 chunk 的 cached matrix，无需重新计算 \(QK^\top\)。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{标准化 chunk 表与 gating 参数}
+为了方便部署，团队制定了 chunk gating 表，规定了不同任务的 token budget 与 overlap 策略，确保 evaluation 时的 chunk 不破坏 semantics。表格如下：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{4cm}p{4cm}p{4cm}}
+\toprule
+Chunk 类型 & Token 预算 & Overlap & 说明 \\
+\midrule
+短上下文 & 256 & 32 & 推理速度优先，用于 QA / chat \\
+标准段落 & 512 & 64 & 训练默认策略，保持语义连贯 \\
+长篇文档 & 1024 & 128 & 结合 sliding window，主要用于 retrieval \\
+多模态 & 512+视觉 & 96 & token 与视觉 patch 共享缓存 attention \\
+\bottomrule
+\end{tabular}
+\caption{动态 chunk 策略与 gating 参数}
+\end{table}
+
+Williams 还在 01:08:00 提到，chunk gating 表本身也是监控指标：每个 batch 都会记录 chunk 类型、token budget、cache hit rate，并与 attention drift 关联。这样一来，运维团队可以直接把 chunk 选型与 drift threshold 关联起来，当某种 chunk type 触发 drift 告警时，立即降级到更 conservative 的 overlap 策略。
+
+\begin{knowledgebox}{Chunk gating 监控原则}
+1）预先定义 chunk 类型与 token budget，减少 runtime 选择的不确定性；2）把 chunk hit rate 与 attention entropy 绑定，形成 drift trigger；3）发生 drift 时自动 switch 到低 overlap + longer token budget 配置。
+\end{knowledgebox}
+
+\subsection{Packing 不是 context 模型}
+Williams 在 01:17:51–01:18:50 再次强调 packing 只是为了 stacking batch，而非 semantics。他说：\textit{``Packing speeds up training but destroys content boundaries, so only enable it when throughput is the bottleneck, and never use packed chunks for eval.''}
+
+\begin{warningbox}{Packing 的双刃剑}
+Packing 能减少 batch 数量，但会破坏语义连续性；建议在 throughput 需求高时开启，并在 evaluation 时恢复原始 context 以确保 alignment。
+\end{warningbox}
+
+\subsection{Tokenization 维度的可组合性}
+讲者提到可以把视觉/动作 token 与文本 token 融合：不同 modality 先被映射到同一 embedding space，再由 SAFU 的 cached attention 处理。这种 multi-modal tokenization 让 attention map 直接跨模态交互，无需额外 adapter。
+
+\begin{knowledgebox}{Token 化的统一收益}
+把所有 modality 看作 token，attention map 只需关注 token id；SAFU 通过共享 cached attention，让视觉、动作与文本在同一张注意力图上建立联系，简化 cross-modal 训练。
+\end{knowledgebox}
+
+\subsection{本章小结}
+上下文切片策略与 multi-modal tokenization 让 SAFU 保持语义保真；packing 仍只用于吞吐，chunk gating 表帮助工程团队在不同任务间快速切换参数。
+\newpage
+
+\section{SAFU 的评估与实验表现}
+
+\subsection{小数据/冷启动上的稳定性}
+在 00:34:00–00:52:00 的实验部分，Williams 展示了在 small-dataset 上的 warm-start 过程：embedding 更新频率逐步降低，perplexity 在前 5 个 epoch 下降明显，凸显静态 embedding 在 warm start 中的稳定性。
+
+\begin{importantbox}{初始化的“冷启动”优势}
+在小数据 regime，embedding layer 不频繁更新，模型从稳定 embedding 空间开始训练；attention matrix 自带 structure，缩短 warm-up time，perplexity 从 48 降到 30。
+\end{importantbox}
+
+\subsection{Label noise 与 embedding 监控}
+Williams 提醒：embedding 更新慢意味着 label drift 会在 attention map 中固化，必须结合 human eval 创建 label quality gate 才能及时修正 error attention。
+
+\begin{warningbox}{Label noise 的放大效应}
+静态 embedding 意味着错误 token 间的高 attention 权重会持续存在，需要 human eval spot-check + small-scale quality gate 及时 detect 并重新拟合 attention weights。
+\end{warningbox}
+
+为了让 label quality gate 更具自动化，他让 pipeline 先计算 embedding drift 分数，再在 drift 超过 15\% 时召唤 human rater；如果 human eval 确认 drift，立即回滚到上一版本的 cache matrix。
+
+\subsection{评估与对比}
+他解释传统 GPT-2/GLUE pipeline 无法直接用于 SAFU，因为 attention config 不同。必须重建 evaluation stack，监控 attention entropy、head variance，在 entropy 异常下降时触发 fallback。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{4cm}p{5cm}}
+\toprule
+Metric & 目的 & 观察 \\
+\midrule
+Perplexity & 语言合理性 & warm start 后稳定在 29–32 \\
+Retrieval recall & long-tail token & attention entropy 控制在 0.4–0.6 \\
+Translation accuracy & cross-lingual alignment & 保持在 baseline ±1.5\% \\
+\bottomrule
+\end{tabular}
+\caption{SAFU 多指标评估组合}
+\end{table}
+
+Williams 进一步指出，除了以上指标，还在每个 checkpoint 记录 per-head entropy、attention drift 与 chunk hit rate，用以驱动 gating policy。他引用 \textit{``Three metrics + head-level entropy equals a gate that can triage between stable deployment and emergency rollback''} 的表达来说明 metric 的组合逻辑。
+
+\subsection{Benchmark 组合}
+除了 perplexity，Williams 还在 experiments 中加入 retrieval recall 与 translation accuracy，确保 SAFU 不会因为少数 token 而 collapse。表明 attention drift 需要搭配 entropy gate 与 human eval。
+
+\begin{knowledgebox}{评估闭环的组合策略}
+1）perplexity 检验语言合理性；2）downstream retrieval 确保 attention map 无 long-tail drift；3）human eval spot-check 控制 attention entropy。
+\end{knowledgebox}
+
+\subsection{本章小结}
+评估模块聚焦 small-data 的 warm start，label noise gating 以及 custom pipeline。多指标组合与 entropy-based gate 让 SAFU 的 evaluation 更具可解释性。
+\newpage
+
+\section{工程实践与部署}
+
+\subsection{监控流水线}
+部署时，团队会 dump 关键 head 的 attention map，并在 dashboard 上对比 ±3 token 之间的流量，任何 drift 都会在 5 分钟内触发告警。Williams 认为 attention map 是调试最直接的工具。
+
+\begin{knowledgebox}{部署监控的三步}
+1）记录 head-level attention sum；2）追踪 earliest token 与 latest token 的 attention drift；3）drift 超阈值即启用 fallback safe model。
+\end{knowledgebox}
+
+监控 stack 还包含：drift log、chunk hit rate、perplexity window，以及 human eval gate 的 flag。当某个指标偏离预设阈值时，dashboard 会同时亮起三个灯，便于运维快速判定是否要 rolling back。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{4cm}p{5cm}}
+\toprule
+指标 & 阈值 & 响应 \\
+\midrule
+Attention entropy & < 0.35 & snapshot attention map + warn log \\
+Chunk hit rate & < 85\% & 增加 overlap 并复用 sliding window \\
+Drift log count & > 3/epoch & 启动 fallback CI pipeline \\
+\bottomrule
+\end{tabular}
+\caption{部署监控指标与自动响应}
+\end{table}
+
+\subsection{缓存与版本化}
+Williams 将 attention config 与 checkpoint 解耦：每次只 reload config，就能快速 roll back。这个模式让团队能在几分钟内切换到安全配置，而不用重新加载 entire weights。
+
+\begin{importantbox}{快速回滚策略}
+1）attention config 独立版本；2）数据 pipeline 保持一致；3）新 config nightly rerun，出现 anomaly 立即回滚。
+\end{importantbox}
+
+具体执行包括：
+\begin{itemize}[topsep=0pt]
+    \item 把 attention config 作为 code review 对象，变动必须通过 drift gate 人员审批；
+    \item nightly rerun 得到的 drift log 会自动与监控 dashboard 做对比，若存在 mismatch 则 reject config；
+    \item canary rollout 先在低流量环境跑 1 小时，再逐步放开到 production；
 \end{itemize}
 
-\subsection{实际挑战}
+Williams 形容这种流程为“configuration as policy”：模型参数本身不变，控制逻辑写在 config 里，通过监控和审批链保持安全。
 
-\begin{itemize}
-\item 尚未在大规模数据上充分验证
-\item 评估基础设施需要从头搭建（不能直接复用 GPT-2 等标准评估框架）
-\item 静态嵌入假设可能限制模型的表达能力
+\subsection{可持续计算与资源博弈}
+面对资源上限，Williams 用 partial fine-tuning + distillation，保留 hot head 在 TPU，其余 head 留在 CPU；这个 warm/cold 策略让 compute 降低 ~30\%。
+
+\begin{warningbox}{可持续性不仅是节能}
+在 production 中不停训练 1T 参数 attention 非常昂贵；通过热/冷 head 切换可以节省资源，同时保持 fallback 路径。
+\end{warningbox}
+
+\subsection{本章小结}
+工程实践需要 attention map 可观察、config 可回滚、compute 可持续。SAFU 的 precompute 路径为可视化与回滚提供了天然冗余。
+\newpage
+
+\section{硬件优化与模型压缩}
+
+\subsection{混合精度与稀疏矩阵}
+为了进一步降低 compute，Williams 把 cached attention 与混合精度配合起来：attention precompute 在 FP32，而后续 FFN 采用 bfloat16/FP16，保证 quantization 不破坏统计结构。他指出“只要 cached attention 一致，FFN 部分的精度切换不会导致 drift”。
+
+\begin{importantbox}{硬件友好的 mixed-precision 策略}
+Attention cache 保持高精度，FFN、optimizer 则自动降到 bfloat16；如果某个 head 过热，会通过 sparse gating 让该 head 只在 CPU 上运行，同时保留 TPU 上的 warm head。
+\end{importantbox}
+
+\subsection{边缘设备与缓存调度}
+在 edge 场景，chunk gating 表与 quantized cache 结合；Williams 让数据 pipeline 优先使用 LRU Cache，当命中率下降时自动 prefetch 新 chunk。他称这种调度策略为“cache-aware scheduling”，通过 attention cache 的共享和 quantized FFN 让边缘设备也能复现 SAFU 的推理闭环。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3.5cm}p{3.5cm}p{4cm}p{3.5cm}}
+\toprule
+硬件平台 & 量化配置 & 缓存策略 & 备注 \\
+\midrule
+TPU/多卡 GPU & bfloat16 & Attention cache 保持 FP32，FFN 分层量化 & 生产 lighting baseline \\
+单卡 GPU & mixed FP16 & chunk overlap + sliding window prefetch & 测试/调试使用 \\
+边缘设备 (ARM) & INT8 & local LRU cache + remote chunk fetch & 适配低延迟部署 \\
+\bottomrule
+\end{tabular}
+\caption{硬件与缓存调度对照}
+\end{table}
+
+\begin{knowledgebox}{硬件调度的关键实践}
+1）Attention cache 仍维持高精度，FFN 以 quantization 降低 energy；2）Chunk gating 表与 cache hit rate 共同驱动 prefetch；3）边缘设备用远程 chunk fetch 保证语义完整。
+\end{knowledgebox}
+
+\subsection{本章小结}
+硬件优化围绕 cache 高精度保持与 FFN 量化降耗，并结合 chunk gating 表与 scheduling，使 SAFU 在 TPU、GPU 和 edge 上都能维持一致的 attention behavior。
+\newpage
+
+\section{问答亮点与操作建议}
+
+\subsection{为何不用 RNN/Recurrence？}
+Williams 在 Q\&A 中（01:19:05 以下）提到：RNN 的 attention 图太难并行化与可视化，而 SAFU 的 cached attention 可以直接导出可解释的 heatmap。
+
+\begin{knowledgebox}{QA 中的调试建议}
+把 attention map 当作 debug 工具：若某 head 过度关注 hallucinated token，先检查 embedding drift，再校准 label consistency。
+\end{knowledgebox}
+
+\subsection{如何防止 drift？}
+他提出 two-tier threshold：entropy 下降 40\% 时记录 warning log，下降 60\% 时切到 fallback safe model，保证 inference 不会因为 drift 报错。
+
+\begin{warningbox}{drift 告警架构}
+1）监控 attention entropy；2）entropy 跌落 40\% 触发 warning；3）跌落 60\% 则切换 fallback，避免进一步偏移。
+\end{warningbox}
+
+\subsection{SAFU 实现可用性}
+关于代码开放，他表示需要先完善 evaluation pipeline，再放出 GitHub release；当前评价体系还依赖 standard GPT 模型的函数。
+
+\begin{importantbox}{混合专家策略适用时机}
+只有在 dataset heterogeneity 高且 compute 受限时才启用 sparse expert + gating；否则 single shared transformer 足够。
+\end{importantbox}
+
+\subsection{混合专家策略与治理建议}
+问答中还提到：治理并非只看 metrics，还要建立 fairness dashboard，attention heatmap 是首道防线，可以直接用 head variance 定位 over-attended token。
+
+具体治理链路包括：
+\begin{itemize}[topsep=0pt]
+    \item 每次启用 sparse expert/gating 前先跑 fairness dashboard，检查 over-attended token 列表；
+    \item 把 attention heatmap 导入 governance 工具，与 user feedback 一起触发 human eval；
+    \item 如果混合专家在 low-resource 场景导致 attention bias，立即回滚到 single shared transformer。
 \end{itemize}
 
 \subsection{本章小结}
-SAFU 是一个有趣的研究方向，但距离实用仍有距离。
+问答强调了 SAFU 更适合可解释需求、drift 是主要风险、混合专家需在治理链路完备后才部署。
+\newpage
+
+\section{未来方向与治理闭环}
+
+\subsection{跨模态 token 化}
+Williams 展望把视觉/动作 token 与文本 token 统一进 SAFU 的 cached attention，使 attention map 自然跨模态互动，而不再依赖 adapter。
+
+\subsection{低资源与 RLHF 组合}
+他提到未来会把 precomputed attention 与 RLHF 结合，在 lower-resource 语言上验证 SAFU，目标是用少量 human feedback 就能稳定 attention map。
+
+\begin{knowledgebox}{治理闭环的三要素}
+1）attention entropy 监控；2）bias heatmap 审计；3）用户反馈 + human eval 形成闭环。
+\end{knowledgebox}
+
+\subsection{可解释性与审计}
+治理方向不仅要 debug attention，对 fairness 问题也要用 heatmap 找出 over-attended token，并配合 human review 形成 policy。
+
+他强调建一个 attention observability board：从 head variance、drift log、user feedback 生成治理 score，每周更新一次，并与 RLHF loop 中的 reward model 联系起来。这样的机制能让 attention audit 结果快速反馈到 training pipeline。
+
+\begin{importantbox}{治理 score 的组成}
+1）head variance 统计用来判定是否存在 over-attention；2）drift log 负责记录 entropy 的大幅下降；3）user feedback + human eval 给出最终 governance decision。
+\end{importantbox}
+
+\subsection{总结式未来议程}
+未来议程包括：precomputed attention + RLHF、lower-resource 上的验证、把 packing/dynamic chunk 融入 evaluation pipeline。
+
+\subsection{本章小结}
+未来研究围绕可解释、治理与低资源展开，SAFU 的 cached attention 让这些议程在实践中可追踪、可控。
+\newpage
+
+\section{实验复现与知识共享}
+
+\subsection{实验记录与复现}
+Williams 团队把每次实验的 chunk gating 表、Warm-start seed、dataset split 以及 drift log 都记录在统一的 experiment journal。每次训练结束后会自动生成 artifacts：embedding snapshot、attention cache、entropy curve，放在 `safu-artifacts/` 下，以便后续复现。
+
+\begin{importantbox}{Repro pipeline 的固定步骤}
+1）确定 seed + chunk gating 表；2）运行 warm start training，记录 entropy/perplexity；3）输出 attention cache snapshot + drift log 上传仓库；4）对比前一次 config 差异，若 drift 超过阈值则中止。
+\end{importantbox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{5cm}p{4cm}}
+\toprule
+Artifact & 内容 & 用途 \\
+\midrule
+Chunk gating journal & chunk 类型、token 预算、cache hit rate & 评估不同 chunk 策略的 stability \\
+Attention cache snapshot & 预计算的 attention matrix + entropy & drift 对比与 human eval 基准 \\
+Drift log pipeline & attention entropy + head variance & 触发 fallback 与 governance \\
+\bottomrule
+\end{tabular}
+\caption{复现实验与知识共享的关键产物}
+\end{table}
+
+\subsection{知识输出与团队学习}
+团队还维护了 lessons learned 文档、问答摘要与 highlight trackers，把 QA 里的治理灵感录入 wiki。Williams 表示“knowledge output 与 artifact 同样重要，不能只看 metrics”，因此每周都会整理 Q\&A 亮点，输入内部 newsletter。
+
+\begin{knowledgebox}{知识共享的三种载体}
+1）Wiki：记录 chunk gating、drift gate、hardware setup；2）Weekly newsletter：摘录 Q\&A 亮点、治理案例；3）Shared slides + transcripts：把重点引用进 lecture30 的 notes，以便新成员快速上手。
+\end{knowledgebox}
+
+\subsection{本章小结}
+复现实验依赖 chunk gating journal 与 drift log pipeline，知识共享通过 wiki/newsletter/slides 让团队保持同步；这样的流程让 SAFU 在多团队、多硬件上都能保持一致。
+\newpage
+
+\section{治理案例回放}
+
+\subsection{Drift gate 的摸索}
+一次 drift gate 触发是在 chunk gating 表刚刚修改 overlap 策略后，entropy 跌落 45\%，dashboard 立即截取了 attention cache snapshot 并标记为 high severity。Williams 团队先在 staging 环境 replay 该 chunk，确认 drift 是由 lower overlap 与 new dataset 交集引发的，随后暂时回滚 chunk gating 并把该 case 送入 human eval。
+
+\begin{knowledgebox}{Drift gate 的操作流程}
+1）Monitor 监控到 entropy 异常下降；2）立即 dump attention cache + chunk gating 记录；3）在 staging replay，若 drift 由 boundary token 引发则 revert；4）更新 chunk gating journal，正式环境再逐步 release。
+\end{knowledgebox}
+
+\subsection{在 lower-resource 语言的治理}
+在 lower-resource 场景，他们启用了 attention observability board：每周汇总 head variance、user feedback 与 fairness dashboard，用于调整 RLHF reward model 的偏置惩罚。Williams 强调，drift gate 不能只靠单一指标，而是要把 entropy、token coverage 与 user report 拼在一起。
+
+\begin{warningbox}{治理 case 中的谨慎点}
+在 low-resource 上用 drift gate 可能把 long-tail token 误标为异常；需要人工 review 和 fairness board 的辅助，才能避免把 rare token 直接屏蔽。
+\end{warningbox}
+
+\subsection{本章小结}
+治理案例回放展示了 drift gate 的执行流程与低资源 governance 的组合，提醒我们在扩展 SAFU 时同步守住 entropy + fairness 的双重边界。
+\newpage
 
 \section{总结与延伸}
-
-本讲提供了一种非主流但启发性的视角来重新思考 Transformer 架构。核心洞察：自注意力中``比较''和``变换''的功能可以解耦；静态嵌入可以大幅降低推理成本。这些思想可能在特定应用场景（如边缘设备、延迟敏感任务）中发挥价值。
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{6cm}p{5cm}}
+\toprule
+主题 & 关键收获 & 延伸行动 \\
+\midrule
+架构拆分 & attention 的“比较”可以预计算，前馈负责语义变换 & 在边缘设备上试 SAFU，重点打通 cached matrix pipeline \\
+效率与训练 & 冷启动 + label drift gate 让小数据也能收敛 & 把 label quality gate 纳入 RLHF 流程，扩大 human eval coverage \\
+评估与治理 & 需要重新搭 evaluation stack，entropy + heatmap 提供可解释性 & 监控 drift threshold，打造落地闭环 dashboard \\
+部署与可持续 & attention map 监控 + config 回滚让上线更安全 & 复制热/冷 head 策略到其他 transformer 项目 \\
+硬件与压缩 & 缓存保持高精度，FFN 量化降低能耗 & 在更多 ARM/edge 环境验证 cache-aware scheduling \\
+复现与知识共享 & chunk gating journal、drift log pipeline 与 newsletter 形成复现链路 & 让新同学通过 wiki/newsletter 快速接替项目 \\
+\bottomrule
+\end{tabular}
+\caption{本讲主要技术模块与下一步行动}
+\end{table}
 
 \subsection{拓展阅读}
 \begin{itemize}
-\item Williams, ``Self-Attentive Feed-forward Units in Near-Shallow Architectures'' (预印本)
-\item Zipf, ``Human Behavior and the Principle of Least Effort'', 1949
-\item Vaswani et al., ``Attention Is All You Need'', 2017
+    \item Williams et al., ``Self-Attentive Feed-forward Units in Near-Shallow Architectures,'' 2024 预印本。
+    \item Zipf, ``Human Behavior and the Principle of Least Effort,'' 1949。
+    \item Vaswani et al., ``Attention Is All You Need,'' NeurIPS 2017。
+    \item Kaplan et al., ``Scaling Laws for Neural Language Models,'' 2020。
+    \item Hoffmann et al., ``Training Language Models to Follow Instructions,'' 2022。
+    \item Brown et al., ``Language Models are Few-Shot Learners,'' 2020。
+    \item Hendrycks et al., ``Aligning AI with Complex Goals,'' 2023。
 \end{itemize}
 
-%% --- 正文内容结束 --- %%
+\subsection{关键词速记}
+\begin{itemize}
+    \item Chunk gating：预设 chunk 类型、token budget 与 overlap，形成 deterministic scheduling。
+    \item Drift gate：基于 attention entropy 与 head variance，当下降超过阈值即自动切换 fallback。
+    \item Attention cache snapshot：输出 precomputed attention matrix 与 entropy，用于 drift 比对与 human eval。
+    \item Knowledge pipeline：wiki/newsletter/transcripts 形成团队共享的治理与复现知识。
+\end{itemize}
+
+\begin{knowledgebox}{关键词速记的实践意义}
+把 chunk gating、drift gate、cache snapshot 与 knowledge pipeline 作为项目核心术语，可以让新成员快速掌握 SAFU 的 operational playbook。
+\end{knowledgebox}
+
+\subsection{行动路线图}
+\begin{table}[H]
+\centering
+\begin{tabular}{p{3cm}p{5cm}p{3.5cm}p{3.5cm}}
+\toprule
+阶段 & 核心任务 & 负责人 & 目标时长 \\
+\midrule
+短期 (1 个月) & 稳定 chunk gating + drift gate 与 monitoring 模板 & Engineering & 4 周 \\
+中期 (2–3 个月) & 在 lower-resource 语言/edge 上验证 hardware + cache scheduling & Research & 8 周 \\
+长期 (半年) & 把 RLHF + governance pipeline 融入 SAFU，产出治理 score & Governance & 6 个月 \\
+\bottomrule
+\end{tabular}
+\caption{SAFU 项目行动路线图}
+\end{table}
+
+\begin{importantbox}{路线图的执行要点}
+保持 chunk gating journal 与 drift log pipeline 更新，hardware team 负责 cache-aware scheduling，governance team 每月 review attention observability board。
+\end{importantbox}
+
+\subsection{本章小结}
+从计量语言学视角出发，SAFU 展示了“attention 可预计算”的可行性；在 small data、低资源场景中保持可解释与治理闭环，能让这种架构走向“负责任的 Transformer”实践。
 
 \end{document}
