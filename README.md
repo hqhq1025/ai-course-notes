@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-**258 份 AI / LLM 公开课中文讲义 PDF**
+**269 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-258份-blue?style=for-the-badge)](.)
-[![Courses](https://img.shields.io/badge/课程系列-13个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-269份-blue?style=for-the-badge)](.)
+[![Courses](https://img.shields.io/badge/课程系列-14个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
 </div>
@@ -26,13 +26,14 @@
 
 ## 📋 课程一览
 
-### 🏫 Stanford 课程 (121 份)
+### 🏫 Stanford 课程 (132 份)
 
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
 | [**CS336**](cs336/) | Language Modeling from Scratch | 17 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
 | [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
+| [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
 | [**CS146S**](cs146s/) | The Modern Software Developer | 10 | Mihail Eric + 业界嘉宾 |
 | [**CS224N**](cs224n/) | NLP with Deep Learning | 17 | Chris Manning |
 | [**CS231N**](cs231n/) | Deep Learning for Computer Vision | 18 | — |
@@ -143,6 +144,7 @@ Ilya (Research时代) → Dario (AGI路线) → Lex (State of AI 2026)
 ```
 ai-course-notes/
 ├── cs336/                    # Stanford CS336 (17讲)
+├── cs153/                    # Stanford CS153 Infra@Scale (11讲)
 ├── cs224n/                   # Stanford CS224N (17讲)
 ├── cs231n/                   # Stanford CS231N (18讲)
 ├── cs224r/                   # Stanford CS224R (19讲, 含 slides)
@@ -187,6 +189,7 @@ graph LR
 | 课程 | 官网 | YouTube | Slides |
 |------|------|---------|--------|
 | CS336 | [stanford-cs336.github.io](https://stanford-cs336.github.io/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) | [GitHub](https://github.com/stanford-cs336/spring2025-lectures) |
+| CS153 | [cs153.stanford.edu](https://cs153.stanford.edu/) | [W25](https://www.youtube.com/playlist?list=PL2aDf5-VARtCwgVceDClce1OcnUk1vIvR) · [S26](https://www.youtube.com/playlist?list=PL2aDf5-VARtBwz1kz5FsuSZXOig2U6aJI) | — |
 | CS224R | [cs224r.stanford.edu](https://cs224r.stanford.edu/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rPwxE0ONYRa_itZFdaKCylL) | [官网](https://cs224r.stanford.edu/spring_2025/slides/) |
 | CS25 | [web.stanford.edu/class/cs25](https://web.stanford.edu/class/cs25/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) | — |
 | CS146S | [themodernsoftware.dev](https://themodernsoftware.dev) | — | Google Slides |

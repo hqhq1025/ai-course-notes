@@ -185,6 +185,7 @@ articles/
 ```
 ai-course-notes/
 ├── cs336/                 # Stanford CS336 (17讲)
+├── cs153/                 # Stanford CS153 Infra@Scale / Frontier Systems (11讲)
 ├── cs224n/                # Stanford CS224N (17讲)
 ├── cs231n/                # Stanford CS231N (18讲)
 ├── cs224r/                # Stanford CS224R Deep RL (19讲, 含 slides PDF)
