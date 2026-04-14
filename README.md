@@ -2,11 +2,11 @@
 
 # 📚 AI Course Notes
 
-**269 份 AI / LLM 公开课中文讲义 PDF**
+**270 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-269份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-270份-blue?style=for-the-badge)](.)
 [![Courses](https://img.shields.io/badge/课程系列-14个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
@@ -60,7 +60,7 @@
 | [**LLM Architect**](llm-architect/) | 模型架构 (MoE, RoPE, VLM, K2.5) | 10 | 五道口纳什 |
 | [**Agentic RL**](agentic-rl/) | RL for LLM (PPO→GRPO→DPO, veRL) | 20 | 五道口纳什 |
 
-### 🎤 演讲与访谈 (27 份)
+### 🎤 演讲与访谈 (28 份)
 
 <details>
 <summary><b>点击展开完整列表</b></summary>
@@ -79,6 +79,7 @@
 | **青稞嘉年华** ×4 | LLM / Agentic / RL / Infra 圆桌 | 青稞社区 |
 | **AGI 峰会** ×4 | 张钹 / 林俊旸 / 姚顺雨 / 阿里圆桌 | AITIME / 阿里云 |
 | **Greg Isenberg** | Claude Cowork & Code | YouTube |
+| **Demis Hassabis** | AGI, Scaling Laws & DeepMind 战略 | 20VC Podcast |
 
 ### 📝 技术文章笔记 (24 篇)
 
