@@ -758,6 +758,7 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
     filename = f"tikz-{digest}.svg"
     cached_svg = ctx.cache_dir / filename
     if not ctx.render_tikz:
+        ctx.warn("tikz_skipped", f"TikZ rendering disabled for {note.rel_tex_path}; keeping source block")
         return fallback_tikz_environment(block)
     if not cached_svg.exists():
         if not shutil.which("xelatex") or not shutil.which("dvisvgm"):
@@ -1355,6 +1356,7 @@ def build_site(
     output: Path,
     *,
     strict: bool,
+    fail_on_tikz_warnings: bool,
     render_tikz: bool,
     verbose_warnings: bool,
     compress_images: bool,
@@ -1395,7 +1397,11 @@ def build_site(
     write_text(output / "mkdocs.yml", generate_mkdocs_yml(courses, entries_by_path))
     print(f"Generated {len(notes)} note pages across {len(courses)} course pages in {output}")
     print_warning_report(ctx.warnings, verbose=verbose_warnings)
-    return 0 if not strict or notes else 1
+    if strict and not notes:
+        return 1
+    if fail_on_tikz_warnings and any(warning.kind in {"tikz_failed", "tikz_skipped"} for warning in ctx.warnings):
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -1404,6 +1410,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path(".web-build"), help="Generated MkDocs workspace")
     parser.add_argument("--strict", action="store_true", help="Return non-zero if no notes can be generated")
     parser.add_argument("--skip-tikz", action="store_true", help="Keep TikZ source blocks instead of rendering SVG")
+    parser.add_argument("--fail-on-tikz-warnings", action="store_true", help="Return non-zero if TikZ diagrams fall back to source blocks")
     parser.add_argument("--verbose-warnings", action="store_true", help="Print detailed warning messages")
     parser.add_argument("--no-compress-images", action="store_true", help="Copy JPG/PNG assets without resizing or recompressing")
     parser.add_argument("--image-max-width", type=int, default=1600, help="Maximum width for copied JPG/PNG assets")
@@ -1413,6 +1420,7 @@ def main() -> int:
         args.root,
         args.output,
         strict=args.strict,
+        fail_on_tikz_warnings=args.fail_on_tikz_warnings,
         render_tikz=not args.skip_tikz,
         verbose_warnings=args.verbose_warnings,
         compress_images=not args.no_compress_images,

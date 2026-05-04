@@ -400,6 +400,15 @@ def test_tikz_fallback_does_not_look_like_an_unconverted_error(tmp_path: Path) -
     assert "未转换的 LaTeX 环境：tikzpicture" not in page
 
 
+def test_can_fail_build_when_tikz_falls_back(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict", "--skip-tikz", "--fail-on-tikz-warnings")
+
+    assert result.returncode == 1
+    assert "TikZ diagrams skipped" in result.stdout
+
+
 def test_tikz_renderer_uses_xdv_pipeline_without_pdf_dependency(tmp_path: Path, monkeypatch) -> None:
     generator = load_generator_module()
     root = tmp_path / "repo"
@@ -497,3 +506,11 @@ def test_verbose_warnings_show_detailed_messages(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "missing.png" in result.stdout
+
+
+def test_pages_workflow_installs_tikz_font_dependencies_and_fails_on_fallback() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+
+    assert "texlive-fonts-recommended" in workflow
+    assert "--fail-on-tikz-warnings" in workflow
+    assert "--verbose-warnings" in workflow
