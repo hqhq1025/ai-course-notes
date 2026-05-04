@@ -24,6 +24,24 @@ REPO_URL = "https://github.com/hqhq1025/ai-course-notes"
 RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
+PASSTHROUGH_LATEX_ENVIRONMENTS = {
+    "align",
+    "align*",
+    "aligned",
+    "bmatrix",
+    "cases",
+    "equation",
+    "equation*",
+    "gather",
+    "gather*",
+    "matrix",
+    "multline",
+    "multline*",
+    "pmatrix",
+    "smallmatrix",
+    "split",
+    "vmatrix",
+}
 
 
 @dataclass
@@ -202,8 +220,43 @@ def replace_one_arg_commands(text: str, replacements: dict[str, str]) -> str:
     return text
 
 
+def replace_multicolumn_commands(text: str) -> str:
+    pattern = re.compile(r"\\multicolumn\b")
+    pos = 0
+    pieces: list[str] = []
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            pieces.append(text[pos:])
+            break
+        index = match.end()
+        args: list[str] = []
+        ok = True
+        for _ in range(3):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text) or text[index] != "{":
+                ok = False
+                break
+            try:
+                value, index = read_braced(text, index)
+            except ValueError:
+                ok = False
+                break
+            args.append(value)
+        if not ok:
+            pieces.append(text[pos : match.end()])
+            pos = match.end()
+            continue
+        pieces.append(text[pos : match.start()])
+        pieces.append(args[2])
+        pos = index
+    return "".join(pieces)
+
+
 def clean_latex_text(text: str) -> str:
     text = text.replace(r"\protect", "")
+    text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
     text = re.sub(r"\\footnote\{([^{}]*)\}", r"\1", text)
     text = replace_one_arg_commands(
@@ -230,6 +283,12 @@ def clean_latex_text(text: str) -> str:
         r"\_": "_",
         r"\{": "{",
         r"\}": "}",
+        r"\sim": "≈",
+        r"\times": "×",
+        r"\leq": "≤",
+        r"\geq": "≥",
+        r"\rightarrow": "→",
+        r"\to": "→",
         r"~": " ",
         "---": "—",
         "--": "–",
@@ -246,6 +305,7 @@ def clean_latex_text(text: str) -> str:
 
 def convert_inline_latex(text: str) -> str:
     text = text.replace(r"\protect", "")
+    text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
     text = replace_one_arg_commands(
         text,
@@ -369,8 +429,45 @@ def parse_options(options: str) -> dict[str, str]:
     return parsed
 
 
+def remove_latex_command_with_arg(text: str, command: str) -> str:
+    pattern = re.compile(rf"\\{re.escape(command)}(?:\[[^\]]*\])?")
+    pos = 0
+    pieces: list[str] = []
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            pieces.append(text[pos:])
+            break
+        index = match.end()
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] != "{":
+            pieces.append(text[pos : match.end()])
+            pos = match.end()
+            continue
+        try:
+            _, end = read_braced(text, index)
+        except ValueError:
+            pieces.append(text[pos:])
+            break
+        pieces.append(text[pos : match.start()])
+        pos = end
+    return "".join(pieces)
+
+
+def strip_latex_layout_commands(body: str) -> str:
+    body = re.sub(r"\\(centering|raggedleft|raggedright|small|footnotesize|scriptsize|normalsize)\b", "", body)
+    body = re.sub(r"\\renewcommand\s*\{\\arraystretch\}\s*\{[^{}]*\}", "", body)
+    body = re.sub(r"\\setlength\s*\{\\tabcolsep\}\s*\{[^{}]*\}", "", body)
+    body = re.sub(r"\\vspace\*?\s*\{[^{}]*\}", "", body)
+    return body
+
+
 def markdown_table_from_tabular(body: str) -> str:
+    body = strip_latex_layout_commands(body)
+    body = replace_multicolumn_commands(body)
     body = re.sub(r"\\(toprule|midrule|bottomrule|hline)\b", "", body)
+    body = re.sub(r"\\(endfirsthead|endhead|endfoot|endlastfoot)\b", "", body)
     rows = [row.strip() for row in re.split(r"\\\\", body) if row.strip()]
     parsed_rows: list[list[str]] = []
     for row in rows:
@@ -389,6 +486,32 @@ def markdown_table_from_tabular(body: str) -> str:
     for row in parsed_rows[1:]:
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n\n"
+
+
+def split_latex_items(body: str) -> list[tuple[str, str]]:
+    token_pattern = re.compile(r"\\(?:begin|end)\{[A-Za-z*]+\}|\\item(?:\[[^\]]*\])?")
+    items: list[tuple[str, str]] = []
+    current_start: int | None = None
+    current_label = ""
+    depth = 0
+    for token in token_pattern.finditer(body):
+        value = token.group(0)
+        if value.startswith(r"\begin"):
+            depth += 1
+            continue
+        if value.startswith(r"\end"):
+            depth = max(0, depth - 1)
+            continue
+        if depth != 0:
+            continue
+        if current_start is not None:
+            items.append((current_label, body[current_start : token.start()]))
+        label_match = re.match(r"\\item(?:\[([^\]]*)\])?", value)
+        current_label = label_match.group(1) if label_match and label_match.group(1) else ""
+        current_start = token.end()
+    if current_start is not None:
+        items.append((current_label, body[current_start:]))
+    return items
 
 
 def markdown_code_from_listing(block: EnvBlock) -> str:
@@ -493,8 +616,9 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
         return ""
     include = re.search(r"\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}", block.body)
     if not include:
-        content = convert_latex_fragment(block.body, ctx).strip()
         caption = clean_latex_text(extract_command_arg(block.body, "caption"))
+        body = remove_latex_command_with_arg(block.body, "caption")
+        content = convert_latex_fragment(body, ctx).strip()
         if caption:
             content = (content + "\n\n" if content else "") + f"*{caption}*"
         return f"\n{content}\n\n" if content else ""
@@ -523,6 +647,30 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
     return f"\n![{caption}]({rel})\n\n"
 
 
+def markdown_passthrough_from_block(ctx: BuildContext, block: EnvBlock) -> str:
+    body = strip_latex_layout_commands(block.body)
+    content = convert_latex_fragment(body, ctx).strip()
+    return f"\n{content}\n\n" if content else ""
+
+
+def markdown_table_wrapper_from_block(ctx: BuildContext, block: EnvBlock) -> str:
+    caption = clean_latex_text(extract_command_arg(block.body, "caption"))
+    body = remove_latex_command_with_arg(block.body, "caption")
+    body = strip_latex_layout_commands(body)
+    content = convert_latex_fragment(body, ctx).strip()
+    if caption:
+        content = (content + "\n\n" if content else "") + f"*{caption}*"
+    return f"\n{content}\n\n" if content else ""
+
+
+def markdown_quote_from_block(ctx: BuildContext, block: EnvBlock) -> str:
+    content = convert_latex_fragment(block.body, ctx).strip()
+    if not content:
+        return ""
+    lines = [f"> {line}" if line else ">" for line in content.splitlines()]
+    return "\n" + "\n".join(lines) + "\n\n"
+
+
 def markdown_box_from_block(ctx: BuildContext, block: EnvBlock, kind: str) -> str:
     title = clean_latex_text(block.args[0]) if block.args else ""
     content = convert_latex_fragment(block.body, ctx).strip()
@@ -531,16 +679,37 @@ def markdown_box_from_block(ctx: BuildContext, block: EnvBlock, kind: str) -> st
 
 
 def markdown_list_from_block(ctx: BuildContext, block: EnvBlock, ordered: bool) -> str:
-    items = re.split(r"\\item\b", block.body)
+    items = split_latex_items(block.body)
     lines: list[str] = []
-    for index, item in enumerate(items[1:], start=1):
+    for index, (_label, item) in enumerate(items, start=1):
         content = convert_latex_fragment(item, ctx).strip()
-        content = re.sub(r"\n{2,}", "\n", content)
-        content = " ".join(line.strip() for line in content.splitlines() if line.strip())
         prefix = f"{index}. " if ordered else "- "
-        if content:
-            lines.append(prefix + content)
+        content_lines = content.splitlines()
+        while content_lines and not content_lines[0].strip():
+            content_lines.pop(0)
+        while content_lines and not content_lines[-1].strip():
+            content_lines.pop()
+        if not content_lines:
+            continue
+        lines.append(prefix + content_lines[0].strip())
+        continuation = " " * len(prefix)
+        for line in content_lines[1:]:
+            lines.append(continuation + line if line.strip() else "")
     return "\n" + "\n".join(lines) + "\n\n"
+
+
+def markdown_description_from_block(ctx: BuildContext, block: EnvBlock) -> str:
+    lines: list[str] = []
+    for label, item in split_latex_items(block.body):
+        term = clean_latex_text(label) if label else "说明"
+        content = convert_latex_fragment(item, ctx).strip()
+        content_lines = [line for line in content.splitlines() if line.strip()]
+        if not content_lines:
+            continue
+        lines.append(f"- **{term}**：{content_lines[0].strip()}")
+        for line in content_lines[1:]:
+            lines.append(f"  {line}")
+    return "\n" + "\n".join(lines) + "\n\n" if lines else ""
 
 
 def tikz_preamble_for_note(ctx: BuildContext, note: Note) -> str:
@@ -621,6 +790,14 @@ def fallback_environment(block: EnvBlock) -> str:
 
 
 def replace_unknown_environments(text: str) -> str:
+    protected: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"@@AI_NOTES_PROTECTED_{len(protected) - 1}@@"
+
+    text = re.sub(r"```.*?```", protect, text, flags=re.S)
+    text = re.sub(r"\$\$.*?\$\$", protect, text, flags=re.S)
     pattern = re.compile(r"\\begin\{([A-Za-z*]+)\}")
     pos = 0
     pieces: list[str] = []
@@ -630,6 +807,10 @@ def replace_unknown_environments(text: str) -> str:
             pieces.append(text[pos:])
             break
         env = match.group(1)
+        if env in PASSTHROUGH_LATEX_ENVIRONMENTS:
+            pieces.append(text[pos : match.end()])
+            pos = match.end()
+            continue
         block = find_env_block(text, env, match.start())
         if not block:
             pieces.append(text[pos:])
@@ -637,7 +818,10 @@ def replace_unknown_environments(text: str) -> str:
         pieces.append(text[pos : block.start])
         pieces.append(fallback_environment(block))
         pos = block.end
-    return "".join(pieces)
+    output = "".join(pieces)
+    for index, value in enumerate(protected):
+        output = output.replace(f"@@AI_NOTES_PROTECTED_{index}@@", value)
+    return output
 
 
 def strip_document_shell(tex: str) -> str:
@@ -697,14 +881,21 @@ def normalize_markdown(text: str) -> str:
 def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = fragment
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
+    text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
+    text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
+    text = replace_environment(text, "quote", lambda block: markdown_quote_from_block(ctx, block))
+    text = replace_environment(text, "sloppypar", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "tikzpicture", lambda block: render_tikz_to_svg(ctx, block))
     text = replace_environment(text, "figure", lambda block: markdown_figure_from_block(ctx, block))
     text = replace_environment(text, "importantbox", lambda block: markdown_box_from_block(ctx, block, "important"))
     text = replace_environment(text, "knowledgebox", lambda block: markdown_box_from_block(ctx, block, "info"))
     text = replace_environment(text, "warningbox", lambda block: markdown_box_from_block(ctx, block, "warning"))
+    text = replace_environment(text, "longtable", lambda block: markdown_table_from_tabular(block.body))
+    text = replace_environment(text, "tabularx", lambda block: markdown_table_from_tabular(block.body))
     text = replace_environment(text, "tabular", lambda block: markdown_table_from_tabular(block.body))
     text = replace_environment(text, "itemize", lambda block: markdown_list_from_block(ctx, block, ordered=False))
     text = replace_environment(text, "enumerate", lambda block: markdown_list_from_block(ctx, block, ordered=True))
+    text = replace_environment(text, "description", lambda block: markdown_description_from_block(ctx, block))
     text = convert_display_math(text)
     text = convert_sections(text)
     text = re.sub(r"\\footnotetext\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", lambda m: f"\n> 来源：{clean_latex_text(m.group(1))}\n", text)

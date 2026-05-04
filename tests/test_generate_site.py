@@ -61,8 +61,22 @@ def write_sample_repo(root: Path) -> None:
 LaTeX 是唯一源文稿，网页由构建脚本生成。
 \end{importantbox}
 
+\begin{knowledgebox}{嵌套列表}
+\begin{itemize}
+    \item 第一层条目
+    \begin{itemize}
+        \item 第二层条目
+    \end{itemize}
+\end{itemize}
+\end{knowledgebox}
+
 \[
 E = mc^2
+\]
+
+\[
+M = \begin{bmatrix}1 & 0 \\ 0 & 1\end{bmatrix},\quad
+v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 \]
 
 \begin{figure}[H]
@@ -110,6 +124,49 @@ E = mc^2
 \textbf{字段} & \textbf{含义} \\
 Title & 页面标题 \\
 \end{tabular}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\textbf{包装} & \textbf{结果} \\
+table & Markdown 表格 \\
+math & $\sim 4\times$ \\
+\multicolumn{2}{l}{\textbf{合计行}} \\
+\end{tabular}
+\caption{包装表格}
+\end{table}
+
+\begin{table}[H]
+| 已是 Markdown | 说明 |
+| --- | --- |
+| table wrapper | 不应回退 |
+\end{table}
+
+\begin{center}
+\begin{tabular}{ll}
+\textbf{中心} & \textbf{内容} \\
+A & B \\
+\end{tabular}
+\end{center}
+
+\begin{quote}
+这是一段引用内容。
+\end{quote}
+
+\begin{description}
+\item[术语] 解释文本。
+\item[另一个术语] 更多说明。
+\end{description}
+
+\begin{longtable}{ll}
+\textbf{Long} & \textbf{Table} \\
+A & B \\
+\end{longtable}
+
+\begin{tabularx}{\textwidth}{ll}
+\textbf{TabularX} & \textbf{Table} \\
+X & Y \\
+\end{tabularx}
 
 \begin{lstlisting}[language=Python,caption={示例代码}]
 print("hello")
@@ -196,10 +253,18 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "**粗体**" in page
     assert "$a+b=c$" in page
     assert '!!! important "核心概念"' in page
+    assert '!!! info "嵌套列表"' in page
+    assert "第一层条目" in page
+    assert "第二层条目" in page
+    assert "未转换的 LaTeX 环境：itemize" not in page
     assert "$$" in page and "E = mc^2" in page
+    assert r"\begin{bmatrix}" in page
+    assert "未转换的 LaTeX 环境：bmatrix" not in page
+    assert "未转换的 LaTeX 环境：pmatrix" not in page
     assert "![示意图：网页阅读器结构](diagram.jpg)" in page
     assert "测试来源。" in page
     assert "图片资源缺失" in page
+    assert "未转换的 LaTeX 环境：figure" not in page
     assert "![子目录图片](images/fallback.png)" in page
     assert "PDF 图示资源" in page
     assert "[打开 PDF 图示](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/slides.pdf)" in page
@@ -209,6 +274,26 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "本地 Markdown 链接" in page
     assert "| 字段 | 含义 |" in page
     assert "| --- | --- |" in page
+    assert "| 包装 | 结果 |" in page
+    assert "| table | Markdown 表格 |" in page
+    assert "| math | $≈ 4×$ |" in page
+    assert "| 合计行 |" in page
+    assert "2l合计行" not in page
+    assert "*包装表格*" in page
+    assert "| 已是 Markdown | 说明 |" in page
+    assert "| table wrapper | 不应回退 |" in page
+    assert "| 中心 | 内容 |" in page
+    assert "> 这是一段引用内容。" in page
+    assert "- **术语**：解释文本。" in page
+    assert "- **另一个术语**：更多说明。" in page
+    assert "| Long | Table |" in page
+    assert "| TabularX | Table |" in page
+    assert "未转换的 LaTeX 环境：table" not in page
+    assert "未转换的 LaTeX 环境：center" not in page
+    assert "未转换的 LaTeX 环境：quote" not in page
+    assert "未转换的 LaTeX 环境：description" not in page
+    assert "未转换的 LaTeX 环境：longtable" not in page
+    assert "未转换的 LaTeX 环境：tabularx" not in page
     assert '```python title="示例代码"' in page
     assert 'print("hello")' in page
     assert "??? quote \"未转换的 LaTeX 环境：mystery\"" in page
@@ -274,6 +359,7 @@ def test_tikz_blocks_render_to_svg_when_tex_tools_are_available(tmp_path: Path) 
     assert "tikz-" in page
     assert ".svg" in page
     assert "Figure 中的 TikZ" in page
+    assert r"\caption{Figure 中的 TikZ}" not in page
     assert list((tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01").glob("tikz-*.svg"))
 
 
