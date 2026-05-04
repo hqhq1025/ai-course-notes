@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 
 from PIL import Image
@@ -8,6 +9,15 @@ from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = REPO_ROOT / "tools" / "web" / "generate_site.py"
+
+
+def load_generator_module():
+    spec = importlib.util.spec_from_file_location("generate_site", GENERATOR)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_image(path: Path, size: tuple[int, int], mode: str = "RGB") -> None:
@@ -119,6 +129,12 @@ v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 \end{figure}
 
 参见 \href{../../QUALITY.md}{本地质量文档}，以及 [本地 Markdown 链接](../../QUALITY.md)。
+
+这里有一段带 LaTeX 引号的等宽文本：``\texttt{key1:val1 query:key2}''，后面的列表仍然要正常转换。
+
+\begin{itemize}
+\item 引号后的列表
+\end{itemize}
 
 \begin{tabular}{ll}
 \textbf{字段} & \textbf{含义} \\
@@ -272,6 +288,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "本地质量文档" in page
     assert "[本地 Markdown 链接](../../QUALITY.md)" not in page
     assert "本地 Markdown 链接" in page
+    assert "`key1:val1 query:key2`" in page
+    assert "- 引号后的列表" in page
+    assert r"\begin{itemize}" not in page
     assert "| 字段 | 含义 |" in page
     assert "| --- | --- |" in page
     assert "| 包装 | 结果 |" in page
@@ -379,6 +398,84 @@ def test_tikz_fallback_does_not_look_like_an_unconverted_error(tmp_path: Path) -
     ).read_text(encoding="utf-8")
     assert "TikZ 图暂未渲染" in page
     assert "未转换的 LaTeX 环境：tikzpicture" not in page
+
+
+def test_tikz_renderer_uses_xdv_pipeline_without_pdf_dependency(tmp_path: Path, monkeypatch) -> None:
+    generator = load_generator_module()
+    root = tmp_path / "repo"
+    note_dir = root / "sample-course" / "lecture01"
+    out_dir = tmp_path / "out"
+    note_dir.mkdir(parents=True)
+    out_dir.mkdir()
+    tex_path = note_dir / "lecture01-notes.tex"
+    tex_path.write_text(
+        r"""
+\documentclass{article}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\begin{document}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+    note = generator.Note(
+        root=root,
+        tex_path=tex_path,
+        route_dir=Path("sample-course/lecture01"),
+        course_dir=Path("sample-course"),
+        title="Sample",
+    )
+    ctx = generator.BuildContext(
+        root=root,
+        output=tmp_path / "build",
+        docs_dir=tmp_path / "build" / "docs",
+        cache_dir=tmp_path / "build" / ".cache" / "tikz",
+        render_tikz=True,
+        compress_images=True,
+        image_max_width=1600,
+        jpeg_quality=82,
+        current_note=note,
+        current_out_dir=out_dir,
+    )
+    block = generator.EnvBlock(
+        env="tikzpicture",
+        start=0,
+        end=0,
+        args=[],
+        optional_args=[],
+        body=r"\node[draw]{A};",
+        source=r"\begin{tikzpicture}\node[draw]{A};\end{tikzpicture}",
+    )
+    calls = []
+
+    def fake_run(cmd, cwd, check, stdout, stderr, text, timeout):
+        calls.append(cmd)
+        if cmd[0] == "xelatex":
+            assert "-no-pdf" in cmd
+            (cwd / "tikz.xdv").write_text("xdv", encoding="utf-8")
+        elif cmd[0] == "dvisvgm":
+            assert "--pdf" not in cmd
+            assert "tikz.xdv" in cmd
+            (cwd / "tikz.svg").write_text("<svg></svg>", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(generator.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(generator.subprocess, "run", fake_run)
+
+    markdown = generator.render_tikz_to_svg(ctx, block)
+
+    assert "TikZ 图暂未渲染" not in markdown
+    assert "tikz-" in markdown and ".svg" in markdown
+    assert (out_dir / markdown.split("(")[1].split(")")[0]).is_file()
+    assert calls[0][0] == "xelatex"
+    assert calls[1][0] == "dvisvgm"
+
+
+def test_inline_triple_backticks_do_not_mark_rest_as_fenced_code() -> None:
+    generator = load_generator_module()
+    text = "考虑关联检索任务：```key1:val1 key2:val2`'' 后面还有正文\n\\begin{itemize}\n"
+
+    assert not generator.inside_fenced_code(text, text.index(r"\begin{itemize}"))
 
 
 def test_default_output_summarizes_warnings_without_flooding(tmp_path: Path) -> None:

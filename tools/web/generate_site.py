@@ -24,6 +24,8 @@ REPO_URL = "https://github.com/hqhq1025/ai-course-notes"
 RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
+FENCE_LINE_PATTERN = re.compile(r"^[ \t]*```", re.M)
+FENCED_CODE_BLOCK_PATTERN = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.M | re.S)
 PASSTHROUGH_LATEX_ENVIRONMENTS = {
     "align",
     "align*",
@@ -372,12 +374,12 @@ def parse_begin_args(text: str, index: int) -> tuple[list[str], list[str], int]:
 
 
 def inside_fenced_code(text: str, pos: int) -> bool:
-    return text.count("```", 0, pos) % 2 == 1
+    return sum(1 for _match in FENCE_LINE_PATTERN.finditer(text, 0, pos)) % 2 == 1
 
 
 def next_fence_end(text: str, pos: int) -> int:
-    end = text.find("```", pos)
-    return len(text) if end == -1 else end + 3
+    match = FENCE_LINE_PATTERN.search(text, pos)
+    return len(text) if match is None else match.end()
 
 
 def find_env_block(text: str, env: str, start_pos: int = 0) -> EnvBlock | None:
@@ -767,30 +769,38 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
             (tmp_path / "tikz.tex").write_text(tex, encoding="utf-8")
             try:
                 subprocess.run(
-                    ["xelatex", "-interaction=nonstopmode", "tikz.tex"],
+                    ["xelatex", "-no-pdf", "-interaction=nonstopmode", "tikz.tex"],
                     cwd=tmp_path,
                     check=True,
-                    stdout=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     timeout=45,
                 )
                 subprocess.run(
-                    ["dvisvgm", "--pdf", "tikz.pdf", "-n", "-o", "tikz.svg"],
+                    ["dvisvgm", "-n", "-o", "tikz.svg", "tikz.xdv"],
                     cwd=tmp_path,
                     check=True,
-                    stdout=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     timeout=30,
                 )
             except (subprocess.SubprocessError, FileNotFoundError) as exc:
-                ctx.warn("tikz_failed", f"TikZ render failed for {note.rel_tex_path}: {exc}")
+                ctx.warn("tikz_failed", f"TikZ render failed for {note.rel_tex_path}: {format_subprocess_error(exc)}")
                 return fallback_tikz_environment(block)
             ctx.cache_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(tmp_path / "tikz.svg", cached_svg)
     shutil.copy2(cached_svg, ctx.current_out_dir / filename)
     return f"\n![TikZ diagram]({filename})\n\n"
+
+
+def format_subprocess_error(exc: BaseException) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        output = "\n".join(part for part in [exc.stdout, exc.stderr] if part)
+        tail = "\n".join(output.splitlines()[-12:])
+        return f"{exc}; output tail: {tail}" if tail else str(exc)
+    return str(exc)
 
 
 def fallback_tikz_environment(block: EnvBlock) -> str:
@@ -823,7 +833,7 @@ def replace_unknown_environments(text: str) -> str:
         protected.append(match.group(0))
         return f"@@AI_NOTES_PROTECTED_{len(protected) - 1}@@"
 
-    text = re.sub(r"```.*?```", protect, text, flags=re.S)
+    text = FENCED_CODE_BLOCK_PATTERN.sub(protect, text)
     text = re.sub(r"\$\$.*?\$\$", protect, text, flags=re.S)
     pattern = re.compile(r"\\begin\{([A-Za-z*]+)\}")
     pos = 0
