@@ -371,11 +371,25 @@ def parse_begin_args(text: str, index: int) -> tuple[list[str], list[str], int]:
     return args, optional_args, index
 
 
+def inside_fenced_code(text: str, pos: int) -> bool:
+    return text.count("```", 0, pos) % 2 == 1
+
+
+def next_fence_end(text: str, pos: int) -> int:
+    end = text.find("```", pos)
+    return len(text) if end == -1 else end + 3
+
+
 def find_env_block(text: str, env: str, start_pos: int = 0) -> EnvBlock | None:
     begin_pattern = re.compile(rf"\\begin\{{{re.escape(env)}\}}")
-    begin_match = begin_pattern.search(text, start_pos)
-    if not begin_match:
-        return None
+    while True:
+        begin_match = begin_pattern.search(text, start_pos)
+        if not begin_match:
+            return None
+        if inside_fenced_code(text, begin_match.start()):
+            start_pos = next_fence_end(text, begin_match.end())
+            continue
+        break
     args, optional_args, body_start = parse_begin_args(text, begin_match.end())
     token_pattern = re.compile(rf"\\(?:begin|end)\{{{re.escape(env)}\}}")
     depth = 1
@@ -736,17 +750,17 @@ def tikz_preamble_for_note(ctx: BuildContext, note: Note) -> str:
 def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
     note = ctx.current_note
     if note is None or ctx.current_out_dir is None:
-        return fallback_environment(block)
+        return fallback_tikz_environment(block)
     preamble = tikz_preamble_for_note(ctx, note)
     digest = hashlib.sha256((preamble + "\n" + block.source).encode("utf-8")).hexdigest()[:16]
     filename = f"tikz-{digest}.svg"
     cached_svg = ctx.cache_dir / filename
     if not ctx.render_tikz:
-        return fallback_environment(block)
+        return fallback_tikz_environment(block)
     if not cached_svg.exists():
         if not shutil.which("xelatex") or not shutil.which("dvisvgm"):
             ctx.warn("tikz_skipped", f"TikZ tools unavailable for {note.rel_tex_path}; keeping source block")
-            return fallback_environment(block)
+            return fallback_tikz_environment(block)
         tex = "\n".join([preamble, r"\begin{document}", block.source, r"\end{document}"])
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -772,14 +786,27 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
                 )
             except (subprocess.SubprocessError, FileNotFoundError) as exc:
                 ctx.warn("tikz_failed", f"TikZ render failed for {note.rel_tex_path}: {exc}")
-                return fallback_environment(block)
+                return fallback_tikz_environment(block)
             ctx.cache_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(tmp_path / "tikz.svg", cached_svg)
     shutil.copy2(cached_svg, ctx.current_out_dir / filename)
     return f"\n![TikZ diagram]({filename})\n\n"
 
 
+def fallback_tikz_environment(block: EnvBlock) -> str:
+    source = block.source.strip().replace("```", "``\\`")
+    return (
+        '\n??? info "TikZ 图暂未渲染"\n'
+        "    当前构建环境没有成功生成 SVG，保留原始 TikZ 源码。\n\n"
+        "    ```latex\n"
+        + "\n".join(f"    {line}" for line in source.splitlines())
+        + "\n    ```\n\n"
+    )
+
+
 def fallback_environment(block: EnvBlock) -> str:
+    if block.env == "tikzpicture":
+        return fallback_tikz_environment(block)
     source = block.source.strip().replace("```", "``\\`")
     return (
         f'\n??? quote "未转换的 LaTeX 环境：{block.env}"\n'

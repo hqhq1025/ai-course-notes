@@ -363,6 +363,24 @@ def test_tikz_blocks_render_to_svg_when_tex_tools_are_available(tmp_path: Path) 
     assert list((tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01").glob("tikz-*.svg"))
 
 
+def test_tikz_fallback_does_not_look_like_an_unconverted_error(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict", "--skip-tikz")
+
+    assert result.returncode == 0, result.stderr
+    page = (
+        tmp_path
+        / ".web-build"
+        / "docs"
+        / "sample-course"
+        / "lecture01"
+        / "index.md"
+    ).read_text(encoding="utf-8")
+    assert "TikZ 图暂未渲染" in page
+    assert "未转换的 LaTeX 环境：tikzpicture" not in page
+
+
 def test_default_output_summarizes_warnings_without_flooding(tmp_path: Path) -> None:
     write_sample_repo(tmp_path)
 
