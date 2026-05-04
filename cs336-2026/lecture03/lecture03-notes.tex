@@ -1,0 +1,922 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{needspace}
+
+\graphicspath{{./}{slides-images/}}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!55!black,
+    urlcolor=blue!65!black,
+    citecolor=blue!55!black
+}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=t,
+    showstringspaces=false,
+    columns=fullflexible,
+    keepspaces=true,
+    extendedchars=false
+}
+
+\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+
+\newcommand{\notetitle}{CS336 2026 Lecture 3：语言模型架构与超参数}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{Spring 2026}
+\newcommand{\videoduration}{官方幻灯片 lecture03-slides.pdf}
+\newcommand{\videourl}{https://cs336.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{材料类型}：\videoduration\par
+\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{本讲的问题：架构选择到底该听谁的？}
+
+Lecture 1 把语言模型放进 scaling-law 与产品能力的版图里，Lecture 2 把训练过程拆成 FLOPs、显存、带宽和 wall-clock 的资源账本。Lecture 3 进入另一个常见痛点：当你真的开始写一个 Transformer 时，架构细节多到让人怀疑人生。LayerNorm 放前面还是后面？FFN 用 GeLU 还是 SwiGLU？位置编码用 absolute、relative、ALiBi 还是 RoPE？head dim 和 model dim 必须相乘相等吗？dropout 还要不要？这些问题看起来像超参细枝末节，但在大模型训练中，它们会影响稳定性、吞吐、推理成本和可复现性。
+
+Tatsu Hashimoto 给出的学习策略很务实：最好的学习方式是自己训练和消融；第二好的方式，是系统地学习其他团队的失败和成功。本讲不是要把每个变体讲成“理论上必然正确”，而是要把过去几年公开模型的选择放在一起，判断哪些已经是强共识，哪些只是弱证据，哪些其实主要由系统约束驱动。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-001.jpg}
+\caption{Lecture 3 的目标：回顾现代 Transformer，观察大型 LM 的共同点，并理解常见架构与训练变体。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{本讲的核心方法}
+不要把架构选择理解成排行榜上的单点胜利，而要分清三类证据：
+\begin{enumerate}
+    \item \textbf{收敛性证据}：大量独立团队都采用同一设计，说明它是安全默认值。
+    \item \textbf{消融证据}：小到中等规模实验显示某个变体稳定优于基线。
+    \item \textbf{系统证据}：理论上质量差不多，但运行时、显存、KV cache 或部署成本明显不同。
+\end{enumerate}
+真正可靠的工程判断往往来自这三类证据的交集。
+\end{importantbox}
+
+\subsection{从原始 Transformer 到作业里的现代变体}
+
+原始 Transformer 的默认配置，在今天看已经很“复古”：sinusoidal position embedding、ReLU FFN、post-norm LayerNorm、线性层带 bias。CS336 作业实现的版本则更接近 LLaMA 以后形成的现代默认值：pre-norm、RoPE、SwiGLU、无 bias。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-003.jpg}
+\caption{CS336 作业中的现代 Transformer 变体：pre-norm、RoPE、SwiGLU，以及无 bias 的线性层和归一化层。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{为什么“现代默认值”值得重视}
+现代默认值并不代表它们在所有尺度、所有数据、所有硬件上数学最优；它们代表的是，在公开经验里，这组选择通常能让模型\textbf{少踩坑、好扩展、好部署}。对课程作业或从零训练项目而言，复制安全默认值通常比重新发明架构更有价值，因为真正的学习会发生在实现、profiling、debugging 和训练曲线分析中。
+\end{knowledgebox}
+
+\subsection{本讲地图}
+
+本讲可按四个层次理解：
+
+\begin{enumerate}
+    \item \textbf{架构骨架}：norm、FFN、activation、position embedding、block ordering。
+    \item \textbf{形状超参}：\(d_{\text{model}}\)、\(d_{\text{ff}}\)、head dim、层数、词表大小。
+    \item \textbf{稳定性补丁}：z-loss、QK-norm、logit soft-capping。
+    \item \textbf{推理驱动的注意力变体}：MQA/GQA、sliding window、full/local interleaving。
+\end{enumerate}
+
+\begin{warningbox}{不要把“大家都这么做”误读成理论证明}
+CS336 这节课的味道很重要：很多设计共识是经验性的。经验性不是“不科学”，但它要求我们在使用结论时保留上下文：模型规模、训练 tokens、硬件、优化器、数据质量和推理场景都会改变最优选择。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Lecture 3 的主线不是“列举 Transformer 花活”，而是学习如何读懂架构选择背后的证据强度。后续写模型时，可以把每个选择放到一个简单问题里：这个设计是在提升训练稳定性、提升模型质量、降低运行时成本，还是降低推理成本？如果答不出来，它很可能只是盲目跟风。
+
+\section{Pre-norm：保护残差主干}
+
+现代大语言模型最强的共识之一是 pre-norm。原始 Transformer 使用 post-norm，也就是先做子层和残差相加，再对结果做 LayerNorm。现代模型几乎都把 norm 放到 attention/MLP 分支入口处，使 residual stream 本身尽量保持为一条不被归一化打断的主干。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-009.jpg}
+\caption{Pre-norm 与 post-norm 的差别：现代模型倾向于让 LayerNorm 不破坏主残差路径。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片，引用 Xiong et al. 2020。}
+\end{figure}
+
+\subsection{为什么残差流不能被随便碰}
+
+残差连接的关键作用是给梯度提供一条近似恒等路径。如果每一层都把主路径送进 LayerNorm，这条恒等路径就被不断重标定。Post-norm 在浅层模型中可以工作，但深层模型训练时更容易出现梯度衰减、梯度尖刺和 warmup 敏感性。Pre-norm 的直觉是：让归一化只作用于将要进入子层的输入，而不是作用于已经累积起来的残差信号。
+
+\begin{importantbox}{Pre-norm 的工程意义}
+Pre-norm 的收益不只是“loss 更好看”。它减少了学习率 warmup 的脆弱性，允许更深网络使用更大的学习率，并降低中途 loss spike 的概率。大规模训练最怕的不是慢一点，而是花了很多 GPU 天之后曲线突然炸掉。
+\end{importantbox}
+
+\begin{lstlisting}[caption={Pre-norm Transformer block 的最小形式}]
+def transformer_block(x):
+    x = x + attention(norm1(x))
+    x = x + mlp(norm2(x))
+    return x
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Post-norm Transformer block 的对比形式}]
+def post_norm_block(x):
+    x = norm1(x + attention(x))
+    x = norm2(x + mlp(x))
+    return x
+\end{lstlisting}
+
+\subsection{Double norm 与 non-residual postnorm}
+
+如果 LayerNorm 放在残差流里有风险，那是否可以把一个额外的 norm 放在 residual branch 的输出端，但不直接归一化主路径？近年一些模型采用了这种思路。Grok、Gemma 2 使用类似 double norm 的设计，OLMo 2 也使用 non-residual post norm。它们的共同点是：保留 pre-norm 的稳定主干，同时在分支输出进入残差相加之前再做一次控制。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-012.jpg}
+\caption{新的归一化放置方式：在不破坏主残差路径的前提下，对分支输出增加额外控制。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{一种有用的心智模型}
+把 residual stream 想成模型的“长期记忆总线”。Attention 和 MLP 是往总线写入更新的模块。Pre-norm 规范的是“写入模块看到的输入”；non-residual postnorm 规范的是“写入总线的增量”。Post-norm 规范的是“整条总线本身”，因此更容易破坏信号连续性。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Pre-norm 是现代 dense LM 的安全默认值。Double norm 一类设计说明社区仍在围绕稳定性继续微调，但底层原则没有变：主 residual stream 要尽量保持可传播、可累积、可优化。
+
+\section{RMSNorm 与无 bias：FLOPs 之外的效率}
+
+LayerNorm 会对每个 token 的 hidden dimension 计算均值与方差：
+
+\[
+\operatorname{LayerNorm}(x)
+= \gamma \odot \frac{x-\mu(x)}{\sqrt{\sigma^2(x)+\epsilon}}+\beta .
+\]
+
+RMSNorm 去掉均值中心化和 bias，只保留均方根缩放：
+
+\[
+\operatorname{RMSNorm}(x)
+= \gamma \odot \frac{x}{\sqrt{\frac{1}{d}\sum_{i=1}^{d}x_i^2+\epsilon}} .
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-013.jpg}
+\caption{LayerNorm 与 RMSNorm：现代 LM 多数使用不减均值、无 bias 的 RMSNorm。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{为什么少一点操作能有实际收益}
+
+如果只看 FLOPs，norm 几乎不值得优化，因为训练计算主要在矩阵乘法里。但 Lecture 2 已经建立了关键直觉：FLOPs 不等于 runtime。Norm 这样的操作经常是 memory-bound，需要读写大张量，却不能像 GEMM 那样用高算术强度把 GPU 喂满。RMSNorm 的收益主要不是少做了几个浮点操作，而是少读写、少同步、少移动参数。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-015.jpg}
+\caption{RMSNorm 的运行时收益来自数据移动：FLOP 占比小的操作也可能占据显著 wall-clock 时间。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片，引用 Ivanov et al. 2023。}
+\end{figure}
+
+\begin{importantbox}{架构课和系统课在这里接上了}
+RMSNorm 是一个典型例子：单看数学表达，它只是 LayerNorm 的小变体；从系统角度看，它减少了 memory traffic；从训练经验看，它质量基本不降。这类“微小但全层重复”的改动，在几十层到上百层模型上会被放大成可见的吞吐收益。
+\end{importantbox}
+
+\subsection{为什么现代模型普遍去掉 bias}
+
+现代 Transformer 的线性层和 norm 层通常也去掉 bias。单个 bias 向量参数量很小，但它在每个 token、每层、每个投影里都会带来额外读写和 kernel 逻辑。更重要的是，RMSNorm 本身已经去掉 \(\beta\)，FFN/attention 的线性层又被后续缩放和残差结构包围，bias 的表达收益常常不值得它的系统复杂度。
+
+\begin{lstlisting}[caption={无 bias 的 RMSNorm 与线性层是现代默认写法}]
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        scale = torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return self.weight * x * scale
+
+linear = nn.Linear(d_model, d_model, bias=False)
+\end{lstlisting}
+
+\begin{warningbox}{不要把“无 bias”理解成无条件真理}
+去掉 bias 是 dense LM 里的好默认值，不代表所有神经网络都应该无 bias。小模型、非 Transformer、特定数据归一化方式或特定任务里，bias 可能仍然有用。CS336 的语境是大规模 causal LM 的训练和部署。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RMSNorm 和无 bias 共同说明：架构选择不只服务于 loss，也服务于训练系统。一个在 FLOPs 表里几乎看不到的设计，可能会通过数据移动和 kernel 边界影响真实吞吐。
+
+\section{FFN 与激活函数：SwiGLU 为什么成了默认值}
+
+Transformer 的 MLP/FFN 部分通常消耗大量参数和 FLOPs。原始 Transformer 使用 ReLU，GPT 系列推动了 GELU，2023 年以后的 LLaMA-like 模型则普遍转向 SwiGLU 或 GeGLU。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-020.jpg}
+\caption{常见 FFN 激活：ReLU、GELU，以及后来成为主流的 SwiGLU/GeGLU。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{从普通 FFN 到 GLU}
+
+普通两层 FFN 可以写作：
+
+\[
+\operatorname{FFN}(x)=\phi(xW_1)W_2 .
+\]
+
+GLU 类方法加入一条门控分支：
+
+\[
+\operatorname{GLU\text{-}FFN}(x)=\left(\phi(xW_1)\odot xV\right)W_2 .
+\]
+
+这里 \(V\) 是额外的线性投影，\(\odot\) 是逐元素乘法。ReGLU 用 ReLU，GeGLU 用 GELU，SwiGLU 用 Swish/SiLU：
+
+\[
+\operatorname{SwiGLU}(x)=\left(\operatorname{SiLU}(xW_1)\odot xV\right)W_2 .
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-021.jpg}
+\caption{GLU 的核心：在 FFN 第一层后增加逐元素门控分支，让网络动态控制哪些中间特征通过。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{门控的表达意义}
+普通 FFN 让每个 hidden feature 独立通过非线性；GLU 让一个分支产生候选特征，另一个分支产生门。这样模型不仅能“生成特征”，还能“选择特征”。这种动态选择机制在 LSTM、Highway Networks、MoE router 等设计里反复出现。
+\end{knowledgebox}
+
+\subsection{为什么 GLU 的 FFN 维度要缩小}
+
+如果普通 FFN 的中间维度为 \(4d_{\text{model}}\)，参数量约为：
+
+\[
+d_{\text{model}}\cdot d_{\text{ff}} + d_{\text{ff}}\cdot d_{\text{model}}
+=2d_{\text{model}}d_{\text{ff}} .
+\]
+
+GLU 有三个矩阵 \(W_1,V,W_2\)，参数量为：
+
+\[
+d_{\text{model}}d_{\text{ff}} + d_{\text{model}}d_{\text{ff}} + d_{\text{ff}}d_{\text{model}}
+=3d_{\text{model}}d_{\text{ff}} .
+\]
+
+为了和普通 \(4d_{\text{model}}\) FFN 的参数量大致相同，令：
+
+\[
+3d_{\text{model}}d_{\text{ff}}^{\text{GLU}}
+\approx 2d_{\text{model}}(4d_{\text{model}}),
+\quad
+d_{\text{ff}}^{\text{GLU}}\approx \frac{8}{3}d_{\text{model}}.
+\]
+
+\begin{importantbox}{SwiGLU 的默认 recipe}
+如果你从零训练一个 LLaMA-like dense LM，合理默认值是：
+\[
+\operatorname{MLP}(x)=W_2\left(\operatorname{SiLU}(W_1x)\odot W_3x\right),
+\quad
+d_{\text{ff}}\approx \frac{8}{3}d_{\text{model}},
+\]
+并且三个线性层都不使用 bias。
+\end{importantbox}
+
+\begin{lstlisting}[caption={SwiGLU MLP 的 PyTorch 结构}]
+class SwiGLU(nn.Module):
+    def __init__(self, d_model, d_ff):
+        super().__init__()
+        self.up = nn.Linear(d_model, d_ff, bias=False)
+        self.gate = nn.Linear(d_model, d_ff, bias=False)
+        self.down = nn.Linear(d_ff, d_model, bias=False)
+
+    def forward(self, x):
+        return self.down(F.silu(self.gate(x)) * self.up(x))
+\end{lstlisting}
+
+\subsection{证据强度：GLU 很强，但不是神话}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-023.jpg}
+\caption{Shazeer 2020 的结果：GLU 变体在多种设置下表现稳定。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-024.jpg}
+\caption{Narang et al. 2020 也观察到 GLU 变体带来的稳定收益。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+GLU 的证据比许多架构小技巧更扎实：既有专门论文消融，也有大量现代模型采用。但它仍然不是成功的必要条件。GPT-3 使用 GELU 也能训练出强模型，Nemotron 340B 使用 squared ReLU，部分模型仍保留其他激活函数。更准确的说法是：SwiGLU/GeGLU 是当前最安全的默认值，尤其在你没有预算重新做大规模消融时。
+
+\subsection{本章小结}
+
+FFN 是 Transformer 中最“宽”的计算模块之一。SwiGLU 的价值在于，它用门控增加表达灵活性，同时通过 \(8/3\) 的中间维度控制参数量。这个设计的经验收益足够稳定，因此已经从“技巧”变成“默认”。
+
+\section{串行块、并行块与位置编码}
+
+\subsection{Serial vs parallel blocks}
+
+标准 Transformer block 通常是串行的：先 attention，再 MLP。GPT-J、PaLM、GPT-NeoX 等模型探索过并行块，即 attention 和 MLP 从同一个 normalized input 出发并行计算，最后一起加回 residual stream。
+
+\[
+x_{t+1}=x_t+\operatorname{Attn}(\operatorname{Norm}(x_t))
+          +\operatorname{MLP}(\operatorname{Norm}(x_t)).
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-027.jpg}
+\caption{Parallel layers 的动机：共享 LayerNorm，并让 attention 和 MLP 的矩阵乘法更容易融合。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{并行块主要是系统选择，不是明确的质量选择}
+并行块可能带来 kernel 融合和调度收益，但它削弱了“attention 结果再进入 MLP”的组合结构。现代模型多数仍使用串行块，说明在没有明确系统瓶颈时，保守的串行结构仍然更稳。
+\end{warningbox}
+
+\subsection{位置编码的四代思路}
+
+语言模型必须知道 token 的顺序。历史上常见方案包括：
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.18\textwidth}>{\raggedright\arraybackslash}p{0.29\textwidth}>{\raggedright\arraybackslash}p{0.39\textwidth}}
+\toprule
+\textbf{方案} & \textbf{代表模型} & \textbf{核心思想} \\
+\midrule
+Sinusoidal & 原始 Transformer & 预设正弦/余弦向量，加到 token embedding 上。\\
+Absolute learned & GPT-1/2/3, OPT & 学习每个绝对位置的向量。\\
+Relative bias & T5, Gopher, Chinchilla & 在 attention score 中加入相对距离相关项。\\
+RoPE & GPT-J, PaLM, LLaMA 及多数 2024+ 模型 & 旋转 query/key，使 attention 内积天然依赖相对位置。\\
+\bottomrule
+\end{longtable}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-029.jpg}
+\caption{位置编码的主要路线：现代模型普遍收敛到 RoPE 或其变体。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{RoPE 的核心数学}
+
+RoPE 希望构造一个位置相关表示 \(f(x,i)\)，使得 query/key 内积只依赖相对距离：
+
+\[
+\langle f(x,i), f(y,j)\rangle = g(x,y,i-j).
+\]
+
+普通 absolute embedding 很难满足这一点，因为它把绝对位置向量直接加到 token embedding 上，会产生许多与 \(i\)、\(j\) 单独相关的交叉项。RoPE 的做法是：不加位置向量，而是把 query 和 key 按位置旋转。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-030.jpg}
+\caption{RoPE 的目标：让 attention 只看到相对位置，而不是绝对位置本身。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+在二维平面中，旋转矩阵为：
+
+\[
+R_{\theta m}
+=
+\begin{bmatrix}
+\cos(m\theta) & -\sin(m\theta)\\
+\sin(m\theta) & \cos(m\theta)
+\end{bmatrix}.
+\]
+
+高维 RoPE 将 hidden dimension 配对，每对维度使用不同频率旋转：
+
+\[
+\operatorname{RoPE}(x_m)_{2r:2r+2}=R_{m\theta_r}x_{m,2r:2r+2}.
+\]
+
+由于旋转矩阵正交，两个位置 \(m,n\) 的内积中只剩下相对旋转 \(R_{(n-m)\theta}\)。这就是 RoPE 能在 dot-product attention 内自然注入相对距离的原因。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-033.jpg}
+\caption{RoPE 的实际数学：用 sin/cos 对 query 和 key 的成对维度做旋转。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[caption={RoPE 的向量化实现骨架}]
+def rotate_half(x):
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+def apply_rope(q, k, cos, sin):
+    q_rot = q * cos + rotate_half(q) * sin
+    k_rot = k * cos + rotate_half(k) * sin
+    return q_rot, k_rot
+\end{lstlisting}
+
+\begin{knowledgebox}{RoPE 为什么在每层 attention 里做}
+RoPE 不是把位置向量加在输入 embedding 上，而是在每层 attention 里旋转 query/key。这样每层的 attention score 都直接获得相对位置信息。对于深层 causal LM，这比只在输入层注入一次位置更贴近 attention 的实际使用位置。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+位置编码的共识比许多超参更强：RoPE 已经是 LLaMA-like dense LM 的默认方案。但 RoPE 也带来长上下文外推问题，因此后续模型会配合 RoPE scaling、局部窗口、NoPE full attention 等设计继续调整。
+
+\section{形状超参：模型到底该长什么样}
+
+\subsection{FFN 维度与模型维度}
+
+最稳定的经验规则之一是：
+
+\[
+d_{\text{ff}}=4d_{\text{model}}
+\]
+
+对于普通 ReLU/GELU FFN 基本成立。使用 GLU 后，因为有额外门控矩阵，常见比例变成：
+
+\[
+d_{\text{ff}}\approx \frac{8}{3}d_{\text{model}}.
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-036.jpg}
+\caption{FFN 维度与模型维度的标准关系：非门控用 4 倍，GLU 通常用约 \(8/3\) 倍。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-037.jpg}
+\caption{GLU 模型中的 \(d_{\text{ff}}/d_{\text{model}}\) 通常集中在约 2.5 到 3.5 的范围。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{T5 的反例告诉我们什么}
+
+T5 11B 使用了极端设置：
+
+\[
+d_{\text{model}}=1024,\quad d_{\text{ff}}=65536,
+\quad \frac{d_{\text{ff}}}{d_{\text{model}}}=64.
+\]
+
+这说明“4 倍规则”不是数学铁律。模型可以在很宽的超参区域内工作。但 T5 v1.1 又回到更标准的 GeGLU 与 2.5 倍左右比例，因此这个反例更像是告诉我们：架构空间存在宽盆地，但安全默认值仍然很有价值。
+
+\begin{importantbox}{安全默认值不是唯一可行解}
+许多超参不是尖锐最优点，而是一片宽阔盆地。工程上应区分“可以工作”和“值得偏离默认值”。如果偏离默认值不能带来清晰收益，例如更好并行、更低推理成本、更强多语言 tokenization，就不值得牺牲可比性和稳定性。
+\end{importantbox}
+
+\subsection{Attention head dim 与 model dim}
+
+常见默认关系是：
+
+\[
+d_{\text{model}}=n_{\text{heads}}\cdot d_{\text{head}}.
+\]
+
+这不是硬约束。T5 和 PaLM 等模型都曾偏离。但现代多数模型仍让比值接近 1，因为这让实现、张量切分、checkpoint 转换和推理 kernel 都更简单。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-042.jpg}
+\caption{不同模型的 head 数、head dim 与 model dim。多数模型让三者乘积关系接近 1。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{Aspect ratio：深一点还是宽一点}
+
+模型形状还取决于宽深比：
+
+\[
+\operatorname{aspect}=\frac{d_{\text{model}}}{n_{\text{layers}}}.
+\]
+
+公开模型常落在 100--200 附近，但也有例外。更深的模型通常 latency 更高，也更难做 pipeline 以外的高效并行；更宽的模型更吃张量并行和矩阵乘法效率。于是 aspect ratio 不是纯 ML 超参，而是训练系统、推理延迟和硬件拓扑共同决定的设计。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-043.jpg}
+\caption{公开模型的宽深比：许多模型在相对一致的范围内，但没有单一硬规则。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{极深模型的隐藏成本}
+如果模型太深，单 token 推理必须经过更多串行层，latency 会升高；训练中 pipeline bubble、activation memory、跨设备调度也会更麻烦。宽深比的选择必须和服务目标绑定：离线 pretraining 关心吞吐，交互式推理关心首 token 与每 token 延迟。
+\end{warningbox}
+
+\subsection{Vocabulary size：多语言与生产系统的压力}
+
+早期英语为主的模型常用 30K--50K 词表。现代多语言和生产模型越来越常见 100K--250K 词表。大词表的代价是 embedding/output projection 更大；收益是多语言文本、代码、特殊符号、emoji 等内容能用更少 token 表示，从而降低长序列推理成本。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-046.jpg}
+\caption{词表大小趋势：单语模型可用 30K--50K，多语言/生产系统常到 100K--250K。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{词表大小是一种系统-数据折中}
+词表越大，embedding 和 logits 计算越贵；但 token 数可能更少，尤其是非英语文本和代码。最终成本近似取决于“每个 token 的成本 \(\times\) token 数”。因此 tokenizer 不是预处理小事，而是训练和推理成本模型的一部分。
+\end{knowledgebox}
+
+\subsection{Dropout 与 weight decay}
+
+大规模预训练里，dropout 的地位明显下降。原因很直观：数据巨大，训练通常近似单 pass，模型并不容易以传统 supervised learning 的方式过拟合。相反，weight decay 仍然常见，但它的作用更像优化动力学调节，而不是传统意义上缩小 train/validation gap。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-048.jpg}
+\caption{公开模型中的 dropout 与 weight decay：新模型更少使用 dropout，但仍常使用 weight decay。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Weight decay 在 LM 预训练里的真实角色}
+在大规模 LM 预训练里，weight decay 常常不是为了“防止记忆训练集”，而是与学习率、cosine schedule、AdamW 参数尺度共同塑造优化路径。它可以改变训练后期的有效步长和参数范数演化。
+\end{importantbox}
+
+\subsection{本章小结}
+
+形状超参有一组相当保守的默认值：
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.28\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.28\textwidth}}
+\toprule
+\textbf{超参} & \textbf{安全默认值} & \textbf{何时值得偏离} \\
+\midrule
+\(d_{\text{ff}}\) & 非门控 \(4d\)，GLU 约 \(8d/3\) & 有明确系统并行或消融收益时。\\
+Head dim & \(n_{\text{heads}}d_{\text{head}}\approx d_{\text{model}}\) & 需要特殊 attention kernel 或 GQA/MQA 设计时。\\
+Aspect ratio & \(d_{\text{model}}/n_{\text{layers}}\) 常在 100--200 & 延迟、并行策略或硬件拓扑强约束时。\\
+Vocabulary & 英语 30K--50K，多语言 100K+ & 多语言、代码、生产压缩 token 数时。\\
+Dropout & 预训练常为 0 & 小数据、finetune 或强过拟合风险时。\\
+\bottomrule
+\end{longtable}
+
+\section{稳定性技巧：Softmax 是危险区域}
+
+近年来训练稳定性越来越受关注。大模型训练最坏的失败模式不是“最终 loss 差一点”，而是曲线在中途出现不可恢复的 spike，迫使团队回滚 checkpoint、降低学习率或重启训练。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-051.jpg}
+\caption{稳定训练与不稳定训练的对比：梯度尖刺会在大规模训练中造成昂贵风险。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{为什么 softmax 值得警惕}
+
+Transformer 里有两个关键 softmax：
+
+\begin{enumerate}
+    \item 输出层 softmax：把 vocabulary logits 变成 token 概率。
+    \item Attention softmax：把 \(QK^\top/\sqrt{d_k}\) 变成注意力权重。
+\end{enumerate}
+
+Softmax 使用指数函数，logits 变大时容易造成数值饱和；归一化常数过大时，梯度也可能变得尖锐。稳定性技巧大多围绕“让 softmax 的输入更可控”展开。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-052.jpg}
+\caption{Softmax 中的指数和除法是数值稳定性的高风险区域。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{Z-loss：约束输出 softmax 的 partition function}
+
+设输出 logits 为 \(u_i(x)\)，softmax 归一化常数为：
+
+\[
+Z(x)=\sum_i\exp(u_i(x)).
+\]
+
+Z-loss 在标准交叉熵外加入：
+
+\[
+\mathcal{L}_{z}=\alpha\left(\log Z(x)\right)^2.
+\]
+
+它鼓励 \(\log Z(x)\) 接近 0，即 \(Z(x)\) 接近 1，从而避免 logits 整体尺度失控。PaLM 使用过该技巧，后续 Baichuan 2、DCLM、OLMo 2/3 等模型也采用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-053.jpg}
+\caption{Z-loss：通过惩罚 \(\log^2 Z\) 控制输出 softmax 的数值尺度。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[caption={Z-loss 的训练代码骨架}]
+def cross_entropy_with_z_loss(logits, targets, alpha=1e-4):
+    ce = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+    log_z = torch.logsumexp(logits, dim=-1)
+    z_loss = alpha * (log_z ** 2).mean()
+    return ce + z_loss
+\end{lstlisting}
+
+\subsection{QK-norm：约束 attention softmax 的输入}
+
+Attention logits 来自 query 和 key 的内积。如果 \(Q\) 或 \(K\) 的范数持续变大，\(QK^\top\) 会产生过尖的 attention 分布。QK-norm 在 attention 前对 query/key 做 LayerNorm 或 RMSNorm：
+
+\[
+\operatorname{Attn}(Q,K,V)
+=\operatorname{softmax}\left(
+\frac{\operatorname{Norm}(Q)\operatorname{Norm}(K)^\top}{\sqrt{d_k}}
+\right)V.
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-054.jpg}
+\caption{QK-norm：在 query/key 进入 attention softmax 前控制向量尺度。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{QK-norm 为什么越来越常见}
+QK-norm 直接处理 attention softmax 的输入尺度。它不是靠事后截断 logits，而是在 attention score 形成之前约束 query/key 的范数。因此它通常比简单 soft-capping 更像“结构性稳定性”改动。
+\end{importantbox}
+
+\subsection{Logit soft-capping}
+
+另一类方法是 soft-capping：
+
+\[
+\operatorname{cap}(z)=c\tanh(z/c).
+\]
+
+它把 logits 平滑限制在 \([-c,c]\) 内，避免极端值进入 softmax。这个方法简单直接，但也可能伤害模型表达：如果 cap 太小，模型无法形成足够尖锐的分布；如果 cap 太大，稳定性收益有限。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-055.jpg}
+\caption{Logit soft-capping：用 tanh 将 logits 平滑压到有限范围内。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{稳定性补丁要警惕“过度镇静”}
+Z-loss、QK-norm、soft-capping 都在控制分布尺度。但语言模型有时需要非常尖锐的 token 分布或 attention 分布。稳定性技巧的目标不是让一切变平，而是防止尺度失控；过度约束会变成性能损失。
+\end{warningbox}
+
+\subsection{本章小结}
+
+稳定性技巧可以归纳为一句话：\textbf{不要让 softmax 看见失控的 logits}。输出层用 z-loss，attention 层用 QK-norm，必要时用 soft-capping。这些方法的地位正在上升，因为训练规模越大，稳定性事故越贵。
+
+\section{Attention 变体：训练时代的 attention 和推理时代的 attention}
+
+很多架构变体是为了提升训练 loss；attention 变体则越来越多由推理成本驱动。训练时 full attention 可以并行处理整个序列；推理时必须逐 token 生成，并持续读写 KV cache。这个差别会彻底改变瓶颈。
+
+\subsection{训练时 attention 的算术强度}
+
+训练时，batch 和 sequence 维度可以并行，主要操作是大矩阵乘法，GPU 利用率通常较高。Lecture 3 用 \(b\) 表示 batch size，\(n\) 表示长度，\(d\) 表示 hidden dim，\(h\) 表示 heads，\(k=d/h\) 表示 head dim。粗略看，训练 attention 中大块计算能形成较高 arithmetic intensity。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-057.jpg}
+\caption{训练时 attention 的高层成本：并行矩阵计算让算术强度相对友好。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\subsection{推理时 KV cache 成为内存账本}
+
+自回归推理不能并行生成未来 token。每生成一个新 token，都要读取过去所有 token 的 key/value cache。对于 \(L\) 层、\(h_{kv}\) 个 KV heads、head dim 为 \(k\)、序列长度 \(n\) 的模型，KV cache 大小近似为：
+
+\[
+2 \cdot L \cdot h_{kv}\cdot n\cdot k\cdot \text{bytes}.
+\]
+
+这里的 2 来自 key 和 value。长上下文、多并发请求和大模型层数会把 KV cache 变成推理服务的主要内存压力。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-058.jpg}
+\caption{增量生成必须维护 KV cache，推理瓶颈从大 GEMM 转向内存读写。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{为什么推理会反过来改变架构}
+如果模型只用于离线打分，MHA 的 KV cache 成本可能不是第一优先级；如果模型要服务高并发长对话，KV cache 会直接决定 batch size、吞吐、上下文长度和服务成本。这就是 GQA/MQA 成为现代模型标配的根本原因。
+\end{knowledgebox}
+
+\subsection{MQA 与 GQA}
+
+Multi-Head Attention 为每个 query head 配一组 key/value head。MQA 让所有 query heads 共享一组 key/value；GQA 则在二者之间折中，让多个 query heads 共享一组 key/value。
+
+\[
+h_{kv}=h \quad \text{(MHA)},\qquad
+h_{kv}=1 \quad \text{(MQA)},\qquad
+1<h_{kv}<h \quad \text{(GQA)}.
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-060.jpg}
+\caption{MQA 的核心：减少 key/value 维度，从而减少 KV cache 的内存搬运。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-061.jpg}
+\caption{GQA 是 MHA 和 MQA 的折中旋钮：控制表达能力与推理效率之间的平衡。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{GQA 的实用判断}
+MQA 把 KV cache 减到最小，但可能带来 perplexity 损失。GQA 保留多个 KV groups，通常以较小质量代价换来大幅推理收益。现代模型多选择 GQA，是因为它处在质量-成本曲线的甜点位置。
+\end{importantbox}
+
+\begin{lstlisting}[caption={GQA 中 query heads 到 KV heads 的映射直觉}]
+def repeat_kv_for_gqa(kv, num_query_heads, num_kv_heads):
+    # kv: [batch, seq, num_kv_heads, head_dim]
+    repeat = num_query_heads // num_kv_heads
+    kv = kv[:, :, :, None, :]          # [b, n, h_kv, 1, k]
+    kv = kv.expand(-1, -1, -1, repeat, -1)
+    return kv.reshape(kv.size(0), kv.size(1), num_query_heads, kv.size(-1))
+\end{lstlisting}
+
+\subsection{稀疏与滑动窗口 attention}
+
+Full attention 的成本随序列长度二次增长。稀疏 attention 和 sliding window attention 通过限制每个 token 可见的位置减少计算和 KV 访问。它们牺牲的是任意 token 之间单层直接交互的能力，换来长上下文可扩展性。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-063.jpg}
+\caption{Sparse/sliding attention：用结构化可见范围换取长上下文效率。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片，引用 Child et al. 2019。}
+\end{figure}
+
+\subsection{Full 与 local 交错：现代长上下文 recipe}
+
+现代模型常用交错策略：大多数层做 local/sliding attention，少数层做 full attention。Command A 的例子是每 4 层有一层 full attention。局部层负责高效处理邻近上下文，全局层提供跨窗口信息流。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-064.jpg}
+\caption{Command A 一类设计：大部分层使用局部 attention，周期性插入 full attention 层。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-065.jpg}
+\caption{Gemma、OLMo、Qwen 等近期模型也采用 full/local 交错或相关长上下文变体。}
+\figsource{CS336 Spring 2026 Lecture 3 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{长上下文不是只把 RoPE extrapolate 更远}
+长上下文系统同时受位置编码、attention pattern、KV cache、batching、显存碎片和服务策略影响。RoPE scaling 只能解决一部分位置外推问题；如果每层仍做 full attention，成本仍会随上下文长度快速上升。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Attention 变体是本讲里最能体现“推理驱动架构”的部分。GQA/MQA 减少 KV cache，sliding/full interleaving 降低长上下文成本。未来很多架构创新不会来自训练 loss 的小幅下降，而会来自“同样能力下更便宜地服务用户”。
+
+\section{把本讲变成可执行的架构决策}
+
+\subsection{一份保守但强的 2026 dense LM recipe}
+
+如果要在 CS336 作业或中小规模 pretraining 项目里选择架构，一个稳健起点如下：
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.35\textwidth}>{\raggedright\arraybackslash}p{0.3\textwidth}}
+\toprule
+\textbf{模块} & \textbf{默认选择} & \textbf{理由} \\
+\midrule
+Block & Pre-norm serial block & 稳定，主残差路径清晰，公开模型共识强。\\
+Norm & RMSNorm, no bias & 质量不降，数据移动更少，实现简单。\\
+MLP & SwiGLU, no bias & 经验收益稳定，LLaMA-like 默认。\\
+\(d_{\text{ff}}\) & \(\approx 8d_{\text{model}}/3\) & GLU 保持参数量的常用比例。\\
+Position & RoPE & 相对位置性质好，现代模型共识强。\\
+Attention heads & \(h d_{\text{head}}\approx d_{\text{model}}\) & 实现和 kernel 友好，缺少强理由时不偏离。\\
+KV heads & 中小模型可 MHA，大模型服务优先 GQA & GQA 明显降低推理 KV cache 成本。\\
+Dropout & 预训练默认 0 & 大规模单 pass 数据下收益小。\\
+Weight decay & 保留 AdamW weight decay & 优化动力学收益比传统正则解释更重要。\\
+Stability & z-loss/QK-norm 视规模加入 & 大规模训练中稳定性成本很高。\\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{什么时候该保守}
+如果你的目标是复现、学习系统、跑通训练或建立 scaling baseline，就应尽量采用保守 recipe。这样训练曲线出了问题时，优先怀疑实现、数据、optimizer、batching 或资源账本，而不是同时怀疑十几个架构新点。
+\end{importantbox}
+
+\subsection{什么时候值得实验}
+
+偏离默认值并非错误，但应该有明确假设：
+
+\begin{enumerate}
+    \item \textbf{系统假设}：例如 parallel layers 是否能显著提升特定硬件上的吞吐。
+    \item \textbf{推理假设}：例如 GQA group 数是否能在目标上下文长度下降低服务成本。
+    \item \textbf{数据假设}：例如大词表是否显著降低多语言语料 token 数。
+    \item \textbf{稳定性假设}：例如 QK-norm 是否允许更大学习率或减少 spike。
+\end{enumerate}
+
+\begin{warningbox}{实验要有对照，不要只做大模型孤例}
+架构实验最容易犯的错是只训练一个配置，然后把结果归因给自己喜欢的改动。好的实验至少要控制参数量、训练 tokens、optimizer、数据顺序和硬件吞吐；更好的实验是在小尺度上做曲线，再挑少数候选放大。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Lecture 3 的实用价值在于把“架构审美”变成“架构决策”。保守 recipe 让你有可靠起点；偏离默认值需要清楚的训练、系统或推理假设；任何结论都应该能回到曲线、吞吐、显存和服务成本上验证。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item Vaswani et al., ``Attention Is All You Need'' (2017): \url{https://arxiv.org/abs/1706.03762}
+    \item Xiong et al., ``On Layer Normalization in the Transformer Architecture'' (2020): \url{https://arxiv.org/abs/2002.04745}
+    \item Zhang and Sennrich, ``Root Mean Square Layer Normalization'' (2019): \url{https://arxiv.org/abs/1910.07467}
+    \item Shazeer, ``GLU Variants Improve Transformer'' (2020): \url{https://arxiv.org/abs/2002.05202}
+    \item Su et al., ``RoFormer: Enhanced Transformer with Rotary Position Embedding'' (2021): \url{https://arxiv.org/abs/2104.09864}
+    \item Kaplan et al., ``Scaling Laws for Neural Language Models'' (2020): \url{https://arxiv.org/abs/2001.08361}
+    \item Shazeer, ``Fast Transformer Decoding: One Write-Head is All You Need'' (2019): \url{https://arxiv.org/abs/1911.02150}
+    \item Ainslie et al., ``GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints'' (2023): \url{https://arxiv.org/abs/2305.13245}
+    \item Child et al., ``Generating Long Sequences with Sparse Transformers'' (2019): \url{https://arxiv.org/abs/1904.10509}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲可以浓缩成三条主线：
+
+\begin{enumerate}
+    \item \textbf{残差主干要稳定}：pre-norm、RMSNorm、无 bias、必要时 double/non-residual norm，都是为了让深层网络可优化。
+    \item \textbf{默认架构已经高度收敛}：SwiGLU、RoPE、\(8/3\) FFN ratio、接近 1 的 head ratio、无 dropout，构成了现代 dense LM 的稳健起点。
+    \item \textbf{推理成本正在塑造架构}：GQA/MQA、sliding attention、full/local interleaving 等设计，核心目标是降低 KV cache 和长上下文服务成本。
+\end{enumerate}
+
+\begin{importantbox}{最终 takeaways}
+架构选择的成熟标志不是“每个团队都做完全一样的模型”，而是大家知道哪些地方应该保守、哪些地方可以实验。CS336 Lecture 3 教的不是一张配置表，而是一套判断力：看共识、看消融、看系统瓶颈，再决定是否偏离默认值。
+\end{importantbox}
+
+\begin{knowledgebox}{和后续课程的连接}
+下一讲会继续进入 attention 以外的模型变体和系统侧设计。Lecture 3 建立的判断框架会不断复用：当看到 MoE、hybrid attention、SSM、long-context trick 或 inference kernel 时，都要问同一个问题：它解决的是质量、稳定性、训练吞吐，还是推理成本？
+\end{knowledgebox}
+
+\end{document}

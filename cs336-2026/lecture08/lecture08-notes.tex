@@ -1,0 +1,956 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{needspace}
+
+\graphicspath{{./}{slides-images/}}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!55!black,
+    urlcolor=blue!65!black,
+    citecolor=blue!55!black
+}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=t,
+    showstringspaces=false,
+    columns=fullflexible,
+    keepspaces=true,
+    extendedchars=false
+}
+
+\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+
+\newcommand{\notetitle}{CS336 2026 Lecture 8：Parallelism Basics 与大模型并行训练}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{Spring 2026}
+\newcommand{\videoduration}{官方幻灯片 lecture08-slides.pdf}
+\newcommand{\videourl}{https://cs336.stanford.edu/}
+\newcommand{\videocoverpath}{slides-images/slide-001.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{
+\includegraphics[width=0.86\textwidth,height=0.44\textheight,keepaspectratio]{\videocoverpath}\par
+}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{材料类型}：\videoduration\par
+\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{本讲主线：并行训练不是单一技巧}
+
+Lecture 7 已经建立了分布式训练的通信词汇：rank、world size、collectives、NCCL、data/tensor/pipeline parallelism。Lecture 8 的目标更系统：当语言模型已经大到单 GPU 无法容纳、单节点无法高效训练时，怎样把\textbf{参数、梯度、优化器状态、激活、序列维度、专家和训练 batch} 分别切到不同硬件层次上。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-002.jpg}
+\caption{本讲目标：理解训练巨大模型的系统复杂性、并行范式，以及大规模训练运行常见形态。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+整讲可以压成三个问题：
+
+\begin{enumerate}
+    \item \textbf{为什么单 GPU scaling 不够}：compute 与 memory 都遇到单卡边界。
+    \item \textbf{有哪些并行维度}：data、pipeline、tensor、sequence/context、expert，以及 ZeRO/FSDP 的 state sharding。
+    \item \textbf{真实大模型怎么组合}：TP 常限于节点内，PP 跨节点，DP 扩吞吐，EP/CP 为 MoE 和长上下文服务。
+\end{enumerate}
+
+\begin{importantbox}{本讲的核心观点}
+大模型并行训练没有一个万能方案。Data parallel 解决吞吐，ZeRO/FSDP 解决训练状态冗余，pipeline parallel 沿深度切模型，tensor parallel 沿宽度切计算，sequence/context parallel 处理长序列激活，expert parallel 处理 MoE。真实系统往往需要把这些策略按硬件拓扑组合起来。
+\end{importantbox}
+
+\subsection{三段组织}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-003.jpg}
+\caption{Lecture 8 的三段组织：网络基础、LLM 并行训练原语、用并行策略扩展大语言模型。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+本讲的结构是：
+
+\begin{itemize}
+    \item Part 1：LLM networking basics，包括 collective communication、GPU/TPU 网络拓扑。
+    \item Part 2：standard LLM parallelization primitives，包括 DP、ZeRO/FSDP、PP、TP、SP、EP、CP。
+    \item Part 3：scaling recipes 和真实模型案例，包括 Narayanan 2021、DeepSeek、Yi、Llama 3 405B、Gemma 2、Mixtral、Nemotron、Qwen 3。
+\end{itemize}
+
+\subsection{本章小结}
+
+L08 的重点不是背名词，而是建立一套判断：\textbf{状态放哪里、激活怎么走、每步通信什么、通信频率多高、链路能否承受、batch 是否足以隐藏开销}。后面每种并行策略都围绕这些问题展开。
+
+\section{为什么需要数据中心级并行}
+
+\subsection{Compute 边界：单 GPU 速度不够}
+
+单 GPU 每代都在变快，但最大模型训练需求增长更快。即使单卡 tensor core 峰值极高，训练 frontier LLM 仍需要 exaFLOP 级别总计算量。训练时间是硬约束：如果一个实验需要数月才完成，研究迭代就会停滞。因此多 GPU 的第一动机是把计算分散到更多设备上。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-004.jpg}
+\caption{Compute scaling 的单卡边界：最快超级计算机已经进入 exaFLOP 级别。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{更多 GPU 只是潜在 FLOPs}
+增加 GPU 数量不等于线性加速。通信、同步、负载不均衡、pipeline bubble、内存不足导致的小 batch，都会让实际利用率低于硬件峰值。
+\end{knowledgebox}
+
+\subsection{Memory 边界：模型状态放不下}
+
+第二个动机更直接：模型太大。一张 A100/H100 80GB 无法容纳大模型训练所需的完整状态。训练时不只是参数本身，还包括梯度、optimizer state、master weights、activation、temporary buffers 和通信 buffers。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-005.jpg}
+\caption{Memory scaling 的单卡边界：大模型参数量增长让单 GPU 难以容纳完整训练状态。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+若用 mixed precision + AdamW，一个参数可能对应：
+
+\begin{align*}
+&2 \text{ bytes parameter}
++2 \text{ bytes gradient}
++4 \text{ bytes fp32 master weight}\\
+&\quad
++4 \text{ bytes Adam }m
++4 \text{ bytes Adam }v
+=16\text{ bytes/parameter}.
+\end{align*}
+
+这还没有计算 activation。一个 13B 参数模型按 16 bytes/param 就需要约 208GB 静态训练状态，超过单卡 80GB。
+
+\begin{warningbox}{推理能放下，不代表训练能放下}
+推理主要存参数和 KV cache；训练还要存梯度、优化器状态和激活。很多“模型大小”直觉来自推理部署，但训练显存账本要大得多。
+\end{warningbox}
+
+\subsection{目标：线性内存扩展和线性计算扩展}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-013.jpg}
+\caption{Part 1 recap：新的计算单位是 datacenter，我们希望获得线性内存扩展和线性计算扩展。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+理想情况下，GPU 数 $N$ 翻倍，应当同时带来：
+
+\[
+\text{max trainable model size} \propto N,
+\qquad
+\text{effective training FLOPs} \propto N.
+\]
+
+实际系统很难同时完全达到两者。某些策略更偏 memory scaling，例如 FSDP、pipeline、tensor；某些策略更偏 compute scaling，例如 data parallel。3D/4D parallelism 的目的，就是在不同硬件层次上组合这些策略。
+
+\subsection{本章小结}
+
+多 GPU 并行的必要性来自两个边界：compute 和 memory。系统目标也有两个：让更大的模型放得下，让更多 GPU 的计算用得上。后续所有策略都可以看作在这两个目标之间做折中。
+
+\section{Collectives 与拓扑：通信不是抽象常数}
+
+\subsection{All-reduce 与 reduce-scatter/all-gather}
+
+Lecture 8 首先回到 collective communication。最重要的细节是：all-reduce 可以实现为 reduce-scatter + all-gather。在 bandwidth-limited regime 下，这基本已经是能做到的最优通信量。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-007.jpg}
+\caption{Collective communication 原语：all-reduce、broadcast、reduce、all-gather、reduce-scatter。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-008.jpg}
+\caption{关键恒等式：all-reduce 可以拆成 reduce-scatter 和 all-gather。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+若张量大小为 $S$，world size 为 $p$，ring all-reduce 每个 rank 需要发送/接收近似：
+
+\[
+2\frac{p-1}{p}S.
+\]
+
+其中前半段 reduce-scatter 移动 $\frac{p-1}{p}S$，后半段 all-gather 再移动 $\frac{p-1}{p}S$。
+
+\begin{importantbox}{为什么这条恒等式贯穿全讲}
+ZeRO/FSDP 的核心就是：不一定要让每张卡永久保存完整结果。先 reduce-scatter 到分片状态，再按需 all-gather 完整参数，这就把“同步”改造成“状态分片 + 按需重建”。
+\end{importantbox}
+
+\subsection{GPU 与 TPU 拓扑差异}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-009.jpg}
+\caption{TPU 与 GPU 在通信拓扑上的差异：TPU 更偏 mesh，GPU 在一定域内更偏 all-to-all/switch。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+TPU pods 传统上常被描述为 toroidal mesh，通信结构规则，适合编译器做 SPMD/tensor parallel。GPU 集群常在节点内用 NVLink/NVSwitch，在更大范围使用 switched networks。拓扑不是中性背景，它决定了哪些通信模式便宜。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-010.jpg}
+\caption{Mesh 与 tree/all-to-all 风格的取舍：mesh 便宜、规则；tree/A2A 更适合不规则通信如 expert parallel。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{拓扑和并行策略要匹配}
+Tensor parallel 通信规则且频繁，mesh/高速节点内互连很合适；expert parallel 的 token routing 更不规则，tree/all-to-all/switch 风格更自然。硬件设计和模型结构会互相塑形。
+\end{knowledgebox}
+
+\subsection{Domain size：为什么不把所有东西全互连}
+
+全互连很诱人，但线缆、交换芯片、功耗、成本和拓扑管理都会随规模急剧上升。系统通常把高速互连限制在一个 domain 内，例如一个 node、rack 或 NVLink domain；跨 domain 则使用较慢但更可扩展的网络。并行策略因此要分层：高频通信留在小而快的 domain，低频通信跨更大范围。
+
+\begin{warningbox}{通信域大小是系统参数}
+“TP=8 很常见”不是魔法数字，而是和 8-GPU 节点、NVLink/NVSwitch domain、kernel shape、通信延迟共同形成的经验结果。换硬件，最优并行度也可能变。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Collectives 提供通信语义，硬件拓扑决定通信代价。L08 后续每种 parallelism 的合理使用范围，都要回到这两件事：它需要什么 collective，它发生在什么网络层次。
+
+\section{Data Parallelism 与 ZeRO/FSDP}
+
+\subsection{朴素数据并行}
+
+朴素 data parallelism 沿 batch 维切分。假设 batch size 为 $B$，机器数为 $M$，每台机器处理 $B/M$ 个样本。每个 rank 保存完整参数 $\theta$，本地计算梯度，然后通过 all-reduce 同步梯度。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-015.jpg}
+\caption{朴素 data parallel：切 batch，同步梯度，通信量约为每 step $2\times$ 参数量。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+优点是简单，compute scaling 在 batch 足够大时很好；缺点是 memory scaling 基本没有。每个 rank 都要保存完整参数、梯度和 optimizer state。
+
+\begin{importantbox}{DDP 的本质}
+DDP 用更多 GPU 并行处理更多数据，但不切模型状态。它解决 throughput，不解决单卡能否容纳完整训练状态。
+\end{importantbox}
+
+\subsection{训练状态显存账本}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-017.jpg}
+\caption{朴素 data parallel 的显存问题：mixed precision + Adam 可能需要约 16 bytes/param。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+课程把状态拆成 5 份：BF16/FP16 参数、BF16/FP16 梯度、FP32 master weights、Adam first moment、Adam second moment。根据精度选择，可能是 12 到 16 bytes/param。这个账本解释了为什么“参数量乘 2 bytes”远远低估训练显存。
+
+\subsection{ZeRO 的核心：分片昂贵状态}
+
+ZeRO (Zero Redundancy Optimizer) 的想法是把 data parallel 中冗余复制的状态分片。分三阶段：
+
+\begin{itemize}
+    \item \textbf{ZeRO-1}：optimizer state sharding。参数和梯度仍复制，但 Adam 状态分片。
+    \item \textbf{ZeRO-2}：再把 gradients sharding。反向中逐层 reduce-scatter，释放完整梯度。
+    \item \textbf{ZeRO-3/FSDP}：参数也分片。前向/反向按需 all-gather 参数，用完释放。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-018.jpg}
+\caption{ZeRO 的核心动机：切分 expensive state，并利用 reduce-scatter/all-gather 的等价关系。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\subsection{ZeRO-1：optimizer state sharding}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-019.jpg}
+\caption{ZeRO stage 1：每个 worker 负责更新一部分参数对应的 optimizer state。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+ZeRO-1 的步骤是：
+
+\begin{enumerate}
+    \item 每个 rank 在本地 batch 上计算完整梯度。
+    \item 对梯度做 reduce-scatter，让每个 rank 得到自己负责参数 shard 的归约梯度。
+    \item 每个 rank 用本地 optimizer state 更新自己的参数 shard。
+    \item all-gather 更新后的参数，让所有 rank 恢复完整参数副本。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-021.jpg}
+\caption{ZeRO-1 与朴素 DDP 对比：通信量同为 $2\times$ 参数量，但 optimizer state 内存下降。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{ZeRO-1 近似是“免费”的显存收益}
+朴素 DDP 做一次 all-reduce，ZeRO-1 做 reduce-scatter + all-gather。两者在 bandwidth-limited regime 下通信量相近，但 ZeRO-1 把 optimizer state 降到每卡 $1/M$。这就是课程说 ZeRO-1 is free 的含义。
+\end{importantbox}
+
+\subsection{ZeRO-2：gradient sharding}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-022.jpg}
+\caption{ZeRO stage 2：进一步保持 gradients 分片，但实现复杂度上升。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+ZeRO-2 的关键是不能长期实例化完整梯度向量。反向传播每算完一层梯度，就立即 reduce-scatter 到负责该参数 shard 的 worker；当该梯度不再被 autograd graph 需要，就释放本地完整梯度。这样可以进一步节省梯度显存。
+
+\begin{warningbox}{ZeRO-2 的复杂性来自生命周期}
+数学上只是“梯度也分片”；工程上则要正确管理每层梯度的产生、通信、释放和 optimizer 更新。大模型训练系统的难点经常不是公式，而是 tensor 生命周期。
+\end{warningbox}
+
+\subsection{ZeRO-3 / FSDP：参数也分片}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-024.jpg}
+\caption{ZeRO stage 3 / FSDP：参数、梯度、optimizer state 全部分片。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+ZeRO-3 的想法最激进：连参数本身也不常驻完整副本。forward 到某个 module 时，先 all-gather 该 module 的完整参数，计算完后释放；backward 也类似。梯度通过 reduce-scatter 回到分片形式。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-026.jpg}
+\caption{FSDP/ZeRO-3 的真实图景：按需请求参数/梯度，用完释放，并尝试 overlap 通信与计算。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片，引用 FSDP 相关资料。}
+\end{figure}
+
+课程给出的 baby version 通信量是：两次 all-gather 参数、一次 reduce-scatter 梯度，约 $3\times$ 参数量。相比 DDP 的 $2\times$ 参数量，通信多 50\%，但换来参数、梯度、optimizer state 近似线性分片。
+
+\begin{knowledgebox}{为什么 FSDP 仍然可用}
+FSDP 的通信频率高，但可以 overlap：在计算当前 module 时预取下一层参数，backward 时尽早 reduce-scatter 梯度。能否隐藏通信，是 FSDP 性能的核心。
+\end{knowledgebox}
+
+\subsection{ZeRO 是否能让模型 fit}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-028.jpg}
+\caption{8xA100 80GB 上不同 ZeRO 阶段可容纳模型规模的粗略估计。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+幻灯片用 BF16 训练估算：baseline 约 6.7B，ZeRO-1 约 16B，ZeRO-2 约 24.6B，ZeRO-3 约 53.3B。具体数字依赖 optimizer 精度、activation、fragmentation 和框架实现，但趋势明确：state sharding 能显著提升可训练模型规模。
+
+\subsection{Data parallel 的剩余问题}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-030.jpg}
+\caption{Data parallel 的剩余问题：ZeRO-1/2 不切参数，ZeRO-3 不减少 activation memory。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Data parallel 仍有两个边界：
+
+\begin{itemize}
+    \item \textbf{compute scaling}：GPU 数不能无限超过 batch size；batch 太小通信占比高，batch 太大优化收益递减。
+    \item \textbf{activation memory}：ZeRO-3 切训练状态，但不自动让 activation memory 线性下降。
+\end{itemize}
+
+\subsection{本章小结}
+
+ZeRO/FSDP 是 data parallel 内部的 state sharding 技术。ZeRO-1/2 几乎用相同通信量换显存，ZeRO-3/FSDP 用约 1.5 倍通信换最大显存节省。它们解决参数/优化器状态冗余，但不是所有内存和计算扩展问题的终点。
+
+\section{Pipeline Parallelism：沿 depth 切模型}
+
+\subsection{从 layer-wise parallel 到 pipeline}
+
+模型并行的第一种直觉是沿层切分：rank 0 放前几层，rank 1 放后几层。问题是如果整个 batch 一次通过，只有一个 stage 在工作，其他 GPU 大部分时间 idle。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-032.jpg}
+\caption{Layer-wise parallel：按层切模型，activation 和 partial gradients 在设备间传递。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-033.jpg}
+\caption{朴素 layer-wise parallel 的利用率很差：$n$ 个 GPU 时每个 GPU 可能只有 $1/n$ 时间活跃。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Pipeline parallel 的修正是把 batch 切成 microbatches，让不同 microbatch 同时位于不同 stage 中。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-034.jpg}
+\caption{Pipeline parallel：用 microbatches 填充 pipeline，降低 idle time。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+若 stage 数为 $S$，microbatch 数为 $M$，bubble ratio 粗略是：
+
+\[
+\frac{S-1}{M}.
+\]
+
+这解释了为什么 pipeline parallel 需要足够多 microbatches，也间接要求较大 batch 或 gradient accumulation。
+
+\begin{importantbox}{Pipeline 的核心代价}
+Pipeline parallel 用 depth sharding 节省模型状态，但付出 pipeline bubble 和调度复杂度。microbatch 数越多，bubble 越小，但 kernel launch、activation buffer、通信调度和 backward scheduling 都更复杂。
+\end{importantbox}
+
+\subsection{为什么还要用 pipeline}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-035.jpg}
+\caption{Pipeline 的吸引力：节省内存，通信是 stage 间 activation，适合较慢 inter-node links。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Pipeline 看起来麻烦，但它有两个优势：
+
+\begin{itemize}
+    \item 相比 DDP，它沿 depth 切参数，能把更深模型放进多卡。
+    \item 相比 FSDP/TP，它的通信主要是 point-to-point activation，大小约 $b\times s\times h$，可以跨较慢节点间链路。
+\end{itemize}
+
+\begin{knowledgebox}{Pipeline 常用于跨节点}
+Tensor parallel 频繁 collective 更适合节点内；pipeline 的 stage-to-stage activation 传输更粗粒度，因此常用于跨节点扩展模型深度。
+\end{knowledgebox}
+
+\subsection{Zero-bubble 思想}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-038.jpg}
+\caption{Zero-bubble pipelining：把 backward 拆成 activation gradient 和 weight gradient 两部分，重排以减少空泡。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+反向传播可以拆成两类工作：传播 activation gradients，以及计算 weight gradients。后者在某些调度中可以延后或重排，以填补 pipeline bubble。这类技巧说明 pipeline performance 不只是数学切分，还强烈依赖 schedule。
+
+\subsection{本章小结}
+
+Pipeline parallel 沿 depth 切模型，适合跨节点、深模型和较慢互连；主要瓶颈是 bubble、stage imbalance 和调度复杂度。它通常与 tensor/data parallel 组合，而不是单独使用。
+
+\section{Tensor Parallelism：沿 width 切计算}
+
+\subsection{矩阵乘法的宽度切分}
+
+Pipeline 沿 depth 切模型；tensor parallel 沿 width 切模型。它利用矩阵乘法结构，把权重矩阵切成 submatrices，让不同 GPU 计算不同部分，再通过 all-reduce 或 all-gather 合并。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-039.jpg}
+\caption{沿 width 做模型并行：把矩阵乘法分解成子矩阵和 partial sums。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-040.jpg}
+\caption{Tensor parallel：GPU 持有 submatrices；forward/backward 的 f/g 同步点互换。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Megatron-style tensor parallel 常把 Transformer block 中不同线性层按 column/row 方向切分：
+
+\begin{itemize}
+    \item QKV、MLP up-projection 常做 column parallel。
+    \item attention output、MLP down-projection 常做 row parallel。
+    \item LayerNorm、routers 等通常 replicated。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-041.jpg}
+\caption{Transformer block 中 row/column tensor parallel 的典型划分。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\subsection{什么时候用 tensor parallel}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-042.jpg}
+\caption{GPU 上 tensor parallel 通常限制在节点内 8 GPU，因为它需要高速互连。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Tensor parallel 的优势：
+
+\begin{itemize}
+    \item 没有 pipeline bubble。
+    \item 不要求很大 batch 才有效。
+    \item 可以较自然地包裹 Transformer block。
+\end{itemize}
+
+代价是通信量大。课程给出的比较是：
+
+\[
+\text{Pipeline} \sim bsh \quad \text{point-to-point per microbatch},
+\]
+
+\[
+\text{Tensor} \sim 8bsh\frac{n_{\text{devices}}-1}{n_{\text{devices}}}
+\quad \text{per layer with all-reduce-like communication}.
+\]
+
+\begin{importantbox}{Tensor parallel 的使用规则}
+只在低延迟、高带宽互连中使用 tensor parallel。典型做法是把 TP 放在节点内 NVLink/NVSwitch 域，跨节点用 pipeline、FSDP 或 data parallel。
+\end{importantbox}
+
+\subsection{Tensor vs pipeline}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-043.jpg}
+\caption{Tensor parallel 与 pipeline parallel 对比：TP 无 bubble，但通信更大；PP 通信较小但有 bubble。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+从工程角度看，TP 是“用高速通信买高利用率”，PP 是“用调度复杂度买跨节点可扩展性”。二者互补：节点内 TP，节点间 PP，是许多大模型训练配置的基本形态。
+
+\subsection{本章小结}
+
+Tensor parallel 沿 width 切矩阵乘法，能降低每卡参数和计算压力，且没有 pipeline bubble；但每层通信频繁，强依赖高速互连。它通常是节点内模型并行的首选。
+
+\section{Activation Memory 与 Sequence Parallelism}
+
+\subsection{静态状态之外还有 activation}
+
+到这里，我们已经讨论了参数、梯度和 optimizer state。但训练显存还有一个巨大部分：activation memory。尤其在长序列、大 batch、深层模型中，activation 可以成为主导。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-044.jpg}
+\caption{Memory 是动态的：除了参数等静态状态，activation memory 也可能很大。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-046.jpg}
+\caption{每层 activation memory 的分解：attention 的二次项可通过 recomputation/FlashAttention 类方法降低。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+课程指出，某些 $5as^2h$ 量级的 attention 中间项可以通过 recomputation 或 FlashAttention 风格方法丢掉；但 LayerNorm、Dropout、attention/MLP 输入等点状操作仍有 $10sbh$ 量级项，会随模型和序列增长。
+
+\subsection{Tensor parallel 后仍有 activation 残留}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-047.jpg}
+\caption{Tensor parallel 切分 attention/MLP 的矩阵乘法，但 LayerNorm/Dropout 等激活项仍会增长。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Tensor parallel 可以切分 matmul 相关 activation，但点状层的输入、dropout masks、normalization 中间状态仍可能 replicated。要让 activation memory 真正随更多机器线性下降，就需要沿 sequence 维度继续切分。
+
+\subsection{Sequence parallel}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-048.jpg}
+\caption{Sequence parallel：把 LayerNorm/Dropout 等 pointwise over sequence 的操作沿 sequence 维分片。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Sequence parallel 的观察是：很多剩余 activation 项是 sequence 维上的 pointwise operations。因此可以把 sequence tokens 分到不同 rank。forward 中某些同步点用 all-gather，另一些用 reduce-scatter；backward 中反过来。
+
+\begin{knowledgebox}{Sequence parallel 的角色}
+SP 常与 TP 搭配。TP 切矩阵乘法，SP 切剩余 pointwise activation。二者一起，才能让每卡 activation memory 更接近线性下降。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-049.jpg}
+\caption{组合 TP 与 SP，让 activation memory 更接近随机器数线性缩放。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\subsection{Activation recomputation}
+
+Activation recomputation/checkpointing 用额外 compute 换更少 activation storage。课程后面指出，recomputation 有时“pays for itself”：节省的内存允许使用更大 batch，从而改善吞吐并摊薄通信。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-062.jpg}
+\caption{Activation recomputation 能通过释放内存支持更大 batch，从而间接提升吞吐。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Recomputation 不是单纯慢一点}
+如果显存限制迫使 batch 很小，通信效率会差。通过 recomputation 释放内存、增大 batch，有时反而提升端到端 throughput。系统优化要看整体 step time，不只看单个 forward/backward FLOPs。
+\end{importantbox}
+
+\subsection{本章小结}
+
+参数状态只是显存账本的一半。Activation memory 使得 TP/FSDP 之后仍可能放不下模型或 batch。Sequence parallel 和 recomputation 是处理长序列、大 batch、大模型时不可绕开的工具。
+
+\section{Expert Parallelism 与 Context Parallelism}
+
+\subsection{Expert parallelism}
+
+MoE 模型把 FFN/MLP 替换成多个 experts，并由 router 把 token 发送到少数 experts。Expert parallelism 不再切同一个 matmul，而是把不同 experts 放到不同 rank，然后 route activations。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-050.jpg}
+\caption{Expert parallelism：不切 matmul，而是切 experts，并把 activations 路由到对应 expert。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-051.jpg}
+\caption{EP 的行为类似 MLP 上的 TP：需要高带宽，但可以避免切 matmul 带来的效率损失。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+EP 的主要通信是 all-to-all token dispatch。相比 TP，它可能保留更好的 expert matmul efficiency；但 router imbalance 会导致某些 rank 处理过多 tokens，通信和计算同时失衡。
+
+\begin{warningbox}{EP 的难点是负载均衡}
+MoE 不是把 expert 平均放到卡上就结束了。router 的 token 分布、capacity factor、drop/pad 策略、expert placement 和 all-to-all overlap 都会影响 step time。
+\end{warningbox}
+
+\subsection{EP 与 attention parallelism 的解耦}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-053.jpg}
+\caption{MoE 主要作用于 MLP，不作用于 attention，因此 attention 与 expert parallelism 需要解耦。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+MoE 通常只替换 MLP，不替换 attention。这意味着 attention 部分仍可能需要 TP/CP/SP，而 MLP 部分更偏 EP。Megatron 等系统因此支持更灵活的并行策略：attention 用 TP/CP/DP，MLP experts 用 ETP/EP/EDP。
+
+\subsection{Context parallel / Ring Attention}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-054.jpg}
+\caption{Context parallel / Ring Attention：长序列时沿 sequence/context 切激活和 KV。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+Context parallel 更面向长上下文 attention。它沿 sequence/context 维切分 activations 或 KV，常与 Ring Attention 类方法相关。长上下文阶段往往会把 CP 开得很大，因为 KV/attention memory 与序列长度强相关。
+
+\begin{knowledgebox}{SP 与 CP 的区别}
+Sequence parallel 常指 Transformer block 中 pointwise activation 的序列维切分；context parallel 更强调 attention/KV/长上下文的序列维分布。实际系统中两者边界可能随框架命名变化，但共同目标都是让长序列激活/KV 不再单卡复制。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+EP 针对 MoE experts，CP 针对长上下文。它们说明并行维度已经从经典的 batch/width/depth 扩展到 experts 和 context。模型结构越复杂，并行策略越需要按模块解耦。
+
+\section{LLM Parallelism 总表}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-055.jpg}
+\caption{Lecture 8 的并行策略总表：每种方法的通信、内存、batch scaling 与易用性不同。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+把课程表格整理成中文判断：
+
+\begingroup
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{longtable}{p{2.1cm}p{2.7cm}p{2.7cm}p{2.8cm}p{2.7cm}}
+\toprule
+\textbf{方法} & \textbf{通信/同步} & \textbf{参数内存/卡} & \textbf{主要带宽成本} & \textbf{典型用途} \\
+\midrule
+DDP / ZeRO-1 & 每步梯度 all-reduce & 参数不切；ZeRO-1 切优化器状态 & 梯度流量 $O(P)$ & 模型能放下、扩大 batch/吞吐。 \\
+FSDP / ZeRO-3 & 参数 all-gather；梯度 reduce-scatter & 参数、梯度、优化器近似 $1/DP$ & 参数流量 $O(P)$，可重叠 & 状态显存不够时。 \\
+Pipeline & stage 间激活 & 约 $1/PP$ & stage 边界激活 & 跨节点切深度。 \\
+Tensor & 每层激活 collective & TP 权重约 $1/TP$ & 每 block 激活 collective & 节点内切宽度。 \\
+Seq./Context & sequence 分片交换 & 参数通常不变 & activation/KV 通信 & 长序列、激活/KV 压力。 \\
+Expert & MoE token all-to-all & expert 权重约 $1/EP$ & token routing & MoE MLP 扩展。 \\
+\bottomrule
+\end{longtable}
+\endgroup
+
+\begin{importantbox}{表格的读法}
+不要问“哪种 parallelism 最好”，而要问“我的瓶颈是哪一类内存/计算/通信”。参数状态不够用，看 ZeRO/FSDP；单层太宽，看 TP；模型太深或跨节点，看 PP；序列太长，看 SP/CP；MoE experts 太多，看 EP。
+\end{importantbox}
+
+\subsection{本章小结}
+
+并行策略的差异可以落在三张账本上：每卡参数内存、每卡 activation/KV 内存、每 step 通信量和频率。真实训练配置就是在这些账本之间找一个能 fit、能跑快、能稳定维护的组合。
+
+\section{3D/4D Parallelism：组合策略}
+
+\subsection{基本规则}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-057.jpg}
+\caption{3D/4D parallelism 的经验规则：先让模型 fit，再用 data parallel 扩展剩余 GPU。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+课程给出简单规则：
+
+\begin{enumerate}
+    \item 在模型还放不下之前，先用 tensor/expert parallel 填满单机高速域，再用 pipeline parallel 跨机器；或者视带宽使用 ZeRO-3。
+    \item 当模型 fit 后，用 data parallel 扩展剩余 GPU。
+    \item 如果 batch size 小，使用 gradient accumulation 增大 effective batch，提高通信效率。
+\end{enumerate}
+
+\begin{knowledgebox}{为什么先 TP/EP 再 PP，再 DP}
+TP/EP 处理层内宽度和 experts，通常吃节点内高速链路；PP 处理深度，适合跨节点；DP 复制模型状态来扩吞吐，要求 batch 能够增长。这个顺序是在硬件层次和通信频率之间折中出来的。
+\end{knowledgebox}
+
+\subsection{Narayanan 2021 的 scaling 策略}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-059.jpg}
+\caption{Narayanan 2021 scaling 策略：TP 先升到 8 后封顶，PP 为了 fit 增长，DP 随模型变大下降。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+经验规律很清楚：
+
+\begin{itemize}
+    \item Tensor parallel 先增加到节点内上限，常见是 8。
+    \item Pipeline parallel 继续增加，让更大模型放得下。
+    \item Data parallel 在模型变大时下降，因为同样总 GPU 数下，更多 GPU 被用于模型并行。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-060.jpg}
+\caption{仔细设计的 3D parallelism 可以在扩展 GPU 时保持较平坦的利用率。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\subsection{TP=8 为什么常见}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-061.jpg}
+\caption{TP=8 常常是节点内并行的甜点：64 机器时 8x8 配置表现好。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+TP=8 常见是因为 8-GPU 节点和 NVLink/NVSwitch 域提供高速低延迟通信。TP 继续跨节点会让每层 collective 穿过慢网络，通常不划算。这个经验再次说明：并行度不是抽象超参数，而是硬件拓扑参数。
+
+\subsection{本章小结}
+
+3D/4D parallelism 是把并行维度分层放置：节点内 TP/EP，节点间 PP/FSDP，集群剩余容量用 DP 扩吞吐，长上下文再叠 CP/SP。好的配置不是追求最高并行度，而是让每个通信模式落在合适的网络层次。
+
+\section{真实模型案例}
+
+\subsection{DeepSeek、Yi、Llama 3、Gemma 2}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-064.jpg}
+\caption{DeepSeek：ZeRO-1 加 Tensor、Sequence、Pipeline parallel；V3 使用 PP、EP 和 ZeRO-1。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-066.jpg}
+\caption{Llama 3 405B 训练阶段：不同阶段可能使用不同并行与 batch/context 配置。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-068.jpg}
+\caption{Gemma 2：ZeRO-3、model parallel、data parallel 的组合。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+这些例子展示了一个重要事实：不同组织、不同硬件、不同模型结构会选择不同组合。DeepSeek V3 使用大规模 expert parallel 和 pipeline；Llama 3 405B 使用 TP/PP/DP 的大规模组合；Gemma 2 在 TPU/JAX 栈上使用 ZeRO-3 类 sharding、MP 和 DP。
+
+\subsection{MoE 和长上下文模型}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-069.jpg}
+\caption{Mixtral 8x22B 示例：TP/PP/CP/EP 组合。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-070.jpg}
+\caption{Nemotron 长上下文扩展示例：长上下文阶段使用很大的 CP/EP。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+MoE 模型往往需要 EP；长上下文模型往往需要 CP。二者都把并行设计从“标准 dense Transformer”推向更细模块化：attention、MLP experts、KV/context 可能各有不同 parallel group。
+
+\subsection{Overview table 的模式}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-072.jpg}
+\caption{多个模型并行配置的 overview table：TP 通常不超过 8，EP 可很大，长上下文阶段 CP 较大。}
+\figsource{CS336 Spring 2026 Lecture 8 官方幻灯片。}
+\end{figure}
+
+课程给出的模式：
+
+\begin{itemize}
+    \item TP generally $\le 8$。
+    \item EP can be big, but hard。
+    \item Long context phases use large CP。
+\end{itemize}
+
+\begin{warningbox}{公开配置只能作为线索}
+论文或文档里的 parallelism table 往往省略硬件细节、batch schedule、overlap、failure recovery、optimizer precision 和 implementation tricks。真正复现吞吐，需要完整系统上下文。
+\end{warningbox}
+
+\subsection{本章小结}
+
+真实模型配置验证了本讲规则：TP 节点内、PP/DP/FSDP 跨节点、EP 给 MoE、CP 给长上下文。没有单一策略统治所有模型；模型结构、硬件拓扑和训练阶段共同决定配置。
+
+\section{工程 Checklist：设计并行方案}
+
+\subsection{先画四张图}
+
+设计并行训练前，先画清楚：
+
+\begin{enumerate}
+    \item \textbf{硬件拓扑图}：GPU/node/rack/NIC/NVLink/IB 域。
+    \item \textbf{模型状态图}：参数、梯度、optimizer state、master weights 如何分布。
+    \item \textbf{激活图}：每层 activation、KV、dropout/norm state 是否切分或重算。
+    \item \textbf{通信时间线}：每个 step 哪些 all-gather、reduce-scatter、all-reduce、send/recv、all-to-all 发生，是否 overlap。
+\end{enumerate}
+
+\begin{importantbox}{并行训练设计的底层问题}
+每个 tensor 在哪张卡上？什么时候需要完整？完整多久？用完能否释放？下一个需要它的 rank 是谁？这几个问题比并行策略名字更基础。
+\end{importantbox}
+
+\subsection{常见决策规则}
+
+\begin{longtable}{p{4.0cm}p{5.4cm}p{4.0cm}}
+\toprule
+\textbf{症状} & \textbf{优先考虑} & \textbf{注意事项} \\
+\midrule
+参数/optimizer state 放不下 & ZeRO-1/2/3 或 FSDP & ZeRO-3 通信频率高，要看 overlap。 \\
+单层太宽或 attention heads 太多 & Tensor parallel & 限制在高速节点内。 \\
+模型太深、跨节点 fit & Pipeline parallel & 需要足够 microbatches 减 bubble。 \\
+激活/KV 太大 & Sequence/context parallel 或 recomputation & 长上下文阶段尤其重要。 \\
+MoE expert 太多 & Expert parallel & all-to-all 和 load balance 是核心。 \\
+通信占比过高 & 增大 effective batch、overlap、改变并行维度 & batch 过大可能影响优化。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{本章小结}
+
+并行训练不是一次性选项，而是随模型规模、batch、context length、硬件和训练阶段变化的配置问题。好的系统设计会不断用 profiler、通信 benchmark 和 memory trace 校正并行策略。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://cs336.stanford.edu/}{Stanford CS336 Spring 2026 course page}
+    \item \href{https://arxiv.org/abs/1910.02054}{ZeRO: Memory Optimizations Toward Training Trillion Parameter Models}
+    \item \href{https://arxiv.org/abs/2104.04473}{Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM}
+    \item \href{https://arxiv.org/abs/2205.05198}{Reducing Activation Recomputation in Large Transformer Models}
+    \item \href{https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html}{PyTorch FSDP tutorial}
+    \item \href{https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/moe.html}{NVIDIA Megatron-Core MoE documentation}
+\end{itemize}
+
+\section{总结与延伸}
+
+Lecture 8 把并行训练从“几个基本策略”扩展为完整系统设计。Data parallel 和 ZeRO/FSDP 处理 batch 与 state sharding；pipeline 和 tensor parallel 处理 depth 与 width；sequence/context parallel 处理 activation/KV；expert parallel 处理 MoE routing。真实大模型训练通常是这些策略的分层组合，而不是单一方案。
+
+\begin{importantbox}{最终 takeaways}
+\begin{enumerate}
+    \item 超过某个规模后，multi-GPU、multi-node parallelism 是必要条件。
+    \item All-reduce 与 reduce-scatter/all-gather 的关系解释了 ZeRO/FSDP 的通信账本。
+    \item ZeRO-1/2 近似免费节省状态内存；ZeRO-3/FSDP 更省显存但增加通信频率。
+    \item Pipeline parallel 适合跨节点切 depth，但需要 microbatches 控制 bubble。
+    \item Tensor parallel 适合节点内切 width，常见上限约 8。
+    \item Sequence/context/expert parallel 是长上下文和 MoE 模型的重要扩展维度。
+    \item 3D/4D parallelism 的经验规则是：先让模型 fit，再用 DP 扩展吞吐。
+\end{enumerate}
+\end{importantbox}
+
+\begin{knowledgebox}{和后续课程的连接}
+后续分布式训练内容会继续深入 FSDP/ZeRO 的实现细节、通信计算 overlap、并行组组合、长上下文训练，以及真实集群中的 failure、straggler 和吞吐监控。L08 提供的是这些系统问题的总地图。
+\end{knowledgebox}
+
+\end{document}

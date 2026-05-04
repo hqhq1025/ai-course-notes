@@ -1,0 +1,784 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{needspace}
+
+\graphicspath{{./}{slides-images/}}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!55!black,
+    urlcolor=blue!65!black,
+    citecolor=blue!55!black
+}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=t,
+    showstringspaces=false,
+    columns=fullflexible,
+    keepspaces=true,
+    extendedchars=false
+}
+
+\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+
+\newcommand{\notetitle}{CS336 2026 Lecture 5：GPUs、内存层次与 FlashAttention}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{Spring 2026}
+\newcommand{\videoduration}{官方幻灯片 lecture05-slides.pdf}
+\newcommand{\videourl}{https://cs336.stanford.edu/}
+\newcommand{\videocoverpath}{slides-images/slide-001.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{材料类型}：\videoduration\par
+\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{本讲问题：为什么懂 GPU 才能懂现代 LLM}
+
+Lecture 5 的目标很直接：让 CUDA 和 GPU 不再像黑魔法。语言模型 scaling laws 让我们知道更多 compute 往往带来可预测的性能提升；但实际训练和推理中，能不能把 compute 用起来，取决于 GPU 的执行模型、内存层次、矩阵乘法硬件、kernel 融合、tile 形状和数据搬运。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-002.jpg}
+\caption{本讲目标：理解 GPU 何时变慢，以及怎样设计快速算法。右侧 FlashAttention 是贯穿全讲的综合案例。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+本讲结构分成三段：
+
+\begin{enumerate}
+    \item \textbf{GPU 硬件和执行模型}：CPU/GPU 区别、SM、thread/block/warp、内存层次、TPU 对照。
+    \item \textbf{GPU 性能优化}：roofline、control divergence、低精度、fusion、recomputation、coalescing、tiling。
+    \item \textbf{FlashAttention}：把 tiling、fusion、online softmax 和 recomputation 串起来。
+\end{enumerate}
+
+\begin{importantbox}{本讲的核心观点}
+现代 LLM 的瓶颈经常不是“缺 FLOPs”，而是\textbf{无法把数据足够快地送到计算单元}。GPU 优化的主线不是神秘技巧，而是不断减少高成本内存访问、提高算术强度、让矩阵乘法硬件尽量满载。
+\end{importantbox}
+
+\subsection{Scaling 依赖硬件进步}
+
+Kaplan 等人的 scaling laws 表明，语言模型 loss 与训练 compute 有可预测关系。只要硬件更快、利用率更高、并行化更好，在一段时间内就能继续推动模型能力。这也是为什么 GPU scaling 本身成为 LLM scaling 的基础条件。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-004.jpg}
+\caption{计算量与语言模型性能之间存在可预测关系，因此硬件吞吐和利用率直接影响模型进展。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 Kaplan et al. Neural Scaling Laws。}
+\end{figure}
+
+\subsection{从 Dennard scaling 到并行 scaling}
+
+早期处理器性能提升依赖 Dennard scaling：晶体管变小、功耗密度保持、频率可以提高。2000 年代后，这条路逐渐走到极限。单线程频率不能无限提高，性能增长转向并行化。GPU 的核心价值就是把芯片面积尽量用于大量简单计算单元，而不是复杂控制逻辑。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-005.jpg}
+\caption{传统 Dennard scaling 走弱之后，性能增长越来越依赖并行计算。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-006.jpg}
+\caption{过去十年 GPU 并行计算能力大幅扩展；没有 GPU scaling，就没有 LLM scaling。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 Bill Dally HotChips keynote。}
+\end{figure}
+
+\subsection{本章小结}
+
+LLM 系统的真实问题不是抽象 FLOPs，而是“哪些 FLOPs 能在硬件上高效执行”。GPU 讲义的价值在于把 scaling laws 的宏观规律，接到 SM、HBM、SRAM、Tensor Core 和 kernel 的微观现实上。
+
+\section{GPU 架构：吞吐优先的机器}
+
+\subsection{CPU 和 GPU 的设计哲学}
+
+CPU 优化少数线程的低延迟：复杂控制逻辑、大缓存、分支预测、乱序执行。GPU 优化大量线程的吞吐：更多 ALU、更少控制、更轻量线程。换句话说，CPU 希望“一个任务快点结束”，GPU 希望“单位时间处理更多数据”。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-007.jpg}
+\caption{CPU 与 GPU 的芯片资源分配不同：CPU 面向低延迟，GPU 面向高吞吐。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 NVIDIA CUDA refresher。}
+\end{figure}
+
+\begin{knowledgebox}{吞吐模型的代价}
+GPU 并不是“所有事情都快”。它擅长大量相同指令作用在大量数据上的 workloads。如果任务分支很多、每个线程做的事情不同、内存访问分散，GPU 的巨大并行计算单元会被控制流和内存等待拖住。
+\end{knowledgebox}
+
+\subsection{SM、SP、block、thread 与 warp}
+
+GPU 由许多 SM (Streaming Multiprocessor) 组成。每个 SM 内部包含许多执行单元、register file、shared memory、L1 cache 和 Tensor Cores。CUDA 程序把工作切成 blocks；每个 block 分配到一个 SM；block 内有很多 threads；threads 以 warp 为基本调度单位，典型 warp 大小是 32。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-008.jpg}
+\caption{GPU 执行单元：多个 SM 独立执行 blocks，每个 SM 内含大量计算单元和 Tensor Cores。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-010.jpg}
+\caption{CUDA 执行模型：threads 做实际计算，blocks 分配到 SM，warps 是 32 个连续线程的调度单位。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{SIMT 模型}
+GPU 使用 SIMT (Single Instruction, Multiple Threads)：一个 warp 内的线程执行同一条指令，但操作不同数据。这个模型让 GPU 控制逻辑很轻，但也意味着 warp 内分支会导致部分线程空转。
+\end{importantbox}
+
+\subsection{GPU 内存层次}
+
+GPU 内存越靠近 SM 越快、越小、越贵。每个 thread 有 registers；同一个 block 内 threads 可以访问 shared memory；L1 通常在 SM 内；L2 在芯片上；HBM/global memory 在芯片外。跨 block 通信通常必须通过 global memory，因此算法设计要尽量让 block 内完成尽可能多的工作。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-009.jpg}
+\caption{GPU 内存层次：shared/L1 靠近 SM，L2 在芯片上，global memory/HBM 在芯片外。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-011.jpg}
+\caption{GPU 内存模型：thread 有 registers，block 内共享 shared memory，block 间通过 global memory 交换信息。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{跨 block 通信很贵}
+一个常见优化原则是：让每个 block 负责一块数据，把重复使用的数据搬到 shared memory，在 block 内尽量完成计算，最后再写回 global memory。频繁跨 block 或反复访问 HBM 会让计算单元等待数据。
+\end{warningbox}
+
+\subsection{TPU 与 GPU 的共同点}
+
+TPU 和 GPU 在高层都可以看成：轻量控制 + 大矩阵乘法单元 + 快速片上内存 + HBM。不同点在于并行组织、网络互联、是否有 warp 这种执行单位，以及 matmul 与非 matmul workload 的取舍。TPU 对很多 matmul 工作负载非常强，但 GPU 的 SM 更多、更通用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-012.jpg}
+\caption{TPU 和 GPU 高层类似：轻量控制、矩阵乘法单元、快速内存和 HBM。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+GPU 是吞吐机器。它用大量简单线程和快速矩阵乘法硬件换取并行吞吐。代价是程序必须尊重 SIMT、warp、block、shared memory 和 HBM 的层次。算法如果无法把数据局部化，或者无法形成规则矩阵乘法，就很难吃满硬件。
+
+\section{矩阵乘法和 Memory Wall}
+
+\subsection{Tensor Cores 让 matmul 变成特权运算}
+
+早期 GPU 被研究者“黑”成矩阵乘法机器；后来 NVIDIA 直接引入 Tensor Cores，专门加速矩阵乘法。现代 GPU 上，matmul 的吞吐远高于普通浮点操作。因此 Transformer 这类以 GEMM 为中心的架构，非常符合硬件偏好。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-015.jpg}
+\caption{GPU 从图形 shader 演化为矩阵乘法机器，现代 Tensor Cores 专门服务大规模 matmul。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-016.jpg}
+\caption{Tensor Cores 让 matmul 比普通 floating point ops 快很多，matmul 因而成为硬件上的特权操作。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{架构设计的硬件审美}
+高效神经网络不只是数学上表达能力强，还要把大部分 FLOPs 放进硬件最擅长的路径。对 GPU 来说，这通常意味着大而规则的矩阵乘法，少量分支，少量非融合 pointwise 操作，尽可能少的 HBM 往返。
+\end{importantbox}
+
+\subsection{计算扩展快于内存扩展}
+
+硬件 FLOPs 的增长速度长期快于 DRAM bandwidth 和互联 bandwidth。结果是，越来越多 workloads 的瓶颈不是能算多少，而是能不能把数据及时送进 Tensor Cores。Lecture 2 的 arithmetic intensity 在这里变成 GPU 性能的中心语言。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-017.jpg}
+\caption{FLOPs 的扩展速度快于 DRAM 和互联带宽，现代加速器越来越容易撞上 memory wall。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 RISELab memory wall 文章。}
+\end{figure}
+
+\subsection{Roofline model}
+
+Roofline 模型把性能上限写成：
+
+\[
+\text{achievable FLOP/s}
+\leq
+\min(\text{peak FLOP/s},\ \text{memory bandwidth}\times \text{arithmetic intensity}).
+\]
+
+当 arithmetic intensity 低，性能受内存带宽限制；当 arithmetic intensity 高，性能受计算峰值限制。优化 ML kernel 的许多技巧，本质上都是提高 arithmetic intensity 或减少不必要内存流量。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slide-020.jpg}
+\caption{Roofline 模型：低强度 workloads memory-bound，高强度 workloads compute-bound。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{为什么 ReLU 和 matmul 的命运不同}
+ReLU 只做很少计算，却要读写完整张量，因此通常 memory-bound。Matmul 会把读进来的矩阵元素复用很多次，因此 arithmetic intensity 高，更容易接近 Tensor Core 峰值。
+\end{knowledgebox}
+
+\subsection{Matmul 的 arithmetic intensity 手算}
+
+考虑方阵乘法 \(C=AB\)，其中 \(A,B,C\in\mathbb{R}^{N\times N}\)。忽略 cache 和 tiling 的理想下界，计算量约为：
+
+\[
+2N^3 \quad \text{FLOPs}
+\]
+
+因为每个 \(C_{ij}\) 需要 \(N\) 次乘加。若每个矩阵元素读写一次，内存流量约为：
+
+\[
+3N^2 \cdot b \quad \text{bytes},
+\]
+
+其中 \(b\) 是每个元素的 byte 数。因此理想 arithmetic intensity 为：
+
+\[
+I_{\text{matmul}}\approx \frac{2N^3}{3N^2b}=\frac{2N}{3b}.
+\]
+
+当 \(N\) 增大时，matmul 的强度线性增加，这解释了为什么大矩阵更容易接近 compute-bound 区域。但这个推导是假设元素只从 HBM 读一次；真实 kernel 如果没有 tiling，会反复读同一元素，实际强度会低得多。
+
+\begin{importantbox}{为什么大 batch 和大矩阵通常更快}
+大矩阵提供更高数据复用，能摊薄 HBM 读写成本，也能产生足够多 tiles 填满 SM。小矩阵、小 batch、细碎 pointwise ops 经常无法提供足够算术强度和并行工作量，因此即使 FLOPs 很少，也可能拖慢端到端训练。
+\end{importantbox}
+
+\subsection{本章小结}
+
+GPU 性能分析的第一步是问：这个 workload 是 compute-bound 还是 memory-bound？如果 memory-bound，继续增加 FLOPs 或换更强 Tensor Core 没用；需要减少数据移动、提高复用、融合 kernel、降低精度或重计算。
+
+\section{让 GPU 跑快的六类技巧}
+
+Lecture 5 把 GPU 优化总结为六类：control divergence、低精度、operator fusion、recomputation、memory coalescing、tiling。其中第一类是执行模型问题，后五类都围绕内存展开。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{slide-021.jpg}
+\caption{GPU 性能优化的六类手段。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{Control divergence：warp 内别分裂}
+
+如果 warp 内不同 threads 走不同分支，GPU 不能真正并行执行两个分支，而是先执行一边、屏蔽另一边，再反过来。这样 warp 的有效利用率下降。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-022.jpg}
+\caption{Control divergence：warp 内线程走不同分支时，部分线程会被屏蔽并等待。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[language=C,caption={会造成 warp divergence 的分支示例}]
+if (threadIdx.x < 4) {
+    // Threads 0..3 active, other lanes idle.
+    A();
+    B();
+} else {
+    // Other lanes active, threads 0..3 idle.
+    X();
+    Y();
+}
+Z();  // All lanes active again.
+\end{lstlisting}
+
+\begin{warningbox}{分支不是不能用，而是要知道成本}
+如果分支在 warp 粒度上对齐，例如整个 warp 都走同一边，代价很小；如果同一 warp 内线程分裂，代价很大。CUDA kernel 写法经常要围绕 warp alignment 设计。
+\end{warningbox}
+
+\subsection{Low precision：少搬 bit，也用更快硬件}
+
+低精度同时带来两类收益：
+
+\begin{enumerate}
+    \item 数据更小，HBM 读写更少。
+    \item Tensor Cores 对 FP16/BF16/FP8 等格式有专门高吞吐路径。
+\end{enumerate}
+
+以 ReLU 为例，FP32 读写一个元素约 8 bytes，FP16 约 4 bytes。计算量差不多，内存流量减半，arithmetic intensity 提高。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-024.jpg}
+\caption{低精度减少数据搬运，提高 arithmetic intensity。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-025.jpg}
+\caption{Tensor Core 混合精度：低精度输入乘法，常用更高精度累加。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{FP8、MXFP8 和 scale factors}
+非常低精度不是简单把所有数截短。MXFP8 使用多个 scale factors，例如每 32 个值一个 scale，scale 本身也可用 FP8 表示。这样能扩大可表示范围，但也让 transpose、layout 和 kernel 实现更复杂。
+\end{knowledgebox}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.2\textwidth}>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.42\textwidth}}
+\toprule
+\textbf{格式} & \textbf{常见用途} & \textbf{主要取舍} \\
+\midrule
+FP32 & loss、optimizer state、敏感 reduction & 范围和精度好，但带宽和存储成本高。\\
+BF16 & 训练 activations/weights 的常用格式 & 指数范围接近 FP32，mantissa 较短，稳定性通常好于 FP16。\\
+FP16 & Tensor Core matmul、部分训练/推理 & mantissa 比 BF16 多一点，但指数范围小，容易 overflow/underflow。\\
+FP8 & 前沿训练/推理加速 & bytes 更少、matmul 更快，但需要 scale factors、校准和更复杂 kernel。\\
+MXFP8/MXFP4 & Blackwell 等新硬件的前沿低精度 & 每块共享 scale，提升动态范围，但 transpose 和 layout 更难。\\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{低精度不是全局替换}
+低精度最适合大矩阵乘法；softmax、normalization、loss、optimizer update、router 等对尺度敏感的模块常需要更高精度。一个成熟 mixed-precision recipe 往往是逐模块决定，而不是把 dtype 全部改成 FP8。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-027.jpg}
+\caption{MXFP8 训练实践中，并非所有权重都同样量化；transpose 和 scale factor 也会影响系统设计。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 arXiv 2506.08027v2。}
+\end{figure}
+
+\subsection{Operator fusion：少往 HBM 运半成品}
+
+把 GPU 想成工厂，HBM 是仓库。naive pointwise 计算每做一步就把中间结果送回仓库，下一步再取出。Fusion 把多个小操作合并到一个 kernel，在寄存器或 shared memory 中保留中间结果，只读一次、写一次。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-030.jpg}
+\caption{Operator fusion：把多个操作放进一个 kernel，减少中间结果往返 global memory。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[caption={torch.compile 可自动融合许多 pointwise 操作}]
+@torch.compile
+def trig_identity(x):
+    # Naively this is sin -> square -> cos -> square -> add.
+    # A compiler can fuse these pointwise ops into one kernel.
+    return torch.sin(x) ** 2 + torch.cos(x) ** 2
+\end{lstlisting}
+
+\begin{importantbox}{Fusion 的直觉}
+Fusion 不改变数学计算量，但改变数据生命周期。中间张量如果只存在寄存器/shared memory 中，就避免了昂贵 HBM 写入和再次读取。对 elementwise chain 这种低算术强度 workload，fusion 往往很关键。
+\end{importantbox}
+
+\subsection{Recomputation：用多算一点换少读一点}
+
+反向传播需要前向激活。如果存下所有中间激活，可能产生大量 HBM 写和读。Recomputation 的想法是丢掉部分激活，在 backward 中重新算。它牺牲 FLOPs，换取更少内存访问或更低显存占用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-034.jpg}
+\caption{存储和读取 activation 会产生大量低强度内存访问。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-035.jpg}
+\caption{Recomputation：丢掉 activation，在需要时重新计算，减少内存读写。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{Recomputation 不是“浪费计算”}
+在 memory-bound 场景里，计算单元本来就在等数据。多做一些便宜计算，减少 HBM 访问，可能让端到端更快。FlashAttention backward 就利用了这个思路：不保存 \(n\times n\) attention matrix，而是在 backward tile-by-tile 重算。
+\end{warningbox}
+
+\subsection{Memory coalescing：让一个 burst 服务整个 warp}
+
+DRAM 通常以 burst mode 读取：访问一个地址时，硬件会取回一段连续 bytes。如果 warp 内 threads 访问连续地址，这些访问可以 coalesce 成少数内存事务；如果访问跨得很散，就需要多个事务。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-036.jpg}
+\caption{DRAM burst mode：一次读会取回连续的一段数据，coalescing 利用这个事实。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-037.jpg}
+\caption{Memory coalescing：warp 内线程访问同一 burst 范围时，内存事务更少。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-038.jpg}
+\caption{矩阵乘法中的 coalescing：row-major layout 下，不同遍历方向会产生完全不同的内存事务。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{Tiling：最重要的复用手段}
+
+Tiling 把大矩阵切成小块，把 tile 加载到 shared memory，在 tile 内完成多次复用，再写回结果。对于矩阵乘法，非 tiled 做法可能让每个输入从 global memory 读 \(N\) 次；tile 大小为 \(T\) 时，每个输入从 global memory 读约 \(N/T\) 次，global memory 访问减少 \(T\) 倍。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-040.jpg}
+\caption{Tiling：把矩阵块搬到 shared memory，在高速内存中重复使用。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-041.jpg}
+\caption{Tiling math：tile size \(T\) 带来约 \(T\) 倍 global memory 访问减少。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Tiling 是 shared memory 的使用方式}
+Shared memory 小但快。Tiling 的目标不是“切块好看”，而是让每次从 HBM 取来的元素被尽可能多次使用，把昂贵的 global memory 访问变成便宜的 shared memory 访问。
+\end{importantbox}
+
+\subsection{本章小结}
+
+这些技巧可以按目标重新归类：
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.33\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}}
+\toprule
+\textbf{目标} & \textbf{技巧} & \textbf{核心效果} \\
+\midrule
+减少 HBM 访问次数 & Fusion, recomputation & 少写/少读中间结果。\\
+减少每次访问大小 & Low precision & bytes 更少，Tensor Core 更快。\\
+提高访问效率 & Coalescing, alignment & 一个 burst 服务更多 threads。\\
+增加数据复用 & Tiling & 数据进 shared memory 后重复使用。\\
+避免执行浪费 & 减少 control divergence & warp 内线程少空转。\\
+\bottomrule
+\end{longtable}
+
+\section{矩阵性能“怪象”：维度、tiling 与 wave quantization}
+
+GPU 性能曲线常出现看似离奇的波动：矩阵只增加 1 个维度，吞吐可能突然下降。Lecture 5 用 Horace He 的矩阵乘法性能分析来解释：这通常来自 tiling 对齐、memory alignment 和 wave quantization。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-044.jpg}
+\caption{矩阵性能怪象：维度是否能被 tile size 整除，会显著影响吞吐。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 thonking.ai。}
+\end{figure}
+
+\subsection{Tile size 不整除会浪费}
+
+如果 tile size 是 128，矩阵维度 256 可以被整除，所有 tile 都满；维度 257 时，最后一个 tile 只有少量有效元素，但仍占用完整 tile 资源。这种 padding 和空 tile 计算会降低利用率。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-042.jpg}
+\caption{Tile quantization：矩阵维度不能整除 tile size 时，边界 tile 会浪费大量计算。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{Memory alignment 影响 coalescing}
+
+即使 tile 形状合理，如果数据在内存中的起点和 burst 边界不对齐，原本一次 burst 能读完的数据可能需要两次事务。矩阵维度、stride、padding 都会影响这种对齐。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-043.jpg}
+\caption{Memory alignment：tile 与 burst 边界对齐时，内存事务更少。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{Wave quantization}
+
+GPU 有固定数量 SM。如果总 tile 数刚好能填满一波或几波，利用率高；如果最后一波只剩少量 tiles，大量 SM 会空闲。slides 举例：tile size 为 \(256\times128\)，从 1792 到 1793 维度时，tile 数从 \(7\times14=98\) 变成 \(8\times15=120\)。A100 有 108 个 SM，120 个 tiles 需要第二波，但第二波只有 12 个 tiles，很多 SM 空闲。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-047.jpg}
+\caption{Wave quantization：tile 数与 SM 数不匹配时，最后一波可能只有少量工作，导致周期性性能下降。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{模型维度也是系统参数}
+词表大小、隐藏维度、中间层维度和 attention head 维度不只是建模超参。它们是否能被 64、128 或 256 等硬件友好大小整除，会影响 kernel 选择、tile 利用率、coalescing 和 wave quantization。工程上常为速度 pad 一些“无意义”维度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+矩阵乘法性能曲线的波动不是玄学。它来自硬件调度的离散性：tile size、burst alignment、SM 数量和最后一波工作量。理解这些现象后，很多“为什么这个维度慢很多”的问题都能解释。
+
+\section{FlashAttention：GPU 优化技巧的综合体}
+
+FlashAttention 是本讲的综合应用。它不是近似 attention，而是精确 attention 的高效实现。它的关键不是减少 FLOPs，而是减少 HBM 读写，把数据留在 SRAM/shared memory 中，并用 online softmax 解决 softmax 的全局归一化问题。
+
+\subsection{标准 attention 的内存问题}
+
+标准 attention：
+
+\[
+O=\operatorname{softmax}\left(\frac{QK^\top}{\sqrt{d}}\right)V.
+\]
+
+朴素实现会显式构造 \(S=QK^\top\) 和 \(P=\operatorname{softmax}(S)\)，它们都是 \(n\times n\) 矩阵。长序列时，这些中间结果不仅占显存，还要在 HBM 中读写，成为主要瓶颈。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-050.jpg}
+\caption{Attention computation：三次矩阵相关操作，中间 softmax 让 naive tiling 变得不直接。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片。}
+\end{figure}
+
+\subsection{Attention 的 IO 账本}
+
+设 batch 和 head 暂时省略，\(Q,K,V\in\mathbb{R}^{n\times d}\)。朴素 attention 常 materialize 两个 \(n\times n\) 矩阵：
+
+\[
+S=QK^\top,\qquad P=\operatorname{softmax}(S).
+\]
+
+如果使用 FP16/BF16，每个元素 2 bytes，仅 \(S\) 和 \(P\) 的读写量就与 \(n^2\) 成正比。比如 \(n=8192\) 时，单个 \(n\times n\) 矩阵约有 6700 万元素，FP16 大约 128 MB；多 head、多 batch、多层后，HBM 流量迅速变成瓶颈。FlashAttention 的目标就是不把 \(S\) 和 \(P\) 当作完整中间张量写入 HBM。
+
+\begin{importantbox}{FlashAttention 省的是 HBM，不是 attention 数学}
+标准 attention 和 FlashAttention 都计算同一个函数。区别在于数据流：朴素实现把 \(S\) 和 \(P\) 物化成 HBM 中间结果；FlashAttention 把它们限制在 tile 内，在 SRAM/register 中完成局部 softmax 和输出累积。
+\end{importantbox}
+
+\subsection{Tiling Q、K、V}
+
+FlashAttention 将 \(Q,K,V\) 切成 tiles。每次把 K/V tile 加载到 SRAM，再和 Q tile 做局部计算。关键是：不把完整 \(n\times n\) attention score 或 probability matrix 写回 HBM。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-051.jpg}
+\caption{FlashAttention 的第一步：对 \(Q,K,V\) 做 tile-wise matrix multiplication，把局部块留在 SRAM。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 Dao et al. FlashAttention。}
+\end{figure}
+
+\begin{importantbox}{FlashAttention 的“快”主要来自 IO-aware}
+FlashAttention 的数学输出和普通 attention 相同。它的优势来自 IO-aware algorithm design：知道 HBM 慢、SRAM 快，于是避免把 \(S\) 和 \(P\) 这两个 \(n^2\) 中间矩阵写入 HBM。
+\end{importantbox}
+
+\subsection{Online softmax：让 softmax 可以 tile-by-tile}
+
+Softmax 难点在于每一行需要全局最大值和归一化分母：
+
+\[
+\operatorname{softmax}(x_i)=\frac{e^{x_i-m}}{\sum_j e^{x_j-m}},\qquad
+m=\max_j x_j.
+\]
+
+Online softmax 维护当前最大值 \(m\) 和归一化累积 \(l\)。当新 tile 的最大值改变时，用指数因子重标定旧累积：
+
+\[
+m_{\text{new}}=\max(m_{\text{old}}, m_{\text{tile}}),
+\]
+\[
+l_{\text{new}}
+=e^{m_{\text{old}}-m_{\text{new}}}l_{\text{old}}
+e^{m_{\text{tile}}-m_{\text{new}}}l_{\text{tile}}.
+\]
+
+输出累积也用同样因子重标定，因此可以 tile-by-tile 得到精确 softmax 结果。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-052.jpg}
+\caption{Online softmax：增量维护最大值和归一化分母，使 softmax 可以分块精确计算。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 Milakov and Gimelshein 2018。}
+\end{figure}
+
+\begin{lstlisting}[caption={Online softmax 的核心状态更新}]
+def merge_softmax_state(m_old, l_old, o_old, scores_tile, v_tile):
+    m_tile = scores_tile.max(dim=-1, keepdim=True).values
+    p_tile = torch.exp(scores_tile - m_tile)
+    l_tile = p_tile.sum(dim=-1, keepdim=True)
+    o_tile = p_tile @ v_tile
+
+    m_new = torch.maximum(m_old, m_tile)
+    old_scale = torch.exp(m_old - m_new)
+    new_scale = torch.exp(m_tile - m_new)
+    l_new = old_scale * l_old + new_scale * l_tile
+    o_new = old_scale * o_old + new_scale * o_tile
+    return m_new, l_new, o_new
+\end{lstlisting}
+
+\subsection{Forward pass 的组合}
+
+FlashAttention forward 包含：
+
+\begin{enumerate}
+    \item tile-wise 计算 \(S_{ij}=Q_iK_j^\top\)；
+    \item fusion：在同一个 kernel 中做 scaling、mask、exp 等操作；
+    \item online softmax：维护每个 query row 的 \(m,l,O\)；
+    \item 最终只写回输出 \(O\)，不写回完整 \(S\) 或 \(P\)。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-053.jpg}
+\caption{FlashAttention forward：tile-wise score、online softmax、局部输出累积，避免 materialize attention matrix。}
+\figsource{CS336 Spring 2026 Lecture 5 官方幻灯片，引用 Dao 2023。}
+\end{figure}
+
+\subsection{Backward pass 为什么重计算}
+
+Backward 如果保存 \(P\) 矩阵，会重新引入 \(n^2\) HBM 存储。FlashAttention 的选择是在 backward 中 tile-by-tile 重算必要的 scores 和 probabilities。计算多了一些，但避免了巨大中间矩阵的 HBM 往返，这正是 recomputation 的典型应用。
+
+\begin{knowledgebox}{FlashAttention = 四种技巧的组合}
+\[
+\text{FlashAttention}
+= \text{Tiling} + \text{Fusion} + \text{Online Softmax} + \text{Recomputation}.
+\]
+它不是一个孤立 trick，而是把本讲的 GPU 性能原则完整应用到 attention。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+FlashAttention 的价值在于把 attention 从 memory-bound 的 naive 实现，变成更接近 IO-optimal 的实现。它让我们看到：算法创新并不总是改变数学函数，有时是改变数据在硬件层次中的生命周期。
+
+\subsection{FlashAttention 的设计检查表}
+
+理解 FlashAttention 后，可以用同一套问题审视其他 kernel：
+
+\begin{enumerate}
+    \item 是否 materialize 了巨大中间张量？
+    \item 中间结果能否只存在于 register/shared memory？
+    \item 是否能用 online 或 streaming 形式替代全局归一化？
+    \item backward 是否必须保存所有 activation，还是可以重计算？
+    \item tile 大小是否受 shared memory、register pressure 和 occupancy 共同限制？
+\end{enumerate}
+
+\begin{knowledgebox}{IO-aware algorithm design}
+FlashAttention 的真正启发是 IO-aware：先理解硬件内存层次，再重排数学计算。很多未来 kernel 的优化空间，也会来自同一种思路：不改变输出函数，而是改变中间数据是否出现、出现在哪里、出现多久。
+\end{knowledgebox}
+
+\section{把 GPU 知识变成 LLM 工程判断}
+
+\subsection{什么时候该关注 kernel}
+
+并不是每个研究者都要手写 CUDA，但每个训练 LLM 的工程师都应该能读懂性能症状：
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.28\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.3\textwidth}}
+\toprule
+\textbf{症状} & \textbf{可能原因} & \textbf{优先检查} \\
+\midrule
+GPU 利用率低、HBM 带宽高 & memory-bound & fusion、tiling、precision、activation checkpointing。\\
+小 batch 或小矩阵很慢 & Tensor Core 利用不足、wave quantization & 增大 batch、pad 维度、选择友好 shape。\\
+Pointwise ops 占比异常高 & kernel launch 和 HBM 往返过多 & torch.compile、fused layernorm/activation。\\
+长上下文 attention 爆显存或慢 & \(n^2\) 中间矩阵和 KV cache & FlashAttention、GQA、sliding attention。\\
+分支-heavy kernel 慢 & warp divergence & 改写分支、按 warp/block 对齐。\\
+\bottomrule
+\end{longtable}
+
+\subsection{模型维度设计要硬件友好}
+
+Lecture 3 讲了 \(d_{\text{model}}\)、\(d_{\text{ff}}\)、head dim 等超参；Lecture 5 解释了为什么这些数字不能只从建模角度选择。能否被 64/128 整除，能否触发 Tensor Core 快路径，是否造成最后一波 tile 大量空闲，都会改变真实训练吞吐。
+
+\begin{importantbox}{一个朴素但重要的原则}
+如果两个维度选择在建模上差不多，选择硬件友好的那个。把 vocab size、hidden size 或 intermediate size pad 到合适倍数，常常比复杂架构微调更直接地提高训练速度。
+\end{importantbox}
+
+\subsection{本章小结}
+
+GPU 性能知识不是低层细节的炫技，而是 LLM 工程判断的基础。它会影响 batch size、sequence length、hidden size、precision、attention implementation、activation strategy 和 serving 成本。
+
+\section{拓展阅读}
+
+\begin{sloppypar}
+\begin{itemize}
+    \item Horace He, ``Making Deep Learning Go Brrrr From First Principles'': \url{https://horace.io/brrr_intro.html}
+    \item Horace He, ``What Shapes Do Matrix Multiplications Like?'': \url{https://www.thonking.ai/p/what-shapes-do-matrix-multiplications}
+    \item Dao et al., ``FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness'' (2022): \url{https://arxiv.org/abs/2205.14135}
+    \item Dao, ``FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning'' (2023): \url{https://arxiv.org/abs/2307.08691}
+    \item Milakov and Gimelshein, ``Online Normalizer Calculation for Softmax'' (2018): \url{https://arxiv.org/abs/1805.02867}
+    \item JAX Scaling Book, GPU performance notes: \url{https://jax-ml.github.io/scaling-book/gpus/}
+    \item CUDA Mode community: \url{https://github.com/cuda-mode}
+\end{itemize}
+\end{sloppypar}
+
+\section{总结与延伸}
+
+Lecture 5 的三条 takeaways：
+
+\begin{enumerate}
+    \item \textbf{硬件决定可扩展性}：LLM scaling 依赖 GPU scaling，而 GPU scaling 的主要挑战已经转向内存和数据移动。
+    \item \textbf{GPU 优化围绕数据生命周期}：低精度、fusion、recomputation、coalescing、tiling 都是在减少 HBM 往返或提高数据复用。
+    \item \textbf{FlashAttention 是 IO-aware 设计范例}：它没有近似 attention，而是用 tile 和 online softmax 改变计算顺序，让精确 attention 适配 GPU 内存层次。
+\end{enumerate}
+
+\begin{importantbox}{最终 takeaways}
+想让 LLM 训练和推理变快，不要只问“FLOPs 有多少”，还要问：数据从哪里来？在 HBM、L2、shared memory、register 之间移动几次？矩阵形状是否适合 Tensor Cores？中间结果是否必须 materialize？这些问题就是现代模型系统性能的核心。
+\end{importantbox}
+
+\begin{knowledgebox}{和后续课程的连接}
+下一步进入 kernels、Triton 和更具体的实现时，本讲提供的是性能直觉：为什么要写自定义 kernel，为什么 PyTorch eager 可能慢，为什么 FlashAttention 和 fused kernels 能改变训练可行性。
+\end{knowledgebox}
+
+\end{document}

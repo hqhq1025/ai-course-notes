@@ -9,16 +9,50 @@
 
 set -euo pipefail
 
+pdf_pages() {
+    local pdf="$1"
+    local pages=""
+
+    [ -f "$pdf" ] || {
+        echo 0
+        return
+    }
+
+    if command -v pdfinfo >/dev/null 2>&1; then
+        pages=$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/ {print $2; exit}' || true)
+        if [[ "$pages" =~ ^[0-9]+$ ]]; then
+            echo "$pages"
+            return
+        fi
+    fi
+
+    if command -v mutool >/dev/null 2>&1; then
+        pages=$(mutool show "$pdf" trailer/Root/Pages/Count 2>/dev/null | awk '/^[0-9]+$/ {print $1; exit}' || true)
+        if [[ "$pages" =~ ^[0-9]+$ ]]; then
+            echo "$pages"
+            return
+        fi
+
+        pages=$(mutool info "$pdf" 2>/dev/null | awk '/^Pages:/ {print $2; exit}' || true)
+        if [[ "$pages" =~ ^[0-9]+$ ]]; then
+            echo "$pages"
+            return
+        fi
+    fi
+
+    echo 0
+}
+
 check_one() {
     local f="$1"
     local pdf="${f%.tex}.pdf"
     local name=$(echo "$f" | sed 's|^\./||')
 
     local pages=0 secs=0 subs=0 boxes=0 figs=0 summary=0
-    [ -f "$pdf" ] && pages=$(pdfinfo "$pdf" 2>/dev/null | grep Pages | awk '{print $2}' || echo 0)
+    pages=$(pdf_pages "$pdf")
     secs=$(grep -c '\\section{' "$f" 2>/dev/null || true)
     subs=$(grep -c '\\subsection{' "$f" 2>/dev/null || true)
-    boxes=$(grep -c 'importantbox\|knowledgebox\|warningbox' "$f" 2>/dev/null || true)
+    boxes=$(grep -Ec '\\begin\{importantbox\}|\\begin\{knowledgebox\}|\\begin\{warningbox\}' "$f" 2>/dev/null || true)
     figs=$(grep -c '\\includegraphics' "$f" 2>/dev/null || true)
     summary=$(grep -c '本章小结\|总结与延伸' "$f" 2>/dev/null || true)
 

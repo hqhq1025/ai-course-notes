@@ -1,0 +1,931 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{needspace}
+
+\graphicspath{{./}{slides-images/}}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!55!black,
+    urlcolor=blue!65!black,
+    citecolor=blue!55!black
+}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
+    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
+    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=t,
+    showstringspaces=false,
+    columns=fullflexible,
+    keepspaces=true,
+    extendedchars=false
+}
+
+\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+
+\newcommand{\notetitle}{CS336 2026 Lecture 4：Attention Alternatives 与 Mixture of Experts}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{Spring 2026}
+\newcommand{\videoduration}{官方幻灯片 lecture04-slides.pdf}
+\newcommand{\videourl}{https://cs336.stanford.edu/}
+\newcommand{\videocoverpath}{cover.jpg}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.2cm}
+\ifdefempty{\videocoverpath}{}{
+\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+}
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{材料类型}：\videoduration\par
+\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{本讲主线：用稀疏性降低大模型成本}
+
+Lecture 3 讲的是现代 dense Transformer 的默认 recipe：pre-norm、RMSNorm、SwiGLU、RoPE、GQA 与稳定性技巧。Lecture 4 往前推进一步：如果 dense Transformer 的基本架构已经很强，但我们仍然被长上下文、推理吞吐、训练成本和参数容量卡住，下一步该改哪里？
+
+本讲的标题是 ``Attention alternatives and mixtures of experts''。前半部分讨论 attention 的替代和混合形式，后半部分讨论 Mixture of Experts (MoE)。这两块看起来不同：一个在 sequence dimension 上省成本，一个在 parameter dimension 上扩容量。但它们的共同思想是\textbf{稀疏激活}：不是每个 token 都必须看所有历史 token，也不是每个 token 都必须激活模型里的所有参数。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-000.jpg}
+\caption{Lecture 4 的主题：attention alternatives 与 mixtures of experts。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{本讲的统一视角}
+\begin{itemize}
+    \item \textbf{Attention alternatives}：减少每个 token 与所有历史 token 交互的成本。
+    \item \textbf{MoE}：减少每个 token 激活全部 FFN 参数的成本。
+    \item \textbf{共同难点}：稀疏性会引入路由、稳定性、负载均衡、系统通信和可复现性问题。
+\end{itemize}
+\end{importantbox}
+
+\subsection{为什么 attention 成本越来越显眼}
+
+上下文窗口越来越长，attention 的二次成本就越来越难忽略。上一讲已经看到 sliding window 和 full/local interleaving 是当前保守工具箱的一部分。但如果目标是 100K、1M 甚至更长上下文，只靠工程优化和少量局部 attention 可能不够，需要更激进的结构改动。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-001.jpg}
+\caption{上下文长度增加会放大 attention 成本，迫使模型从 full attention 走向 local、linear、hybrid 或 sparse 设计。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本讲地图}
+
+本讲可以分成六段：
+
+\begin{enumerate}
+    \item 线性 attention：用矩阵结合律把二次复杂度变成线性复杂度。
+    \item Recurrent/dual form：训练时并行，推理时递推。
+    \item Mamba-2 与 Gated Delta Net：给线性状态加入输入相关门控和擦除机制。
+    \item Sparse adaptation：不彻底改 attention，而是学一个轻量 indexer 选择少数 token。
+    \item MoE 基础：用多个 FFN experts 替代单个 FFN，每个 token 只激活少数 experts。
+    \item MoE 训练和系统：routing、load balancing、expert parallelism、router z-loss、fine-tuning 和 upcycling。
+\end{enumerate}
+
+\subsection{本章小结}
+
+Lecture 4 的重点不是“dense Transformer 已经过时”，而是说明当模型进入长上下文和超大容量时代，dense 的全连接默认形式会变得昂贵。更现代的架构设计会在质量、稀疏性和系统可实现性之间反复折中。
+
+\section{Linear Attention：从二次矩阵到递推状态}
+
+标准 self-attention 可以写成：
+
+\[
+\operatorname{Attn}(Q,K,V)=\rho(QK^\top)V,
+\]
+
+其中 \(Q,K\in\mathbb{R}^{n\times d_k}\)，\(V\in\mathbb{R}^{n\times d_v}\)，\(n\) 是序列长度，\(\rho\) 通常是 softmax。二次成本来自 \(QK^\top\)：所有 query 都和所有 key 做内积，复杂度为 \(O(n^2d_k)\)，attention matrix 本身也是 \(n\times n\)。
+
+\subsection{一个“幼稚”但重要的结合律}
+
+如果暂时把 \(\rho\) 当成恒等映射，则：
+
+\[
+QK^\top V = Q(K^\top V).
+\]
+
+左边先算 \(QK^\top\)，需要构造 \(n\times n\) 矩阵；右边先算 \(K^\top V\)，得到一个 \(d_k\times d_v\) 的小矩阵，再左乘 \(Q\)。复杂度从大致 \(n^2d_k+n^2d_v\) 变成 \(2nd_kd_v\)，当 \(n\gg d\) 时差距巨大。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-003.jpg}
+\caption{Linear attention 的基本代数：当归一化项可被处理时，先算 \(K^\top V\) 可以避免显式 \(n^2\) attention matrix。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{真正难点在 softmax}
+这个推导之所以看起来“太容易”，是因为它暂时忽略了 softmax。Softmax 逐行归一化，不能简单移到括号外。因此 linear attention 的核心不是单纯使用结合律，而是寻找可分解的 feature map 或替代归一化，使 attention 近似或替代 softmax attention。
+\end{warningbox}
+
+\subsection{Recurrent form：把历史压成状态}
+
+在 causal setting 下，linear attention 可以写成递推状态：
+
+\[
+S_t=S_{t-1}+k_t v_t^\top,\qquad
+y_t=q_t^\top S_t .
+\]
+
+直觉上，\(S_t\) 是到当前位置为止所有 key/value 外积的累积。每个新 token 只把自己的 \(k_t v_t^\top\) 写入状态，输出时用当前 query \(q_t\) 读取状态。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-004.jpg}
+\caption{Linear attention 的递推形式：训练时可以并行求前缀，推理时可以像 RNN 一样更新状态。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[caption={Linear attention recurrent form 的最小递推骨架}]
+def linear_attention_step(q_t, k_t, v_t, state):
+    # state: [d_k, d_v]
+    state = state + torch.outer(k_t, v_t)
+    y_t = q_t @ state
+    return y_t, state
+\end{lstlisting}
+
+\begin{knowledgebox}{Duality 为什么重要}
+Linear attention 的吸引力不只是渐近复杂度。它有一个很漂亮的 duality：训练时可以用并行 scan 或矩阵形式高效计算，推理时可以用递推状态逐 token 更新。这正好匹配语言模型的两种工作负载：训练要吞吐，推理要低延迟和低 KV cache。
+\end{knowledgebox}
+
+\subsection{RetNet、Minimax M1 与 hybrid linear attention}
+
+如果把旧状态乘上衰减系数 \(\gamma\)，就得到类似 RetNet 的形式：
+
+\[
+S_t=\gamma S_{t-1}+k_t v_t^\top.
+\]
+
+衰减让状态更偏向近期 token，也避免无限累积导致尺度问题。Minimax M1 一类模型采用 linear attention/full attention 的混合比例，例如 7 个 linear attention 层配 1 个 full attention 层。这样既获得长上下文线性扩展，又保留少量 full attention 处理全局精细交互。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-005.jpg}
+\caption{Minimax M1 使用 linear/full hybrid attention，并展示出随上下文长度较线性的扩展特性。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+Linear attention 的核心不是“把 softmax attention 免费变快”，而是把全历史交互改写为可递推状态。它牺牲了一些 full attention 的表达形式，换来长上下文训练和推理的系统优势。因此现代模型更常采用 hybrid 形式，而不是完全替代 full attention。
+
+\section{从 Mamba-2 到 Gated Delta Net：给状态加门控}
+
+纯 linear attention 的状态更新很简单：
+
+\[
+S_t=S_{t-1}+k_t v_t^\top.
+\]
+
+但这个状态只会不断累积，不会主动忘记或选择性覆盖。Mamba-2、Gated Delta Net 等模型可以理解成在线性状态模型上加入输入相关的门控、衰减和擦除机制，使它更接近一个可学习的动态记忆系统。
+
+\subsection{Mamba-2：输入相关的状态衰减}
+
+Lecture 4 用下面的形式概括 Mamba-2：
+
+\[
+S_t=\gamma_t S_{t-1}+k_t v_t^\top,\qquad
+y_t=q_t^\top S_t+v_t^\top D,\qquad
+\gamma_t=f(x_t).
+\]
+
+与固定 \(\gamma\) 不同，Mamba-2 的衰减由当前输入决定。这让模型可以根据 token 内容决定保留多少历史状态。再加上 skip/diagonal 项 \(v_t^\top D\)，模型既能读取历史，也能保留当前 token 的直接通道。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-006.jpg}
+\caption{Mamba-2 可以看成带输入相关 gate 的 linear attention/state-space 变体。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Mamba-2 的直觉}
+如果 standard attention 是“每次都重新查看所有历史 token”，Mamba-like 模型更像“维护一个压缩的历史状态”。这个状态是否保留、如何衰减、如何写入，都由输入控制。它的优势来自推理时不需要存储和扫描完整 KV cache。
+\end{importantbox}
+
+\subsection{Gated Delta Net：选择性写入和擦除}
+
+Gated Delta Net 进一步加入一个 \(\beta_t\) gate，以及沿当前 key 方向的擦除项：
+
+\[
+S_t=\gamma_t(I-\beta_t k_t k_t^\top)S_{t-1}
+    +\beta_t k_t v_t^\top,
+\qquad
+y_t=q_t^\top S_t .
+\]
+
+这里 \(\beta_t=0\) 时接近 no-input operation，不写入当前 token；\((I-\beta_t k_t k_t^\top)\) 则表示在写入新信息前，先擦掉状态中和当前 key 方向相关的旧信息。这个形式与 fast weight programming、test-time training 和可微记忆都有联系。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-008.jpg}
+\caption{Gated Delta Net：在 Mamba-2 式状态上加入输入 gate 与方向性擦除。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{lstlisting}[caption={Gated Delta Net 状态更新的伪代码}]
+def gdn_step(q, k, v, state, gamma, beta):
+    # state: [d_k, d_v], k: [d_k], v: [d_v]
+    erase = torch.eye(k.numel(), device=k.device) - beta * torch.outer(k, k)
+    state = gamma * (erase @ state) + beta * torch.outer(k, v)
+    y = q @ state
+    return y, state
+\end{lstlisting}
+
+\begin{warningbox}{这些模型不只是 attention 的 drop-in replacement}
+Mamba-2/GDN 一类模型改变了信息流的归纳偏置。它们可能在长上下文和推理效率上有优势，但也可能在需要精确检索任意历史 token 的任务上弱于 full attention。因此许多强模型采用 hybrid：大多数层用线性/状态模型，少数层保留 full attention。
+\end{warningbox}
+
+\subsection{Qwen Next 与 hybrid performance}
+
+Qwen 3.5 / Qwen Next 使用 GDN/full attention hybrid。幻灯片强调：这些新模型在性能上相当合理，同时推理特性更好。公开 controlled ablation 还不多，但已有证据显示小比例 full attention 加大量线性或 GDN 层，可以在 loss 与长上下文成本之间取得不错折中。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-009.jpg}
+\caption{Qwen Next 一类模型使用 GDN/attention hybrid，希望兼顾质量和推理效率。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-010.jpg}
+\caption{Hybrid attention 的初步证据：少量 full attention 与大量替代模块的组合可能有较好 loss/cost 折中。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+Linear attention、Mamba-2、GDN 形成了一条连续谱：从简单累积状态，到输入相关衰减，再到选择性擦除和写入。它们都在尝试把“全历史矩阵”压缩成“可更新状态”。当前最稳健的工程判断不是完全抛弃 full attention，而是用 hybrid 架构把 full attention 留给少数关键层。
+
+\section{Sparse Adaptation：保留 attention，但少看一些 token}
+
+另一条路线不是把 attention 改成状态模型，而是保留 attention 的形式，但让每个 query 只看少数候选 token。DeepSeek Sparse Attention (DSA) 和类似方法的目标是：用一个很轻的 indexer 先筛选相关 token，再在小集合上做精确 attention。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-011.jpg}
+\caption{Sparse adaptation：不让每个 token attend 到全部历史，而是用轻量 indexer 找候选。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{为什么 sparse adaptation 有吸引力}
+
+Sparse adaptation 的一个关键卖点是 post hoc adaptation：模型可以先用 dense short-context 方式预训练，再通过稀疏 attention 或 indexer 适配更长上下文。相比从头训练一个全新的 state-space/hybrid 模型，这条路对已有 dense checkpoint 更友好。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-012.jpg}
+\caption{DSA 一类方法尝试通过稀疏检索降低长上下文 attention 成本。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{Sparse attention 与 RAG 的区别}
+Sparse attention 的 indexer 在模型内部选择历史 token，仍然属于上下文内计算；RAG 通常从外部语料库检索文档。二者都在做“少看但看对”，但一个是模型层内的序列稀疏化，一个是系统层面的外部知识检索。
+\end{knowledgebox}
+
+\subsection{风险：检索错了就真的看不到}
+
+Full attention 的好处是所有信息都可见；sparse attention 的问题是如果 indexer 漏掉关键 token，后续精确 attention 无法恢复。因此 sparse attention 的质量取决于候选选择的 recall。对需要精确引用、代码依赖或长距离指代的任务，这一点尤其重要。
+
+\begin{warningbox}{稀疏不等于免费}
+Sparse attention 省掉了大量 attention 计算，但新增了 indexer、候选管理、稀疏 kernel 和可变形状调度。真正的收益要用 end-to-end wall-clock 和服务吞吐衡量，而不是只看理论复杂度。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Attention alternatives 有三条路线：状态化、混合化、稀疏化。它们都在对抗长上下文的二次成本。保守判断是：full attention 在短上下文和精确交互上仍然很强，替代方案最合理的位置是长上下文、多轮推理和服务成本受限场景。
+
+\section{MoE 基本思想：用稀疏激活换参数容量}
+
+Mixture of Experts 把 Transformer 里的 MLP/FFN 层替换成多个 experts 和一个 router。每个 expert 通常就是一个 FFN；router 为每个 token 选择 top-\(k\) experts。这样模型可以拥有很多专家参数，但每个 token 只激活其中一小部分。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-014.jpg}
+\caption{MoE 的基本结构：用多个 FFN experts 和 selector/router 替代单个大 FFN。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Fedus et al. 2022。}
+\end{figure}
+
+\subsection{Dense FFN 与 MoE FFN}
+
+标准 dense FFN：
+
+\[
+h=\operatorname{FFN}(x).
+\]
+
+MoE FFN：
+
+\[
+h=\sum_{i\in \operatorname{TopK}(r(x))} g_i(x)E_i(x),
+\]
+
+其中 \(E_i\) 是第 \(i\) 个 expert，\(r(x)\) 是 router score，\(g_i(x)\) 是被选 expert 的 gate weight。若每个 token 只激活 \(k\) 个 experts，单 token FLOPs 主要随 \(k\) 增长，而总参数量随 expert 总数 \(N\) 增长。
+
+\begin{importantbox}{MoE 的关键承诺}
+MoE 让模型的\textbf{总参数量}和\textbf{每 token 激活计算量}解耦。Dense 模型增加参数通常也增加 FLOPs；MoE 可以增加 experts 来增加容量，同时保持每个 token 只计算少数 experts。
+\end{importantbox}
+
+\subsection{为什么 MoE 越来越流行}
+
+幻灯片给出的证据包括 Switch Transformer、OLMoE、DeepSeek、Qwen、Mixtral、Grok、DBRX 等结果。趋势很清楚：在相同或相近 activated FLOPs 下，MoE 常常比 dense 模型表现更好；在多设备训练中，experts 也天然适合 expert parallelism。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-015.jpg}
+\caption{同等 FLOPs 下，更多 expert 参数通常能带来更低 loss。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Fedus et al. 2022。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-016.jpg}
+\caption{OLMoE 的结果：MoE 可以用更少训练计算达到强 dense baseline 的质量。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-019.jpg}
+\caption{西方公开 MoE 模型的代表结果：高性能开源模型中 MoE 比例越来越高。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{为什么中国开源 MoE 特别重要}
+Qwen、DeepSeek、MiniCPM 等模型较早公开了 MoE 架构细节和消融。尤其 DeepSeek 从 v1 到 v3 的演进，把 fine-grained experts、shared experts、device-level balancing、aux-loss-free balancing、MLA/MTP 等设计放进了可研究的公开语境。
+\end{knowledgebox}
+
+\subsection{为什么 MoE 没有一开始就统治一切}
+
+MoE 的代价同样明显：
+
+\begin{enumerate}
+    \item \textbf{路由不可微}：top-\(k\) 选择是离散操作，训练目标高度启发式。
+    \item \textbf{负载不均衡}：如果 router 总选少数 experts，系统吞吐和模型容量都会浪费。
+    \item \textbf{通信复杂}：tokens 需要跨设备发送给对应 experts，引入 all-to-all。
+    \item \textbf{稳定性和微调更难}：router、expert specialization、token dropping 都会带来额外风险。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-023.jpg}
+\caption{MoE 的阻力：基础设施复杂、目标函数启发式、训练可能不稳定。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Zoph et al. 2022 与 Fedus et al. 2022。}
+\end{figure}
+
+\subsection{本章小结}
+
+MoE 的本质是用稀疏激活扩大参数容量。它不是让模型“真的学出人类意义上的专家”，而是让每个 token 只使用一小块 FFN 参数。它的收益很强，但必须用路由、负载均衡和系统并行来兑现。
+
+\section{Routing：MoE 的离散选择问题}
+
+MoE 最大的概念难点是 routing。给定 token 表示 \(x\)，router 输出每个 expert 的分数，然后选择 top-\(k\) experts。这个选择直接决定模型用哪些参数、设备之间发送哪些 token、哪些 experts 获得梯度。
+
+\subsection{三类路由范式}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-026.jpg}
+\caption{Routing 的三种抽象：token 选 expert、expert 选 token、全局优化分配。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Fedus et al. 2022。}
+\end{figure}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.33\textwidth}}
+\toprule
+\textbf{路由类型} & \textbf{机制} & \textbf{实践地位} \\
+\midrule
+Token choice & 每个 token 选择 top-\(k\) experts & 主流事实标准，Switch/GShard/Mixtral/DeepSeek/Qwen 等都用。\\
+Expert choice & 每个 expert 选择自己要处理的 tokens & 容量控制自然，但 token 侧表达不如 top-\(k\) 直观。\\
+Global assignment & 解匹配或优化问题 & 理论上优雅，系统和训练复杂度高，主流大模型少用。\\
+\bottomrule
+\end{longtable}
+
+\subsection{Top-K routing 的基本公式}
+
+最常见 router 是一个线性分类器：
+
+\[
+s=xW_r,\qquad
+I=\operatorname{TopK}(s,k).
+\]
+
+门控权重可以对所有 experts softmax 后取 top-\(k\)，也可以先 top-\(k\) 再在候选内 softmax：
+
+\[
+g_i=\frac{\exp(s_i)}{\sum_{j\in I}\exp(s_j)},\quad i\in I.
+\]
+
+DeepSeek v1/v2、Grok、Qwen 等使用 logistic/sigmoid-style router；Mixtral、DBRX、DeepSeek v3 等有 top-\(k\) 后 softmax 的变体。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-030.jpg}
+\caption{Top-K routing 细节：router 打分、选择 experts，并用 gate weight 加权 expert 输出。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Dai et al. 2024。}
+\end{figure}
+
+\begin{lstlisting}[caption={Top-K MoE routing 的简化 PyTorch 骨架}]
+def moe_layer(x, router, experts, k=2):
+    # x: [tokens, d_model]
+    scores = router(x)                       # [tokens, n_experts]
+    top_scores, top_idx = scores.topk(k, dim=-1)
+    gates = torch.softmax(top_scores, dim=-1)
+
+    out = torch.zeros_like(x)
+    for j in range(k):
+        expert_id = top_idx[:, j]
+        weight = gates[:, j:j+1]
+        # Real systems batch tokens by expert and use grouped/sparse GEMMs.
+        for e, expert in enumerate(experts):
+            mask = expert_id == e
+            if mask.any():
+                out[mask] += weight[mask] * expert(x[mask])
+    return out
+\end{lstlisting}
+
+\begin{warningbox}{这段代码只是概念，不是高效实现}
+真实 MoE 系统不会逐 expert Python loop。它们会按 expert 对 token 分桶，跨设备 all-to-all，使用 grouped GEMM 或 MegaBlocks 一类 sparse matrix multiplication。MoE 的难点很大一部分在这里，而不在数学公式本身。
+\end{warningbox}
+
+\subsection{Shared experts 与 fine-grained experts}
+
+DeepSeek/Qwen 等模型常使用 shared experts：有些 experts 总是激活，用来承载通用计算；另一些 routed experts 由 router 选择。Fine-grained experts 则把 experts 切得更小、数量更多，每个 token 激活更多个小 experts。这给 router 更细粒度的组合空间。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-031.jpg}
+\caption{DeepSeek/Qwen 一类模型使用更多、更小的 routed experts，并加入少量 shared experts。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-034.jpg}
+\caption{近期 MoE 的 expert 设置：routed experts、active experts、shared experts 与 fine-grained ratio 差异很大。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Expert 数量不是越大越简单}
+更多 experts 增加总容量，但也增加路由难度、负载均衡难度和通信复杂度。Fine-grained experts 让组合更灵活，但每个 expert 看到的数据更少，可能更依赖稳定的 router 和良好的 balancing。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Routing 是 MoE 的“控制平面”。Top-\(k\) token choice 是事实标准，因为它简单、可扩展、效果好。但它也带来离散选择、负载均衡和系统调度问题。MoE 的大部分训练技巧，本质上都在修补 top-\(k\) routing 的副作用。
+
+\section{MoE 训练：不可微路由与负载均衡}
+
+MoE 训练的矛盾很尖锐：为了效率，需要 sparse top-\(k\) routing；但 top-\(k\) 是离散选择，不能直接通过标准反向传播优化。幻灯片列出三类方案：强化学习、随机近似、启发式 balancing losses。现实中最常用的是第三类。
+
+\subsection{为什么不用纯 RL 来学 router}
+
+把 expert 选择看成 action，用 REINFORCE 优化是“理论上正确”的方案。早期工作和 Clark et al. 2020 证明它可以工作。但 RL gradient variance 高、实现复杂、收益没有压倒性优势，因此没有成为主流。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-036.jpg}
+\caption{RL routing 可以工作，但方差和复杂度让它没有成为主流 MoE 训练方案。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{随机扰动：让专家不那么脆弱}
+
+Shazeer et al. 2017 使用 Gaussian perturbation，让 routing 决策带随机性。Fedus et al. 2022 使用 uniform multiplicative jitter。目标是让 experts 不要过早固定在脆弱分工上，并让 router 学会排序多个候选 experts。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-037.jpg}
+\caption{随机扰动 routing：在训练早期增加探索，使 experts 更鲁棒。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Shazeer et al. 2017。}
+\end{figure}
+
+\subsection{Load balancing loss}
+
+系统效率要求 experts 被均匀使用。如果大多数 tokens 都路由到少数 experts，其他 experts 学不到东西，热点 experts 又会过载。Switch Transformer 使用的 auxiliary balancing loss 可写成：
+
+\[
+\mathcal{L}_{\text{aux}}=\alpha N \sum_{i=1}^{N} f_i P_i,
+\]
+
+其中 \(N\) 是 expert 数，\(f_i\) 是实际分配给 expert \(i\) 的 token fraction，\(P_i\) 是 router 给 expert \(i\) 的平均概率。频繁被选中的 expert 会收到更强的 downweighting 信号，从而鼓励均衡。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-039.jpg}
+\caption{Switch Transformer 的 balancing loss：用启发式目标鼓励 experts 均匀使用。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Fedus et al. 2022。}
+\end{figure}
+
+\begin{lstlisting}[caption={Switch-style load balancing loss 的概念实现}]
+def load_balance_loss(router_probs, expert_idx, n_experts, alpha=0.01):
+    # router_probs: [tokens, n_experts]
+    # expert_idx: [tokens] top-1 chosen expert ids
+    tokens = router_probs.size(0)
+    one_hot = F.one_hot(expert_idx, n_experts).float()
+    f = one_hot.mean(dim=0)             # actual token fraction per expert
+    p = router_probs.mean(dim=0)        # average router probability
+    return alpha * n_experts * torch.sum(f * p)
+\end{lstlisting}
+
+\begin{knowledgebox}{为什么 balancing 是训练目标的一部分}
+MoE 的 loss 不只是语言建模 loss。你还在优化一个分布式系统：每个设备上有多少 tokens、每个 expert 的 batch 多大、是否 token dropping、all-to-all 是否均衡。Balancing loss 把系统吞吐要求注入训练目标。
+\end{knowledgebox}
+
+\subsection{DeepSeek 的 balancing 演进}
+
+DeepSeek v1/v2 使用 per-expert balancing 和 per-device balancing。per-device balancing 不只看每个 expert 是否均衡，还看设备级通信是否均衡。DeepSeek v3 引入 per-expert bias，通过在线更新偏置让冷门 experts 更容易被选中，称为 auxiliary-loss-free balancing；不过 slides 也提醒，这并非完全没有辅助约束，因为还存在 sequence-wise aux 等设计。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-040.jpg}
+\caption{DeepSeek v1/v2 的 balancing：同时考虑 expert 和 device 层面的负载。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-041.jpg}
+\caption{DeepSeek v3 的 per-expert bias：通过在线偏置调整实现更少辅助损失的均衡。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+MoE 训练的主流做法并不是优雅地求解离散路由，而是用 top-\(k\) routing 加启发式 balancing，把语言建模目标和系统均衡目标混在一起优化。它不完美，但实践效果足够好。
+
+\section{MoE 系统：Expert Parallelism 与 All-to-All}
+
+MoE 的理论 FLOPs 很漂亮，但实际速度取决于系统实现。每个 expert 可以放在不同设备上，这带来 expert parallelism；但 token 必须被发送到对应 expert，再把结果发回原顺序，这带来 all-to-all 通信。
+
+\subsection{MoE forward 的系统路径}
+
+一个 MoE layer 的典型 forward 包含：
+
+\begin{enumerate}
+    \item 本地计算 router scores 和 top-\(k\) experts。
+    \item 按 expert id 对 tokens 分桶。
+    \item all-to-all：把 tokens 发送到持有对应 experts 的设备。
+    \item 每个设备对收到的 tokens 运行本地 experts。
+    \item all-to-all：把 expert outputs 发送回 token 原设备。
+    \item 按 gate weights 聚合输出，恢复原 token 顺序。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-043.jpg}
+\caption{MoE 天然适合 expert parallelism：不同 FFN experts 可以放在不同设备上。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-044.jpg}
+\caption{MoE routing 带来并行机会，也带来 all-to-all、token 分桶和 sparse GEMM 的系统复杂度。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{MoE 只有在系统做对时才便宜}
+如果 all-to-all 慢、expert batch 太小、token dropping 过多、router 不均衡，MoE 可能比 dense 更慢更难训。MoE 的论文 FLOPs 优势必须通过网络拓扑、kernel、parallelism 和 batching 兑现。
+\end{warningbox}
+
+\subsection{Sparse matrix multiplication 与 MegaBlocks}
+
+现代 MoE 库不把每个 expert 当成一个普通小 batch 独立跑，而是使用 grouped GEMM、block-sparse matrix multiplication 或 MegaBlocks 一类方法，把不均匀 token-expert 分配变成更高效的稀疏矩阵计算。这能减少 padding 浪费，并提高 GPU 利用率。
+
+\begin{knowledgebox}{容量因子与 token dropping}
+早期 MoE 常设置 capacity factor：每个 expert 最多接收一定数量 tokens，超过容量的 tokens 被 drop 或走 residual。这样可以控制内存和通信，但会引入 batch-level stochasticity：同一个请求中的 token 是否被 drop，可能取决于同一 batch 里其他请求的 tokens。
+\end{knowledgebox}
+
+\subsection{MoE 的额外随机性}
+
+幻灯片特别提到一个有趣问题：MoE 模型可能比普通模型多一层随机性。因为 token dropping 和 expert capacity 是 batch-level 决策，其他人的 query 可能挤占某个 expert 容量，导致你的 token 被 drop。这在 serving 中会影响可复现性和稳定体验。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-046.jpg}
+\caption{MoE 的 batch-level stochasticity：其他请求可能影响你的 token 是否被专家处理。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+MoE 的系统本质是用通信换计算和参数容量。Expert parallelism 可以让模型扩到很多设备，但 all-to-all 和 sparse GEMM 是真正的工程核心。评价 MoE 不能只看 activated parameters，还要看端到端吞吐、延迟、网络负载和可复现性。
+
+\section{MoE 稳定性、微调与 Upcycling}
+
+\subsection{Router stability}
+
+Router 是 MoE 的控制器，一旦 router logits 数值不稳定，expert 使用会剧烈波动。Zoph et al. 2022 的建议包括：router 用 float32，即使模型主体用 bf16/fp16；并对 router 加 z-loss，控制 router softmax 的 partition function。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-047.jpg}
+\caption{MoE 稳定性问题：router 常需要 fp32 和额外 z-loss。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 Zoph et al. 2022。}
+\end{figure}
+
+\[
+\mathcal{L}_{z,\text{router}}=\alpha(\log\sum_i e^{s_i})^2.
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-048.jpg}
+\caption{移除 router z-loss 会显著影响训练稳定性。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{Router 是小模块，但不能低精度对待}
+Router 参数量很小，使用 fp32 的额外成本通常很低；但 router 决策影响整个 MoE 的激活路径和系统负载。把 router 做稳定，往往比省下这点算力更重要。
+\end{importantbox}
+
+\subsection{Fine-tuning 的过拟合问题}
+
+Sparse MoE 在小数据微调时容易过拟合。原因之一是每个 expert 只看到被路由到自己的 token 子集，有效数据量更小；router 还可能在微调数据上形成脆弱分配。Zoph et al. 的方案是 fine-tune 非 MoE MLP；DeepSeek 的策略则是用大量 SFT 数据，比如 1.4M 级别样本。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-049.jpg}
+\caption{MoE 微调难点：稀疏 experts 在小数据上可能更容易过拟合。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{MoE 微调不能照搬 dense recipe}
+Dense 模型微调的学习率、batch size、正则化和 LoRA 位置，不一定适合 MoE。MoE 还要考虑是否训练 router、是否训练所有 experts、是否冻结 shared experts、是否让每个 expert 获得足够数据。
+\end{warningbox}
+
+\subsection{Upcycling：从 dense checkpoint 初始化 MoE}
+
+Upcycling 问题是：能否用已有 dense LM 初始化 MoE？这很有吸引力，因为 dense 预训练 checkpoint 很贵。如果能把 dense FFN 复制或切分为 experts，再继续训练，就能避免从零训练 MoE。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-050.jpg}
+\caption{Upcycling：用已有 dense LM 初始化 MoE，再继续训练。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+MiniCPM、Qwen MoE 都展示了 upcycling 的成功案例。Qwen MoE 从 Qwen 1.8B 初始化，采用 top-\(k=4\)、60 routed experts 和 4 shared experts，与 DeepSeekMoE 风格相近，是较早确认成功的开源 upcycling 案例。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-051.jpg}
+\caption{MiniCPM upcycling：从 dense base 继续训练 MoE，获得质量提升。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-052.jpg}
+\caption{Qwen MoE upcycling：从 Qwen 1.8B 初始化，使用 top-\(k=4\)、60 experts 和 shared experts。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{本章小结}
+
+MoE 不只是预训练架构，也改变后训练流程。Router stability、fine-tuning 数据量、是否 upcycle dense checkpoint、是否冻结部分模块，都会影响最终效果。MoE 的“稀疏”在预训练、微调和 serving 中都会带来额外工程决策。
+
+\section{DeepSeek MoE 演进：v1 到 v3}
+
+Lecture 4 用 DeepSeek MoE 作为贯穿案例，因为 DeepSeek 公开了大量架构和消融细节。它的演进很好地展示了现代 MoE 如何同时优化 expert granularity、路由、负载均衡、通信和推理成本。
+
+\subsection{DeepSeek MoE v1}
+
+DeepSeek v1 约 16B total parameters、2.8B active parameters。它使用较标准的 top-\(k\) routing，加 shared experts 和 fine-grained routed experts。训练上使用 standard auxiliary balancing，包括 expert-level 和 device-level balancing。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-053.jpg}
+\caption{DeepSeek MoE v1/v2/v3 的演进概览。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{DeepSeek MoE v2}
+
+DeepSeek v2 约 236B total、21B active。主要新点包括：
+
+\begin{itemize}
+    \item shared experts 与 fine-grained routed experts 继续扩大。
+    \item 约 160 个 routed expert groups，激活 6 个。
+    \item communication balancing loss：同时平衡通信进入和通信流出。
+    \item top-\(M\) device routing：控制 token 发送到哪些设备，减少通信爆炸。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-054.jpg}
+\caption{DeepSeek MoE v2：引入通信均衡和 top-M device routing。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\subsection{DeepSeek MoE v3}
+
+DeepSeek v3 约 671B total、37B active。它使用 1 个 shared expert、258 个 fine-grained experts、每 token 激活 8 个，并引入 sigmoid+softmax top-\(k\)+top-\(M\) routing、aux-loss-free balancing 与 sequence-wise auxiliary loss。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-055.jpg}
+\caption{DeepSeek MoE v3：更大 expert 池、更细粒度 experts、aux-loss-free balancing 与 sequence-wise aux。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{DeepSeek 的 MoE 设计哲学}
+DeepSeek 的路线不是单纯“增加 experts”，而是系统性地把 experts 切细、控制每 token active parameters、限制跨设备通信、稳定 router、并用 MLA 降低 KV cache。这说明前沿 MoE 是架构和系统协同设计，不是单个 MoE layer。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+DeepSeek v1 到 v3 展示了 MoE 从“稀疏 FFN”走向完整训练系统的过程：路由、负载、通信、稳定性和推理缓存都被一起优化。读 DeepSeek MoE 不应只看参数量数字，而要看 active parameters、expert granularity 和 parallelism recipe。
+
+\section{DeepSeek v3 的额外组件：MLA 与 MTP}
+
+幻灯片最后提醒：只做 MoE 还不够。DeepSeek v3 的整体效率还依赖 MLA (Multihead Latent Attention) 和 MTP (Multi-Token Prediction) 等组件。
+
+\subsection{MLA：压缩 KV cache}
+
+MLA 的基本思路是用较低维 latent activation 表示 key/value，再从 latent 生成 \(Q,K,V\) 相关投影。推理时只需要缓存压缩后的 \(c_t^{KV}\)，而不是完整 K/V。这样可以显著降低长上下文服务中的 KV cache 内存。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-056.jpg}
+\caption{MLA 的目标：把 Q/K/V 表达为低维 latent activation 的函数。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+如果没有 RoPE，可以把上投影合并进 query projection：
+
+\[
+\langle hW_Q,\; W_U^K c_t^{KV}\rangle
+=
+\langle hW_QW_U^K,\; c_t^{KV}\rangle.
+\]
+
+这样推理时只缓存 \(c_t^{KV}\)。但 RoPE 会插入旋转矩阵 \(R_q,R_k\)，导致合并不再直接成立：
+
+\[
+\langle hW_QR_q,\; R_k W_U^K c_t^{KV}\rangle.
+\]
+
+DeepSeek 的解决方案是保留少量非 latent key dimensions 专门做 RoPE，使大部分 KV 仍可压缩缓存。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-057.jpg}
+\caption{MLA 与 RoPE 的冲突：旋转矩阵阻碍上投影合并，需要保留少量可旋转的非 latent key 维度。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{MLA 是推理成本优化，不只是 attention 小技巧}
+MoE 降低的是每 token 激活 FFN 计算；MLA 降低的是长上下文推理中的 KV cache 存储和读取。DeepSeek v3 的效率来自多项系统级设计叠加，而不是单独某个 MoE routing trick。
+\end{importantbox}
+
+\subsection{MTP：预测多个未来 token}
+
+MTP (Multi-Token Prediction) 让模型附加轻量模块预测多个未来 token。DeepSeek v3 只做 one-token-ahead 的 MTP，但思路与 EAGLE 等 speculative decoding 相关：通过辅助未来预测信号改善表示或支持更快解码。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{slide-058.jpg}
+\caption{MTP：使用轻量模块预测多个未来步骤，与 speculative decoding 相关。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片，引用 DeepSeek v3 与 EAGLE。}
+\end{figure}
+
+\subsection{本章小结}
+
+DeepSeek v3 不是“一个 MoE 模型”这么简单。它把 MoE、MLA、MTP、负载均衡、device routing 和训练数据工程组合在一起。理解这类模型时，不能把架构组件拆开孤立评价，而要看它们如何共同降低训练和推理成本。
+
+\section{把 Attention Alternatives 和 MoE 放在同一张图里}
+
+本讲最重要的综合视角是：现代 LLM 架构正在从 dense all-to-all 走向条件计算。
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}}
+\toprule
+\textbf{方向} & \textbf{节省什么} & \textbf{新增什么问题} \\
+\midrule
+Linear/Mamba/GDN & 长上下文 attention 的二次成本和 KV cache & 状态表达能力、精确检索、hybrid 比例选择。\\
+Sparse attention/DSA & 每个 query 看到的历史 token 数 & Indexer recall、稀疏 kernel、候选选择错误。\\
+GQA/MLA & KV cache 的存储和读写 & Attention 表达约束、RoPE 兼容、实现复杂度。\\
+MoE & 每 token 激活的 FFN 参数/FLOPs & Router、load balancing、all-to-all、微调稳定性。\\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{条件计算的共同陷阱}
+条件计算只有在“选择器”可靠时才有效。Linear state 要选择保留什么历史；sparse attention 要选择看哪些 token；MoE router 要选择哪些 experts。选择错了，dense 模型原本的冗余鲁棒性就消失了。
+\end{warningbox}
+
+\subsection{实践中的保守 recipe}
+
+如果目标是从零训练一个稳健 LLM：
+
+\begin{enumerate}
+    \item 先用 Lecture 3 的 dense recipe 建立 baseline。
+    \item 长上下文优先尝试 sliding/full interleaving、GQA 和 RoPE scaling。
+    \item 如果服务 KV cache 成本是主要瓶颈，再考虑 MLA、linear/hybrid attention。
+    \item 如果训练/推理预算允许多设备 expert parallelism，再考虑 MoE。
+    \item MoE 不应只评估 perplexity，还要评估 all-to-all、token dropping、expert utilization 和 fine-tuning 表现。
+\end{enumerate}
+
+\subsection{本章小结}
+
+Attention alternatives 和 MoE 都在回答同一个问题：能不能让 token 只使用必要的计算？答案越来越多地是“可以”，但代价是系统和训练复杂度上升。前沿模型的胜负，不只在数学结构，也在能否把稀疏性稳定地训出来、部署出去。
+
+\section{拓展阅读}
+
+\begin{sloppypar}
+\begin{itemize}
+    \item Katharopoulos et al., ``Transformers are RNNs: Fast Autoregressive Transformers with Linear Attention'' (2020): \url{https://arxiv.org/abs/2006.16236}
+    \item Dao and Gu, ``Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality'' (Mamba-2, 2024): \url{https://arxiv.org/abs/2405.21060}
+    \item Fedus et al., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity'' (2022): \url{https://arxiv.org/abs/2101.03961}
+    \item Shazeer et al., ``Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer'' (2017): \url{https://arxiv.org/abs/1701.06538}
+    \item Zoph et al., ``ST-MoE: Designing Stable and Transferable Sparse Expert Models'' (2022): \url{https://arxiv.org/abs/2202.08906}
+    \item Jiang et al., ``Mixtral of Experts'' (2024): \url{https://arxiv.org/abs/2401.04088}
+    \item Dai et al., ``DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models'' (2024): \url{https://arxiv.org/abs/2401.06066}
+    \item DeepSeek-AI, ``DeepSeek-V3 Technical Report'' (2024): \url{https://arxiv.org/abs/2412.19437}
+\end{itemize}
+\end{sloppypar}
+
+\section{总结与延伸}
+
+Lecture 4 可以总结为三句话：
+
+\begin{enumerate}
+    \item \textbf{长上下文让 attention 的二次成本变成核心瓶颈}，因此 linear attention、Mamba-2、GDN、sparse adaptation 和 MLA 都在尝试减少历史信息的存储与读取。
+    \item \textbf{MoE 让参数容量和每 token FLOPs 解耦}，用少量 active experts 换取大量总参数，但必须解决 routing、balancing、通信和稳定性。
+    \item \textbf{前沿架构越来越像系统设计}：数学模块、训练目标、并行策略、缓存格式和 serving 约束必须一起考虑。
+\end{enumerate}
+
+\begin{importantbox}{最终 takeaways}
+稀疏性不是目的，而是手段。好的稀疏架构会让模型少算不重要的东西，同时尽量不丢重要信息；坏的稀疏架构会把复杂性转移到 router、indexer、通信和稳定性上。Lecture 4 的真正价值，是让我们在看到新架构时问：它稀疏了什么？选择器可靠吗？系统成本真的下降了吗？
+\end{importantbox}
+
+\begin{knowledgebox}{和后续课程的连接}
+后续 GPU、parallelism、distributed training、inference 和 scaling laws 会不断回到本讲主题。MoE 和 attention alternatives 都不是孤立架构技巧，它们最终要在硬件上跑、在集群上训、在服务系统里承载真实流量。
+\end{knowledgebox}
+
+\end{document}

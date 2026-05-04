@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-**270 份 AI / LLM 公开课中文讲义 PDF**
+**301 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-270份-blue?style=for-the-badge)](.)
-[![Courses](https://img.shields.io/badge/课程系列-14个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-301份-blue?style=for-the-badge)](.)
+[![Courses](https://img.shields.io/badge/课程系列-15个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
 </div>
@@ -26,11 +26,11 @@
 
 ## 📋 课程一览
 
-### 🏫 Stanford 课程 (132 份)
+### 🏫 Stanford 课程 (142 份)
 
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
-| [**CS336**](cs336/) | Language Modeling from Scratch | 17 | Percy Liang, Tatsu Hashimoto |
+| [**CS336**](cs336/) / [**2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 10 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
 | [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
 | [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
@@ -44,6 +44,12 @@
 |------|------|------|------|
 | [**6.S191**](6s191/) | Introduction to Deep Learning | 10 | Alexander Amini + 业界嘉宾 |
 
+### 🇰🇷 KAIST 课程 (15 份)
+
+| 课程 | 主题 | 讲数 | 讲者 |
+|------|------|------|------|
+| [**CS492D**](kaist-cs492d/) | Diffusion Models and Flow Models | 15 | Minhyuk Sung |
+
 ### 🐻 Berkeley 课程 (35 份)
 
 | 课程 | 主题 | 讲数 | 亮点嘉宾 |
@@ -52,11 +58,11 @@
 | [**CS294 SP25**](talks/berkeley-llm-agents/sp25/) | Advanced LLM Agents | 12 | Jason Weston, AlphaProof, Salakhutdinov |
 | [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 11 | Noam Brown, Oriol Vinyals, James Zou |
 
-### 🇨🇳 B站系列课程 (46 份)
+### 🇨🇳 B站系列课程 (47 份)
 
 | 系列 | 主题 | 讲数 | UP主 |
 |------|------|------|------|
-| [**Modern Agent**](modern-agent/) | LLM Agent 实战 (ReAct, RAG, Codex) | 16 | 五道口纳什 |
+| [**Modern Agent**](modern-agent/) | LLM Agent 实战 (ReAct, RAG, Codex) | 17 | 五道口纳什 |
 | [**LLM Architect**](llm-architect/) | 模型架构 (MoE, RoPE, VLM, K2.5) | 10 | 五道口纳什 |
 | [**Agentic RL**](agentic-rl/) | RL for LLM (PPO→GRPO→DPO, veRL) | 20 | 五道口纳什 |
 
@@ -145,13 +151,15 @@ Ilya (Research时代) → Dario (AGI路线) → Lex (State of AI 2026)
 ```
 ai-course-notes/
 ├── cs336/                    # Stanford CS336 (17讲)
+├── cs336-2026/               # Stanford CS336 Spring 2026 (进行中)
 ├── cs153/                    # Stanford CS153 Infra@Scale (11讲)
 ├── cs224n/                   # Stanford CS224N (17讲)
 ├── cs231n/                   # Stanford CS231N (18讲)
 ├── cs224r/                   # Stanford CS224R (19讲, 含 slides)
 ├── cs146s/                   # Stanford CS146S (10周, 基于 slides)
 ├── cs25/                     # CS25 Transformers United (40讲)
-├── modern-agent/             # 五道口纳什 Modern Agent (16讲)
+├── kaist-cs492d/             # KAIST CS492D (15讲)
+├── modern-agent/             # 五道口纳什 Modern Agent (17讲)
 ├── llm-architect/            # 五道口纳什 LLM Architect (10讲)
 ├── agentic-rl/               # 五道口纳什 Agentic RL + veRL (20讲)
 ├── interviews/               # 深度访谈
@@ -189,13 +197,14 @@ graph LR
 
 | 课程 | 官网 | YouTube | Slides |
 |------|------|---------|--------|
-| CS336 | [stanford-cs336.github.io](https://stanford-cs336.github.io/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) | [GitHub](https://github.com/stanford-cs336/spring2025-lectures) |
+| CS336 | [cs336.stanford.edu](https://cs336.stanford.edu/) | [Spring 2025 播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) | [Spring 2026 GitHub](https://github.com/stanford-cs336/lectures) |
 | CS153 | [cs153.stanford.edu](https://cs153.stanford.edu/) | [W25](https://www.youtube.com/playlist?list=PL2aDf5-VARtCwgVceDClce1OcnUk1vIvR) · [S26](https://www.youtube.com/playlist?list=PL2aDf5-VARtBwz1kz5FsuSZXOig2U6aJI) | — |
 | CS224R | [cs224r.stanford.edu](https://cs224r.stanford.edu/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rPwxE0ONYRa_itZFdaKCylL) | [官网](https://cs224r.stanford.edu/spring_2025/slides/) |
 | CS25 | [web.stanford.edu/class/cs25](https://web.stanford.edu/class/cs25/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) | — |
 | CS146S | [themodernsoftware.dev](https://themodernsoftware.dev) | — | Google Slides |
 | CS224N | [官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) | [官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/slides/) |
 | CS231N | [cs231n.stanford.edu](https://cs231n.stanford.edu/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOABXSygHTsbvUz4G_YQhOb) | [官网](https://cs231n.stanford.edu/slides/2025) |
+| KAIST CS492D | [course page](https://mhsung.github.io/kaist-cs492d-fall-2024/) | [播放列表](https://www.youtube.com/playlist?list=PLQ28Nx3M4JrhkqBVIXg-i5_CVVoS1UzAv) | — |
 | Berkeley LLM Agents | [rdi.berkeley.edu](https://rdi.berkeley.edu/llm-agents/f24) | [F24](https://www.youtube.com/playlist?list=PLS01nW3RtgopsNLeM936V4TNSsvvVglLc) · [SP25](https://www.youtube.com/playlist?list=PLS01nW3RtgorL3AW8REU9nGkzhvtn6Egn) · [F25](https://www.youtube.com/playlist?list=PLS01nW3RtgoqGkm4UeqNeZLccW-OGc1fJ) | [rdi.berkeley.edu](https://rdi.berkeley.edu/llm-agents/assets/) |
 
 ---

@@ -1,0 +1,76 @@
+# Progress Log
+
+## 2026-05-04
+- Started update batch after user approval.
+- Loaded planning, YouTube PDF, Bilibili PDF, and verification skills.
+- Verified local tooling availability.
+- Counted current notes: 290 PDFs and 289 TeX files before this batch.
+- Confirmed Bilibili new videos have public metadata but no platform subtitles.
+- Marked Bilibili note generation blocked due to B站 412 plus missing Whisper.
+- Updated README and TRACKING with current inventory and active-course backlog.
+- Downloaded CS336 Spring 2026 official materials for lecture05-10 into `cs336-2026/`.
+- Verified downloaded CS336 files by `file` and `wc -c`.
+- Final verification: 290 `*-notes.pdf` files, no stale README/TRACKING strings found, `git diff --check` clean, and CS336 downloaded files have valid file types.
+- Created `NOTE_GENERATION_TODO.md` to track pending note generation.
+- Confirmed 4 A100 80GB GPUs are visible via `/proc/driver/nvidia/gpus`.
+- Confirmed `faster-whisper` and cached large-v3 model exist, but YouTube and Bilibili downloads currently require cookies.
+- Downloaded Modern Agent 17 via public Bilibili playurl API, extracted audio, transcribed on A100 with faster-whisper large-v3, generated key frames, wrote TeX, and compiled `lecture17-notes.pdf`.
+- Attempted Agentic RL 16 via public Bilibili playurl API; only preview-length media was accessible, so no incomplete PDF was generated.
+- Verification after Modern Agent 17: note count is 291, generated PDF/TeX/SRT exist, no stale README/TODO strings found, and `git diff --check` is clean.
+- Switched focus to CS336 at user request.
+- Generated `cs336-2026/lecture01/lecture01-notes.tex` from official Spring 2026 `lecture01-slides.py`.
+- Compiled initial `cs336-2026/lecture01/lecture01-notes.pdf` draft with XeLaTeX; output was 9 pages and was later superseded by the quality rewrite.
+- Updated README/TRACKING/TODO after CS336 lecture01; note count temporarily became 292 before lecture02 was added.
+- User clarified that CS336 notes must meet the repository depth standard rather than a thin summary.
+- Rewrote `cs336-2026/lecture01/lecture01-notes.tex` into a deeper 964-line course note, removed manual TikZ figures, and added official image assets under `cs336-2026/lecture01/images/`.
+- Recompiled `cs336-2026/lecture01/lecture01-notes.pdf` twice with XeLaTeX; current PDF is 27 pages by `mutool`, with 11 images including cover, 22 teaching boxes, 13 section-level summaries, and 9 code listings.
+- Patched `tools/scripts/check_quality.sh` to fall back to `mutool` when `pdfinfo` is unavailable and to count actual box environments.
+- Final verification: `tools/scripts/check_quality.sh cs336-2026/lecture01/lecture01-notes.tex` later reports `28p ⭐⭐⭐`, and `git diff --check` passed.
+- Continued CS336 Spring 2026 with lecture02 at the same depth standard.
+- Downloaded lecture02 figure assets, wrote `cs336-2026/lecture02/lecture02-notes.tex`, and compiled `lecture02-notes.pdf` twice with XeLaTeX.
+- Lecture02 verification: `tools/scripts/check_quality.sh cs336-2026/lecture02/lecture02-notes.tex` later reports `26p ⭐⭐⭐`; note count became 293 PDFs.
+- Resumed CS336 Spring 2026 at user request with stricter quality bar: deep exposition, careful technical detail, and one verified lecture at a time.
+- Started `cs336-2026/lecture03/`, using official lecture03 slides plus the existing CS336 lecture03 note as a cross-check, not as a replacement for fresh writing.
+- Wrote `cs336-2026/lecture03/lecture03-notes.tex` as a fresh Spring 2026 architecture/hyperparameters note with conservative recipe tables, formulas, code snippets, official slide figures, and explicit engineering judgment sections.
+- Compiled `cs336-2026/lecture03/lecture03-notes.pdf` with XeLaTeX; quality verification reports `35p 11s 24b 33f ⭐⭐⭐`, and repository note count is now 294 PDFs.
+- Continued to `cs336-2026/lecture04/` at user request.
+- Confirmed Spring 2026 lecture04 is broader than the old CS336 lecture04: it covers attention alternatives (linear attention, Mamba-2, Gated Delta Net, sparse adaptation/DSA) before mixture-of-experts.
+- Wrote `cs336-2026/lecture04/lecture04-notes.tex` as a fresh Spring 2026 long-form note tying attention alternatives and MoE together through sparse/conditional computation.
+- Compiled `cs336-2026/lecture04/lecture04-notes.pdf` with XeLaTeX; quality verification reports `38p 14s 21b 41f ⭐⭐⭐`, and repository note count is now 295 PDFs.
+- Continued to `cs336-2026/lecture05/` at user request.
+- Confirmed Spring 2026 lecture05 is a 55-slide GPU performance lecture: GPU/TPU architecture, memory hierarchy, low precision, fusion, recomputation, memory coalescing, tiling, matrix-performance anomalies, and FlashAttention.
+- Generated 55 slide images under `cs336-2026/lecture05/slides-images/`.
+- Wrote `cs336-2026/lecture05/lecture05-notes.tex` as a fresh Spring 2026 long-form GPU performance note with matmul arithmetic-intensity derivation, low-precision tradeoffs, attention IO accounting, and FlashAttention design checklist.
+- Compiled `cs336-2026/lecture05/lecture05-notes.pdf` with XeLaTeX; quality verification reports `31p 9s 21b 36f ⭐⭐⭐`, and repository note count is now 296 PDFs.
+- Continued to `cs336-2026/lecture06/` at user request.
+- Confirmed Spring 2026 lecture06 is an executable-source lecture on benchmarking, profiling, kernel fusion, torch.compile, and Triton kernels for GeLU, softmax, row sum, and matmul+ReLU.
+- Downloaded/copied lecture06 visual assets into `cs336-2026/lecture06/images/`, including official referenced images and selected L05 GPU/roofline/tiling recap figures.
+- Wrote `cs336-2026/lecture06/lecture06-notes.tex` as a fresh Spring 2026 long-form Kernels/Triton note with detailed GPU programming-model review, benchmarking/profiling methodology, fusion memory accounting, and Triton kernel walkthroughs for GeLU, softmax, row sum, and matmul+ReLU.
+- Compiled `cs336-2026/lecture06/lecture06-notes.pdf` twice with XeLaTeX; single-note quality verification reports `31p 13s 31b 12f ⭐⭐⭐`, and repository note count is now 297 PDFs.
+- Final L06 verification: `tools/scripts/check_quality.sh cs336-2026` reports lecture01-06 all `⭐⭐⭐`, `find . -name '*-notes.pdf' | wc -l` reports `297`, `git diff --check` passed, and the L06 LaTeX log scan found no LaTeX errors, undefined control sequences, rerun requests, or overfull boxes.
+- Continued to `cs336-2026/lecture07/` at user request.
+- Confirmed Spring 2026 lecture07 is an executable-source lecture on multi-GPU parallelism: collectives, interconnect hardware, NCCL/PyTorch distributed, communication benchmark methodology, and bare-bones data/tensor/pipeline parallel MLPs.
+- Downloaded lecture07 visual assets into `cs336-2026/lecture07/images/`, including official CS336 diagrams for ranks/interconnect/data/tensor/pipeline parallelism and PyTorch/NCCL diagrams for broadcast, scatter, gather, reduce, all-gather, all-reduce, and reduce-scatter.
+- Wrote `cs336-2026/lecture07/lecture07-notes.tex` as a fresh Spring 2026 long-form Parallelism note with detailed sections on collectives, hardware topology, NCCL/PyTorch distributed, communication benchmarking, and data/tensor/pipeline parallel MLP implementations.
+- Compiled `cs336-2026/lecture07/lecture07-notes.pdf` twice with XeLaTeX; single-note quality verification reports `25p 12s 30b 14f ⭐⭐⭐`, and canonical repository source-note count excluding `.web-build` is now 298 PDFs.
+- Final L07 verification: `tools/scripts/check_quality.sh cs336-2026` reports lecture01-07 all `⭐⭐⭐`, canonical source-note count excluding `.web-build` reports `298`, `git diff --check` passed, and the L07 LaTeX log scan found no LaTeX errors, undefined control sequences, rerun requests, or overfull boxes.
+- Continued to `cs336-2026/lecture08/` at user request.
+- Confirmed Spring 2026 lecture08 is a 73-page official PDF deck titled "Parallelism Basics".
+- Attempted to install missing `pdftotext` support via `sudo apt-get install poppler-utils`; host requires an interactive sudo password, so the install was blocked.
+- Used existing `mutool` to extract lecture08 per-page text into `/tmp/lecture08-text-*.txt` and render 73 slide images under `cs336-2026/lecture08/slides-images/`.
+- Wrote `cs336-2026/lecture08/lecture08-notes.tex` as a fresh Spring 2026 long-form Parallelism Basics note with detailed sections on networking, collective communication, ZeRO/FSDP, pipeline/tensor/sequence/expert/context parallelism, 3D/4D recipes, and recent model configurations.
+- Compiled `cs336-2026/lecture08/lecture08-notes.pdf` twice with XeLaTeX; single-note quality verification reports `41p 14s 23b 51f ⭐⭐⭐`, and canonical repository source-note count excluding `.web-build` is now 299 PDFs.
+- Final L08 verification: `tools/scripts/check_quality.sh cs336-2026` reports lecture01-08 all `⭐⭐⭐`, canonical source-note count excluding `.web-build` reports `299`, `git diff --check` passed, and the L08 LaTeX log scan found no LaTeX errors, undefined control sequences, rerun requests, or overfull boxes.
+- Installed `poppler-utils` after the user provided the sudo password for this session; `pdftotext`, `pdfinfo`, and `pdfimages` are now available.
+- Continued to `cs336-2026/lecture09/` at user request.
+- Confirmed Spring 2026 lecture09 is a 57-page official PDF deck titled "Scaling Laws - Basics".
+- Used `pdfinfo`/`pdftotext` to inspect/extract L09 text and rendered 57 slide images under `cs336-2026/lecture09/slides-images/`.
+- Wrote `cs336-2026/lecture09/lecture09-notes.tex` as a fresh Spring 2026 long-form Scaling Laws Basics note with detailed sections on data scaling, data mixture/repetition, model-engineering scaling laws, critical batch size, muP, joint data-model scaling, Kaplan vs Chinchilla, IsoFLOPS, and deployment-aware overtraining.
+- Compiled `cs336-2026/lecture09/lecture09-notes.pdf` with XeLaTeX until cross-reference warnings cleared; single-note quality verification reports `36p 12s 23b 44f ⭐⭐⭐`, and canonical repository source-note count excluding `.web-build` is now 300 PDFs.
+- Final L09 verification: `tools/scripts/check_quality.sh cs336-2026` reports lecture01-09 all `⭐⭐⭐`, canonical source-note count excluding `.web-build` reports `300`, `git diff --check` passed, and the L09 LaTeX log scan found no LaTeX errors, undefined control sequences, rerun requests, or overfull boxes.
+- Continued to `cs336-2026/lecture10/` at user request.
+- Confirmed Spring 2026 lecture10 is an executable-source lecture titled "inference", covering inference metrics, arithmetic intensity, KV cache, prefill/generation, latency-throughput tradeoffs, KV compression, quantization, pruning/distillation, speculative sampling, continuous batching, and PagedAttention.
+- Downloaded lecture10 visual assets into `cs336-2026/lecture10/images/`, including official CS336 figures, Scaling Book Transformer/inference/GQA diagrams, a continuous batching diagram, and a quantization diagram; converted WebP inference diagrams to PNG for local TeX compilation.
+- Wrote `cs336-2026/lecture10/lecture10-notes.tex` as a fresh Spring 2026 long-form Inference note with detailed derivations, 29 figures, 41 teaching boxes, and code snippets for KV-cache decoding, latency-throughput modeling, speculative sampling, continuous batching, and PagedAttention block tables.
+- Compiled `cs336-2026/lecture10/lecture10-notes.pdf` with XeLaTeX until cross-reference warnings cleared; single-note quality verification reports `30p 13s 41b 29f ⭐⭐⭐`, and canonical repository source-note count excluding `.web-build` is now 301 PDFs.
+- Final L10 verification: `tools/scripts/check_quality.sh cs336-2026` reports lecture01-10 all `⭐⭐⭐`, canonical source-note count excluding `.web-build` reports `301`, `git diff --check` passed, and the L10 LaTeX log scan found no LaTeX errors, undefined control sequences, rerun requests, or overfull boxes.
