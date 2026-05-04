@@ -1,0 +1,298 @@
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from PIL import Image
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+GENERATOR = REPO_ROOT / "tools" / "web" / "generate_site.py"
+
+
+def write_image(path: Path, size: tuple[int, int], mode: str = "RGB") -> None:
+    if mode == "RGBA":
+        image = Image.new("RGBA", size, (40, 120, 160, 220))
+    else:
+        image = Image.new("RGB", size, (40, 120, 160))
+    image.save(path)
+
+
+def write_sample_repo(root: Path) -> None:
+    (root / "sample-course" / "lecture01").mkdir(parents=True)
+    (root / "sample-course" / "lecture01" / "images").mkdir(parents=True)
+    write_image(root / "sample-course" / "lecture01" / "cover.jpg", (2000, 1000))
+    write_image(root / "sample-course" / "lecture01" / "diagram.jpg", (2000, 1000))
+    write_image(root / "sample-course" / "lecture01" / "images" / "fallback.png", (1800, 900), mode="RGBA")
+    (root / "sample-course" / "lecture01" / "lecture01-notes.pdf").write_bytes(b"%PDF-1.4")
+    (root / "sample-course" / "lecture01" / "slides.pdf").write_bytes(b"%PDF-1.4")
+    (root / "README.md").write_text(
+        """
+# AI Course Notes
+
+### Test Courses
+
+| 课程 | 主题 | 讲数 | 讲者 |
+|------|------|------|------|
+| [**Sample Course**](sample-course/) | Testing conversion | 1 | Test Teacher |
+""".strip(),
+        encoding="utf-8",
+    )
+    (root / "sample-course" / "lecture01" / "lecture01-notes.tex").write_text(
+        r"""
+\documentclass[a4paper]{article}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\newcommand{\notetitle}{Sample Lecture \& Agents}
+\newcommand{\noteauthors}{基于 Test Teacher 授课内容整理}
+\newcommand{\videopublishdate}{2026-05-04}
+\newcommand{\videochannel}{Sample Channel}
+\newcommand{\videourl}{https://example.com/watch}
+\newcommand{\videocoverpath}{cover.jpg}
+\begin{document}
+\tableofcontents
+\newpage
+
+\section{第一节：为什么需要网页阅读}
+这是一个 \textbf{粗体} 段落，包含 inline math $a+b=c$。
+
+\begin{importantbox}{核心概念}
+LaTeX 是唯一源文稿，网页由构建脚本生成。
+\end{importantbox}
+
+\[
+E = mc^2
+\]
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{diagram.jpg}
+\caption{示意图：网页阅读器结构\protect\footnotemark}
+\end{figure}
+\footnotetext{测试来源。}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{missing.png}
+\caption{缺失图片}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{fallback.png}
+\caption{子目录图片}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{slides.pdf}
+\caption{PDF 图示}
+\end{figure}
+
+\begin{tikzpicture}
+\begin{axis}[width=4cm,height=3cm]
+\addplot coordinates {(0,0) (1,1)};
+\end{axis}
+\end{tikzpicture}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\node[draw]{Figure TikZ};
+\end{tikzpicture}
+\caption{Figure 中的 TikZ}
+\end{figure}
+
+参见 \href{../../QUALITY.md}{本地质量文档}，以及 [本地 Markdown 链接](../../QUALITY.md)。
+
+\begin{tabular}{ll}
+\textbf{字段} & \textbf{含义} \\
+Title & 页面标题 \\
+\end{tabular}
+
+\begin{lstlisting}[language=Python,caption={示例代码}]
+print("hello")
+\end{lstlisting}
+
+\begin{mystery}
+unknown environment body
+\end{mystery}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def run_generator(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(GENERATOR),
+            "--root",
+            str(root),
+            "--output",
+            str(root / ".web-build"),
+            *extra,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    build = tmp_path / ".web-build"
+    assert (build / "mkdocs.yml").is_file()
+    assert (build / "docs" / "index.md").is_file()
+    assert (build / "docs" / "sample-course" / "index.md").is_file()
+    assert (build / "docs" / "sample-course" / "lecture01" / "index.md").is_file()
+
+    mkdocs_yml = (build / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "theme:" in mkdocs_yml
+    assert "material" in mkdocs_yml
+    assert "https://hqhq1025.github.io/ai-course-notes/" in mkdocs_yml
+    assert "sample-course/index.md" in mkdocs_yml
+    assert "sample-course/lecture01/index.md" in mkdocs_yml
+
+    home = (build / "docs" / "index.md").read_text(encoding="utf-8")
+    assert "Test Courses" in home
+    assert "Sample Course" in home
+    assert "1 份讲义" in home
+    assert "(sample-course/index.md)" in home
+
+    course = (build / "docs" / "sample-course" / "index.md").read_text(encoding="utf-8")
+    assert "# Sample Course" in course
+    assert "Sample Lecture & Agents" in course
+    assert "lecture01/index.md" in course
+
+
+def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = (
+        tmp_path
+        / ".web-build"
+        / "docs"
+        / "sample-course"
+        / "lecture01"
+        / "index.md"
+    ).read_text(encoding="utf-8")
+
+    assert "# Sample Lecture & Agents" in page
+    assert "基于 Test Teacher 授课内容整理" in page
+    assert "[观看视频](https://example.com/watch)" in page
+    assert "[备用 PDF](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/lecture01-notes.pdf)" in page
+    assert "[LaTeX 源码](lecture01-notes.tex)" in page
+    assert "## 第一节：为什么需要网页阅读" in page
+    assert "**粗体**" in page
+    assert "$a+b=c$" in page
+    assert '!!! important "核心概念"' in page
+    assert "$$" in page and "E = mc^2" in page
+    assert "![示意图：网页阅读器结构](diagram.jpg)" in page
+    assert "测试来源。" in page
+    assert "图片资源缺失" in page
+    assert "![子目录图片](images/fallback.png)" in page
+    assert "PDF 图示资源" in page
+    assert "[打开 PDF 图示](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/slides.pdf)" in page
+    assert "[本地质量文档](../../QUALITY.md)" not in page
+    assert "本地质量文档" in page
+    assert "[本地 Markdown 链接](../../QUALITY.md)" not in page
+    assert "本地 Markdown 链接" in page
+    assert "| 字段 | 含义 |" in page
+    assert "| --- | --- |" in page
+    assert '```python title="示例代码"' in page
+    assert 'print("hello")' in page
+    assert "??? quote \"未转换的 LaTeX 环境：mystery\"" in page
+
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg").is_file()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "images" / "fallback.png").is_file()
+    assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.pdf").exists()
+    assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "slides.pdf").exists()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.tex").is_file()
+
+
+def test_compresses_image_copies_without_touching_sources(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+    source = tmp_path / "sample-course" / "lecture01" / "diagram.jpg"
+    before_size = source.stat().st_size
+
+    result = run_generator(tmp_path, "--strict", "--image-max-width", "640", "--jpeg-quality", "70")
+
+    assert result.returncode == 0, result.stderr
+    generated = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg"
+    with Image.open(source) as image:
+        assert image.size == (2000, 1000)
+    with Image.open(generated) as image:
+        assert image.width == 640
+    assert source.stat().st_size == before_size
+
+
+def test_can_disable_image_compression(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict", "--no-compress-images")
+
+    assert result.returncode == 0, result.stderr
+    generated = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg"
+    with Image.open(generated) as image:
+        assert image.size == (2000, 1000)
+
+
+def test_tikz_blocks_render_to_svg_when_tex_tools_are_available(tmp_path: Path) -> None:
+    if not shutil.which("xelatex") or not shutil.which("dvisvgm"):
+        return
+
+    write_sample_repo(tmp_path)
+    tex_path = tmp_path / "sample-course" / "lecture01" / "lecture01-notes.tex"
+    tex = tex_path.read_text(encoding="utf-8")
+    tex = tex.replace(
+        r"\begin{mystery}",
+        r"\begin{tikzpicture}\node[draw]{TikZ Test};\end{tikzpicture}" + "\n" + r"\begin{mystery}",
+    )
+    tex_path.write_text(tex, encoding="utf-8")
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = (
+        tmp_path
+        / ".web-build"
+        / "docs"
+        / "sample-course"
+        / "lecture01"
+        / "index.md"
+    ).read_text(encoding="utf-8")
+    assert "tikz-" in page
+    assert ".svg" in page
+    assert "Figure 中的 TikZ" in page
+    assert list((tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01").glob("tikz-*.svg"))
+
+
+def test_default_output_summarizes_warnings_without_flooding(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    assert "Warning summary:" in result.stdout
+    assert "Missing assets: 1" in result.stdout
+    assert "missing.png" not in result.stdout
+    assert "--verbose-warnings" in result.stdout
+
+
+def test_verbose_warnings_show_detailed_messages(tmp_path: Path) -> None:
+    write_sample_repo(tmp_path)
+
+    result = run_generator(tmp_path, "--strict", "--verbose-warnings")
+
+    assert result.returncode == 0, result.stderr
+    assert "missing.png" in result.stdout
