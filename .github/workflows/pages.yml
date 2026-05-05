@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -26,11 +26,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-web.txt
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Restore generated asset cache
+        uses: actions/cache@v4
+        with:
+          path: .web-build/.cache
+          key: ai-notes-generated-${{ runner.os }}-v2-${{ hashFiles('**/*-notes.tex', '**/*.jpg', '**/*.jpeg', '**/*.png') }}
+          restore-keys: |
+            ai-notes-generated-${{ runner.os }}-v2-
+
+      - name: Install web dependencies
+        run: python -m pip install -r requirements-web.txt
+
+      - name: Check TikZ cache coverage
+        id: tikz-cache
+        run: |
+          if python tools/web/generate_site.py --strict --check-tikz-cache; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install TeX tools for TikZ SVG rendering
+        if: steps.tikz-cache.outputs.complete != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -42,9 +65,6 @@ jobs:
             texlive-pictures \
             texlive-xetex \
             texlive-lang-chinese
-
-      - name: Install web dependencies
-        run: python -m pip install -r requirements-web.txt
 
       - name: Generate MkDocs workspace
         run: python tools/web/generate_site.py --strict --verbose-warnings --fail-on-tikz-warnings

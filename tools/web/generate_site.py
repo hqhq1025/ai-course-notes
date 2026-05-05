@@ -26,6 +26,7 @@ RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
 TIKZ_RENDERER_VERSION = "pdf-v2"
+IMAGE_CACHE_VERSION = "image-v1"
 VISIBLE_SPACE_SYMBOL = "\u2423"
 FENCE_LINE_PATTERN = re.compile(r"^[ \t]*```", re.M)
 FENCED_CODE_BLOCK_PATTERN = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.M | re.S)
@@ -96,8 +97,10 @@ class BuildContext:
     compress_images: bool
     image_max_width: int
     jpeg_quality: int
+    image_cache_dir: Path | None = None
     warnings: list[WarningEvent] = field(default_factory=list)
     tikz_preambles: dict[Path, str] = field(default_factory=dict)
+    tikz_collector: list[Path] | None = None
     current_note: Note | None = None
     current_out_dir: Path | None = None
 
@@ -622,6 +625,32 @@ def is_pdf_asset(path: Path) -> bool:
     return path.suffix.lower() in PDF_EXTENSIONS
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def image_cache_path(ctx: BuildContext, src: Path) -> Path | None:
+    if ctx.image_cache_dir is None:
+        return None
+    source_digest = file_sha256(src)
+    cache_digest = hashlib.sha256(
+        "\n".join(
+            [
+                IMAGE_CACHE_VERSION,
+                src.suffix.lower(),
+                str(ctx.image_max_width),
+                str(ctx.jpeg_quality),
+                source_digest,
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    return ctx.image_cache_dir / f"image-{cache_digest}{src.suffix.lower()}"
+
+
 def external_asset_url(ctx: BuildContext, src: Path) -> str:
     try:
         return raw_github_url(src.relative_to(ctx.root))
@@ -630,8 +659,13 @@ def external_asset_url(ctx: BuildContext, src: Path) -> str:
 
 
 def copy_image_asset(ctx: BuildContext, src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
     if not ctx.compress_images or not should_compress_image(src):
         shutil.copy2(src, dest)
+        return
+    cached_image = image_cache_path(ctx, src)
+    if cached_image is not None and cached_image.exists():
+        shutil.copy2(cached_image, dest)
         return
     try:
         with Image.open(src) as image:
@@ -648,6 +682,9 @@ def copy_image_asset(ctx: BuildContext, src: Path, dest: Path) -> None:
                 image.save(dest, format="PNG", optimize=True)
             else:
                 shutil.copy2(src, dest)
+        if cached_image is not None:
+            cached_image.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dest, cached_image)
     except Exception as exc:
         shutil.copy2(src, dest)
         if ctx.current_note is not None:
@@ -824,13 +861,63 @@ def tikz_preamble_for_note(ctx: BuildContext, note: Note) -> str:
     return preamble
 
 
-def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
-    note = ctx.current_note
-    if note is None or ctx.current_out_dir is None:
-        return fallback_tikz_environment(block)
+def iter_env_blocks(text: str, env: str) -> list[EnvBlock]:
+    blocks: list[EnvBlock] = []
+    pos = 0
+    while True:
+        block = find_env_block(text, env, pos)
+        if block is None:
+            break
+        blocks.append(block)
+        pos = block.end
+    return blocks
+
+
+def tikz_svg_filename(ctx: BuildContext, note: Note, block: EnvBlock) -> str:
     preamble = tikz_preamble_for_note(ctx, note)
     digest = hashlib.sha256((TIKZ_RENDERER_VERSION + "\n" + preamble + "\n" + block.source).encode("utf-8")).hexdigest()[:16]
-    filename = f"tikz-{digest}.svg"
+    return f"tikz-{digest}.svg"
+
+
+def tikz_cache_entries(ctx: BuildContext, notes: list[Note]) -> list[Path]:
+    entries: list[Path] = []
+    previous_note = ctx.current_note
+    previous_out_dir = ctx.current_out_dir
+    previous_collector = ctx.tikz_collector
+    ctx.tikz_collector = entries
+    ctx.current_out_dir = None
+    try:
+        for note in notes:
+            ctx.current_note = note
+            convert_latex_fragment(strip_document_shell(read_text(note.tex_path)), ctx)
+    finally:
+        ctx.current_note = previous_note
+        ctx.current_out_dir = previous_out_dir
+        ctx.tikz_collector = previous_collector
+    return entries
+
+
+def print_tikz_cache_status(ctx: BuildContext, notes: list[Note]) -> int:
+    entries = tikz_cache_entries(ctx, notes)
+    missing = [entry for entry in entries if not entry.exists()]
+    if missing:
+        cached = len(entries) - len(missing)
+        print(f"TikZ cache incomplete: {cached}/{len(entries)} diagrams cached; {len(missing)} missing.")
+        return 1
+    print(f"TikZ cache complete: {len(entries)} diagrams cached.")
+    return 0
+
+
+def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
+    note = ctx.current_note
+    if note is None:
+        return fallback_tikz_environment(block)
+    if ctx.tikz_collector is not None:
+        ctx.tikz_collector.append(ctx.cache_dir / tikz_svg_filename(ctx, note, block))
+        return ""
+    if ctx.current_out_dir is None:
+        return fallback_tikz_environment(block)
+    filename = tikz_svg_filename(ctx, note, block)
     cached_svg = ctx.cache_dir / filename
     if not ctx.render_tikz:
         ctx.warn("tikz_skipped", f"TikZ rendering disabled for {note.rel_tex_path}; keeping source block")
@@ -839,6 +926,7 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
         if not shutil.which("xelatex") or not shutil.which("dvisvgm"):
             ctx.warn("tikz_skipped", f"TikZ tools unavailable for {note.rel_tex_path}; keeping source block")
             return fallback_tikz_environment(block)
+        preamble = tikz_preamble_for_note(ctx, note)
         tex = "\n".join(
             [
                 preamble,
@@ -1471,16 +1559,22 @@ def print_warning_report(warnings: list[WarningEvent], *, verbose: bool) -> None
         print("- Run with --verbose-warnings for details.")
 
 
-def prepare_output(output: Path) -> tuple[Path, Path]:
+def resolve_cache_root(output: Path, cache_root: Path | None) -> Path:
+    return (cache_root if cache_root is not None else output / ".cache").resolve()
+
+
+def prepare_output(output: Path, cache_root: Path | None = None) -> tuple[Path, Path, Path]:
     docs_dir = output / "docs"
-    cache_dir = output / ".cache" / "tikz"
+    resolved_cache_root = resolve_cache_root(output, cache_root)
+    cache_dir = resolved_cache_root / "tikz"
+    image_cache_dir = resolved_cache_root / "images"
     if docs_dir.exists():
         shutil.rmtree(docs_dir)
     docs_dir.mkdir(parents=True, exist_ok=True)
     mkdocs_yml = output / "mkdocs.yml"
     if mkdocs_yml.exists():
         mkdocs_yml.unlink()
-    return docs_dir, cache_dir
+    return docs_dir, cache_dir, image_cache_dir
 
 
 def build_site(
@@ -1494,10 +1588,11 @@ def build_site(
     compress_images: bool,
     image_max_width: int,
     jpeg_quality: int,
+    cache_root: Path | None,
 ) -> int:
     root = root.resolve()
     output = output.resolve()
-    docs_dir, cache_dir = prepare_output(output)
+    docs_dir, cache_dir, image_cache_dir = prepare_output(output, cache_root)
     ctx = BuildContext(
         root=root,
         output=output,
@@ -1507,6 +1602,7 @@ def build_site(
         compress_images=compress_images,
         image_max_width=image_max_width,
         jpeg_quality=jpeg_quality,
+        image_cache_dir=image_cache_dir,
     )
     catalog_entries = parse_readme_catalog(root)
     entries_by_path = {entry.path.as_posix(): entry for entry in catalog_entries}
@@ -1540,6 +1636,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--output", type=Path, default=Path(".web-build"), help="Generated MkDocs workspace")
+    parser.add_argument("--cache-dir", type=Path, default=None, help="Persistent cache root for generated TikZ SVGs and compressed images")
+    parser.add_argument("--check-tikz-cache", action="store_true", help="Return zero when every TikZ diagram already has a cached SVG")
     parser.add_argument("--strict", action="store_true", help="Return non-zero if no notes can be generated")
     parser.add_argument("--skip-tikz", action="store_true", help="Keep TikZ source blocks instead of rendering SVG")
     parser.add_argument("--fail-on-tikz-warnings", action="store_true", help="Return non-zero if TikZ diagrams fall back to source blocks")
@@ -1548,6 +1646,27 @@ def main() -> int:
     parser.add_argument("--image-max-width", type=int, default=1600, help="Maximum width for copied JPG/PNG assets")
     parser.add_argument("--jpeg-quality", type=int, default=82, help="JPEG quality for copied JPG assets")
     args = parser.parse_args()
+    if args.check_tikz_cache:
+        root = args.root.resolve()
+        output = args.output.resolve()
+        cache_root = resolve_cache_root(output, args.cache_dir)
+        docs_dir = output / "docs"
+        ctx = BuildContext(
+            root=root,
+            output=output,
+            docs_dir=docs_dir,
+            cache_dir=cache_root / "tikz",
+            render_tikz=True,
+            compress_images=not args.no_compress_images,
+            image_max_width=args.image_max_width,
+            jpeg_quality=args.jpeg_quality,
+            image_cache_dir=cache_root / "images",
+        )
+        notes = discover_notes(root)
+        if args.strict and not notes:
+            print("No LaTeX notes found.")
+            return 1
+        return print_tikz_cache_status(ctx, notes)
     return build_site(
         args.root,
         args.output,
@@ -1558,6 +1677,7 @@ def main() -> int:
         compress_images=not args.no_compress_images,
         image_max_width=args.image_max_width,
         jpeg_quality=args.jpeg_quality,
+        cache_root=args.cache_dir,
     )
 
 

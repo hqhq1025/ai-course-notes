@@ -391,6 +391,39 @@ def test_compresses_image_copies_without_touching_sources(tmp_path: Path) -> Non
     assert source.stat().st_size == before_size
 
 
+def test_reuses_compressed_image_cache_without_recompressing(tmp_path: Path, monkeypatch) -> None:
+    generator = load_generator_module()
+    source = tmp_path / "source.jpg"
+    write_image(source, (2000, 1000))
+    ctx = generator.BuildContext(
+        root=tmp_path,
+        output=tmp_path / ".web-build",
+        docs_dir=tmp_path / ".web-build" / "docs",
+        cache_dir=tmp_path / ".web-build" / ".cache" / "tikz",
+        render_tikz=True,
+        compress_images=True,
+        image_max_width=640,
+        jpeg_quality=70,
+        image_cache_dir=tmp_path / ".web-build" / ".cache" / "images",
+    )
+    first_dest = tmp_path / "first" / "source.jpg"
+    second_dest = tmp_path / "second" / "source.jpg"
+
+    generator.copy_image_asset(ctx, source, first_dest)
+
+    cache_files = list(ctx.image_cache_dir.glob("image-*.jpg"))
+    assert len(cache_files) == 1
+
+    def fail_open(*_args, **_kwargs):
+        raise AssertionError("cached image copy should not recompress")
+
+    monkeypatch.setattr(generator.Image, "open", fail_open)
+
+    generator.copy_image_asset(ctx, source, second_dest)
+
+    assert second_dest.read_bytes() == first_dest.read_bytes()
+
+
 def test_can_disable_image_compression(tmp_path: Path) -> None:
     write_sample_repo(tmp_path)
 
@@ -449,6 +482,33 @@ def test_tikz_fallback_does_not_look_like_an_unconverted_error(tmp_path: Path) -
     ).read_text(encoding="utf-8")
     assert "TikZ 图暂未渲染" in page
     assert "未转换的 LaTeX 环境：tikzpicture" not in page
+
+
+def test_tikz_cache_status_reports_missing_then_complete(tmp_path: Path) -> None:
+    generator = load_generator_module()
+    write_sample_repo(tmp_path)
+    ctx = generator.BuildContext(
+        root=tmp_path,
+        output=tmp_path / ".web-build",
+        docs_dir=tmp_path / ".web-build" / "docs",
+        cache_dir=tmp_path / ".web-build" / ".cache" / "tikz",
+        render_tikz=True,
+        compress_images=True,
+        image_max_width=1600,
+        jpeg_quality=82,
+        image_cache_dir=tmp_path / ".web-build" / ".cache" / "images",
+    )
+    notes = generator.discover_notes(tmp_path)
+    entries = generator.tikz_cache_entries(ctx, notes)
+
+    assert len(entries) == 2
+    assert generator.print_tikz_cache_status(ctx, notes) == 1
+
+    for entry in entries:
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text("<svg></svg>", encoding="utf-8")
+
+    assert generator.print_tikz_cache_status(ctx, notes) == 0
 
 
 def test_can_fail_build_when_tikz_falls_back(tmp_path: Path) -> None:
@@ -697,6 +757,12 @@ def test_verbose_warnings_show_detailed_messages(tmp_path: Path) -> None:
 def test_pages_workflow_installs_tikz_font_dependencies_and_fails_on_fallback() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
 
+    assert "cancel-in-progress: true" in workflow
+    assert "cache: pip" in workflow
+    assert "actions/cache@v4" in workflow
+    assert ".web-build/.cache" in workflow
+    assert "--check-tikz-cache" in workflow
+    assert "if: steps.tikz-cache.outputs.complete != 'true'" in workflow
     assert "mupdf-tools" in workflow
     assert "texlive-fonts-recommended" in workflow
     assert "--fail-on-tikz-warnings" in workflow
