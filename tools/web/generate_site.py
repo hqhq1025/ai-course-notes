@@ -1327,6 +1327,17 @@ def css_content() -> str:
     return """
 :root {
   --ai-notes-card-border: rgba(28, 86, 87, 0.18);
+  --ai-notes-page-gutter: clamp(0.8rem, 2vw, 2rem);
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-grid {
+    max-width: min(96rem, calc(100vw - 2 * var(--ai-notes-page-gutter)));
+  }
+
+  .md-main__inner {
+    width: 100%;
+  }
 }
 
 .md-typeset .course-grid {

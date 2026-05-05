@@ -261,6 +261,10 @@ def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     assert "sample-course/index.md" in mkdocs_yml
     assert "sample-course/lecture01/index.md" in mkdocs_yml
 
+    css = (build / "docs" / "assets" / "stylesheets" / "ai-notes.css").read_text(encoding="utf-8")
+    assert ".md-grid" in css
+    assert "max-width: min(96rem, calc(100vw - 2 * var(--ai-notes-page-gutter)))" in css
+
     home = (build / "docs" / "index.md").read_text(encoding="utf-8")
     assert "Test Courses" in home
     assert "Sample Course" in home
