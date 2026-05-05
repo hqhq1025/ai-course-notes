@@ -26,6 +26,7 @@ RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
 TIKZ_RENDERER_VERSION = "pdf-v2"
+VISIBLE_SPACE_SYMBOL = "\u2423"
 FENCE_LINE_PATTERN = re.compile(r"^[ \t]*```", re.M)
 FENCED_CODE_BLOCK_PATTERN = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.M | re.S)
 PASSTHROUGH_LATEX_ENVIRONMENTS = {
@@ -208,20 +209,59 @@ def replace_simple_command(text: str, command: str, replacement: str) -> str:
     return re.sub(rf"\\{command}\b", replacement, text)
 
 
+def replace_braced_command(
+    text: str,
+    command: str,
+    arg_count: int,
+    repl: Callable[[list[str]], str],
+) -> tuple[str, int]:
+    pattern = re.compile(rf"\\{re.escape(command)}\b")
+    pos = 0
+    pieces: list[str] = []
+    replacements = 0
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            pieces.append(text[pos:])
+            break
+        index = match.end()
+        args: list[str] = []
+        ok = True
+        for _ in range(arg_count):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text) or text[index] != "{":
+                ok = False
+                break
+            try:
+                value, index = read_braced(text, index)
+            except ValueError:
+                ok = False
+                break
+            args.append(value)
+        if not ok:
+            pieces.append(text[pos : match.end()])
+            pos = match.end()
+            continue
+        pieces.append(text[pos : match.start()])
+        pieces.append(repl(args))
+        replacements += 1
+        pos = index
+    return "".join(pieces), replacements
+
+
 def replace_one_arg_commands(text: str, replacements: dict[str, str]) -> str:
     changed = True
     while changed:
         changed = False
         for command, template in replacements.items():
-            pattern = re.compile(rf"\\{command}\{{([^{{}}]*)\}}")
-
-            def repl(match: re.Match[str]) -> str:
-                nonlocal changed
-                changed = True
-                return template.format(match.group(1))
-
-            text = pattern.sub(repl, text)
+            text, count = replace_braced_command(text, command, 1, lambda args, template=template: template.format(args[0]))
+            changed = changed or count > 0
     return text
+
+
+def replace_latex_symbol_commands(text: str) -> str:
+    return text.replace(r"\textvisiblespace", VISIBLE_SPACE_SYMBOL)
 
 
 def replace_multicolumn_commands(text: str) -> str:
@@ -260,6 +300,7 @@ def replace_multicolumn_commands(text: str) -> str:
 
 def clean_latex_text(text: str) -> str:
     text = text.replace(r"\protect", "")
+    text = replace_latex_symbol_commands(text)
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
     text = re.sub(r"\\footnote\{([^{}]*)\}", r"\1", text)
@@ -274,10 +315,18 @@ def clean_latex_text(text: str) -> str:
             "mathrm": "{}",
             "mathbf": "{}",
             "mathcal": "{}",
+            "sqrt": "√{}",
+            "nolinkurl": "{}",
+            "url": "{}",
         },
     )
-    text = re.sub(r"\\href\{([^{}]*)\}\{([^{}]*)\}", r"\2", text)
-    text = re.sub(r"\\url\{([^{}]*)\}", r"\1", text)
+    text, _ = replace_braced_command(
+        text,
+        "frac",
+        2,
+        lambda args: f"{clean_latex_text(args[0])}/{clean_latex_text(args[1])}",
+    )
+    text, _ = replace_braced_command(text, "href", 2, lambda args: clean_latex_text(args[1]))
     text = text.replace(r"\'{e}", "e").replace(r'\"{o}', "o")
     replacements = {
         r"\&": "&",
@@ -287,12 +336,28 @@ def clean_latex_text(text: str) -> str:
         r"\_": "_",
         r"\{": "{",
         r"\}": "}",
+        r"\neq": "≠",
+        r"\ne": "≠",
+        r"\approx": "≈",
         r"\sim": "≈",
         r"\times": "×",
+        r"\cdot": "·",
         r"\leq": "≤",
         r"\geq": "≥",
+        r"\le": "≤",
+        r"\ge": "≥",
+        r"\pm": "±",
+        r"\infty": "∞",
+        r"\Theta": "Θ",
+        r"\theta": "θ",
+        r"\alpha": "α",
+        r"\beta": "β",
+        r"\eta": "η",
+        r"\sigma": "σ",
         r"\rightarrow": "→",
         r"\to": "→",
+        r"\ldots": "…",
+        r"\dots": "…",
         r"~": " ",
         "---": "—",
         "--": "–",
@@ -303,14 +368,28 @@ def clean_latex_text(text: str) -> str:
     text = replace_simple_command(text, "TeX", "TeX")
     text = text.replace("{", "").replace("}", "")
     text = re.sub(r"\\[a-zA-Z]+\*?", "", text)
+    text = re.sub(r"\$\s*\$", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
 def convert_inline_latex(text: str) -> str:
     text = text.replace(r"\protect", "")
+    text = replace_latex_symbol_commands(text)
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
+
+    def href_repl(args: list[str]) -> str:
+        url = clean_latex_text(args[0])
+        label_source, _ = replace_braced_command(args[1], "nolinkurl", 1, lambda inner: inner[0])
+        label_source, _ = replace_braced_command(label_source, "url", 1, lambda inner: inner[0])
+        label = convert_inline_latex(label_source).strip()
+        if re.match(r"^(https?:|mailto:|#)", url):
+            return f"[{label}]({url})"
+        return label
+
+    text, _ = replace_braced_command(text, "href", 2, href_repl)
+
     text = replace_one_arg_commands(
         text,
         {
@@ -329,21 +408,15 @@ def convert_inline_latex(text: str) -> str:
             "text": "{}",
         },
     )
-    def href_repl(match: re.Match[str]) -> str:
-        url = match.group(1)
-        label = match.group(2)
-        if re.match(r"^(https?:|mailto:|#)", url):
-            return f"[{label}]({url})"
-        return label
 
-    def url_repl(match: re.Match[str]) -> str:
-        url = match.group(1)
+    def url_repl(args: list[str]) -> str:
+        url = args[0]
         if re.match(r"^(https?:|mailto:)", url):
             return f"<{url}>"
         return url
 
-    text = re.sub(r"\\href\{([^{}]*)\}\{([^{}]*)\}", href_repl, text)
-    text = re.sub(r"\\url\{([^{}]*)\}", url_repl, text)
+    text, _ = replace_braced_command(text, "url", 1, url_repl)
+    text, _ = replace_braced_command(text, "nolinkurl", 1, url_repl)
     text = text.replace(r"\&", "&")
     text = text.replace(r"\%", "%")
     text = text.replace(r"\$", "$")
@@ -929,6 +1002,10 @@ def sanitize_local_markdown_links(text: str) -> str:
     return re.sub(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)", repl, text)
 
 
+def strip_latex_comment_lines(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("%"))
+
+
 def transform_outside_math_and_code(text: str, transform: Callable[[str], str]) -> str:
     protected: list[str] = []
 
@@ -953,6 +1030,7 @@ def transform_outside_math_and_code(text: str, transform: Callable[[str], str]) 
 
 
 def normalize_markdown(text: str) -> str:
+    text = transform_outside_math_and_code(text, strip_latex_comment_lines)
     text = transform_outside_math_and_code(text, convert_inline_latex)
     text = transform_outside_math_and_code(text, sanitize_local_markdown_links)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -960,7 +1038,7 @@ def normalize_markdown(text: str) -> str:
 
 
 def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
-    text = fragment
+    text = replace_latex_symbol_commands(fragment)
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))

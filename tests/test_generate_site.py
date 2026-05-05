@@ -71,6 +71,10 @@ def write_sample_repo(root: Path) -> None:
 LaTeX 是唯一源文稿，网页由构建脚本生成。
 \end{importantbox}
 
+\begin{warningbox}{GQA 压缩比 $\neq$ 推理加速比}
+标题里的单符号数学不能吞掉后面的正文转换。
+\end{warningbox}
+
 \begin{knowledgebox}{嵌套列表}
 \begin{itemize}
     \item 第一层条目
@@ -103,9 +107,11 @@ v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.8\textwidth]{diagram.jpg}
-\caption{示意图：网页阅读器结构\protect\footnotemark}
+\caption{示意图：网页阅读器结构，缩放 $\sqrt{\text{layers}}$\protect\footnotemark}
 \end{figure}
 \footnotetext{测试来源。}
+
+数学 caption 后的 \textbf{粗体} 也要继续转换。
 
 \begin{figure}[H]
 \centering
@@ -143,6 +149,16 @@ v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 
 这里有一段带 LaTeX 引号的等宽文本：``\texttt{key1:val1 query:key2}''，后面的列表仍然要正常转换。
 
+嵌套链接：\href{https://example.com/docs}{\nolinkurl{https://example.com/docs}}。
+
+可见空格：\texttt{the\textvisiblespace cat}。
+
+\[
+\texttt{a\textvisiblespace b}
+\]
+
+%% 这是一行 LaTeX 注释，不应该出现在网页正文。
+
 \begin{itemize}
 \item 引号后的列表
 \end{itemize}
@@ -158,6 +174,7 @@ Title & 页面标题 \\
 \textbf{包装} & \textbf{结果} \\
 table & Markdown 表格 \\
 math & $\sim 4\times$ \\
+visible & \texttt{a\textvisiblespace b} \\
 \multicolumn{2}{l}{\textbf{合计行}} \\
 \end{tabular}
 \caption{包装表格}
@@ -280,6 +297,8 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "**粗体**" in page
     assert "$a+b=c$" in page
     assert '!!! important "核心概念"' in page
+    assert '!!! warning "GQA 压缩比 $≠$ 推理加速比"' in page
+    assert "标题里的单符号数学不能吞掉后面的正文转换。" in page
     assert '!!! info "嵌套列表"' in page
     assert "第一层条目" in page
     assert "第二层条目" in page
@@ -294,8 +313,10 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert r"\begin{bmatrix}" in page
     assert "未转换的 LaTeX 环境：bmatrix" not in page
     assert "未转换的 LaTeX 环境：pmatrix" not in page
-    assert "![示意图：网页阅读器结构](diagram.jpg)" in page
+    assert f"![示意图：网页阅读器结构，缩放 $√layers$](diagram.jpg)" in page
     assert "测试来源。" in page
+    assert "数学 caption 后的 **粗体** 也要继续转换。" in page
+    assert r"数学 caption 后的 \textbf" not in page
     assert "图片资源缺失" in page
     assert "未转换的 LaTeX 环境：figure" not in page
     assert "![子目录图片](images/fallback.png)" in page
@@ -306,6 +327,14 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "[本地 Markdown 链接](../../QUALITY.md)" not in page
     assert "本地 Markdown 链接" in page
     assert "`key1:val1 query:key2`" in page
+    visible_space = "\u2423"
+    assert "[https://example.com/docs](https://example.com/docs)" in page
+    assert r"\href{" not in page
+    assert r"\nolinkurl{" not in page
+    assert f"`the{visible_space} cat`" in page
+    assert rf"\texttt{{a{visible_space} b}}" in page
+    assert r"\textvisiblespace" not in page
+    assert "这是一行 LaTeX 注释" not in page
     assert "- 引号后的列表" in page
     assert r"\begin{itemize}" not in page
     assert "| 字段 | 含义 |" in page
@@ -313,6 +342,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "| 包装 | 结果 |" in page
     assert "| table | Markdown 表格 |" in page
     assert "| math | $≈ 4×$ |" in page
+    assert f"| visible | a{visible_space} b |" in page
     assert "| 合计行 |" in page
     assert "2l合计行" not in page
     assert "*包装表格*" in page
