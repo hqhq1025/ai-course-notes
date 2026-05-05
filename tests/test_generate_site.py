@@ -85,6 +85,17 @@ E = mc^2
 \]
 
 \[
+\texttt{decode}(\texttt{encode}(x)) = x
+\]
+
+行内数学里的等宽命令也要保留：\(\texttt{encode}(x)\)。
+
+\[
+\text{compression ratio} =
+\frac{\text{number of UTF-8 bytes}}{\text{number of tokens}}
+\]
+
+\[
 M = \begin{bmatrix}1 & 0 \\ 0 & 1\end{bmatrix},\quad
 v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 \]
@@ -274,6 +285,12 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "第二层条目" in page
     assert "未转换的 LaTeX 环境：itemize" not in page
     assert "$$" in page and "E = mc^2" in page
+    assert r"\texttt{decode}(\texttt{encode}(x)) = x" in page
+    assert r"\(\texttt{encode}(x)\)" in page
+    assert r"\text{compression ratio}" in page
+    assert r"\frac{\text{number of UTF-8 bytes}}{\text{number of tokens}}" in page
+    assert "`decode`(`encode`(x)) = x" not in page
+    assert r"\frac{number of UTF-8 bytes}{number of tokens}" not in page
     assert r"\begin{bmatrix}" in page
     assert "未转换的 LaTeX 环境：bmatrix" not in page
     assert "未转换的 LaTeX 环境：pmatrix" not in page

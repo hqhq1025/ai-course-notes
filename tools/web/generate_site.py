@@ -14,6 +14,7 @@ from collections import Counter
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote
 
 from PIL import Image, ImageOps
@@ -928,9 +929,32 @@ def sanitize_local_markdown_links(text: str) -> str:
     return re.sub(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)", repl, text)
 
 
+def transform_outside_math_and_code(text: str, transform: Callable[[str], str]) -> str:
+    protected: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"@@AI_NOTES_MATH_OR_CODE_{len(protected) - 1}@@"
+
+    patterns = [
+        FENCED_CODE_BLOCK_PATTERN,
+        re.compile(r"\$\$.*?\$\$", re.S),
+        re.compile(r"\\\[.*?\\\]", re.S),
+        re.compile(r"\\\(.*?\\\)", re.S),
+        re.compile(r"(?<!\\)\$(?!\$)(?:\\.|[^\n$])+(?<!\\)\$(?!\$)"),
+    ]
+    for pattern in patterns:
+        text = pattern.sub(protect, text)
+
+    text = transform(text)
+    for index, value in enumerate(protected):
+        text = text.replace(f"@@AI_NOTES_MATH_OR_CODE_{index}@@", value)
+    return text
+
+
 def normalize_markdown(text: str) -> str:
-    text = convert_inline_latex(text)
-    text = sanitize_local_markdown_links(text)
+    text = transform_outside_math_and_code(text, convert_inline_latex)
+    text = transform_outside_math_and_code(text, sanitize_local_markdown_links)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip() + "\n"
 
