@@ -409,7 +409,7 @@ def test_can_fail_build_when_tikz_falls_back(tmp_path: Path) -> None:
     assert "TikZ diagrams skipped" in result.stdout
 
 
-def test_tikz_renderer_uses_xdv_pipeline_without_pdf_dependency(tmp_path: Path, monkeypatch) -> None:
+def test_tikz_renderer_uses_pdf_pipeline_for_tikz_drawing_specials(tmp_path: Path, monkeypatch) -> None:
     generator = load_generator_module()
     root = tmp_path / "repo"
     note_dir = root / "sample-course" / "lecture01"
@@ -460,11 +460,11 @@ def test_tikz_renderer_uses_xdv_pipeline_without_pdf_dependency(tmp_path: Path, 
     def fake_run(cmd, cwd, check, stdout, stderr, text, timeout):
         calls.append(cmd)
         if cmd[0] == "xelatex":
-            assert "-no-pdf" in cmd
-            (cwd / "tikz.xdv").write_text("xdv", encoding="utf-8")
+            assert "-no-pdf" not in cmd
+            (cwd / "tikz.pdf").write_text("%PDF", encoding="utf-8")
         elif cmd[0] == "dvisvgm":
-            assert "--pdf" not in cmd
-            assert "tikz.xdv" in cmd
+            assert "--pdf" in cmd
+            assert "tikz.pdf" in cmd
             (cwd / "tikz.svg").write_text("<svg></svg>", encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0)
 
@@ -478,6 +478,141 @@ def test_tikz_renderer_uses_xdv_pipeline_without_pdf_dependency(tmp_path: Path, 
     assert (out_dir / markdown.split("(")[1].split(")")[0]).is_file()
     assert calls[0][0] == "xelatex"
     assert calls[1][0] == "dvisvgm"
+
+
+def test_tikz_renderer_does_not_reuse_cache_from_old_pipeline(tmp_path: Path, monkeypatch) -> None:
+    generator = load_generator_module()
+    root = tmp_path / "repo"
+    note_dir = root / "sample-course" / "lecture01"
+    out_dir = tmp_path / "out"
+    note_dir.mkdir(parents=True)
+    out_dir.mkdir()
+    tex_path = note_dir / "lecture01-notes.tex"
+    tex_path.write_text(
+        r"""
+\documentclass{article}
+\usepackage{tikz}
+\begin{document}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+    note = generator.Note(
+        root=root,
+        tex_path=tex_path,
+        route_dir=Path("sample-course/lecture01"),
+        course_dir=Path("sample-course"),
+        title="Sample",
+    )
+    ctx = generator.BuildContext(
+        root=root,
+        output=tmp_path / "build",
+        docs_dir=tmp_path / "build" / "docs",
+        cache_dir=tmp_path / "build" / ".cache" / "tikz",
+        render_tikz=True,
+        compress_images=True,
+        image_max_width=1600,
+        jpeg_quality=82,
+        current_note=note,
+        current_out_dir=out_dir,
+    )
+    block = generator.EnvBlock(
+        env="tikzpicture",
+        start=0,
+        end=0,
+        args=[],
+        optional_args=[],
+        body=r"\node[draw]{A};",
+        source=r"\begin{tikzpicture}\node[draw]{A};\end{tikzpicture}",
+    )
+    preamble = generator.tikz_preamble_for_note(ctx, note)
+    old_digest = generator.hashlib.sha256((preamble + "\n" + block.source).encode("utf-8")).hexdigest()[:16]
+    ctx.cache_dir.mkdir(parents=True)
+    (ctx.cache_dir / f"tikz-{old_digest}.svg").write_text("<svg>old renderer</svg>", encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, cwd, check, stdout, stderr, text, timeout):
+        calls.append(cmd)
+        if cmd[0] == "xelatex":
+            (cwd / "tikz.pdf").write_text("%PDF", encoding="utf-8")
+        elif cmd[0] == "dvisvgm":
+            (cwd / "tikz.svg").write_text("<svg>new renderer</svg>", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(generator.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(generator.subprocess, "run", fake_run)
+
+    markdown = generator.render_tikz_to_svg(ctx, block)
+    generated = (out_dir / markdown.split("(")[1].split(")")[0]).read_text(encoding="utf-8")
+
+    assert calls
+    assert "new renderer" in generated
+    assert "old renderer" not in generated
+
+
+def test_tikz_renderer_rejects_svg_with_page_footer_artifacts(tmp_path: Path, monkeypatch) -> None:
+    generator = load_generator_module()
+    root = tmp_path / "repo"
+    note_dir = root / "sample-course" / "lecture01"
+    out_dir = tmp_path / "out"
+    note_dir.mkdir(parents=True)
+    out_dir.mkdir()
+    tex_path = note_dir / "lecture01-notes.tex"
+    tex_path.write_text(
+        r"""
+\documentclass{article}
+\usepackage{tikz}
+\begin{document}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+    note = generator.Note(
+        root=root,
+        tex_path=tex_path,
+        route_dir=Path("sample-course/lecture01"),
+        course_dir=Path("sample-course"),
+        title="Sample",
+    )
+    ctx = generator.BuildContext(
+        root=root,
+        output=tmp_path / "build",
+        docs_dir=tmp_path / "build" / "docs",
+        cache_dir=tmp_path / "build" / ".cache" / "tikz",
+        render_tikz=True,
+        compress_images=True,
+        image_max_width=1600,
+        jpeg_quality=82,
+        current_note=note,
+        current_out_dir=out_dir,
+    )
+    block = generator.EnvBlock(
+        env="tikzpicture",
+        start=0,
+        end=0,
+        args=[],
+        optional_args=[],
+        body=r"\node[draw]{A};",
+        source=r"\begin{tikzpicture}\node[draw]{A};\end{tikzpicture}",
+    )
+
+    def fake_run(cmd, cwd, check, stdout, stderr, text, timeout):
+        if cmd[0] == "xelatex":
+            (cwd / "tikz.pdf").write_text("%PDF", encoding="utf-8")
+        elif cmd[0] == "dvisvgm":
+            (cwd / "tikz.svg").write_text(
+                f"<svg><a xlink:href='{generator.REPO_URL}'>AI Course Notes</a></svg>",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(generator.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(generator.subprocess, "run", fake_run)
+
+    markdown = generator.render_tikz_to_svg(ctx, block)
+
+    assert "TikZ 图暂未渲染" in markdown
+    assert any(warning.kind == "tikz_failed" for warning in ctx.warnings)
 
 
 def test_inline_triple_backticks_do_not_mark_rest_as_fenced_code() -> None:

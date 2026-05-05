@@ -24,6 +24,7 @@ REPO_URL = "https://github.com/hqhq1025/ai-course-notes"
 RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
+TIKZ_RENDERER_VERSION = "pdf-v2"
 FENCE_LINE_PATTERN = re.compile(r"^[ \t]*```", re.M)
 FENCED_CODE_BLOCK_PATTERN = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.M | re.S)
 PASSTHROUGH_LATEX_ENVIRONMENTS = {
@@ -754,7 +755,7 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
     if note is None or ctx.current_out_dir is None:
         return fallback_tikz_environment(block)
     preamble = tikz_preamble_for_note(ctx, note)
-    digest = hashlib.sha256((preamble + "\n" + block.source).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256((TIKZ_RENDERER_VERSION + "\n" + preamble + "\n" + block.source).encode("utf-8")).hexdigest()[:16]
     filename = f"tikz-{digest}.svg"
     cached_svg = ctx.cache_dir / filename
     if not ctx.render_tikz:
@@ -764,13 +765,22 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
         if not shutil.which("xelatex") or not shutil.which("dvisvgm"):
             ctx.warn("tikz_skipped", f"TikZ tools unavailable for {note.rel_tex_path}; keeping source block")
             return fallback_tikz_environment(block)
-        tex = "\n".join([preamble, r"\begin{document}", block.source, r"\end{document}"])
+        tex = "\n".join(
+            [
+                preamble,
+                r"\begin{document}",
+                r"\pagestyle{empty}",
+                r"\thispagestyle{empty}",
+                block.source,
+                r"\end{document}",
+            ]
+        )
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             (tmp_path / "tikz.tex").write_text(tex, encoding="utf-8")
             try:
                 subprocess.run(
-                    ["xelatex", "-no-pdf", "-interaction=nonstopmode", "tikz.tex"],
+                    ["xelatex", "-interaction=nonstopmode", "tikz.tex"],
                     cwd=tmp_path,
                     check=True,
                     stdout=subprocess.PIPE,
@@ -779,7 +789,7 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
                     timeout=45,
                 )
                 subprocess.run(
-                    ["dvisvgm", "-n", "-o", "tikz.svg", "tikz.xdv"],
+                    ["dvisvgm", "--pdf", "-n", "-o", "tikz.svg", "tikz.pdf"],
                     cwd=tmp_path,
                     check=True,
                     stdout=subprocess.PIPE,
@@ -787,7 +797,8 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
                     text=True,
                     timeout=30,
                 )
-            except (subprocess.SubprocessError, FileNotFoundError) as exc:
+                validate_tikz_svg(tmp_path / "tikz.svg")
+            except (subprocess.SubprocessError, FileNotFoundError, ValueError) as exc:
                 ctx.warn("tikz_failed", f"TikZ render failed for {note.rel_tex_path}: {format_subprocess_error(exc)}")
                 return fallback_tikz_environment(block)
             ctx.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -802,6 +813,14 @@ def format_subprocess_error(exc: BaseException) -> str:
         tail = "\n".join(output.splitlines()[-12:])
         return f"{exc}; output tail: {tail}" if tail else str(exc)
     return str(exc)
+
+
+def validate_tikz_svg(svg_path: Path) -> None:
+    if not svg_path.is_file() or svg_path.stat().st_size == 0:
+        raise ValueError("dvisvgm did not produce a non-empty SVG")
+    svg = read_text(svg_path)
+    if REPO_URL in svg or "AI Course Notes" in svg:
+        raise ValueError("rendered SVG contains page footer/link artifacts")
 
 
 def fallback_tikz_environment(block: EnvBlock) -> str:
