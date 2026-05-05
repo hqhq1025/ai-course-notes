@@ -646,6 +646,7 @@ def test_verbose_warnings_show_detailed_messages(tmp_path: Path) -> None:
 def test_pages_workflow_installs_tikz_font_dependencies_and_fails_on_fallback() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
 
+    assert "mupdf-tools" in workflow
     assert "texlive-fonts-recommended" in workflow
     assert "--fail-on-tikz-warnings" in workflow
     assert "--verbose-warnings" in workflow
