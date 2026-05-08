@@ -194,7 +194,10 @@ ai-course-notes/
 ├── modern-agent/          # 五道口纳什 Modern Agent (16讲)
 ├── llm-architect/         # 五道口纳什 LLM Architect (10讲)
 ├── agentic-rl/            # 五道口纳什 Agentic RL + veRL (20讲)
-├── interviews/            # 访谈 (杨植麟/季逸超/谢赛宁)
+├── interviews/            # 访谈（按频道/来源分组）
+│   ├── whynot-tv/         # WhynotTV
+│   ├── zhang-xiaojun/     # 张小珺商业访谈录
+│   └── ungrounded/        # Ungrounded 不着边际
 ├── talks/
 │   ├── berkeley-llm-agents/  # Berkeley CS294 LLM Agents (35讲, f24/sp25/f25)
 │   ├── qingke-*/           # 青稞 AI 嘉年华 (4场圆桌)
