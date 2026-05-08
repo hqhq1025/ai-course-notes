@@ -198,10 +198,11 @@ ai-course-notes/
 │   ├── whynot-tv/         # WhynotTV
 │   ├── zhang-xiaojun/     # 张小珺商业访谈录
 │   └── ungrounded/        # Ungrounded 不着边际
-├── talks/
+├── talks/                 # 演讲与访谈（按频道/来源分组）
 │   ├── berkeley-llm-agents/  # Berkeley CS294 LLM Agents (35讲, f24/sp25/f25)
-│   ├── qingke-*/           # 青稞 AI 嘉年华 (4场圆桌)
-│   ├── zhang-bo-agi/       # AGI 峰会演讲
+│   ├── lex-fridman/       # Lex Fridman Podcast
+│   ├── aitime/            # AITIME 论道
+│   ├── qingke/            # 青稞 AI 嘉年华
 │   └── ...
 ├── articles/              # 技术文章笔记
 └── bilibili_cookies.txt   # (gitignored)
