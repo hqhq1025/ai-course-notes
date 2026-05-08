@@ -2,11 +2,11 @@
 
 # 📚 AI Course Notes
 
-**301 份 AI / LLM 公开课中文讲义 PDF**
+**302 份 AI / LLM 公开课中文讲义 PDF**
 
 基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-301份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-302份-blue?style=for-the-badge)](.)
 [![Courses](https://img.shields.io/badge/课程系列-15个-green?style=for-the-badge)](.)
 [![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
 
@@ -87,7 +87,7 @@
 | **Greg Isenberg** | Claude Cowork & Code | YouTube |
 | **Demis Hassabis** | AGI, Scaling Laws & DeepMind 战略 | 20VC Podcast |
 
-### 📝 技术文章笔记 (24 篇)
+### 📝 技术文章笔记 (25 篇)
 
 | 文章 | 来源 |
 |------|------|
@@ -117,6 +117,7 @@
 | [50 Claude Tips](articles/vishwas-50-claude-tips/) | @vishwas_ai |
 | [Claude Code Best Practices](articles/panda-claude-code-best-practices/) | @panda_quant |
 | [Cowork Starter](articles/corey-cowork-starter/) | @corey_latislaw |
+| [Notes from inside China's AI labs](articles/interconnects-china-ai-labs/) | Interconnects AI |
 
 </details>
 
