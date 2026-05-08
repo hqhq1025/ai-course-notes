@@ -2,25 +2,47 @@
 
 # 📚 AI Course Notes
 
-**302 份 AI / LLM 公开课中文讲义 PDF**
+**303 份 AI / LLM 中文讲义，支持在线阅读、PDF 下载和 LaTeX 源码查看**
 
-基于视频字幕（Whisper large-v3）、课程 Slides 和公开资料，自动生成的高质量 LaTeX 讲义
+基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
-[![Total Notes](https://img.shields.io/badge/讲义总数-302份-blue?style=for-the-badge)](.)
-[![Courses](https://img.shields.io/badge/课程系列-15个-green?style=for-the-badge)](.)
-[![PDF](https://img.shields.io/badge/格式-LaTeX%20PDF-red?style=for-the-badge)](.)
+[![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
+[![Total Notes](https://img.shields.io/badge/讲义总数-303份-blue?style=for-the-badge)](.)
+[![Collections](https://img.shields.io/badge/内容系列-16个-green?style=for-the-badge)](.)
+[![Format](https://img.shields.io/badge/格式-Web%20%7C%20PDF%20%7C%20LaTeX-red?style=for-the-badge)](.)
+
+[🌐 在线阅读](https://hqhq1025.github.io/ai-course-notes/) · [📄 浏览目录](#-课程一览) · [🤝 参与贡献](CONTRIBUTING.md)
 
 </div>
 
 ---
 
-## ✨ 亮点
+## ✨ 这是什么
 
-- 🎯 **覆盖广泛**：从 Transformer 原理到 LLM Agent 实战，从强化学习到模型架构设计
-- 📖 **中文讲义**：英文课程也全部整理为中文，技术术语保留英文
-- 🎨 **排版精美**：LaTeX 专业排版，三种高亮盒子（核心概念/背景知识/常见误解）
-- 🤖 **自动化生成**：Whisper 语音转录 + Claude 智能整理 + XeLaTeX 编译
-- 🔄 **持续更新**：新课程和演讲持续收录中
+- **在线阅读优先**：网页站点支持目录导航、全文搜索、公式渲染、图片展示，并保留 PDF 备用链接。
+- **中文讲义**：英文课程、访谈和文章统一整理为中文，关键技术术语保留英文。
+- **覆盖面广**：从 Transformer、LLM pretraining、RLHF，到 Agent、Diffusion、Infra、模型架构和 AI 工程实践。
+- **LaTeX 为源文稿**：每份讲义保留 `*-notes.tex` 和 `*-notes.pdf`，网页由 `.tex` 自动转换生成。
+- **持续更新**：新课程、演讲、访谈和技术文章会继续补充。
+
+## 🌐 在线阅读
+
+在线站点：**[https://hqhq1025.github.io/ai-course-notes/](https://hqhq1025.github.io/ai-course-notes/)**
+
+站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
+
+## 📊 内容规模
+
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| Stanford 课程 | 142 | CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
+| MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
+| KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
+| Berkeley 课程 | 35 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
+| B 站系列课程 | 47 | Modern Agent、LLM Architect、Agentic RL |
+| 演讲与访谈 | 29 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
+| 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
+| **合计** | **303** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -30,7 +52,7 @@
 
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
-| [**CS336**](cs336/) / [**2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 10 | Percy Liang, Tatsu Hashimoto |
+| [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 10 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
 | [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
 | [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
@@ -58,36 +80,36 @@
 | [**CS294 SP25**](talks/berkeley-llm-agents/sp25/) | Advanced LLM Agents | 12 | Jason Weston, AlphaProof, Salakhutdinov |
 | [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 11 | Noam Brown, Oriol Vinyals, James Zou |
 
-### 🇨🇳 B站系列课程 (47 份)
+### 🇨🇳 B 站系列课程 (47 份)
 
-| 系列 | 主题 | 讲数 | UP主 |
+| 系列 | 主题 | 讲数 | UP 主 |
 |------|------|------|------|
 | [**Modern Agent**](modern-agent/) | LLM Agent 实战 (ReAct, RAG, Codex) | 17 | 五道口纳什 |
 | [**LLM Architect**](llm-architect/) | 模型架构 (MoE, RoPE, VLM, K2.5) | 10 | 五道口纳什 |
 | [**Agentic RL**](agentic-rl/) | RL for LLM (PPO→GRPO→DPO, veRL) | 20 | 五道口纳什 |
 
-### 🎤 演讲与访谈 (28 份)
+### 🎤 演讲与访谈 (29 份)
 
-<details>
-<summary><b>点击展开完整列表</b></summary>
-
-| 嘉宾 | 主题 | 来源 |
-|------|------|------|
-| **Ilya Sutskever** | From Scaling to Research | Dwarkesh Patel |
-| **Dario Amodei** | Claude, AGI & Humanity | Lex Fridman |
-| **Andrej Karpathy** | Code Agents & AutoResearch | No Priors |
-| **Jensen Huang** ×2 | NVIDIA Vision / $4T AI Revolution | Cleo Abram / Lex |
-| **杨植麟** ×3 | K2 对话 / Scaling Law / GTC K2.5 | 张小珺 / AITIME / GTC |
-| **季逸超** | Manus 最后的访谈 | 张小珺 |
-| **谢赛宁** | 7h 马拉松访谈 | AMI |
-| **Lex Fridman** ×2 | State of AI 2026 / DeepSeek & China | Lex Fridman |
-| **Peter Steinberg** | OpenClaw Agent | Lex Fridman |
-| **青稞嘉年华** ×4 | LLM / Agentic / RL / Infra 圆桌 | 青稞社区 |
-| **AGI 峰会** ×4 | 张钹 / 林俊旸 / 姚顺雨 / 阿里圆桌 | AITIME / 阿里云 |
-| **Greg Isenberg** | Claude Cowork & Code | YouTube |
-| **Demis Hassabis** | AGI, Scaling Laws & DeepMind 战略 | 20VC Podcast |
+| 来源 / 频道 | 主题 | 数量 | 目录 |
+|-------------|------|------|------|
+| [**Lex Fridman Podcast**](talks/lex-fridman/) | Dario Amodei、Jensen Huang、State of AI、DeepSeek、中国 AI、OpenClaw | 5 | talks |
+| [**AITIME 论道**](talks/aitime/) | 张钹、林俊旸、姚顺雨、杨植麟 | 4 | talks |
+| [**青稞社区**](talks/qingke/) | LLM、Agentic、RL、Infra 圆桌 | 4 | talks |
+| [**WhynotTV**](interviews/whynot-tv/) | 陈天奇、翁嘉颐、胡渊鸣、杨硕 | 4 | interviews |
+| [**张小珺商业访谈录**](interviews/zhang-xiaojun/) | 季逸超、谢赛宁、杨植麟 | 3 | interviews |
+| [**Ungrounded 不着边际**](interviews/ungrounded/) | GUI Agent、SGLang | 2 | interviews |
+| [**Dwarkesh Patel Podcast**](talks/dwarkesh-patel/) | Ilya Sutskever: From Scaling to Research | 1 | talks |
+| [**No Priors Podcast**](talks/no-priors/) | Andrej Karpathy: Code Agents & AutoResearch | 1 | talks |
+| [**20VC with Harry Stebbings**](talks/20vc/) | Demis Hassabis: AGI, Scaling Laws & DeepMind | 1 | talks |
+| [**Cleo Abram**](talks/cleo-abram/) | Jensen Huang: NVIDIA Vision | 1 | talks |
+| [**Greg Isenberg**](talks/greg-isenberg/) | Claude Cowork & Code | 1 | talks |
+| [**NVIDIA GTC**](talks/nvidia-gtc/) | 杨植麟 K2.5 | 1 | talks |
+| [**阿里云**](talks/alibaba-cloud/) | AGI 圆桌 | 1 | talks |
 
 ### 📝 技术文章笔记 (25 篇)
+
+<details>
+<summary><b>点击展开文章列表</b></summary>
 
 | 文章 | 来源 |
 |------|------|
@@ -125,58 +147,43 @@
 
 ## 🔥 推荐阅读路线
 
-### 入门 LLM
-```
-CS336 (从零训LLM) → CS224R L09 (RLHF) → CS25 V2 Karpathy (Transformer入门)
-```
+```text
+入门 LLM
+CS336 → CS224R L09 (RLHF) → CS25 V2 Karpathy (Transformer 入门)
 
-### 深入 Agent
-```
-Berkeley F24 姚顺雨 (Agent概述) → Modern Agent 全系列 → Agentic RL 全系列
-```
+深入 Agent
+Berkeley F24 姚顺雨 Agent 概述 → Modern Agent 全系列 → Agentic RL 全系列
 
-### 模型架构
-```
-LLM Architect 全系列 → CS25 V4 Mixtral → CS336 L04 (MoE)
-```
+模型架构
+LLM Architect 全系列 → CS25 V4 Mixtral → CS336 L04 MoE
 
-### 前沿洞察
+前沿洞察
+Ilya Sutskever → Dario Amodei → Lex Fridman State of AI 2026
 ```
-Ilya (Research时代) → Dario (AGI路线) → Lex (State of AI 2026)
-```
-
----
 
 ## 📁 目录结构
 
-```
+```text
 ai-course-notes/
-├── cs336/                    # Stanford CS336 (17讲)
-├── cs336-2026/               # Stanford CS336 Spring 2026 (进行中)
-├── cs153/                    # Stanford CS153 Infra@Scale (11讲)
-├── cs224n/                   # Stanford CS224N (17讲)
-├── cs231n/                   # Stanford CS231N (18讲)
-├── cs224r/                   # Stanford CS224R (19讲, 含 slides)
-├── cs146s/                   # Stanford CS146S (10周, 基于 slides)
-├── cs25/                     # CS25 Transformers United (40讲)
-├── kaist-cs492d/             # KAIST CS492D (15讲)
-├── modern-agent/             # 五道口纳什 Modern Agent (17讲)
-├── llm-architect/            # 五道口纳什 LLM Architect (10讲)
-├── agentic-rl/               # 五道口纳什 Agentic RL + veRL (20讲)
-├── interviews/               # 深度访谈（按频道/来源分组）
-│   ├── whynot-tv/            # WhynotTV
-│   ├── zhang-xiaojun/        # 张小珺商业访谈录
-│   └── ungrounded/           # Ungrounded 不着边际
-├── talks/                    # 演讲与访谈（按频道/来源分组）
-│   ├── berkeley-llm-agents/  # Berkeley CS294 (35讲)
-│   ├── lex-fridman/          # Lex Fridman Podcast
-│   ├── aitime/               # AITIME 论道
-│   ├── qingke/               # 青稞嘉年华
-│   └── ...                   # 更多来源
-└── articles/                 # 技术文章笔记
+├── cs336/                    # Stanford CS336 (17 讲)
+├── cs336-2026/               # Stanford CS336 Spring 2026 (10 讲, 进行中)
+├── cs153/                    # Stanford CS153 Infra @ Scale (11 讲)
+├── cs224n/                   # Stanford CS224N (17 讲)
+├── cs231n/                   # Stanford CS231N (18 讲)
+├── cs224r/                   # Stanford CS224R (19 讲, 含 slides)
+├── cs146s/                   # Stanford CS146S (10 周, 基于 slides)
+├── cs25/                     # CS25 Transformers United (40 讲)
+├── 6s191/                    # MIT 6.S191 (10 讲)
+├── kaist-cs492d/             # KAIST CS492D (15 讲)
+├── modern-agent/             # 五道口纳什 Modern Agent (17 讲)
+├── llm-architect/            # 五道口纳什 LLM Architect (10 讲)
+├── agentic-rl/               # 五道口纳什 Agentic RL + veRL (20 讲)
+├── interviews/               # 深度访谈，按频道/来源分组
+├── talks/                    # 演讲与公开课，按频道/来源分组
+├── articles/                 # 技术文章笔记
+├── tools/web/                # 在线阅读站生成器
+└── .github/workflows/        # GitHub Pages 自动部署
 ```
-
----
 
 ## ⚙️ 生成方式
 
@@ -188,13 +195,38 @@ graph LR
     C -->|否| E[Whisper large-v3]
     E --> D
     D --> F[Claude 智能整理]
-    G[官方 Slides PDF] --> F
+    G[官方 Slides / 公开资料] --> F
     F --> H[LaTeX 源文件]
     H --> I[XeLaTeX 编译]
-    I --> J[📄 中文讲义 PDF]
+    I --> J[PDF 讲义]
+    H --> K[网页阅读站]
 ```
 
----
+### 本地预览在线阅读站
+
+```bash
+python -m pip install -r requirements-web.txt
+python tools/web/generate_site.py --strict --skip-tikz
+mkdocs serve -f .web-build/mkdocs.yml
+```
+
+完整构建与 GitHub Pages 工作流一致：
+
+```bash
+python tools/web/generate_site.py --strict --verbose-warnings --fail-on-tikz-warnings
+mkdocs build -f .web-build/mkdocs.yml --strict
+```
+
+## 🔗 项目链接
+
+| 项目 | 地址 |
+|------|------|
+| GitHub 仓库 | [github.com/hqhq1025/ai-course-notes](https://github.com/hqhq1025/ai-course-notes) |
+| 在线阅读站 | [hqhq1025.github.io/ai-course-notes](https://hqhq1025.github.io/ai-course-notes/) |
+| GitHub Pages 工作流 | [.github/workflows/pages.yml](.github/workflows/pages.yml) |
+| 站点生成器 | [tools/web/generate_site.py](tools/web/generate_site.py) |
+| 贡献指南 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 质量标准 | [QUALITY.md](QUALITY.md) |
 
 ## 🔗 课程资源链接
 
@@ -215,15 +247,17 @@ graph LR
 ## 🤝 贡献
 
 欢迎提 Issue 或 PR：
-- 🐛 发现讲义内容错误
-- 💡 推荐新课程或演讲
-- 📝 改进现有讲义质量
 
----
+- 发现讲义内容错误
+- 推荐新课程、演讲、访谈或技术文章
+- 改进现有讲义质量
+- 优化在线阅读站生成效果
+
+更多说明见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [QUALITY.md](QUALITY.md)。
 
 ## 🙏 致谢
 
-讲义生成工具链基于 [wdkns-skills](https://github.com/wdkns/wdkns-skills)（五道口纳什）改进，在此基础上增加了模块化重构、批量处理脚本、文章整理 skill 等扩展。
+讲义生成工具链基于 [wdkns-skills](https://github.com/wdkns/wdkns-skills)（五道口纳什）改进，在此基础上增加了模块化重构、批量处理脚本、文章整理 skill 和在线阅读站生成器等扩展。
 
 ## 📜 License
 
