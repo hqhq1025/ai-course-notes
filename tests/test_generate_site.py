@@ -75,6 +75,14 @@ LaTeX 是唯一源文稿，网页由构建脚本生成。
 标题里的单符号数学不能吞掉后面的正文转换。
 \end{warningbox}
 
+\begin{importantbox}{盒子里的公式}
+公式后面的正文不能被 Markdown 当成代码块。
+\[
+x = y + z
+\]
+公式后的解释仍然应该留在盒子正文里。
+\end{importantbox}
+
 \begin{knowledgebox}{嵌套列表}
 \begin{itemize}
     \item 第一层条目
@@ -93,6 +101,8 @@ E = mc^2
 \]
 
 行内数学里的等宽命令也要保留：\(\texttt{encode}(x)\)。
+
+\resizebox{0.7\textwidth}{!}{Wrapped LaTeX content}
 
 \[
 \text{compression ratio} =
@@ -148,6 +158,8 @@ v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 参见 \href{../../QUALITY.md}{本地质量文档}，以及 [本地 Markdown 链接](../../QUALITY.md)。
 
 这里有一段带 LaTeX 引号的等宽文本：``\texttt{key1:val1 query:key2}''，后面的列表仍然要正常转换。
+
+普通 LaTeX 英文引号：``From scratch'' 不应该在网页里露出反引号。
 
 嵌套链接：\href{https://example.com/docs}{\nolinkurl{https://example.com/docs}}。
 
@@ -258,12 +270,32 @@ def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     assert "theme:" in mkdocs_yml
     assert "material" in mkdocs_yml
     assert "https://hqhq1025.github.io/ai-course-notes/" in mkdocs_yml
+    assert "repo_name: hqhq1025/ai-course-notes" in mkdocs_yml
     assert "sample-course/index.md" in mkdocs_yml
     assert "sample-course/lecture01/index.md" in mkdocs_yml
 
     css = (build / "docs" / "assets" / "stylesheets" / "ai-notes.css").read_text(encoding="utf-8")
     assert ".md-grid" in css
     assert "max-width: min(96rem, calc(100vw - 2 * var(--ai-notes-page-gutter)))" in css
+    assert ".ai-notes-sidebar-toggle--primary" in css
+    assert "body.ai-notes-nav-collapsed .md-sidebar--primary" in css
+    assert "body.ai-notes-toc-collapsed .md-sidebar--secondary" in css
+    assert ".md-typeset h2" in css
+    assert ".md-typeset .arithmatex" in css
+    assert ".md-typeset .admonition" in css
+    assert ".md-typeset table:not([class])" in css
+
+    sidebar_js = (build / "docs" / "assets" / "javascripts" / "ai-notes.js").read_text(encoding="utf-8")
+    assert "ai-notes-sidebar-nav-collapsed" in sidebar_js
+    assert "ai-notes-sidebar-toc-collapsed" in sidebar_js
+    assert "localStorage" in sidebar_js
+    assert "ai-notes-scroll:" in sidebar_js
+    assert "history.scrollRestoration" in sidebar_js
+    assert "sessionStorage" in sidebar_js
+    assert "location.hash" in sidebar_js
+    assert "pagehide" in sidebar_js
+    assert "DOMContentLoaded" in sidebar_js
+    assert "assets/javascripts/ai-notes.js" in mkdocs_yml
 
     home = (build / "docs" / "index.md").read_text(encoding="utf-8")
     assert "Test Courses" in home
@@ -303,6 +335,10 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert '!!! important "核心概念"' in page
     assert '!!! warning "GQA 压缩比 $≠$ 推理加速比"' in page
     assert "标题里的单符号数学不能吞掉后面的正文转换。" in page
+    assert '!!! important "盒子里的公式"' in page
+    assert "    公式后的解释仍然应该留在盒子正文里。" in page
+    assert "    $$" in page
+    assert "```\n公式后的解释仍然应该留在盒子正文里。" not in page
     assert '!!! info "嵌套列表"' in page
     assert "第一层条目" in page
     assert "第二层条目" in page
@@ -310,6 +346,8 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "$$" in page and "E = mc^2" in page
     assert r"\texttt{decode}(\texttt{encode}(x)) = x" in page
     assert r"\(\texttt{encode}(x)\)" in page
+    assert "Wrapped LaTeX content" in page
+    assert r"\resizebox" not in page
     assert r"\text{compression ratio}" in page
     assert r"\frac{\text{number of UTF-8 bytes}}{\text{number of tokens}}" in page
     assert "`decode`(`encode`(x)) = x" not in page
@@ -331,6 +369,8 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "[本地 Markdown 链接](../../QUALITY.md)" not in page
     assert "本地 Markdown 链接" in page
     assert "`key1:val1 query:key2`" in page
+    assert "“From scratch” 不应该在网页里露出反引号。" in page
+    assert "``From scratch''" not in page
     visible_space = "\u2423"
     assert "[https://example.com/docs](https://example.com/docs)" in page
     assert r"\href{" not in page
@@ -349,7 +389,8 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert f"| visible | a{visible_space} b |" in page
     assert "| 合计行 |" in page
     assert "2l合计行" not in page
-    assert "*包装表格*" in page
+    assert '<figcaption class="ai-notes-table-caption">包装表格</figcaption>' in page
+    assert "*包装表格*" not in page
     assert "| 已是 Markdown | 说明 |" in page
     assert "| table wrapper | 不应回退 |" in page
     assert "| 中心 | 内容 |" in page

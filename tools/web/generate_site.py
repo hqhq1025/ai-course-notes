@@ -267,6 +267,20 @@ def replace_latex_symbol_commands(text: str) -> str:
     return text.replace(r"\textvisiblespace", VISIBLE_SPACE_SYMBOL)
 
 
+def unwrap_latex_layout_commands(text: str) -> str:
+    changed = True
+    while changed:
+        text, count = replace_braced_command(text, "resizebox", 3, lambda args: args[2])
+        changed = count > 0
+    return text
+
+
+def replace_latex_quotes(text: str) -> str:
+    text = re.sub(r"``([^`\n]+?)''", r"“\1”", text)
+    text = re.sub(r"`([^`\n]+?)'", r"‘\1’", text)
+    return text.replace("''", "”")
+
+
 def replace_multicolumn_commands(text: str) -> str:
     pattern = re.compile(r"\\multicolumn\b")
     pos = 0
@@ -304,6 +318,7 @@ def replace_multicolumn_commands(text: str) -> str:
 def clean_latex_text(text: str) -> str:
     text = text.replace(r"\protect", "")
     text = replace_latex_symbol_commands(text)
+    text = replace_latex_quotes(text)
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
     text = re.sub(r"\\footnote\{([^{}]*)\}", r"\1", text)
@@ -379,6 +394,7 @@ def clean_latex_text(text: str) -> str:
 def convert_inline_latex(text: str) -> str:
     text = text.replace(r"\protect", "")
     text = replace_latex_symbol_commands(text)
+    text = replace_latex_quotes(text)
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
 
@@ -787,7 +803,8 @@ def markdown_table_wrapper_from_block(ctx: BuildContext, block: EnvBlock) -> str
     body = strip_latex_layout_commands(body)
     content = convert_latex_fragment(body, ctx).strip()
     if caption:
-        content = (content + "\n\n" if content else "") + f"*{caption}*"
+        caption_html = f'<figcaption class="ai-notes-table-caption">{html.escape(caption)}</figcaption>'
+        content = (content + "\n\n" if content else "") + caption_html
     return f"\n{content}\n\n" if content else ""
 
 
@@ -802,7 +819,7 @@ def markdown_quote_from_block(ctx: BuildContext, block: EnvBlock) -> str:
 def markdown_box_from_block(ctx: BuildContext, block: EnvBlock, kind: str) -> str:
     title = clean_latex_text(block.args[0]) if block.args else ""
     content = convert_latex_fragment(block.body, ctx).strip()
-    indented = "\n".join(f"    {line}" if line else "" for line in content.splitlines())
+    indented = "\n".join(f"    {line}" for line in content.splitlines())
     return f'\n!!! {kind} "{title}"\n{indented}\n\n'
 
 
@@ -1058,7 +1075,7 @@ def strip_document_shell(tex: str) -> str:
 
 def convert_display_math(text: str) -> str:
     text = re.sub(r"\\\[(.*?)\\\]", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text, flags=re.S)
-    text = re.sub(r"\$\$(.*?)\$\$", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text, flags=re.S)
+    text = re.sub(r"(?m)^(?![ \t])\$\$(.*?)^(?![ \t])\$\$", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text, flags=re.S)
 
     def env_math(match: re.Match[str]) -> str:
         env = match.group(1)
@@ -1103,7 +1120,9 @@ def transform_outside_math_and_code(text: str, transform: Callable[[str], str]) 
 
     patterns = [
         FENCED_CODE_BLOCK_PATTERN,
+        re.compile(r"^[ \t]*\$\$.*?^[ \t]*\$\$", re.M | re.S),
         re.compile(r"\$\$.*?\$\$", re.S),
+        re.compile(r"^[ \t]*\\\[.*?^[ \t]*\\\]", re.M | re.S),
         re.compile(r"\\\[.*?\\\]", re.S),
         re.compile(r"\\\(.*?\\\)", re.S),
         re.compile(r"(?<!\\)\$(?!\$)(?:\\.|[^\n$])+(?<!\\)\$(?!\$)"),
@@ -1127,6 +1146,7 @@ def normalize_markdown(text: str) -> str:
 
 def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = replace_latex_symbol_commands(fragment)
+    text = unwrap_latex_layout_commands(text)
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
@@ -1429,6 +1449,8 @@ def css_content() -> str:
 :root {
   --ai-notes-card-border: rgba(28, 86, 87, 0.18);
   --ai-notes-page-gutter: clamp(0.8rem, 2vw, 2rem);
+  --ai-notes-rule-color: color-mix(in srgb, var(--md-default-fg-color), transparent 86%);
+  --ai-notes-sidebar-toggle-size: 1.55rem;
 }
 
 @media screen and (min-width: 76.25em) {
@@ -1438,6 +1460,96 @@ def css_content() -> str:
 
   .md-main__inner {
     width: 100%;
+  }
+
+  .ai-notes-sidebar-toggle {
+    align-items: center;
+    background: color-mix(in srgb, var(--md-default-bg-color), var(--md-primary-fg-color) 6%);
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 999px;
+    color: var(--md-default-fg-color--light);
+    cursor: pointer;
+    display: flex;
+    height: var(--ai-notes-sidebar-toggle-size);
+    justify-content: center;
+    position: sticky;
+    top: 3.4rem;
+    transition: background-color 140ms ease, color 140ms ease, transform 140ms ease;
+    width: var(--ai-notes-sidebar-toggle-size);
+    z-index: 3;
+  }
+
+  .ai-notes-sidebar-toggle:hover {
+    background: var(--md-accent-fg-color--transparent);
+    color: var(--md-accent-fg-color);
+  }
+
+  .ai-notes-sidebar-toggle svg {
+    height: 0.95rem;
+    width: 0.95rem;
+  }
+
+  .ai-notes-sidebar-toggle--primary {
+    float: right;
+    margin: 0.15rem 0.2rem 0.45rem 0;
+  }
+
+  .ai-notes-sidebar-toggle--secondary {
+    float: left;
+    margin: 0.15rem 0 0.45rem 0.2rem;
+  }
+
+  body.ai-notes-nav-collapsed .md-sidebar--primary {
+    display: none;
+  }
+
+  body.ai-notes-toc-collapsed .md-sidebar--secondary {
+    display: none;
+  }
+
+  .ai-notes-sidebar-restore {
+    background: var(--md-default-bg-color);
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 999px;
+    box-shadow: var(--md-shadow-z1);
+    color: var(--md-default-fg-color--light);
+    cursor: pointer;
+    display: none;
+    height: 1.8rem;
+    justify-content: center;
+    position: fixed;
+    top: 4.4rem;
+    width: 1.8rem;
+    z-index: 5;
+  }
+
+  .ai-notes-sidebar-restore:hover {
+    color: var(--md-accent-fg-color);
+  }
+
+  .ai-notes-sidebar-restore svg {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .ai-notes-sidebar-restore--primary {
+    left: max(0.55rem, var(--ai-notes-page-gutter));
+  }
+
+  .ai-notes-sidebar-restore--secondary {
+    right: max(0.55rem, var(--ai-notes-page-gutter));
+  }
+
+  body.ai-notes-nav-collapsed .ai-notes-sidebar-restore--primary,
+  body.ai-notes-toc-collapsed .ai-notes-sidebar-restore--secondary {
+    display: flex;
+  }
+}
+
+@media screen and (max-width: 76.234em) {
+  .ai-notes-sidebar-toggle,
+  .ai-notes-sidebar-restore {
+    display: none;
   }
 }
 
@@ -1465,9 +1577,276 @@ def css_content() -> str:
   color: var(--md-default-fg-color--light);
 }
 
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-size: 2.05rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.18;
+  margin-bottom: 1.15rem;
+}
+
+.md-typeset h2 {
+  border-top: 1px solid var(--ai-notes-rule-color);
+  color: var(--md-default-fg-color);
+  font-size: 1.45rem;
+  font-weight: 680;
+  letter-spacing: 0;
+  line-height: 1.28;
+  margin-top: 2.4rem;
+  padding-top: 1.05rem;
+}
+
+.md-typeset h3 {
+  color: var(--md-default-fg-color);
+  font-size: 1.08rem;
+  font-weight: 680;
+  letter-spacing: 0;
+  line-height: 1.38;
+  margin-top: 1.7rem;
+}
+
+.md-typeset h4 {
+  color: var(--md-default-fg-color--light);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin-top: 1.25rem;
+  text-transform: none;
+}
+
+.md-typeset p,
+.md-typeset li {
+  line-height: 1.78;
+}
+
+.md-typeset code {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.22rem;
+  font-size: 0.86em;
+  padding: 0.04rem 0.24rem;
+}
+
+.md-typeset .highlight {
+  margin: 1rem 0 1.35rem;
+}
+
+.md-typeset .highlight pre {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+}
+
+.md-typeset .arithmatex {
+  overflow-x: auto;
+}
+
+.md-typeset > .arithmatex,
+.md-typeset .admonition > .arithmatex {
+  background: color-mix(in srgb, var(--md-default-bg-color), var(--md-primary-fg-color) 3%);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.42rem;
+  margin: 1.1rem 0 1.25rem;
+  padding: 0.7rem 0.9rem;
+}
+
+.md-typeset .admonition {
+  border-radius: 0.45rem;
+  box-shadow: none;
+  margin: 1rem 0 1.3rem;
+}
+
+.md-typeset .admonition-title {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.38rem;
+  display: table;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  margin: 1rem 0 1.1rem;
+  overflow: hidden;
+  width: 100%;
+}
+
+.md-typeset table:not([class]) th {
+  background: color-mix(in srgb, var(--md-default-bg-color), var(--md-primary-fg-color) 6%);
+  font-weight: 700;
+}
+
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td {
+  padding: 0.62rem 0.75rem;
+  vertical-align: top;
+}
+
+.md-typeset blockquote {
+  border-left: 0.18rem solid var(--md-accent-fg-color);
+  color: var(--md-default-fg-color--light);
+}
+
 .md-typeset img {
   border-radius: 0.25rem;
 }
+
+.md-typeset .ai-notes-table-caption {
+  margin: -0.55rem 0 1.25rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  text-align: center;
+}
+""".strip()
+
+
+def sidebar_script() -> str:
+    return """
+(function () {
+  var sidebarConfigs = [
+    {
+      selector: ".md-sidebar--primary",
+      collapsedClass: "ai-notes-nav-collapsed",
+      storageKey: "ai-notes-sidebar-nav-collapsed",
+      buttonClass: "ai-notes-sidebar-toggle--primary",
+      restoreClass: "ai-notes-sidebar-restore--primary",
+      collapseLabel: "折叠左侧导航",
+      restoreLabel: "展开左侧导航",
+      collapseIcon: "M15 6 9 12l6 6",
+      restoreIcon: "M9 6l6 6-6 6"
+    },
+    {
+      selector: ".md-sidebar--secondary",
+      collapsedClass: "ai-notes-toc-collapsed",
+      storageKey: "ai-notes-sidebar-toc-collapsed",
+      buttonClass: "ai-notes-sidebar-toggle--secondary",
+      restoreClass: "ai-notes-sidebar-restore--secondary",
+      collapseLabel: "折叠右侧目录",
+      restoreLabel: "展开右侧目录",
+      collapseIcon: "M9 6l6 6-6 6",
+      restoreIcon: "M15 6 9 12l6 6"
+    }
+  ];
+
+  function icon(path) {
+    return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="' + path + '"></path></svg>';
+  }
+
+  function setCollapsed(config, collapsed) {
+    document.body.classList.toggle(config.collapsedClass, collapsed);
+    try {
+      localStorage.setItem(config.storageKey, collapsed ? "1" : "0");
+    } catch (_error) {
+      return;
+    }
+  }
+
+  function storedCollapsed(config) {
+    try {
+      return localStorage.getItem(config.storageKey) === "1";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function createButton(className, label, path) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.innerHTML = icon(path);
+    return button;
+  }
+
+  function installToggle(config) {
+    var sidebar = document.querySelector(config.selector);
+    if (!sidebar) {
+      return;
+    }
+    var scrollwrap = sidebar.querySelector(".md-sidebar__scrollwrap") || sidebar;
+    var collapseButton = createButton(
+      "ai-notes-sidebar-toggle " + config.buttonClass,
+      config.collapseLabel,
+      config.collapseIcon
+    );
+    var restoreButton = createButton(
+      "ai-notes-sidebar-restore " + config.restoreClass,
+      config.restoreLabel,
+      config.restoreIcon
+    );
+
+    collapseButton.addEventListener("click", function () {
+      setCollapsed(config, true);
+    });
+    restoreButton.addEventListener("click", function () {
+      setCollapsed(config, false);
+    });
+
+    scrollwrap.prepend(collapseButton);
+    document.body.appendChild(restoreButton);
+    setCollapsed(config, storedCollapsed(config));
+  }
+
+  function scrollKey() {
+    return "ai-notes-scroll:" + location.origin + location.pathname + location.search;
+  }
+
+  function saveScrollPosition() {
+    try {
+      sessionStorage.setItem(scrollKey(), String(Math.round(window.scrollY || window.pageYOffset || 0)));
+    } catch (_error) {
+      return;
+    }
+  }
+
+  function restoreScrollPosition() {
+    if (location.hash) {
+      return;
+    }
+    var value;
+    try {
+      value = sessionStorage.getItem(scrollKey());
+    } catch (_error) {
+      return;
+    }
+    var y = Number(value);
+    if (!Number.isFinite(y) || y <= 0) {
+      return;
+    }
+    if ("scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
+    requestAnimationFrame(function () {
+      window.scrollTo({ top: y, left: 0, behavior: "auto" });
+      setTimeout(function () {
+        window.scrollTo({ top: y, left: 0, behavior: "auto" });
+      }, 120);
+    });
+  }
+
+  function installScrollMemory() {
+    var ticking = false;
+    window.addEventListener("scroll", function () {
+      if (ticking) {
+        return;
+      }
+      ticking = true;
+      requestAnimationFrame(function () {
+        saveScrollPosition();
+        ticking = false;
+      });
+    }, { passive: true });
+    window.addEventListener("pagehide", saveScrollPosition);
+    restoreScrollPosition();
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    sidebarConfigs.forEach(installToggle);
+    installScrollMemory();
+  });
+})();
 """.strip()
 
 
@@ -1497,6 +1876,7 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
         "site_name: AI Course Notes",
         f"site_url: {SITE_URL}",
         f"repo_url: {REPO_URL}",
+        "repo_name: hqhq1025/ai-course-notes",
         "docs_dir: docs",
         "site_dir: site",
         "theme:",
@@ -1536,6 +1916,7 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
         "extra_css:",
         "  - assets/stylesheets/ai-notes.css",
         "extra_javascript:",
+        "  - assets/javascripts/ai-notes.js",
         "  - assets/javascripts/mathjax.js",
         "  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js",
         "nav:",
@@ -1634,6 +2015,7 @@ def build_site(
         write_text(docs_dir / course_dir / "index.md", course_page_markdown(course_dir, course_notes, title, topic))
     write_text(docs_dir / "index.md", home_markdown(notes, courses, catalog_entries, entries_by_path))
     write_text(docs_dir / "assets" / "stylesheets" / "ai-notes.css", css_content())
+    write_text(docs_dir / "assets" / "javascripts" / "ai-notes.js", sidebar_script())
     write_text(docs_dir / "assets" / "javascripts" / "mathjax.js", mathjax_config())
     write_text(output / "mkdocs.yml", generate_mkdocs_yml(courses, entries_by_path))
     print(f"Generated {len(notes)} note pages across {len(courses)} course pages in {output}")
