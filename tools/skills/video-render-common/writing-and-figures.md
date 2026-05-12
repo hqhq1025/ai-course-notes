@@ -56,6 +56,9 @@ This typically achieves **10x compression** (86k → 8k lines) with zero informa
    Include as many figures as are necessary for teaching clarity, even if that means many figures across the document.
    Do not optimize for a small figure count; optimize for explanatory coverage and readability.
    Good figures are key formulas, diagrams, tables, plots, visual comparisons, pipeline schedules, architecture views, and stage-by-stage visual progressions.
+   Every important figure must be interpreted, not merely captioned.
+   After dense plots, benchmark tables, architecture diagrams, scaling curves, or multi-panel figures, add a nearby `knowledgebox` titled like `读图：...` that explains axes/columns/legend/baselines, the key trend, and the teaching conclusion.
+   If the figure can be misread, add a `warningbox` explaining what the figure does not prove.
 
 6. Do not place images inside custom message boxes.
 
@@ -76,6 +79,7 @@ This typically achieves **10x compression** (86k → 8k lines) with zero informa
    prefer placing a box immediately after the paragraph, derivation, or example that motivates it
    routine exposition should stay in normal prose; boxes are for high-signal takeaways, not decoration
    figures must stay outside `importantbox`, `knowledgebox`, and `warningbox`
+   when a paragraph contains many terms or acronyms, add a concentrated glossary table or concept box instead of leaving the reader to infer meanings from a list
 
 10. End every major section with `\subsection{本章小结}`.
     Add `\subsection{拓展阅读}` when there are one or two worthwhile external links.
@@ -109,6 +113,71 @@ Skip content that does not contribute to the actual lesson:
 
 Keep the speaker's closing discussion when it carries actual teaching value, such as synthesis, limitations, future work, tradeoffs, advice, or open questions.
 
+## Reader-Comprehension Requirements
+
+The notes must be self-explanatory for a technically strong reader who has not seen the original lecture. When the lecture introduces dense concepts quickly, slow down and add local scaffolding.
+
+### Important Figure Interpretation
+
+For every important figure, especially plots, tables, screenshots of paper results, resource breakdowns, scaling curves, and architecture diagrams, add a nearby explanation that answers:
+
+- What are the axes, rows/columns, colors, legends, or baselines?
+- What should the reader compare first?
+- What is the main trend or anomaly?
+- What claim in the lecture does the figure support?
+- What does the figure not prove?
+- How does it connect to later course topics or engineering decisions?
+
+Do not write only “这张图说明 X 很重要”. Explain how the visual evidence leads to X.
+
+Recommended LaTeX pattern:
+
+```tex
+\begin{knowledgebox}{读图：这张图应该怎么看}
+解释坐标轴/列含义/图例/baseline，然后描述关键趋势，最后给出教学结论。
+\end{knowledgebox}
+
+\begin{warningbox}{读图时容易犯的错误}
+指出不能从图中推出的结论，或容易混淆的因果关系。
+\end{warningbox}
+```
+
+### Dense Terminology Handling
+
+If a subsection lists several terms in quick succession, add a concentrated explanation table. This is mandatory for lists like model components, optimization methods, distributed training strategies, quantization methods, inference metrics, or historical milestones.
+
+Use a table with columns such as:
+
+| 术语 | 解决的问题 | 核心机制与课程关系 |
+
+Each row should say why the term exists, what mechanism it contributes, and why it matters for modern LLMs.
+
+### First-Use Glossary
+
+Technical terms must be explained when they first appear, especially systems/resource-accounting vocabulary. Do not leave terms only inside a table cell without definition.
+
+Mandatory first-use explanations include:
+
+- sharding: what is split, across which devices, and what duplicate state is removed
+- fused kernel: which operations are fused and how this reduces HBM traffic/kernel launches
+- collectives: all-reduce, reduce-scatter, all-gather, broadcast and their typical uses
+- ZeRO: stage 1/2/3 state sharding and the memory/communication trade-off
+- optimizer state: Adam/AdamW `m` and `v`, how they update, and why they cost memory
+- activation checkpointing: recomputing forward activations during backward; distinguish from saving model checkpoints
+- DRAM/SRAM/HBM: spell out names and explain memory hierarchy roles
+- perplexity: effective choices per token intuition and limits
+
+### Background Concepts as Diagrams
+
+When introducing foundational concepts that many readers may not already know, prefer a compact diagram/table plus formulas over prose alone. Examples: Shannon entropy, n-gram, perplexity, roofline, KV cache, ZeRO, speculative sampling, continuous batching.
+
+A good background concept explanation usually has:
+
+- a small flow diagram or comparison table showing relationships
+- one display formula with symbol explanations
+- a short `knowledgebox` for intuition
+- a short `warningbox` for common misconceptions
+
 ## Figure Handling
 
 Select figures by necessity and teaching value, not by an arbitrary quota or a bias toward keeping the document visually sparse.
@@ -118,12 +187,19 @@ Select figures by necessity and teaching value, not by an arbitrary quota or a b
 If official slides, lecture deck pages, or course handout pages are available, treat them as the **primary** visual source for the PDF.
 
 - Prefer slide screenshots for definitions, taxonomies, architecture diagrams, benchmark tables, roadmap charts, and any content that was clearly authored as a teaching slide.
+- When a slide deck or executable slide source is available, include screenshots of every slide page that carries teaching content. Do not merely sample representative slides.
+- If the video visibly uses slides but no deck file is available, capture every teaching slide from the video whenever feasible, using dense candidate extraction and contact sheets.
+- Place each slide screenshot near the prose that explains it, and add a substantive explanation for every slide: what it says, why it matters, and how it connects to the lecture argument.
+- Dense slides need `读图` treatment: unpack axes, columns, legends, formulas, examples, and baselines.
+- For progressive slide builds, include the final fully revealed version at minimum; include intermediate states when they teach distinct reasoning steps.
+- Administrative, duplicated, blank, title-only, or low-information slides may be omitted deliberately.
 - Use video frames as the fallback when slides are unavailable.
 - When both exist, mix them deliberately:
   - use slides for static explanatory content
   - use video frames for live demos, product UIs, code walkthroughs, whiteboard builds, and dynamic reveals
 - If a lecture has slides and the note contains no slide screenshots, treat that as a quality gap unless there is a clear reason not to use them.
 - If standalone slide files are unavailable but the video clearly shows slide pages, it is acceptable to capture slide screenshots from the video and use them as slide evidence.
+- A figure quota is not enough: if a source deck has many teaching slides, the generated note should be slide-complete, not merely figure-rich.
 
 ### 幻灯片与关键帧实践
 
@@ -186,6 +262,40 @@ Whenever the `.tex` or PDF references a specific video frame, or a crop derived 
 - If the figure is a crop, the footnote still refers to the original video time interval of the source frame or subtitle span.
 - If several nearby frames in one figure all come from the same subtitle interval, one clear footnote is enough.
 - Keep the figure and its time footnote anchored to the same page; prefer layouts such as `[H]`, a non-floating block, or another stable placement when ordinary floats would separate them.
+
+## PDF Visual QA After Compilation
+
+Compiling without LaTeX errors is not enough. After every final PDF compile, inspect the rendered PDF visually and fix layout or rendering problems before calling the note complete.
+
+### Required workflow
+
+1. Compile with `xelatex` until there are no rerun warnings.
+2. Render representative pages or all pages to images:
+   ```bash
+   mkdir -p /tmp/pdf-check
+   pdftoppm -png -r 120 <notes.pdf> /tmp/pdf-check/page
+   ```
+   If `pdftoppm` is unavailable, use `mutool draw -r 120 -o /tmp/pdf-check/page-%03d.png <notes.pdf>`.
+3. Build a contact sheet for quick visual scanning:
+   ```bash
+   montage /tmp/pdf-check/page-*.png -thumbnail 240x340 -tile 4x -geometry +8+8 /tmp/pdf-check/contact.png
+   ```
+   Use `magick montage ...` instead if the ImageMagick 7 `magick` wrapper is the available command.
+4. View the contact sheet and inspect suspicious pages at full size.
+5. Fix the `.tex`, recompile, and repeat visual QA until the PDF is readable.
+
+### What to check
+
+- Figures actually render and are not missing, blank, cropped incorrectly, or too small to read.
+- Every important figure has nearby explanation; no lonely dense plot/table appears without interpretation.
+- Tables fit the page and are readable; no columns spill outside the margin.
+- Code blocks do not run off the page.
+- Formulas are not clipped, over-wide, or separated from their symbol explanations.
+- Box titles and contents fit; no title text is mangled by math or underscores.
+- Page flow is sane: no mostly empty pages, orphan captions, figure/caption separation, or section headings stranded at page bottoms.
+- Hyperlinks and raw URLs do not create ugly overfull lines.
+
+If visual QA reveals a problem, the correct response is to edit the source and recompile, not to mention it as a caveat.
 
 ## Visualization
 

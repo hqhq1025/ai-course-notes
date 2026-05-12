@@ -4,7 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
 \usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
+\usepackage[margin=2.35cm]{geometry}
 \usepackage[most]{tcolorbox}
 \usepackage{etoolbox}
 \usepackage{listings}
@@ -23,19 +23,26 @@
     citecolor=blue!55!black
 }
 
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+\newcommand{\code}[1]{\texttt{#1}}
+
 \newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+    enhanced, breakable, colback=blue!5!white, colframe=blue!75!black,
+    colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, boxrule=1pt, sharp corners
 }
 
 \newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=yellow!10!white, colframe=yellow!80!black,
+    colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=red!5!white, colframe=red!75!black,
+    colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \lstset{
@@ -58,7 +65,7 @@
 \BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
 
 \newcommand{\notetitle}{CS336 2026 Lecture 10：Inference、KV Cache 与服务系统}
-\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方可执行讲义重新整理}
 \newcommand{\notedate}{2026 年春季}
 \newcommand{\videochannel}{Stanford CS336}
 \newcommand{\videopublishdate}{Spring 2026}
@@ -66,7 +73,6 @@
 \newcommand{\videourl}{https://cs336.stanford.edu/}
 \newcommand{\videocoverpath}{images/inference-schema.png}
 \newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
 
 \usepackage{fancyhdr}
 \pagestyle{fancy}
@@ -87,10 +93,8 @@
 {\large \noteauthors\par}
 \vspace{0.3cm}
 {\large \notedate\par}
-\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{
+\vspace{1.0cm}
 \includegraphics[width=0.9\textwidth,height=0.4\textheight,keepaspectratio]{\videocoverpath}\par
-}
 \vfill
 \begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
 \textbf{课程/频道}：\videochannel\par
@@ -104,930 +108,473 @@
 \tableofcontents
 \newpage
 
-\section{本讲主线：推理是反复发生的成本}
-
-Lecture 10 讨论 inference，也就是在模型参数固定以后，根据输入 prompt 生成输出 token。表面上看，推理只是训练之后的一个部署步骤；但从大模型产业和系统角度看，推理往往才是长期成本中心。训练一轮基础模型可能极其昂贵，但它是阶段性投入；推理会在聊天、代码补全、评测、agent 内部思考、强化学习采样中被重复调用。只要产品有人用，每一个生成 token 都在消耗显存带宽、GPU 时间和调度资源。
+\section{Lecture 10: inference 的总图}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\textwidth]{inference-schema.png}
-\caption{Lecture 10 的整体结构：先理解推理工作负载，再讨论有损、无损和系统层面的加速。}
-\figsource{CS336 Spring 2026 Lecture 10 官方讲义图片。}
+\includegraphics[width=0.92\textwidth]{inference-schema.png}
+\caption{Lecture 10: inference 的整体结构：理解工作负载，有损 shortcut，无损校验，以及动态服务系统。}
+\figsource{CS336 Spring 2026 Lecture 10 官方可执行讲义图像。}
 \end{figure}
+
+\begin{knowledgebox}{读图：inference-schema 如何串起整讲}
+图里把本讲分成四块。第一块是 Understanding the inference workload：为什么推理和训练不同，为什么 generation memory-bound。第二块是 Taking shortcuts (lossy)：GQA/MLA/CLA、local attention、quantization、pruning/distillation 等可能改变模型或精度的做法。第三块是 Use shortcuts but double check (lossless)：speculative sampling 利用便宜 draft model 但保持目标模型精确分布。第四块是 Handling dynamic workloads：continuous batching 和 PagedAttention 解决真实请求到达、长度不同、共享前缀和 KV cache 碎片化。
+\end{knowledgebox}
 
 \begin{importantbox}{本讲的核心判断}
-推理优化首先是\textbf{内存流量优化}，其次才是 FLOPs 优化。生成阶段每一步都要读取模型权重和当前请求自己的 KV cache，很多时候 GPU 不是算不动，而是在等 HBM 把数据搬过来。
+推理优化首先是\textbf{内存流量优化}，其次才是 FLOPs 优化。这里的 HBM 是 High Bandwidth Memory，即 GPU 上的高带宽显存；generation 阶段一次生成一个 token，不断从 HBM 读取模型权重和请求自己的 KV cache，常常 memory-bound。和 ZeRO/FSDP 训练状态分片不同，推理侧通常不维护 optimizer state；若要 shard 模型或 KV cache，目标是降低单卡 HBM 压力或提升吞吐，而不是同步训练梯度。
 \end{importantbox}
 
-\subsection{推理出现在哪里}
+% Source coverage markers for executable lecture sections and localized remote figures:
+% Summary
+% MLP layers (only looking at the matrix multiplications)
+% Attention layers (focusing on the matrix multiplications with FlashAttention)
+% Grouped-query attention (GQA)
+% Multi-head latent attention (MLA)
+% Cross-layer attention (CLA)
+% Local (sliding window) attention
+% Activation-aware quantization (AWQ)
+% https://jax-ml.github.io/scaling-book/assets/img/naive-inference-1400.webp
+% https://jax-ml.github.io/scaling-book/assets/img/cached-inference-1400.webp
+% https://www.datocms-assets.com/104802/1709770809-twitter-post-20.png
+% https://images.ctfassets.net/xjan103pcp94/1LJioEsEdQQpDCxYNWirU6/82b9fbfc5b78b10
+% cb_02_diagram-static-batching.png
 
-讲义把 inference 放在三个场景里看：
+\section{Understanding the inference workload}
 
-\begin{itemize}
-    \item \textbf{实际使用}：聊天机器人、代码补全、agent、批量数据处理、信息抽取。
-    \item \textbf{模型评测}：instruction following、数学、代码、工具调用等评测，本质上也要让模型生成答案。
-    \item \textbf{强化学习}：RLHF、RLAIF 或大规模 reasoning RL 都要先采样大量回答，再打分、过滤或更新策略。
-\end{itemize}
+\subsection{推理为什么重要，以及什么叫快}
 
-这个分类很重要，因为它说明推理不是训练之后的尾声，而是训练、评测和产品闭环的公共基础设施。特别是 agent 场景中，用户只看到最后几行答案，但模型可能在内部生成很长的 trace；tokens generated 就是 compute spent，越会思考的系统越容易把推理成本放大。
+Inference 出现在实际产品、模型评测、agent 内部轨迹、批量数据处理和 RL 采样中。训练是阶段性成本，推理是每次使用都要付的成本。聊天机器人里，人类等待 time-to-first-token；agent 工作流里，内部 trace 可能生成大量不可见 token；RL 中则要采样许多 completions 再打分。换句话说，tokens generated = compute spent。
 
-\begin{knowledgebox}{人类瓶颈与机器瓶颈}
-普通聊天里，人类阅读速度常常限制了可感知延迟；但 agent、代码批处理、评测和 RL 采样没有这个人类阅读瓶颈。系统会尽可能快地产生、验证、丢弃或再采样 token，因此吞吐量和调度效率变得更重要。
+\begin{knowledgebox}{术语消化：推理服务指标}
+\begin{tabular}{L{0.22\textwidth}L{0.34\textwidth}L{0.34\textwidth}}
+\toprule
+指标 & 含义 & 主要优化方向 \\
+\midrule
+TTFT & Time-to-first-token，用户等到第一个 token 的时间。 & prefill latency，小 batch、prefix cache、prompt 处理。 \\
+Latency & 单个请求 token 出现的速度，常以 seconds/token 计。 & generation step time、KV cache 读取、batch size。 \\
+Throughput & 系统总体 tokens/second。 & batching、并发、KV memory 管理、kernel efficiency。 \\
+Memory-bound & 速度受 HBM 读写限制，而不是算力限制。 & 减少 KV cache、量化、分页、提高复用。 \\
+\bottomrule
+\end{tabular}
 \end{knowledgebox}
 
-\subsection{三个指标：TTFT、Latency、Throughput}
-
-\begin{longtable}{p{0.22\textwidth}p{0.33\textwidth}p{0.34\textwidth}}
-\toprule
-\textbf{指标} & \textbf{含义} & \textbf{主要影响的体验} \\
-\midrule
-TTFT & Time-to-first-token，用户等待第一个 token 出现的时间 & 交互式应用的启动等待感，主要由 prefill 和排队决定 \\
-Latency & seconds/token，单个请求生成 token 的速度 & 流式输出是否顺滑，单用户响应是否拖沓 \\
-Throughput & tokens/second，服务整体每秒生成多少 token & 批处理成本、RL 采样成本、平台总服务能力 \\
-\bottomrule
-\end{longtable}
-
-\begin{warningbox}{不要把三个指标混成一个“快”}
-小 batch 可以降低单个请求延迟，却浪费吞吐；大 batch 可以摊薄权重读取成本，却增加排队和 KV cache 读写。推理服务的难点正是不同业务目标之间的张力。
-\end{warningbox}
-
-\subsection{生态：推理已经是独立系统方向}
-
-课程列举了几个代表性开源系统：vLLM、SGLang、TensorRT-LLM、llama.cpp。它们的侧重点不同：vLLM 以 PagedAttention 和高吞吐服务闻名；SGLang 面向 agentic workload 和 prefix/radix 复用；TensorRT-LLM 深度贴近 NVIDIA GPU kernel 和图优化；llama.cpp 则重视本地和 CPU/边缘部署。
-
-\begin{importantbox}{一个工程直觉}
-训练系统的问题常常是“如何让大矩阵乘法吃满硬件”；推理系统的问题常常是“如何在动态请求、不同长度、不同 prefix、不同 SLO 下少浪费显存和调度槽位”。这就是为什么推理课会同时讲模型结构、量化、采样算法和操作系统式分页。
-\end{importantbox}
-
-\section{记号与算术强度}
-
-\subsection{Transformer 形状记号}
-
-讲义使用近似 einops 的维度记号：
-
-\begin{itemize}
-    \item $B$：batch size，请求数或并发序列数。
-    \item $S$：上下文长度，已有 token 数。
-    \item $T$：本次要处理或生成的 token 数。
-    \item $D$：model dimension。
-    \item $F$：feed-forward hidden dimension，常见近似 $F=4D$。
-    \item $N$：query heads 数。
-    \item $K$：key/value heads 数。
-    \item $H$：每个 head 的维度，常有 $D=NH$。
-    \item $L$：层数。
-    \item $V$：词表大小。
-\end{itemize}
+\subsection{Transformer notation 与算术强度}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.76\textwidth]{transformer-diagram.png}
-\caption{Transformer 的主要模块：embedding、attention、MLP 和输出词表投影。}
-\figsource{JAX Scaling Book Transformer chapter。}
+\includegraphics[width=0.78\textwidth]{transformer-diagram.png}
+\caption{Transformer 结构与维度约定：\(B,T,D,H,N,K,G,S,F\) 等符号用于后续 FLOPs 和 IO 账本。}
+\figsource{Scaling Book Transformer diagram，本地化后供 CS336 Lecture 10 使用。}
 \end{figure}
 
-\begin{knowledgebox}{红色维度和蓝色维度的心智模型}
-矩阵乘法里，被两个输入共同拥有并在输出中消失的维度是 contracting dimension，例如 $D$；被两个输入共同拥有但保留到输出中的维度是 batching dimension，例如 batch 或 head。推理优化经常是在问：哪些维度可以并行，哪些维度只能顺序推进？
+\begin{knowledgebox}{读图：Transformer 维度怎么读}
+\(B\) 是 batch size，\(T\) 是要计算的 token 数，\(S\) 是已条件化的历史 token 数，\(D\) 是 model dimension，\(H\) 是 head dimension，\(N\) 是 query heads 数，\(K\) 是 key/value heads 数，\(G=N/K\) 是 GQA group 数，\(F=4D\) 是 MLP up-projection width。后面所有推理账本都在追踪这些维度如何进入 FLOPs、HBM 读写和 KV cache。
 \end{knowledgebox}
 
-\subsection{算术强度为什么重要}
-
-算术强度定义为：
-
+算术强度 arithmetic intensity 定义为每搬运一个 byte 做多少 FLOPs：
 \[
-I = \frac{\text{FLOPs}}{\text{bytes transferred}}.
+I = \frac{\text{FLOPs}}{\text{HBM bytes read/write}}.
 \]
+若 \(I\) 高于硬件的 compute/bytes 比，算子 compute-bound；若低于该阈值，算子 memory-bound。矩阵乘 \(X(B,D)W(D,F)\) 的 FLOPs 约为 \(2BDF\)，但权重读取约为 \(DF\) 元素。当 \(B=1\) 时，矩阵乘退化成 matrix-vector product，读一整个权重矩阵只服务一个 token，算术强度极低。
 
-它衡量每从 HBM 搬 1 byte 数据，GPU 能做多少计算。若算术强度高，性能受 tensor core 算力限制；若算术强度低，性能受 HBM 带宽限制。以 H100 为例，bf16 tensor core 峰值约 $989$ TFLOP/s，HBM 带宽约 $3.35$ TB/s，所以硬件的平衡点大约是：
-
-\[
-I_{\text{H100}} \approx \frac{989\times 10^{12}}{3.35\times 10^{12}} \approx 295.
-\]
-
-只有当每 byte 数据能带来超过约 295 次 FLOPs 时，才可能进入 compute-bound 区间。
-
-\begin{importantbox}{H100 平衡点的含义}
-如果某个 kernel 的算术强度远小于 295，它就不太可能靠“更多算力”变快；真正的瓶颈是少读、少写、重用数据、压缩数据，或者把多个请求合并起来摊薄权重读取。
+\begin{importantbox}{为什么 generation 像 batch size 为 1 的矩阵向量乘}
+训练时 \(B\times T\) 通常很大，同一个权重矩阵服务许多 tokens；generation 时每个请求每步只生成一个新 token，\(T=1\)，并发 \(B\) 又由在线流量决定。因此 generation 很难稳定形成大矩阵乘，往往被参数和 KV cache 的 HBM 读取限制。
 \end{importantbox}
 
-\subsection{矩阵乘法例子}
-
-考虑 $X\in \mathbb{R}^{B\times D}$ 和 $W\in \mathbb{R}^{D\times F}$：
-
-\[
-Y = XW,\qquad Y\in \mathbb{R}^{B\times F}.
-\]
-
-bf16 下，读 $X$、读 $W$、写 $Y$ 的字节数近似为：
-
-\[
-2BD + 2DF + 2BF.
-\]
-
-FLOPs 约为：
-
-\[
-2BDF.
-\]
-
-所以算术强度为：
-
-\[
-I_{\text{matmul}}
-=
-\frac{2BDF}{2BD+2DF+2BF}.
-\]
-
-当 $B$ 比 $D,F$ 小得多时，权重矩阵 $W$ 的读取主导分母，上式近似为：
-
-\[
-I_{\text{matmul}} \approx B.
-\]
-
-\begin{warningbox}{为什么 B 等于 1 很糟}
-$B=1$ 时，矩阵乘法退化为 matrix-vector product。你仍然要读完整的 $D\times F$ 权重矩阵，却只做 $O(DF)$ 的计算，算术强度约为 1，远低于 H100 的约 295。单请求逐 token 生成正是这种危险形态。
-\end{warningbox}
-
-\section{KV Cache：从三次方到可服务}
-
-\subsection{朴素自回归推理}
-
-最朴素的生成方式是：每生成一个 token，就把完整历史序列重新送进 Transformer。若目标是生成 $T$ 个 token，第 $t$ 步需要处理长度约为 $t$ 的序列，attention 每层有 $O(t^2)$ 复杂度，总体会累积成近似 $O(T^3)$ 的代价。
+\subsection{naive inference、KV cache、prefill 与 generation}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{naive-inference-1400.png}
-\caption{朴素推理每一步都重新处理完整前缀，历史 token 的 K/V 表示被反复计算。}
-\figsource{JAX Scaling Book inference chapter。}
+\caption{Naive inference：每生成一个 token 都把完整历史重新喂进 Transformer，重复计算大量 prefix。}
+\figsource{Scaling Book naive inference diagram，本地 PNG 由官方 WebP 转换。}
 \end{figure}
 
-\begin{knowledgebox}{冗余在哪里}
-第 $t+1$ 步的前 $t$ 个 token 和第 $t$ 步完全相同。它们在每层产生的 key/value 向量也相同。只要模型参数不变，历史 token 的 K/V 就没有必要重复计算。
+\begin{knowledgebox}{读图：naive inference 为什么是 \(O(T^3)\)}
+第 \(t\) 个 token 的 forward pass 会处理长度约为 \(t\) 的上下文；单次 attention 近似 \(O(t^2)\)。把 \(t=1\) 到 \(T\) 累加，整体生成 \(T\) 个 token 需要 \(O(T^3)\) 级别的重复计算。图里的关键是 prefix 被反复重算。
 \end{knowledgebox}
-
-\subsection{KV cache 的基本思想}
-
-KV cache 保存每个历史 token 在每层 attention 中的 key/value 向量。生成下一 token 时，新 token 只需要计算自己的 query、key、value，并让 query 去 attend 已缓存的 key/value。
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{cached-inference-1400.png}
-\caption{带 KV cache 的推理：prefill 建立 cache，generation 每一步只增量追加新 token 的 K/V。}
-\figsource{JAX Scaling Book inference chapter。}
+\caption{Cached inference：把历史 token 的 key/value 存进 KV cache，后续生成只计算新 token 与历史 cache 的交互。}
+\figsource{Scaling Book cached inference diagram，本地 PNG 由官方 WebP 转换。}
 \end{figure}
 
-对一个序列，KV cache 的大小近似为：
-
-\[
-M_{\text{KV, per seq}}
-= S \cdot K \cdot H \cdot L \cdot 2 \cdot 2\ \text{bytes}.
-\]
-
-其中第一个 2 表示 key 和 value 两份向量，第二个 2 表示 bf16 每个数 2 bytes。注意 $K$ 是 key/value heads 数；在 MHA 中 $K=N$，在 GQA/MQA 中 $K$ 可以远小于 $N$。
-
-\begin{importantbox}{KV cache 是推理的“第二套模型权重”}
-训练时我们主要担心参数、梯度、optimizer state 和 activation；推理时 optimizer state 消失，但每个用户请求带来自己的 KV cache。长上下文和大 batch 下，KV cache 会成为显存和带宽的主角。
-\end{importantbox}
-
-\subsection{Prefill 与 generation}
-
-推理可以分成两个阶段：
-
-\begin{itemize}
-    \item \textbf{Prefill}：给定 prompt，一次性处理多个输入 token，建立 KV cache，并产生第一个生成位置的 logits。
-    \item \textbf{Generation}：一次生成一个新 token，把新 token 的 K/V 追加到 cache，再继续下一步。
-\end{itemize}
-
-\begin{lstlisting}[caption={KV cache 推理的最小伪代码}]
-def generate(model, prompt, max_new_tokens):
-    # Prefill: process the prompt in parallel.
-    logits, kv_cache = model.forward(prompt, kv_cache=None)
-    next_token = sample(logits[-1])
-
-    output = [next_token]
-    for _ in range(max_new_tokens - 1):
-        # Generation: feed only the latest token, reuse cached K/V.
-        logits, kv_cache = model.forward([next_token], kv_cache=kv_cache)
-        next_token = sample(logits[-1])
-        output.append(next_token)
-    return output
-\end{lstlisting}
-
-\begin{warningbox}{Prefill 和 generation 不是同一种 workload}
-Prefill 类似训练：序列维度可以并行，容易用大矩阵乘法吃满 GPU。Generation 是逐 token 顺序执行：每一步的 $T=1$，更像反复做低算术强度的 matrix-vector 和 cache 读取。
-\end{warningbox}
-
-\section{推理算术强度：问题到底卡在哪里}
-
-\subsection{MLP 层}
-
-只看 MLP 中的三个大矩阵乘法：up、gate、down。输入 $X\in \mathbb{R}^{B\times T\times D}$，中间维度 $F$。粗略 FLOPs 为：
-
-\[
-\text{FLOPs}_{\text{MLP}} = 6BTDF.
-\]
-
-读写字节包括输入、三个权重矩阵、中间结果和输出：
-
-\[
-\text{Bytes}_{\text{MLP}}
-= 4BTD + 4BTF + 6DF.
-\]
-
-在 $BT$ 远小于 $D,F$ 的情况下，权重读取占主导，于是：
-
-\[
-I_{\text{MLP}} \approx BT.
-\]
-
-因此 prefill 时 $T=S$，若 prompt 足够长或 batch 足够大，MLP 可以 compute-bound；generation 时 $T=1$，算术强度约为 $B$，需要足够多并发请求才能摊薄权重读取。
-
-\begin{knowledgebox}{MLP 为什么能靠 batching 变好}
-同一层 MLP 权重被所有 batch 请求共享。batch 越大，同一份权重读取可以服务越多 token，所以算术强度随 $B$ 增大。这是高吞吐推理服务喜欢动态合批的根本原因之一。
+\begin{knowledgebox}{读图：KV cache 省了计算，但制造了内存瓶颈}
+KV cache 为每个 sequence、token、layer、head 保存 \(K,V\) 向量。它避免历史 token 反复投影，复杂度大幅降低；但每个新 token 都要读取该请求历史的 KV cache。历史越长、batch 越大、层数越多，HBM 读写越重。
 \end{knowledgebox}
 
-\subsection{Attention 层}
-
-在 FlashAttention 式实现中，attention 的主要 FLOPs 来自 $QK^\top$ 和 attention weights 乘 $V$。设历史长度为 $S$，本次处理 $T$ 个 token：
-
 \[
-\text{FLOPs}_{\text{attn}} = 4BSTD.
+M_{\text{KV}}
+  \approx
+2 \cdot B \cdot S \cdot L \cdot K \cdot H \cdot \text{bytes}.
 \]
+其中 \(2\) 来自 key 和 value，\(B\) 是并发请求数，\(S\) 是历史上下文长度，\(L\) 是层数，\(K\) 是 KV heads 数，\(H\) 是 head dimension。这个公式解释了为什么后面 GQA、MLA、CLA、local attention、PagedAttention 都围绕 KV cache 做文章。
 
-读取 $Q,K,V$ 并写输出的主要字节近似为：
-
-\[
-\text{Bytes}_{\text{attn}} = 4BSD + 4BTD.
-\]
-
-所以算术强度为：
-
-\[
-I_{\text{attn}}
-=
-\frac{4BSTD}{4BSD+4BTD}
-=
-\frac{ST}{S+T}.
-\]
-
-两个阶段分别得到：
-
-\[
-I_{\text{prefill-attn}} = \frac{S}{2},\qquad
-I_{\text{generation-attn}} = \frac{S}{S+1} < 1.
-\]
-
-\begin{importantbox}{本讲最关键的公式}
-Generation attention 的算术强度小于 1，而且不随 batch size $B$ 增长。因为不同请求的 KV cache 是不同数据，不能像 MLP 权重一样跨请求共享。这解释了为什么长上下文解码会如此吃显存带宽。
+\begin{importantbox}{prefill 和 generation 的差别}
+Prefill：给定 prompt，一次性编码 \(S\) 个 tokens，能像训练一样并行，MLP intensity 约随 \(B S\) 提升，attention intensity 约随 \(S/2\) 提升。Generation：每次只生成一个 token，MLP intensity 约随并发 \(B\) 提升，attention generation intensity 小于 1，几乎无法靠 batching 改善，因为每个请求读取自己的 KV cache。
 \end{importantbox}
 
-\subsection{总结成一张表}
+\subsection{latency-throughput tradeoff}
 
-\begin{longtable}{p{0.24\textwidth}p{0.28\textwidth}p{0.36\textwidth}}
-\toprule
-\textbf{模块与阶段} & \textbf{近似算术强度} & \textbf{工程含义} \\
-\midrule
-MLP prefill & $BS$ & 长 prompt 或合批后容易 compute-bound \\
-MLP generation & $B$ & 合批能改善，但交互业务的 $B$ 不稳定 \\
-Attention prefill & $S/2$ & 长 prompt 下可用 FlashAttention 做高效块化计算 \\
-Attention generation & $<1$ & 极端 memory-bound，合批不能从根本上改变 KV 读取瓶颈 \\
-\bottomrule
-\end{longtable}
+Batch size 增大时，模型权重读取可被更多请求摊薄，throughput 上升；但 KV cache 随 \(B\) 增大，单请求等待和每步读取也变重，latency 变差。一个简单策略是 prefill 用较小 batch 改善 TTFT，generation 用较大 batch 提高吞吐。
 
-\begin{warningbox}{“attention 优化”和“MLP 优化”的杠杆不同}
-MLP generation 可以通过 batching 提升权重复用；attention generation 主要要减少 KV cache 的大小、读取量或碎片，或者改变 attention 结构本身。
+\begin{warningbox}{复制模型和切分模型的差别}
+若启动 \(M\) 个完整模型副本，latency 基本不变，throughput 近似乘 \(M\)。若 shard 模型和 KV cache，则能服务更大模型或更大上下文，但每步推理需要跨设备通信，latency 可能上升。
 \end{warningbox}
 
 \subsection{本章小结}
 
-到这里，本讲已经完成最重要的瓶颈定位：prefill 仍像训练，容易通过序列并行和大矩阵乘法吃满 GPU；generation 则变成低算术强度、逐 token、强依赖 HBM 的 workload。后续所有方法都围绕这张账本展开：要么减少 KV cache 字节，要么提高权重重用，要么把动态请求调度得更接近规则 batch。
+理解 inference 的关键是把请求拆成 prefill 和 generation，把算子拆成 FLOPs 与 HBM bytes，把状态拆成 weights 和 KV cache。Generation 的 memory-bound 特性决定了后续所有优化方向。
 
-\section{延迟、吞吐量与显存模型}
+\section{Taking shortcuts (lossy)：减少 KV cache 和模型字节}
 
-\subsection{一个极简性能模型}
+\subsection{GQA：按 head 共享 KV}
 
-讲义用一个简单模型估算 Transformer 推理性能。参数量：
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{gmqa.png}
+\caption{Grouped-query attention：\(N\) 个 query heads 共享 \(K\) 个 key/value heads，\(K=1\) 是 MQA，\(K=N\) 是 MHA。}
+\figsource{Scaling Book GQA/MQA diagram，本地化后供 CS336 Lecture 10 使用。}
+\end{figure}
 
-\[
-P
-= 2VD + 3DFL + (2DNH + 2DKH)L.
-\]
-
-参数显存：
-
-\[
-M_{\text{params}} = 2P.
-\]
-
-每个序列的 KV cache：
-
-\[
-M_{\text{KV, per seq}} = S(KH)L\cdot 2\cdot 2.
-\]
-
-总显存：
-
-\[
-M_{\text{total}} = M_{\text{params}} + B M_{\text{KV, per seq}}.
-\]
-
-若 generation 每步主要受内存带宽限制，则单步延迟近似为：
-
-\[
-\text{latency} \approx \frac{M_{\text{total}}}{\text{memory bandwidth}},
-\]
-
-吞吐量为：
-
-\[
-\text{throughput} \approx \frac{B}{\text{latency}}.
-\]
-
-\begin{lstlisting}[caption={讲义中的性能模型骨架}]
-def transformer_stats(config):
-    num_params = 2*V*D + 3*D*F*L + (2*D*N*H + 2*D*K*H)*L
-    parameter_bytes = 2 * num_params
-    kv_per_seq = S * (K*H) * L * 2 * 2
-    memory = parameter_bytes + B * kv_per_seq
-    latency = memory / memory_bandwidth
-    throughput = B / latency
-    return memory, latency, throughput
-\end{lstlisting}
-
-\begin{knowledgebox}{这个模型故意很粗糙}
-它忽略 kernel launch、调度、通信、算子融合、cache locality、并行切分、采样开销和碎片。但它抓住了推理服务最重要的一阶项：每生成一步要读多少参数和 KV cache。
+\begin{knowledgebox}{读图：GQA 图应该看 \(N/K\)}
+MHA 为每个 query head 保存独立 KV；MQA 所有 query heads 共享一个 KV head；GQA 介于两者之间，每组 query heads 共享一组 KV。KV cache 大小约按 \(N/K\) 缩小，因此 latency 和 throughput 改善来自更少 HBM 读取。
 \end{knowledgebox}
 
-\subsection{Llama 2 13B 示例}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{gqa-speed.png}
+\caption{GQA 的 latency/throughput 结果：减少 KV heads 后更容易 fit，throughput 改善。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
 
-使用讲义中的配置：$S=1024$，$D=5120$，$F=13824$，$N=K=40$，$H=128$，$L=40$，$V=32000$，H100 带宽 $3.35$ TB/s。近似结果如下。
+\begin{knowledgebox}{读图：GQA speed 图说明什么}
+横向比较时，KV cache 小的配置通常 latency 更低或能容纳更大 batch，从而 throughput 更好。若原 MHA 配置不 fit，GQA 首先解决容量；若能 fit，GQA 仍可能通过减少内存流量改善吞吐。
+\end{knowledgebox}
 
-\begin{longtable}{p{0.13\textwidth}p{0.16\textwidth}p{0.18\textwidth}p{0.18\textwidth}p{0.2\textwidth}}
-\toprule
-\textbf{KV heads} & \textbf{Batch} & \textbf{总显存} & \textbf{延迟} & \textbf{吞吐} \\
-\midrule
-40 & 1 & 26.9 GB & 8.0 ms/token & 125 tok/s \\
-40 & 64 & 79.7 GB & 23.8 ms/token & 2689 tok/s \\
-40 & 256 & 240.8 GB & 71.9 ms/token & 3562 tok/s \\
-8 & 64 & 33.4 GB & 10.0 ms/token & 6417 tok/s \\
-8 & 256 & 65.6 GB & 19.6 ms/token & 13068 tok/s \\
-\bottomrule
-\end{longtable}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{gqa-accuracy.png}
+\caption{GQA accuracy 检查：减少 KV cache 后必须验证准确率是否下降。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
 
-\begin{importantbox}{批大小的双重作用}
-增大 batch 会提高吞吐，因为同一份参数读取服务了更多 token；但它也会增加 KV cache 总量，让每步读写更重，单请求延迟变差。当 KV cache 大到显存放不下时，吞吐收益也会被迫停止。
-\end{importantbox}
-
-\begin{warningbox}{TTFT 和 generation 应分开优化}
-TTFT 主要由 prefill 和排队决定，generation latency 由逐 token decode 决定。实际 serving 系统常常给 prefill 和 decode 设计不同 batch 策略，甚至用不同资源池，避免长 prompt 把交互式 decode 卡住。
+\begin{warningbox}{GQA 是 lossy shortcut}
+GQA 改变 attention 结构，通常会影响模型质量。速度图只说明系统收益，accuracy 图才说明是否值得用。课程主线是：有损 shortcut 必须以质量检查收尾。
 \end{warningbox}
 
-\section{有损捷径：缩小 KV Cache}
-
-既然 generation 的 attention 部分主要卡在 KV cache 读写，最直接的方向就是减少 KV cache。所谓有损，是因为这些方法改变了模型结构或数值表示，必须通过训练、微调或校准验证准确率没有不可接受的下降。
-
-\subsection{GQA、MQA 与 MHA}
-
-标准 multi-head attention 中，query heads 和 key/value heads 一样多，即 $K=N$。Grouped-query attention 让多个 query heads 共享一组 key/value heads；multi-query attention 是极端情况，所有 query heads 共享一组 key/value heads，即 $K=1$。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{gmqa.png}
-\caption{MHA、GQA、MQA 的关系：减少 KV heads 可以直接减少 KV cache。}
-\figsource{JAX Scaling Book inference chapter。}
-\end{figure}
-
-\begin{importantbox}{GQA 的压缩比}
-KV cache 大小与 $K$ 成正比。若从 $N=40$ 个 KV heads 降到 $K=8$，KV cache 约缩小 $5\times$。这不会让所有计算都加速 $5\times$，但会显著改善 memory-bound 的 generation。
-\end{importantbox}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.72\textwidth]{gqa-speed.png}
-\caption{GQA/MQA 对推理速度和吞吐的改善来自 KV cache 读取量下降。}
-\figsource{GQA paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{gqa-accuracy.png}
-\caption{GQA 的关键问题是速度收益和准确率损失之间的折中。}
-\figsource{GQA paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{warningbox}{GQA 不是越小越好}
-MQA 最省 KV cache，但它让所有 query heads 共享同一组 K/V，表达能力可能下降。现代大模型通常选 GQA 作为折中：节省足够多 KV cache，同时保留多组 K/V 的多样性。
-\end{warningbox}
-
-\subsection{MLA：存潜变量而不是完整 K/V}
-
-Multi-head latent attention 的思想更激进：不要把完整 K/V 存进 cache，而是先把 hidden state 压缩成 latent vector：
-
-\[
-c = W_c h.
-\]
-
-需要 attention 时，再由 $c$ 投影得到 K/V：
-
-\[
-K = W_K c,\qquad V = W_V c.
-\]
-
-DeepSeek v2 的例子中，原本 $N\cdot H=16384$ 维的 KV 表示可以压缩到 $C=512$ 维。由于 RoPE 需要保留额外位置信息，还要加入约 64 维的 RoPE 相关表示，总计约 576 维。
+\subsection{MLA 和 CLA：压缩或跨层共享 KV}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{mla-schema.png}
-\caption{MLA 用低维 latent cache 替代完整 K/V cache，再在需要时恢复 K/V。}
-\figsource{MLA paper and CS336 Lecture 10 官方讲义图片。}
+\caption{Multi-head latent attention：存压缩 latent \(c=W_c h\)，需要时再投影出 \(K,V\)。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-\begin{importantbox}{MLA 的系统意义}
-MLA 不只是“attention 的一种变体”，它直接改变 serving 系统的显存和带宽账本。若 cache 从 16K 维降到数百维，长上下文 decode 的瓶颈会被实质性缓解。
-\end{importantbox}
+\begin{knowledgebox}{读图：MLA 如何压缩 KV cache}
+普通 attention 存 \(K=W_Kh,V=W_Vh\)，维度约为 \(N H\)。MLA 存低维 latent \(c\)，例如 DeepSeek v2 中从 \(16384\) 维压到 \(512\) 维，再额外保留 RoPE 所需维度。它把长期 cache 从高维 KV 变成低维 latent，换来每步投影计算。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{mla-accuracy.png}
-\caption{MLA 论文中的准确率对比之一：不同 KV 设计的质量差异需要实证验证。}
-\figsource{MLA paper and CS336 Lecture 10 官方讲义图片。}
+\caption{MLA/MHA/GQA 准确率比较之一：先确认 MHA 与 GQA 的质量差异。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.72\textwidth]{mla-accuracy2.png}
-\caption{MLA 的吸引力在于同时改善 KV cache 成本和模型质量曲线。}
-\figsource{MLA paper and CS336 Lecture 10 官方讲义图片。}
+\includegraphics[width=0.8\textwidth]{mla-accuracy2.png}
+\caption{MLA 准确率比较之二：MLA 在某些设置下可接近甚至超过 MHA，同时更省 KV cache。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-\begin{warningbox}{MLA 与 RoPE 的细节不能忽略}
-压缩 latent 和旋转位置编码不是天然兼容的。若 K/V 的位置信息被压进不可逆 latent，恢复出的 attention 可能破坏 RoPE 几何结构。DeepSeek 系列因此额外保留 RoPE 相关维度。
-\end{warningbox}
-
-\subsection{CLA：跨层共享 K/V}
-
-Cross-layer attention 把共享维度从 heads 扩展到 layers：某些层复用前面层的 K/V，而不是每层都维护完整 cache。它的类比很清楚：GQA 在 head 维度减少 KV，CLA 在 layer 维度减少 KV。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.56\textwidth]{cla-diagram.png}
-\caption{CLA 在不同层之间共享 K/V，从而减少随层数增长的 cache 成本。}
-\figsource{CLA paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.82\textwidth]{cla-results.png}
-\caption{CLA 的目标是改善准确率与 KV cache 大小之间的 Pareto frontier。}
-\figsource{CLA paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{knowledgebox}{为什么跨层共享可能有效}
-Transformer 相邻层的表示并不是完全独立的。若某些层的 attention 主要使用相似的历史信息，那么复用 K/V 可能用较小的表达损失换来显著 cache 节省。问题在于：哪些层能共享、共享粒度多大、训练时如何让模型适应。
+\begin{knowledgebox}{读图：MLA accuracy 两张表一起看}
+第一张表确认不同 attention 结构的质量基线；第二张表展示 MLA 的质量和成本折中。读表时不能只看平均分，还要看任务类别和模型规模，因为 KV 压缩可能对长上下文、检索或数学任务影响不同。
 \end{knowledgebox}
 
-\subsection{局部与混合注意力}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{cla-diagram.png}
+\caption{Cross-layer attention：跨层共享 KV，类似 GQA 在 heads 维共享 KV。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
 
-另一类方法不是压缩每个 token 的 K/V，而是减少需要保留或读取的 token 数。局部 sliding-window attention 只 attend 最近窗口内的 token，使每层 KV 读取不随完整上下文长度增长。
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{cla-results.png}
+\caption{CLA 结果：改善 accuracy 与 KV cache size 的 Pareto frontier。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：CLA 的 Pareto frontier}
+CLA 不是只追求最小 KV cache，而是在相同 cache budget 下尽量提高 accuracy，或在相同 accuracy 下减少 cache。Pareto frontier 向左下移动才说明结构改动有系统价值。
+\end{knowledgebox}
+
+\subsection{Local、hybrid 和 DeepSeek v4 attention}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{longformer-attention.png}
-\caption{局部和稀疏 attention 用结构化模式替代完整全局 attention。}
-\figsource{Longformer / Sparse Transformer and CS336 Lecture 10 官方讲义图片。}
+\caption{Local/sliding-window attention：每层只看局部窗口，多层叠加后 effective context 线性扩大。}
+\figsource{Longformer/local attention diagram，供 CS336 Lecture 10 使用。}
 \end{figure}
 
-局部 attention 的代价是长程依赖受损。实际模型常用 hybrid 方案：部分层局部、部分层全局，或者在局部窗口之外保留少量全局 token、摘要 token 或检索 token。这样做的工程哲学是：让大多数 token 走便宜路径，让少数真正需要全局信息的层或 token 走昂贵路径。
-
-\begin{warningbox}{局部 attention 的风险}
-困惑度或短 benchmark 可能看不出问题，但长程任务、代码库理解、多轮 agent 状态和长文档问答会暴露全局依赖损失。因此局部化策略必须用目标 workload 验证。
-\end{warningbox}
-
-\subsection{DeepSeek v4 注意力设计}
-
-讲义提到 DeepSeek v4 面向 1M context 的 attention 组合：Compressed Sparse Attention、DeepSeek Sparse Attention、Heavily Compressed Attention。可以把它理解为多层级压缩和稀疏选择：
-
-\begin{itemize}
-    \item CSA 把每 $m$ 个 token 压成 1 个代表，降低长上下文索引成本。
-    \item DSA 选择 top-$k$ 重要位置，避免完整扫描全部历史。
-    \item HCA 对更远历史使用更强压缩，让超长上下文仍可服务。
-\end{itemize}
+\begin{knowledgebox}{读图：local attention 的收益和代价}
+局部窗口让每层 KV cache 与可见窗口相关，而不是与完整 sequence length 线性相关。多层堆叠可以传播信息，但远距离精确依赖会变弱。因此实践中常用 hybrid layers：部分层 local，部分层 global。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{deepseek-v4-attention.png}
-\caption{DeepSeek v4 attention 通过压缩、稀疏选择和分层记忆支持超长上下文。}
-\figsource{DeepSeek v4 report and CS336 Lecture 10 官方讲义图片。}
+\caption{DeepSeek v4 attention：CSA、DSA、HCA 等多级压缩/选择支持超长上下文。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-\begin{importantbox}{超长上下文的真正问题}
-1M context 的难点不是单纯“attention 是二次方”这句老话，而是 serving 时每个活跃请求都携带巨大的历史状态。若没有压缩、稀疏、分页和 prefix 复用，显存会被 KV cache 快速吞掉。
-\end{importantbox}
-
-\section{有损捷径：量化}
-
-\subsection{量化的基本形式}
-
-量化把高精度数值映射到低精度表示。典型 affine quantization 可以写作：
-
-\[
-x_{\text{quant}} = \operatorname{round}\left(\frac{x}{s}\right) + z,
-\qquad
-\hat{x} = (x_{\text{quant}} - z)s,
-\]
-
-其中 $s$ 是 scale，$z$ 是 zero point。推理中使用低精度的收益是参数和 cache 更小、内存带宽压力更低、某些硬件上低精度算子更快。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.62\textwidth]{fp8-quantization.png}
-\caption{FP8 等低精度格式试图在更小内存和可接受误差之间取得平衡。}
-\figsource{Baseten FP8 inference article。}
-\end{figure}
-
-\begin{longtable}{p{0.16\textwidth}p{0.22\textwidth}p{0.5\textwidth}}
+\begin{knowledgebox}{术语消化：DeepSeek v4 attention 三个缩写}
+\begin{tabular}{L{0.18\textwidth}L{0.34\textwidth}L{0.38\textwidth}}
 \toprule
-\textbf{格式} & \textbf{每数值字节} & \textbf{常见使用方式} \\
+术语 & 机制 & 推理意义 \\
 \midrule
-fp32 & 4 & 训练中的 master weights、optimizer states、数值敏感统计 \\
-bf16 & 2 & 训练和推理的常用默认格式，动态范围友好 \\
-fp8 & 1 & H100 等硬件支持下用于低精度训练或推理，需要 scale 管理 \\
-int8 & 1 & 推理常用，校准或 QAT 后可保持较好质量 \\
-int4 & 0.5 & 极致压缩，常用于权重量化，对异常值和校准更敏感 \\
+CSA & Compressed Sparse Attention，把每 \(m\) 个 tokens 压成一个表示。 & 降低长上下文 KV 读取。 \\
+DSA & DeepSeek Sparse Attention，选择 top \(k\) 相关位置。 & 把注意力集中到更有用 token。 \\
+HCA & Heavily Compressed Attention，更激进压缩。 & 服务超长上下文时进一步控成本。 \\
 \bottomrule
-\end{longtable}
-
-\begin{warningbox}{量化不是免费压缩}
-低精度会引入舍入误差、饱和、异常值放大和层间误差传播。模型越小、任务越难、输出分布越尖锐，量化损失越可能显现。
-\end{warningbox}
-
-\subsection{QAT、PTQ、GPTQ 与 AWQ}
-
-\begin{itemize}
-    \item \textbf{QAT}：quantization-aware training，在训练时模拟量化误差，让权重学会适应低精度。质量好但成本高。
-    \item \textbf{PTQ}：post-training quantization，训练后用校准数据估计 scale/zero point。成本低，是部署常用路径。
-    \item \textbf{GPTQ}：利用 Hessian 或近似二阶信息，在量化部分权重后调整剩余权重以补偿误差。
-    \item \textbf{AWQ}：activation-aware weight quantization，观察到少量 activation channel 对输出影响很大，对这些通道保留更高精度或更小误差。
-\end{itemize}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{awq-schema.png}
-\caption{AWQ 的核心：根据 activation 重要性保护少量关键权重通道。}
-\figsource{AWQ paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{importantbox}{从服务角度看量化}
-量化的收益不只是模型文件变小。更关键的是每个 decode step 读取权重和 cache 的字节数下降；若 kernel 和硬件能有效利用低精度，latency 和 throughput 才会同时改善。
-\end{importantbox}
-
-\section{有损捷径：剪枝与蒸馏}
-
-模型剪枝的思想很直白：删除不重要的 layer、head 或 hidden dimension，让模型更小；然后用原模型作为 teacher 修复被剪掉后的能力。课程强调 NVIDIA 的一个流程：
-
-\begin{itemize}
-    \item 在小校准集上识别重要层、重要 heads 或重要 hidden dimensions。
-    \item 删除不重要部分，得到更快的 student architecture。
-    \item 用原模型输出或中间表示蒸馏 student，恢复质量。
-\end{itemize}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.82\textwidth]{pruning-kd-loop.png}
-\caption{剪枝加知识蒸馏：先压缩结构，再用 teacher 修复 student。}
-\figsource{NVIDIA pruning/distillation paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.58\textwidth]{pruning-kd.png}
-\caption{剪枝结果的关键不是参数少了多少，而是压缩后质量是否仍在可接受曲线上。}
-\figsource{NVIDIA pruning/distillation paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{knowledgebox}{从头训练与蒸馏的差异}
-从头训练更像重新寻找一个小模型的最优点；蒸馏则把大模型已经学到的函数形状、暗知识和输出分布迁移给小模型。对于部署压缩，蒸馏通常比“剪完直接用”可靠得多。
+\end{tabular}
 \end{knowledgebox}
 
-\begin{warningbox}{剪枝的隐藏成本}
-剪枝后模型形状可能不再适合硬件。例如不规则 head 数、非 tensor-core-friendly hidden size、奇怪的 FFN 宽度都可能让理论 FLOPs 下降但实际 kernel 变慢。工程上要同时看质量、参数、显存和 kernel shape。
+\subsection{quantization 与 AWQ}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{fp8-quantization.png}
+\caption{不同数值精度示意：fp32、bf16、fp8、int8、int4 代表不同 bytes 和误差。}
+\figsource{CS336 Lecture 10 官方讲义引用/本地化图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：量化为什么直接影响推理}
+推理 memory-bound 时，参数和 KV cache 的 bytes 直接进入 latency/throughput。bf16 是常见默认；fp8/int8/int4 减少内存流量，但会引入量化误差。位宽越低，越需要校准、补偿或训练时适配。
+\end{knowledgebox}
+
+\begin{knowledgebox}{术语消化：QAT、PTQ、GPTQ、AWQ}
+\begin{tabular}{L{0.18\textwidth}L{0.34\textwidth}L{0.38\textwidth}}
+\toprule
+方法 & 做法 & 代价/适用性 \\
+\midrule
+QAT & Quantization-aware training，训练中模拟量化误差。 & 质量好但昂贵。 \\
+PTQ & Post-training quantization，训练后用校准数据确定 scale/zero point。 & 便宜，常用于部署。 \\
+GPTQ & 用 Hessian 信息补偿量化误差。 & 更精细但实现复杂。 \\
+AWQ & Activation-aware quantization，保留少量重要权重高精度。 & 关注大 activation channel 命中的权重。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{awq-schema.png}
+\caption{AWQ：根据 activation 重要性选择少量权重保留更高精度。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：AWQ schema 说明什么}
+AWQ 的直觉是并非所有权重量化误差同等重要。若某些 activation channels 很大，与其相乘的权重误差会被放大。保留 0.1\%-1\% 重要权重的高精度，可能用很小内存代价换来明显质量改善。
+\end{knowledgebox}
+
+\subsection{pruning 与 distillation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{pruning-kd-loop.png}
+\caption{Pruning + distillation loop：识别重要结构、裁剪，再用原模型蒸馏修复。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：pruning 为什么必须 distill}
+直接移除 layers、heads 或 hidden dimensions 会破坏模型函数。蒸馏让小模型模仿原模型输出，把结构损伤修复回来。它是有损 shortcut，但通过 teacher signal 降低质量损失。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{pruning-kd.png}
+\caption{Pruning + KD 结果：裁剪后经蒸馏可恢复部分质量，同时降低推理成本。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
+\end{figure}
+
+\begin{warningbox}{有损 shortcut 的共同风险}
+GQA、MLA、CLA、local attention、quantization、pruning 都可能改变输出分布。它们的验收不能只看速度，必须看准确率、长上下文能力、校准、下游任务和安全性指标。
 \end{warningbox}
 
-\section{无损捷径：Speculative Sampling}
+\section{Use shortcuts but double check (lossless)：speculative sampling}
 
-\subsection{核心直觉：验证比生成便宜}
-
-带 KV cache 的 generation 是逐 token 的；但给定一段候选 token，target model 可以在 prefill-like 模式下并行验证这些 token 的概率。Speculative sampling 利用这个不对称性：用便宜的 draft model 先猜几个 token，再用昂贵的 target model 一次性检查。
-
-\begin{importantbox}{无损的含义}
-Speculative sampling 的目标不是近似 target model，而是\textbf{精确采样自 target model 的分布}。draft model 只影响速度，不应该改变最终分布。
-\end{importantbox}
-
-\subsection{算法流程}
-
-设 draft distribution 为 $p$，target distribution 为 $q$。draft model 先生成若干候选 token；target model 并行计算这些位置上的 $q$。对每个候选 token $x$，以概率
-
-\[
-\min\left(1, \frac{q(x)}{p(x)}\right)
-\]
-
-接受。如果某个 token 被拒绝，则从 residual distribution 中采样：
-
-\[
-r(x) \propto \max(q(x)-p(x),0).
-\]
+Speculative sampling 利用一个便宜 draft model \(p\) 一次猜多个 token，再让 target model \(q\) 并行检查。直觉是：generation 慢，但 checking 多个候选 token 比逐个生成便宜。关键性质是它仍然精确采样自 \(q\)，因此属于 lossless shortcut。
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.78\textwidth]{speculative-sampling-algorithm.png}
-\caption{Speculative sampling 可以看作带修正分布的拒绝采样。}
-\figsource{Speculative sampling papers and CS336 Lecture 10 官方讲义图片。}
+\caption{Speculative sampling 算法：draft model 提案，target model 校验，必要时从 residual distribution 采样。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-\begin{lstlisting}[caption={Speculative sampling 的简化伪代码}]
-def speculative_step(prefix, draft, target, gamma):
-    # Draft proposes gamma tokens autoregressively.
-    proposals, p = draft.sample(prefix, steps=gamma)
-
-    # Target checks all proposed positions in parallel.
-    q = target.score(prefix, proposals)
-
-    accepted = []
-    for token, p_tok, q_tok in zip(proposals, p, q):
-        if uniform() <= min(1.0, q_tok[token] / p_tok[token]):
-            accepted.append(token)
-        else:
-            residual = normalize(max(q_tok - p_tok, 0))
-            accepted.append(sample(residual))
-            break
-    return accepted
-\end{lstlisting}
-
-\begin{knowledgebox}{为什么要 residual distribution}
-若 draft model 过度采样某些 token，直接拒绝后从 target 分布重采会重复计算概率质量。residual $\max(q-p,0)$ 正好补上 draft 少采的部分，从而保证边际分布仍等于 $q$。
+\begin{knowledgebox}{读图：为什么它仍是 exact sample}
+若 draft \(p\) 对某 token 给出概率高于 target \(q\)，该 token 只以 \(q/p\) 的概率接受；被拒绝的概率质量会转移到 residual distribution \(\max(q-p,0)\)。这样最终每个 token 的边际概率仍等于 \(q\)，只是把多个候选的校验并行化。
 \end{knowledgebox}
 
-\subsection{两词表证明}
-
-用词表 $\{A,B\}$ 看正确性最清楚。假设 draft 过度采样 $A$：
-
 \[
-p(A)>q(A),\qquad p(B)<q(B).
+P(A)
+  =
+p(A)\frac{q(A)}{p(A)}
+  +
+p(B)\cdot 1\cdot 0
+  =
+q(A).
 \]
-
-若 draft 抽到 $A$，接受概率是 $q(A)/p(A)$；若拒绝，residual 全部在 $B$ 上。于是最终采样到 $A$ 的概率：
-
-\[
-\Pr[A] = p(A)\frac{q(A)}{p(A)} = q(A).
-\]
-
-最终采样到 $B$ 的概率：
-
-\[
-\Pr[B]
-= p(B) + p(A)\left(1-\frac{q(A)}{p(A)}\right)
-= p(B)+p(A)-q(A)
-= q(B).
-\]
-
-\begin{importantbox}{数学保证带来的工程自由度}
-只要接受/拒绝和 residual 实现正确，draft model 可以很小、可以蒸馏、可以专门为某类 workload 训练。质量由 target model 保证，速度由 draft-target 匹配程度决定。
-\end{importantbox}
-
-\subsection{实践效果与扩展}
+这个两 token 例子说明：如果 \(p(A)>q(A)\)，过多提出的 \(A\) 会被拒绝一部分；若 \(p(B)<q(B)\)，不足的概率通过 residual 补回来。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.78\textwidth]{speculative-sampling-results.png}
-\caption{Speculative sampling 的收益取决于 draft model 的便宜程度和候选 token 的接受率。}
-\figsource{Speculative sampling papers and CS336 Lecture 10 官方讲义图片。}
+\includegraphics[width=0.9\textwidth]{speculative-sampling-results.png}
+\caption{Speculative sampling 结果：draft/target 组合可显著减少 target model 的 sequential generation 次数。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.78\textwidth]{speculative-sampling-stats.png}
-\caption{不同 target/draft 尺寸组合展示了速度与接受率的权衡。}
-\figsource{Speculative sampling papers and CS336 Lecture 10 官方讲义图片。}
+\includegraphics[width=0.9\textwidth]{speculative-sampling-stats.png}
+\caption{Speculative sampling 统计：性能取决于 draft model 接近 target 的程度和候选长度。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-实践中常见组合是 70B target 配 8B draft，或 8B target 配 1B draft。若 draft 太弱，候选 token 经常被拒绝，target 的一次并行验证摊不回 draft 的额外成本；若 draft 太强，它本身又变贵。因此 draft model 训练是 speculative decoding 的核心设计空间。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{medusa-eagle.png}
-\caption{Medusa 和 EAGLE 等方法扩展 draft 机制，让候选 token 生成更并行或更贴近 target。}
-\figsource{Medusa/EAGLE papers and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{warningbox}{Speculative sampling 的适用边界}
-它不能消除 target model 的验证成本，也不能保证所有 workload 都加速。低温度、强模式化输出、代码补全等场景往往接受率高；高温度创作、多样采样或 draft-target 差距大时收益会变弱。
-\end{warningbox}
-
-\section{动态工作负载：Continuous Batching}
-
-\subsection{在线推理不是静态 batch}
-
-训练时 batch 是一个规则张量：$B\times S\times D$。在线推理不同：请求随时到达，prompt 长度不同，输出长度未知，有的请求提前结束，有的请求共享 system prompt，有的请求要为同一个 prompt 采样多个回答。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{continuous-batching-static.png}
-\caption{静态 batching 会等待同一批请求全部完成，导致新请求和短请求浪费时间。}
-\figsource{Continuous batching explanatory diagram。}
-\end{figure}
-
-\begin{knowledgebox}{Ragged array 是 serving 的常态}
-推理服务面对的不是整齐矩阵，而是一组长度不同、生命周期不同、prefix 关系不同的序列。高性能 serving 系统的价值就在于把这些不规则请求映射成尽可能规则的 GPU 工作。
+\begin{knowledgebox}{读图：speculative speedup 的两个控制旋钮}
+Draft model 越接近 target，接受率越高；一次猜的 tokens 越多，潜在并行度越高，但被拒绝时浪费也越多。最佳点取决于 draft 成本、target 成本、接受率和服务端 batch 调度。
 \end{knowledgebox}
 
-\subsection{Iteration-level scheduling}
-
-Continuous batching 的基本策略是 iteration-level scheduling：每个 decode step 后检查是否有请求完成、是否有新请求到达，然后动态更新活跃 batch。这样新请求不必等当前 batch 整段生成结束才能加入。
-
-\begin{lstlisting}[caption={Continuous batching 的调度骨架}]
-active = []
-while server_is_running:
-    active.extend(admit_new_requests())
-
-    # One decode iteration for all active sequences.
-    logits, kv_cache = model.decode_one_token(active)
-    sample_and_append(active, logits)
-
-    finished = [r for r in active if r.is_done()]
-    return_to_users(finished)
-    active = [r for r in active if not r.is_done()]
-\end{lstlisting}
-
-\begin{importantbox}{连续批处理解决的是排队浪费}
-传统静态 batch 中，短请求必须等长请求，晚到请求必须等当前 batch 完成。连续批处理把调度粒度降到 token iteration，让 GPU batch 尽量保持饱满。
-\end{importantbox}
-
-\subsection{Selective batching}
-
-不同长度序列让 attention 和非 attention 模块的 batching 方式不同：
-
-\begin{itemize}
-    \item Attention 要尊重每个序列自己的历史长度和 KV cache，通常按序列处理，或使用变长 kernel。
-    \item MLP、layer norm、projection 等非 attention 部分可以把所有活跃 token 拼接成一个大矩阵，例如 $[3,H]$、$[9,H]$、$[5,H]$ 拼成 $[17,H]$。
-\end{itemize}
-
-\begin{warningbox}{批处理不是“把请求堆起来”这么简单}
-真正的 serving 系统要区分 prefill 和 decode、attention 和 non-attention、短请求和长请求、共享 prefix 和独立 prefix。粗暴合批可能提高平均吞吐，却伤害尾延迟。
-\end{warningbox}
-
-\section{PagedAttention：把 KV Cache 当作虚拟内存}
-
-\subsection{传统 KV 分配的问题}
-
-早期做法常为每个请求预留一段连续 KV cache 空间，长度按最大输出估计。这会产生两类碎片：
-
-\begin{itemize}
-    \item \textbf{内部碎片}：请求实际生成很短，但预留了很长空间。
-    \item \textbf{外部碎片}：不同请求释放后，显存中出现很多不连续空洞。
-\end{itemize}
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.94\textwidth]{paged-attention-fragmentation.png}
-\caption{连续 KV cache 分配容易造成内部和外部碎片。}
-\figsource{vLLM/PagedAttention paper and CS336 Lecture 10 官方讲义图片。}
+\includegraphics[width=0.85\textwidth]{medusa-eagle.png}
+\caption{Medusa 和 EAGLE：改进 draft model 的方法，让提案更接近 target。}
+\figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
-\begin{importantbox}{vLLM 的关键抽象}
-PagedAttention 把每个序列的 KV cache 切成固定大小 blocks，让逻辑上连续的 token 映射到物理上不连续的显存块。这和操作系统虚拟内存分页非常相似。
-\end{importantbox}
-
-\subsection{Block table 与非连续 cache}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.62\textwidth]{paged-attention-blocks.png}
-\caption{PagedAttention 使用固定大小 blocks 管理 KV cache。}
-\figsource{vLLM/PagedAttention paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-每个请求维护一个 block table，记录逻辑 token block 到物理 KV block 的映射。attention kernel 根据 block table 读取 K/V，而不是假设 cache 在物理内存中连续。
-
-\begin{lstlisting}[caption={PagedAttention 的 block table 心智模型}]
-# Logical sequence tokens are split into blocks.
-# Physical KV blocks can live anywhere in GPU memory.
-request.block_table = [17, 42, 5, 91]
-
-for logical_block, physical_block in enumerate(request.block_table):
-    k, v = read_kv_block(physical_block)
-    attend_to_block(k, v)
-\end{lstlisting}
-
-\begin{knowledgebox}{为什么分页适合 KV cache}
-KV cache 是 append-only 为主，且自然按 token 顺序增长。固定 blocks 可以让扩容、释放、共享和 copy-on-write 都变成块级操作，显著降低显存浪费。
+\begin{knowledgebox}{读图：Medusa/EAGLE 的共同目标}
+Medusa 让 draft 头并行提出多个未来 token；EAGLE 利用 target model 的高级特征帮助 draft。二者都服务同一个目标：提高接受率，同时保持 draft 成本足够低。
 \end{knowledgebox}
-
-\subsection{Prefix sharing 与 copy-on-write}
-
-很多请求共享前缀：同一个 system prompt、同一份文档、多样本生成、beam search、程序合成中同一题目采样多个答案。PagedAttention 可以让多个请求的 block table 指向相同物理 block，直到某个请求需要写入新 token 时才 copy-on-write。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{paged-attention-logical.png}
-\caption{逻辑上不同的请求可以共享前缀 KV blocks。}
-\figsource{vLLM/PagedAttention paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.82\textwidth]{paged-attention-sharing.png}
-\caption{Prefix sharing 覆盖 system prompt 共享、多样本生成等常见 workload。}
-\figsource{vLLM/PagedAttention paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.82\textwidth]{paged-attention-parallel.png}
-\caption{Copy-on-write 让共享前缀保持共享，只在分叉后新增或复制必要 blocks。}
-\figsource{vLLM/PagedAttention paper and CS336 Lecture 10 官方讲义图片。}
-\end{figure}
-
-\begin{importantbox}{PagedAttention 的本质收益}
-它不改变模型数学，也不改变采样分布；它改变的是内存管理。更少碎片、更高 prefix 复用、更灵活的动态 batch，最终转化为更高吞吐和更稳定延迟。
-\end{importantbox}
-
-\subsection{vLLM 的其他优化}
-
-讲义还提到 vLLM 中配套的系统优化：
-
-\begin{itemize}
-    \item block read attention kernel：把按 block 读取和 attention 计算融合，减少 kernel launch 和不必要内存流量。
-    \item FlashAttention / FlashDecoding：使用更 IO-aware 的 attention kernel。
-    \item CUDA graphs：减少重复 decode step 的 CPU launch overhead。
-\end{itemize}
-
-\begin{warningbox}{系统优化需要端到端看}
-单个 kernel benchmark 很好不代表服务吞吐一定好。真实瓶颈可能在调度、prefix cache 命中率、显存碎片、PCIe/NVLink 通信、tokenizer、采样和用户侧流式传输。
-\end{warningbox}
 
 \subsection{本章小结}
 
-Continuous batching 解决活跃请求不饱满的问题，selective batching 解决变长序列中哪些算子能拼接的问题，PagedAttention 解决 KV cache 的碎片与共享问题。这三者共同把“模型一步 decode”扩展成“在线服务系统一步 decode”。
+Speculative sampling 的美感在于：它利用系统不对称性，checking 比 generation 更可并行；又用 rejection-sampling 逻辑保证目标分布不变。它是本讲中最典型的“系统技巧 + 概率正确性”结合。
 
-\section{工程综合：如何设计一个推理优化路线}
+\section{Handling dynamic workloads：continuous batching}
 
-\subsection{按瓶颈选择工具}
+真实推理流量不是训练中的矩形 batch。请求到达时间不同、prompt 长度不同、生成长度不同，还可能共享 system prompt 或要求多样本生成。静态 batching 会让早到请求等待，也会因 padding 浪费大量计算。
 
-\begin{longtable}{p{0.22\textwidth}p{0.36\textwidth}p{0.3\textwidth}}
-\toprule
-\textbf{症状} & \textbf{可能瓶颈} & \textbf{优先尝试} \\
-\midrule
-TTFT 高 & prompt 长、prefill 排队、prefill batch 太大 & prefill/decode 分池，限制 prefill batch，prefix cache \\
-单请求 decode 慢 & generation memory-bound，KV cache 或权重读取大 & GQA/MLA、量化、FlashDecoding、较小 batch \\
-吞吐低 & batch 不饱满，权重读取未摊薄 & continuous batching，更积极 admission，CUDA graphs \\
-显存碎片严重 & 预留式 KV cache 和变长输出 & PagedAttention，block allocator，copy-on-write \\
-长上下文成本爆炸 & KV cache 随 $S$ 增长 & MLA、local/hybrid attention、sparse attention、prefix sharing \\
-质量可接受但成本高 & 模型过大或精度过高 & PTQ/AWQ、剪枝、蒸馏、draft model \\
-\bottomrule
-\end{longtable}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{continuous-batching-static.png}
+\caption{静态 batching 的问题：请求长度和到达时间不同，等待和 padding 都会浪费。}
+\figsource{Orca/continuous batching diagram，本地化后供 CS336 Lecture 10 使用。}
+\end{figure}
 
-\begin{importantbox}{不要先迷信某个单点技术}
-推理优化是 workload-driven 的。聊天产品、代码补全、离线批处理、RL 采样、agent tree search 的指标和请求形态不同；同一个技术在一个场景是主菜，在另一个场景可能只是小调料。
+\begin{knowledgebox}{读图：continuous batching 解决哪个问题}
+图中不同请求像长度不一的条带。训练可以把 \(B\times S\times H\) 看成稠密矩形；推理则是 ragged array。Iteration-level scheduling 每个 decode step 都可以加入新请求、移除完成请求，让 GPU 更持续地工作。
+\end{knowledgebox}
+
+\begin{importantbox}{selective batching 的核心}
+Attention 需要按 sequence 单独处理，因为每个请求历史长度不同；non-attention MLP 等操作可以把所有 active tokens concatenate 成 \([3+9+5,H]\) 这样的矩阵统一计算。服务系统要在“保持语义正确”和“形成大矩阵乘”之间拆算子。
 \end{importantbox}
 
-\subsection{Lossy 与 lossless 的组合}
+\section{PagedAttention：用操作系统思想管理 KV cache}
 
-有损方法改变模型或数值：GQA、MLA、CLA、局部 attention、量化、剪枝。它们直接降低每步成本，但要重新验证质量。无损方法如 speculative sampling 和 PagedAttention 不改变 target distribution 或模型输出语义，更适合作为系统层通用优化。
+\subsection{fragmentation 与 blocks}
 
-现实系统通常混合使用：
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{paged-attention-fragmentation.png}
+\caption{传统 KV cache 预分配会产生 internal/external fragmentation。}
+\figsource{vLLM/PagedAttention 论文图，供 CS336 Lecture 10 使用。}
+\end{figure}
 
-\begin{itemize}
-    \item 模型结构上使用 GQA 或 MLA。
-    \item 权重使用 fp8/int8/int4 量化。
-    \item serving 层使用 continuous batching 和 PagedAttention。
-    \item 对高接受率场景加入 speculative decoding。
-    \item 对共享 prompt 的 agent 或代码任务启用 prefix caching。
-\end{itemize}
-
-\begin{knowledgebox}{一个有用的排序}
-先用粗模型定位瓶颈：参数读取、KV cache、排队、碎片、通信还是采样。然后优先选择不改变质量的系统优化；若还不够，再引入有损结构和量化，并用目标 workload 做回归评测。
+\begin{knowledgebox}{读图：KV cache fragmentation}
+如果为每个请求按最大长度预留连续空间，实际生成较短时会产生 internal fragmentation；不同请求释放/分配后，空洞之间不连续，又会产生 external fragmentation。显存看似充足，却无法容纳新的长请求。
 \end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{paged-attention-blocks.png}
+\caption{PagedAttention 把每个序列的 KV cache 切成非连续 blocks。}
+\figsource{vLLM/PagedAttention 论文图，供 CS336 Lecture 10 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：blocks 像虚拟内存页}
+每个请求看到的是逻辑连续的 token 序列，但物理 KV blocks 可以分散在显存里。调度器维护 block table，把逻辑位置映射到物理块。这样可以按需增长，而不是一开始预留最大长度。
+\end{knowledgebox}
+
+\subsection{sharing、copy-on-write 与并行读取}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{paged-attention-logical.png}
+\caption{PagedAttention 的逻辑视图：请求可以共享 prefix 的 KV blocks。}
+\figsource{vLLM/PagedAttention 论文图，供 CS336 Lecture 10 使用。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{paged-attention-sharing.png}
+\caption{KV cache sharing 场景：共享 system prompt、多样本生成、程序合成等。}
+\figsource{vLLM/PagedAttention 论文图，供 CS336 Lecture 10 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：prefix sharing 为什么省显存}
+多个请求若有相同 system prompt 或同一 prompt 的多个 samples，前缀 KV 完全相同。PagedAttention 可让它们共享同一批 blocks；当某个请求继续生成并发生分叉时，再 copy-on-write 新 blocks。这和操作系统共享内存页的思路一致。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{paged-attention-parallel.png}
+\caption{PagedAttention 并行读取 blocks 并执行 attention。}
+\figsource{vLLM/PagedAttention 论文图，供 CS336 Lecture 10 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：PagedAttention 不只是内存分配器}
+为了让非连续 blocks 不拖慢 attention，系统还需要 kernel 支持：融合 block read 和 attention，减少 launch overhead，配合 FlashAttention/FlashDecoding/CUDA graphs。内存管理和 kernel design 必须一起做。
+\end{knowledgebox}
+
+\begin{importantbox}{PagedAttention 的系统意义}
+PagedAttention 把 KV cache 从“连续大数组”变成“可分页的逻辑地址空间”。它直接服务动态 workload：变长请求、共享前缀、多样本生成、早停、长上下文。vLLM 的成功说明，LLM serving 的关键创新不只在模型结构，也在操作系统式资源管理。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Continuous batching 解决时间维度的动态性，PagedAttention 解决空间维度的动态性。前者让 batch 随请求到达和完成不断变化；后者让 KV cache 随序列增长和共享动态分配。
 
 \section{总结与延伸}
 
-Lecture 10 的主线可以压缩成三句话：
+Lecture 10 的主线是：推理不同于训练，因为它反复发生、在线动态、generation sequential 且 memory-bound。优化方向可以分三类：改变模型或精度以减少内存流量，利用概率校验保持 exact sampling，借鉴系统思想管理动态请求和 KV cache。
 
+\begin{importantbox}{最终 takeaways}
 \begin{enumerate}
-    \item 推理之所以不同于训练，是因为 generation 逐 token 顺序执行，attention 读取每个请求自己的 KV cache，极易 memory-bound。
-    \item 大多数模型侧优化都在减少每个 token 的参数或 KV cache 字节：GQA、MLA、CLA、局部/稀疏 attention、量化、剪枝与蒸馏。
-    \item 大多数系统侧优化都在处理动态、不规则和共享：speculative sampling 利用验证比生成便宜，continuous batching 填满 GPU，PagedAttention 用分页和 copy-on-write 管理 KV cache。
+    \item 推理成本长期重复发生，TTFT、latency、throughput 是不同目标。
+    \item Prefill 通常较 compute-bound，generation 通常 memory-bound。
+    \item KV cache 大小约为 \(2BSLKH\cdot\text{bytes}\)，是推理显存和带宽的核心对象。
+    \item GQA、MLA、CLA、local/hybrid attention 都在减少 KV cache，但需要质量检查。
+    \item Quantization、AWQ、pruning、distillation 减少模型字节或计算，但属于有损 shortcut。
+    \item Speculative sampling 用 draft model 提案、target model 校验，能保持 exact target distribution。
+    \item Continuous batching 和 PagedAttention 把在线 serving 变成调度和内存管理问题。
 \end{enumerate}
-
-\begin{importantbox}{最终 takeaway}
-训练让模型变聪明，推理让模型可用。一个优秀的 inference stack 必须同时懂 Transformer 数学、GPU roofline、KV cache 账本、采样正确性和在线服务调度。只看其中一层，都会错过真正的瓶颈。
 \end{importantbox}
 
-\subsection{延伸阅读}
-
+\begin{knowledgebox}{拓展阅读}
 \begin{itemize}
-    \item JAX Scaling Book：Transformer 与 inference chapters。
-    \item vLLM / PagedAttention paper。
-    \item GQA、MLA、CLA、AWQ、Speculative Decoding、Medusa、EAGLE 原论文。
-    \item SGLang、TensorRT-LLM、llama.cpp、vLLM 文档与 benchmark。
+    \item vLLM and PagedAttention paper.
+    \item Speculative decoding / speculative sampling papers.
+    \item GQA, MLA, CLA and DeepSeek attention reports.
+    \item AWQ, GPTQ, QAT/PTQ quantization references.
+    \item Orca continuous batching serving system.
 \end{itemize}
+\end{knowledgebox}
 
 \end{document}

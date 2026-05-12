@@ -1,0 +1,690 @@
+\documentclass[a4paper]{article}
+
+\usepackage[fontset=fandol]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[margin=2.35cm]{geometry}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{needspace}
+
+\graphicspath{{./}{images/}}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!55!black,
+    urlcolor=blue!65!black,
+    citecolor=blue!55!black
+}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\newtcolorbox{knowledgebox}[1]{
+    enhanced, breakable, colback=blue!5!white, colframe=blue!75!black,
+    colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, boxrule=1pt, sharp corners
+}
+
+\newtcolorbox{importantbox}[1]{
+    enhanced, breakable, colback=yellow!10!white, colframe=yellow!80!black,
+    colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries,
+    title=#1, sharp corners
+}
+
+\newtcolorbox{warningbox}[1]{
+    enhanced, breakable, colback=red!5!white, colframe=red!75!black,
+    colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, sharp corners
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    stringstyle=\color{red!60!black},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    captionpos=t,
+    showstringspaces=false,
+    columns=fullflexible,
+    keepspaces=true,
+    extendedchars=false
+}
+
+\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+
+\newcommand{\notetitle}{CS336 2026 Lecture 12：Evaluation}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方可执行讲义重新整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford CS336}
+\newcommand{\videopublishdate}{Spring 2026}
+\newcommand{\videoduration}{官方可执行讲义 lecture12-slides.py}
+\newcommand{\videourl}{https://cs336.stanford.edu/}
+\newcommand{\videocoverpath}{images/artificial-analysis.png}
+\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\Large 课程笔记\par}
+\vspace{1.2cm}
+{\huge\bfseries \notetitle\par}
+\vspace{0.8cm}
+{\large \noteauthors\par}
+\vspace{0.3cm}
+{\large \notedate\par}
+\vspace{1.0cm}
+\includegraphics[width=0.88\textwidth,height=0.43\textheight,keepaspectratio]{\videocoverpath}\par
+\vfill
+\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
+\textbf{课程/频道}：\videochannel\par
+\textbf{发布日期}：\videopublishdate\par
+\textbf{材料类型}：\videoduration\par
+\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par
+\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Lecture 12: evaluation 的核心问题}
+
+前面课程已经讲了如何训练语言模型：架构、训练、系统、scaling、推理。Lecture 12 转向一个更基础也更容易被低估的问题：给定一个模型，如何判断它“好不好”？这个问题必须先于数据选择，因为数据会塑造模型行为；如果我们不知道目标行为是什么，就不知道该训练什么数据。
+
+\begin{importantbox}{Evaluation 的核心挑战}
+Evaluation 不是机械地“给 prompts、拿 responses、算 accuracy”。它是在把一个抽象 construct，例如“能力”“有用性”“安全性”“推理能力”“真实世界表现”，压缩成 concrete metric。这个压缩过程会反过来塑造研究方向、产品选择和社会判断。
+\end{importantbox}
+
+\begin{knowledgebox}{术语消化：评价设计的三条轴}
+\begin{tabular}{L{0.22\textwidth}L{0.34\textwidth}L{0.34\textwidth}}
+\toprule
+轴 & 问题 & 例子 \\
+\midrule
+Difficulty & 任务是否仍能区分 frontier models？ & MMLU 被 MMLU-Pro/HLE 替代。 \\
+Realism & 是否像真实用户或真实工作？ & Chatbot Arena、GDPVal、MedHELM。 \\
+Validity & 指标是否真的测到想测的 construct？ & contamination、dataset quality、judge bias。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\section{What is good：模型好坏有多个定义}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{artificial-analysis.png}
+\caption{Artificial Analysis leaderboard：按 benchmark 和能力指标比较模型。}
+\figsource{CS336 Lecture 12 官方源引用图，本地化自 Stanford lectures images。}
+\end{figure}
+
+\begin{knowledgebox}{读图：benchmark leaderboard 测的是“标准化能力”}
+这类 leaderboard 让模型在同一批标准任务上比较，优点是清晰、可复现、便于购买决策；缺点是指标集合会选择性代表“好”，且容易被过拟合、污染或专门优化。读这类图时要先问：它覆盖了哪些任务，没覆盖哪些真实场景。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{artificial-analysis-cost.png}
+\caption{加入成本后的模型比较：好模型不只要强，还要便宜、快、可部署。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：性能-成本 Pareto frontier}
+如果两个模型能力相近，成本更低的模型可能更“好”。如果一个模型略强但贵很多，具体是否值得取决于用户任务价值。评价不能只看 accuracy，也要看 latency、throughput、价格、上下文长度和可靠性。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.58\textwidth]{lmarena-leaderboard.png}
+\caption{LM Arena leaderboard：通过人类 pairwise preference 给模型排序。}
+\figsource{Arena AI / Chatbot Arena leaderboard，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：preference leaderboard 测的是“人更喜欢哪个回答”}
+人类偏好能捕捉开放式回答的风格、完整性和实用性，但也混合了正确性、语气、长度、迎合性和用户群体偏见。它不是纯粹能力测量，而是特定交互分布上的偏好测量。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{openrouter.png}
+\caption{OpenRouter ranking：用户选择和付费也构成一种模型评价信号。}
+\figsource{OpenRouter ranking，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{warningbox}{读图：使用量不是能力本身}
+用户选择受到价格、品牌、可用性、上下文长度、API 兼容性、区域访问、产品默认值等影响。商业使用量能说明真实 adoption，但不能直接等同于模型能力。
+\end{warningbox}
+
+\subsection{本章小结}
+
+模型“好”可以指 benchmark 强、便宜、用户喜欢、用户愿意付费。不同定义服务不同问题。评价开始前必须说清楚 rules of the game。
+
+\section{Perplexity：最传统也最容易误读的指标}
+
+语言模型定义了 token 序列 \(x\) 的概率 \(p(x)\)。给定数据集 \(D\)，perplexity 可写为：
+\[
+\mathrm{PPL}(D)
+  =
+\left(\frac{1}{p(D)}\right)^{1/|D|}
+  =
+\exp\left(-\frac{1}{|D|}\sum_{x_i\in D}\log p(x_i)\right).
+\]
+直觉上，PPL 约等于模型在每个 token 位置“等效面对多少个选项”。PPL 越低，模型越不惊讶。但它只测概率分配，不直接测“回答是否有用”。
+
+\begin{importantbox}{术语消化：perplexity 的边界}
+Perplexity 适合做平滑 scaling-law 指标，因为它连续、低噪声、可在预训练数据上自然计算。它不适合单独代表真实产品质量，因为它会惩罚所有 token，包括与任务无关的表达形式；也不能直接评价工具使用、开放式帮助、安全性和 agent 行为。
+\end{importantbox}
+
+\begin{knowledgebox}{术语澄清：zero-shot 不是 ZeRO}
+本节的 zero-shot 指“不针对目标数据集微调，直接评测”。它不是 ZeRO（Zero Redundancy Optimizer）：ZeRO 是训练系统里的优化器状态、梯度和参数分片方法，用于减少 data-parallel ranks 上的重复显存。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{gpt2-perplexity.png}
+\caption{GPT-2 zero-shot perplexity：WebText 训练后在标准数据集上做 out-of-distribution evaluation。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：GPT-2 perplexity 说明 transfer 不是均匀发生}
+GPT-2 在小数据集上可能因为预训练 transfer 表现更好，但在更大或分布更不同的数据集上不一定占优。这说明 in-distribution perplexity 和 out-of-distribution perplexity 是不同问题。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{lambada.png}
+\caption{LAMBADA：cloze task，填补最后一个词，属于 perplexity in disguise。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.62\textwidth]{hellaswag.png}
+\caption{HellaSwag：multiple-choice sentence completion，也可看作比较候选 completion 的概率。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：为什么这些是 perplexity in disguise}
+LAMBADA 和 HellaSwag 都可以通过给候选 continuation 打 log probability 来选择答案。它们比纯 PPL 更接近任务，但仍依赖模型概率是否校准、tokenization 是否公平、候选长度如何归一化。
+\end{knowledgebox}
+
+\begin{warningbox}{perplexity leaderboard 的信任问题}
+如果参赛者提交的是 black-box LM，评测方计算 \(\log p(\text{test data})\) 时必须相信模型返回的是合法概率分布并且归一化。下游任务只需 response，而 perplexity leaderboard 需要概率接口，安全边界不同。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Perplexity 仍是语言模型开发中最常用的内部指标，但真实评价必须补充更贴近任务和用户的 benchmarks。
+
+\section{Exam benchmarks：难度可控但不一定真实}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{mmlu.png}
+\caption{MMLU：57 个 subject 的多选题，常被用作知识能力 benchmark。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：MMLU 测的是知识，不是所有 language understanding}
+MMLU 名字里有 language understanding，但其核心是跨学科知识问答。它的优点是题目清楚、容易评分、覆盖广；缺点是容易饱和、可能污染、且不代表真实助理交互。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{mmlu-pro.png}
+\caption{MMLU-Pro：去掉噪声/简单题，把 4 选项扩到 10 选项，并用 chain-of-thought 评估。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：MMLU-Pro 为什么更难}
+更多选项降低猜中概率，去掉 trivial questions 后减少饱和。模型准确率下降 16\%-33\% 说明旧 benchmark 的区分度已经不足。Benchmark 难度必须随模型进步而升级。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{gpqa.png}
+\caption{GPQA：由 PhD contractors 编写的 graduate-level Google-proof Q\&A。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：GPQA 的设计目标}
+GPQA 试图让非专家即使用 Google 也难以答对，从而减少简单检索和记忆。它更接近专业知识推理，但题目来源、专家定义和评测格式仍会影响 validity。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{hle-examples.png}
+\caption{Humanity's Last Exam examples：多模态、多学科，包含多选和短答。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{hle-pipeline.png}
+\caption{HLE pipeline：用奖金、共同作者身份、frontier LLM filtering 和多轮 review 构造高难题。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{hle-results.png}
+\caption{HLE results：展示 frontier models 在更难考试题上的表现。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：HLE 的意义和限制}
+HLE 代表 benchmark 随模型变强而不断加难的趋势。它能延缓饱和，但仍然是考试式任务：答案通常预先存在，交互性弱，不一定覆盖真实世界开放式协作。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Exam benchmarks 的优势是难度可控、答案明确、易评分；缺点是生态真实性弱，且容易被 saturation 和 contamination 追上。
+
+\section{Chat benchmarks：开放式回答如何评价}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{arena-beets.png}
+\caption{Chatbot Arena 示例：开放式 beet salad prompt，两模型匿名回答，由用户选择更好者。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：开放式评价为什么难}
+同一个 prompt 可能有多个好答案。回答可以在正确性、风格、详细程度、简洁性、礼貌性上不同。单一 accuracy 无法覆盖这些维度，因此 pairwise preference 成为高信号替代。
+\end{knowledgebox}
+
+\[
+P(A \text{ beats } B)
+  =
+\frac{1}{1+10^{(ELO_B-ELO_A)/400}}.
+\]
+这里 \(ELO_A,ELO_B\) 是两个模型的评分。Arena 用大量 pairwise comparisons 拟合 ELO，从而得到动态 leaderboard。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.58\textwidth]{lmarena-leaderboard.png}
+\caption{LM Arena leaderboard：基于 pairwise human preference 的模型排序。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{warningbox}{Arena 的偏差来源}
+用户是谁、prompt 分布是什么、投票者是否懂任务、是否偏好更长回答、是否被 sycophancy 影响，都会改变结果。Arena 很真实，但真实不等于无偏。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{alpacaeval-correlation.png}
+\caption{AlpacaEval 与 Chatbot Arena 的相关性：用 LLM judge 近似人类偏好。}
+\figsource{AlpacaEval 官方图，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.62\textwidth]{alpacaeval-leaderboard.png}
+\caption{AlpacaEval leaderboard：以 baseline model 为参照，用 judge 评估 win rate。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：LLM judge 的优势和危险}
+LLM judge 便宜、可扩展、可复现，但会偏好长回答、特定风格或自己熟悉的模型。AlpacaEval 2.0 用 regression debias，是因为指标本身也需要被评价。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{wildbench.png}
+\caption{WildBench：从真实人机对话中抽样，用 checklist 和 GPT-4 judge 提高开放式评价可靠性。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{importantbox}{开放式评价的经验规则}
+Pairwise comparison 通常比单独打分更稳定；checklist/rubric 能提高人类或 LLM judge 的一致性；必须监控 judge bias、长度偏好、style preference 和 correctness/style conflation。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Chat benchmarks 更接近真实助理使用，但牺牲了可控性。它们测的是用户或 judge 在特定分布上的偏好，不是纯粹能力。
+
+\section{Agentic benchmarks：评价模型说什么到做什么}
+
+Agent = language model + agent scaffold。Scaffold 包括如何调用工具、如何计划、是否维护 todo、是否写文件、是否调用子代理、如何管理长上下文。Agent benchmarks 评价的是模型和 scaffold 的组合系统。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{swebench.png}
+\caption{SWE-Bench：给 codebase 和 issue description，要求提交 PR，用 unit tests 评估。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：SWE-Bench 为什么是 agent benchmark}
+模型必须读代码、定位 bug、修改文件、运行测试并迭代。最终 metric 是 unit tests，而不是文本回答质量。它评价的是工程行动能力。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{terminal-bench.png}
+\caption{TerminalBench：用通用 computer terminal environments 评价长期工具使用任务。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{terminal-bench-human-time.png}
+\caption{TerminalBench human time：任务对人类需要的时间提供难度参考。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{terminal-bench-results.png}
+\caption{TerminalBench results：展示 agents 在终端任务上的成功率。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：TerminalBench 的通用性}
+终端环境简单、通用、可脚本化，能覆盖安装、调试、运行、文件处理等真实工作流。但它也强依赖 scaffold：同一模型配不同工具循环，成绩可能显著不同。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{cybench.png}
+\caption{CyBench：40 个 Capture the Flag 任务，用 first-solve time 表示难度。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{cybench-agent.png}
+\caption{CyBench agent setup：模型需要在 CTF 环境中探索、运行工具并解题。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{cybench-results.png}
+\caption{CyBench results：展示 agent 在安全挑战任务中的表现。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：CyBench 的 dual-use 含义}
+CTF 能测试安全推理和工具使用，也具有 dual-use 性质。模型越会做 cyber tasks，越需要同时评估防御和滥用风险。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{mlebench.png}
+\caption{MLE-Bench：Kaggle competitions，要求处理数据、训练模型和提交结果。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{mlebench-results.png}
+\caption{MLE-Bench results：模型在机器学习工程竞赛任务上的表现。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：MLE-Bench 为什么难}
+这类任务跨越数据清洗、建模、调参、提交格式、错误分析和计算预算。它更像真实 ML 工程，而不是单步问答。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.62\textwidth]{agents-overview.png}
+\caption{Agent scaffold overview：planning、delegation、persistent memory、context engineering 等增强能力面。}
+\figsource{Deep agents overview，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{importantbox}{Agentic evaluation 的关键}
+评估 agents = 评估 language model + scaffold。若不固定 scaffold，就不能把结果归因到模型本身；若固定 scaffold，又可能低估真实产品系统的能力。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Agentic benchmarks 从“说得好”转向“做得成”。它们更真实，也更难设计 valid metrics，因为 scaffold、工具、时间、环境和测试质量都会影响结果。
+
+\section{Pure reasoning benchmarks：尽量剥离知识}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{arc-task-grids.jpg}
+\caption{ARC-AGI-1 grid tasks：每个任务独特，人类可解，记忆帮助有限。}
+\figsource{ARC Prize 官方图，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：ARC-AGI 想测什么}
+ARC-AGI 试图把推理从语言知识中剥离出来。输入输出是小网格转换，要求从少量 examples 推断规则。它的目标不是百科知识，而是抽象模式发现。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{arc-agi-2-unsolved.png}
+\caption{ARC-AGI-2：更强调 multi-step reasoning。}
+\figsource{ARC Prize 官方图，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{arc-agi-results.png}
+\caption{ARC-AGI results：pretrained LMs 提升有限，reasoning models 开始推动成绩。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：reasoning models 为什么改变曲线}
+纯预训练语言模型不一定擅长搜索和多步假设检验。o1/o3 类 reasoning models 通过更长推理、搜索或强化学习式训练，开始在 ARC 上提升。这说明 benchmark 能暴露训练范式差异。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.45\textwidth]{arc-agi-3.png}
+\caption{ARC-AGI-3：转向 interactive environments。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{arc-agi-3-results.png}
+\caption{ARC-AGI-3 results：交互式环境进一步测试模型适应和探索。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{warningbox}{纯 reasoning 也不是纯粹无争议}
+ARC 试图减少知识记忆，但任务设计仍包含人类先验、视觉模式偏好和搜索空间选择。它测的是一种人类可理解的抽象推理，不代表所有 intelligence。
+\end{warningbox}
+
+\section{Safety benchmarks：安全是什么也要定义}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.45\textwidth]{crash-test.jpg}
+\caption{Crash-test analogy：安全评价像碰撞测试，需要定义风险场景和评分规则。}
+\figsource{CS336 Lecture 12 官方源引用图，本地化远程图片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：为什么用 crash test 类比 AI safety}
+汽车安全不是一句“安全/不安全”，而是不同碰撞场景、速度、假人伤害指标。AI safety 也类似：harmful instructions、隐私、偏见、幻觉、jailbreak、dual-use 都是不同风险维度。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{air-overview.png}
+\caption{AIR-Bench：基于监管框架和公司政策，把风险分成 314 类、5694 prompts。}
+\figsource{CRFM HELM AIR-Bench 图，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：AIR-Bench 的 taxonomized risks}
+安全评价需要 taxonomy，否则不同评测只是在测不同风险。AIR-Bench 把风险类别显式化，能帮助比较模型在不同政策维度上的拒答和合规表现。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{gcg-examples.png}
+\caption{GCG jailbreak examples：自动优化 prompts 绕过安全拒答，并可能迁移到闭源模型。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{warningbox}{读图：jailbreak 评价是对齐系统的压力测试}
+GCG 说明安全不是只看普通 harmful prompt 是否拒答，还要看 adversarial prompts 是否能绕过。迁移性意味着 open-weight model 上找到的攻击可能影响 closed models。
+\end{warningbox}
+
+\begin{importantbox}{Safety 的上下文依赖}
+很多安全问题强烈依赖政治、法律、社会规范和地区差异。比如医疗建议、网络安全、政治内容、犯罪协助在不同上下文中的边界不同。安全 benchmark 必须明确政策背景，而不是假装存在唯一全局答案。
+\end{importantbox}
+
+\section{Realism：生态有效性与隐私}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{gdpval.png}
+\caption{GDPVal：OpenAI 从 GDP 高贡献行业采样 44 个职业任务，并由资深专业人士构造。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：GDPVal 的 ecological validity}
+GPQA 这样的考试远离真实工作，而 GDPVal 试图从职业任务出发。它更接近“模型能否替代或辅助真实工作”，但也更难标准化，且任务私有性和评分 rubrics 更复杂。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{medhelm-overview.png}
+\caption{MedHELM：121 个临床任务，由 29 名 clinicians 提供，结合私有和公开数据。}
+\figsource{CRFM MedHELM overview，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：医学评价为什么要离开标准考试}
+标准医学考试测知识，但临床工作还包括文档、诊断上下文、沟通、风险权衡和机构流程。MedHELM 用 clinicians 提供的任务提高 realism，但也引入隐私和数据访问限制。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{clio-table4.png}
+\caption{Clio：用模型分析真实用户数据，只分享聚合模式。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{warningbox}{realism 和 privacy 的张力}
+越真实的 eval 越可能含有私有数据、商业流程或用户隐私；越公开可复现的 eval 越容易变得不真实或被污染。高质量评测常需要在公开性、隐私、可重复性和现实性之间折中。
+\end{warningbox}
+
+\section{Validity：污染、质量和规则}
+
+\subsection{Train-test overlap}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{contamination-exchangeability.png}
+\caption{通过 exchangeability 线索推断 train-test overlap。}
+\figsource{CS336 Lecture 12 官方源引用图。}
+\end{figure}
+
+\begin{knowledgebox}{读图：foundation model 时代的污染问题}
+传统 ImageNet/SQuAD 有明确 train-test split；今天模型在互联网大规模训练，提供商通常不公开数据。评测集可能被训练过，导致 benchmark 高估能力。污染检测可以从模型行为推断，也可以靠报告规范、新鲜 eval 或私有 eval 降低风险。
+\end{knowledgebox}
+
+\subsection{Dataset quality}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{platinum-1.jpg}
+\caption{Platinum benchmark 示例之一：更严格检查题目和测试质量。}
+\figsource{课程源引用社交媒体图片，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{platinum-2.jpg}
+\caption{Platinum benchmark 示例之二：强调 benchmark 本身也要被审计。}
+\figsource{课程源引用社交媒体图片，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{warningbox}{读图：benchmark bugs 会变成模型能力幻觉}
+如果测试用例不足、答案错误、任务太 trivial，agent 可能用投机策略通过，而不是具备真实能力。SWE-Bench Verified、Platinum benchmarks、Docent 等工作都在修复“评测本身不可靠”的问题。
+\end{warningbox}
+
+\section{How to think about evaluation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.74\textwidth]{karpathy-nanogpt-speedrun.png}
+\caption{nanoGPT speedrun：少数仍在评价 method 的例子，固定数据和目标 validation loss，比较 compute time。}
+\figsource{课程源引用图，本地化后供 CS336 Lecture 12 使用。}
+\end{figure}
+
+\begin{importantbox}{最终框架：先问评价目的}
+评价没有唯一真理。购买者想做 model A/B 决策；研究者想测 raw capability；政策和商业方想理解 benefits and harms；开发者想获得模型改进反馈。目的不同，应该选择不同 eval。
+\end{importantbox}
+
+\begin{knowledgebox}{术语消化：methods vs models vs agents}
+\begin{tabular}{L{0.2\textwidth}L{0.36\textwidth}L{0.34\textwidth}}
+\toprule
+对象 & 评价什么 & 例子 \\
+\midrule
+Methods & 算法或训练方法，在固定数据和规则下比较。 & nanoGPT speedrun。 \\
+Models & 训练好的模型能力和偏好表现。 & MMLU、Arena、HLE。 \\
+Agents/systems & 模型加 scaffold、工具、记忆和执行循环。 & SWE-Bench、TerminalBench、CyBench。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\section{总结与延伸}
+
+Lecture 12 的核心不是列举 benchmarks，而是建立评价思维：评价会把抽象目标压成具体指标，指标会改变模型开发方向。Perplexity 平滑但不真实；考试清晰但不开放；聊天偏好真实但有偏；agent benchmarks 有行动性但混入 scaffold；reasoning benchmarks 试图剥离知识但仍有先验；safety、realism、validity 则提醒我们，评价本身也是需要被评价的对象。
+
+注意：本讲讨论的 zero-shot、zero contamination、one true evaluation 中的 zero 只是普通英文含义，不是 ZeRO（Zero Redundancy Optimizer）；ZeRO 是训练并行中的优化器状态、梯度、参数分片方法，Lecture 12 不以它为主题。
+
+\begin{importantbox}{最终 takeaways}
+\begin{enumerate}
+    \item 没有 one true evaluation；先说明评价目的和 rules of the game。
+    \item Perplexity 仍有用，但不能代表真实 assistant quality。
+    \item Exam benchmarks 易评分但会饱和，且不等同于真实使用。
+    \item Open-ended chat 需要 preference、rubric 和 judge-bias 控制。
+    \item Agent benchmarks 评价的是 model + scaffold + tools 的系统。
+    \item Safety 和 realism 都高度上下文相关，隐私和公开复现之间有张力。
+    \item Validity 包括 contamination、dataset quality、fresh/private evals 和 benchmark auditing。
+\end{enumerate}
+\end{importantbox}
+
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item HELM, MMLU, MMLU-Pro, GPQA, Humanity's Last Exam.
+    \item Chatbot Arena, AlpacaEval, WildBench.
+    \item SWE-Bench Verified, TerminalBench, CyBench, MLE-Bench.
+    \item ARC-AGI, HarmBench, AIR-Bench, GDPVal, MedHELM.
+    \item Train-test contamination and benchmark quality auditing papers.
+\end{itemize}
+\end{knowledgebox}
+
+% Source coverage markers for localized remote figures:
+% chat_correlations_no_ae.png
+% overview.png
+% arc-task-grids.jpg
+% arc-agi-2-unsolved-1.png
+% 2173645d1625144681-will-crash-test-rating-change-if-higher-variant-chosen-images-30.jpeg
+% air-overview-DpBbyagA.png
+% medhelm-overview-CND0EIsy.png
+% GjICXQlWkAAYnDS
+% GjICcGQXYAAM4o1
+% https://pbs.twimg.com/media/GjICXQlWkAAYnDS?format=jpg&name=4096x4096
+% https://pbs.twimg.com/media/GjICcGQXYAAM4o1?format=jpg&name=4096x4096
+% What's the point of evaluation?
+% What are we evaluating?
+
+\end{document}

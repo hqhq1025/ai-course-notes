@@ -205,6 +205,7 @@ Deliver all of the following:
 - for translations: `original_content.txt` and `original_metadata.json`
 - the final `.tex` file
 - the compiled PDF (two passes of `xelatex -interaction=nonstopmode`)
+- evidence that the compiled PDF was visually inspected via rendered pages/contact sheet and corrected if needed
 
 ## Compilation
 
@@ -213,6 +214,8 @@ cd <article-dir>
 xelatex -interaction=nonstopmode <file>.tex  # first pass (generate references)
 xelatex -interaction=nonstopmode <file>.tex  # second pass (resolve references)
 ```
+
+After compilation, follow `../video-render-common/writing-and-figures.md` PDF Visual QA: render PDF pages, inspect a contact sheet/full-size suspicious pages, fix layout/rendering problems, and recompile before delivery.
 
 ## Rules
 

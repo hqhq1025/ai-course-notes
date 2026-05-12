@@ -81,7 +81,15 @@ if [ -f "$target" ]; then
     echo ""
     check_one "$target"
 else
-    files=$(find "$target" \( -name '*-notes.tex' -o -name 'notes.tex' \) -not -path '*/templates/*' | sort)
+    files=$(
+        find "$target" \( -name '*-notes.tex' -o -name 'notes.tex' \) \
+            -not -path '*/templates/*' \
+            -not -path '*/.web-build/*' \
+            -not -path '*/site/*' \
+            -not -path './.web-build/*' \
+            -not -path './site/*' \
+            | sort
+    )
     total=$(echo "$files" | wc -l)
     star3=0; star2=0; star1=0
 

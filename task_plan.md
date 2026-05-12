@@ -29,6 +29,16 @@ Refresh the repository status and course update tracking, then add a first feasi
 | 13. CS336 lecture08 generation | complete | Generated a 41-page Spring 2026 long-form Parallelism Basics note from official slide PDF, covering networking, ZeRO/FSDP, pipeline/tensor/sequence/expert/context parallelism, 3D/4D scaling recipes, recent model examples, and quality-script verification. |
 | 14. CS336 lecture09 generation | complete | Generated a 36-page Spring 2026 long-form Scaling Laws Basics note from official slide PDF, covering data scaling, model/data/compute scaling, hyperparameter scaling, critical batch size, muP, Chinchilla methods, deployment-aware overtraining, and quality-script verification. |
 | 15. CS336 lecture10 generation | complete | Generated a 30-page Spring 2026 long-form Inference note from official executable slide source, covering KV cache, prefill/generation, latency-throughput models, KV compression, quantization, pruning/distillation, speculative sampling, continuous batching, and PagedAttention. |
+| 16. CS336 lecture01-02 regeneration under new standards | complete | Regenerated lecture01 and lecture02 from official Spring 2026 executable sources under slide-complete/figure-interpretation/terminology-digestion standards; both compile and report `⭐⭐⭐`. |
+| 17. CS336 lecture04 new-workflow verification | complete | Re-verified lecture04 after the new source-first rewrite: all 60 slide images are included, PDF visual QA is checked, coverage and quality scripts pass, and log/diff checks are clean. |
+| 18. CS336 lecture07 regeneration under new standards | complete | Regenerated lecture07 from the official executable source with read-the-figure explanations, terminology digestion, formulas, code walkthroughs, quality/coverage checks, and visual PDF QA. |
+| 19. CS336 lecture08 regeneration under new standards | complete | Regenerated lecture08 from the 73-page official slide deck with slide-complete coverage, detailed read-the-figure/table/formula explanations, quality/coverage checks, and visual PDF QA. |
+| 20. CS336 lecture09 regeneration under new standards | complete | Regenerated lecture09 from the 57-page official slide deck with slide-complete coverage, detailed read-the-figure/formula/table explanations, quality/coverage checks, and visual PDF QA. |
+| 21. CS336 lecture10 regeneration under new standards | complete | Regenerated lecture10 from the official executable source with source-node-complete coverage, detailed read-the-figure explanations, terminology digestion, quality/coverage checks, and visual PDF QA. |
+| 22. Discover newer CS336 lectures | complete | Official lecture11-13 materials were found and downloaded from the Stanford lectures repository. |
+| 23. CS336 lecture11 generation under new standards | complete | Generated lecture11 from the 58-page official slide deck with slide-complete coverage, read-the-figure/formula explanations, quality/coverage checks, and visual PDF QA. |
+| 24. CS336 lecture12 generation under new standards | complete | Generated lecture12 from the official executable source with localized images, source-node-complete coverage, read-the-figure explanations, quality/coverage checks, and visual PDF QA. |
+| 25. CS336 lecture13 generation under new standards | complete | Generated lecture13 from the official executable source with localized images, source-node-complete coverage, read-the-figure explanations, quality/coverage checks, and visual PDF QA. |
 
 ## Decisions
 - Do not attempt a full CS336/CS153/CS25 generation batch in one pass; those are multi-lecture long-form courses.
@@ -36,6 +46,7 @@ Refresh the repository status and course update tracking, then add a first feasi
 - Download official CS336 2026 lecture materials when available because this is low-risk and does not require video transcription.
 - Use A100/faster-whisper for videos with downloadable audio but no subtitles.
 - For CS336 Spring 2026, generate one lecture at a time and hold each finished note to the long-form repository standard before moving on.
+- New user-requested standard: important figures need detailed read-the-figure explanations; dense terminology requires concentrated glossary-style digestion; foundational background concepts should use diagrams/tables/formulas; when slides or executable slide sources exist, cover every teaching slide/node rather than sampling only representative figures.
 
 ## Errors Encountered
 

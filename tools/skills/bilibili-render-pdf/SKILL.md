@@ -74,11 +74,13 @@ whisper audio.wav --model medium --language zh --output_format srt --output_dir 
 - any extracted or generated figure assets
 - the compiled PDF
 - the Whisper-generated SRT subtitle file, if speech-to-text was used
+- evidence that the compiled PDF was visually inspected via rendered pages/contact sheet and corrected if needed
 
 ## Rules
 
 - Follow `ai-course-notes/CLAUDE.md` conventions for LaTeX structure, boxes, and figures
 - Always compile PDF twice (`xelatex` two passes) to resolve references
+- After the final compile, follow the PDF Visual QA workflow in `../video-render-common/writing-and-figures.md`; do not mark the note complete until rendered pages have been inspected and layout/rendering issues fixed
 - Prefer CC subtitles; fall back to Whisper only when unavailable
 - Skip non-teaching content (intros, sponsor segments, 一键三连, 关注投币)
 - Use `[H]` float placement for all figures

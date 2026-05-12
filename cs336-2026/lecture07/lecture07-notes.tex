@@ -4,7 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
 \usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
+\usepackage[margin=2.35cm]{geometry}
 \usepackage[most]{tcolorbox}
 \usepackage{etoolbox}
 \usepackage{listings}
@@ -23,19 +23,26 @@
     citecolor=blue!55!black
 }
 
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+\newcommand{\code}[1]{\texttt{#1}}
+
 \newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+    enhanced, breakable, colback=blue!5!white, colframe=blue!75!black,
+    colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, boxrule=1pt, sharp corners
 }
 
 \newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=yellow!10!white, colframe=yellow!80!black,
+    colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=red!5!white, colframe=red!75!black,
+    colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \lstset{
@@ -55,10 +62,10 @@
     extendedchars=false
 }
 
-\BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
+\BeforeBeginEnvironment{lstlisting}{\Needspace{11\baselineskip}}
 
 \newcommand{\notetitle}{CS336 2026 Lecture 7：Parallelism 与分布式训练基础}
-\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方可执行讲义重新整理}
 \newcommand{\notedate}{2026 年春季}
 \newcommand{\videochannel}{Stanford CS336}
 \newcommand{\videopublishdate}{Spring 2026}
@@ -66,7 +73,6 @@
 \newcommand{\videourl}{https://cs336.stanford.edu/}
 \newcommand{\videocoverpath}{images/gpu-node-overview.png}
 \newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
 
 \usepackage{fancyhdr}
 \pagestyle{fancy}
@@ -87,10 +93,8 @@
 {\large \noteauthors\par}
 \vspace{0.3cm}
 {\large \notedate\par}
-\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{
-\includegraphics[width=0.86\textwidth,height=0.43\textheight,keepaspectratio]{\videocoverpath}\par
-}
+\vspace{1.0cm}
+\includegraphics[width=0.9\textwidth,height=0.43\textheight,keepaspectratio]{\videocoverpath}\par
 \vfill
 \begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
 \textbf{课程/频道}：\videochannel\par
@@ -104,673 +108,711 @@
 \tableofcontents
 \newpage
 
-\section{本讲主线：把内存层次扩展到数据中心}
+\section{本讲主线：从单卡局部性到集群局部性}
 
-Lecture 5 和 Lecture 6 讨论的是单 GPU 内部的并行：怎样让算子少碰 HBM，怎样通过 fusion、tiling、Triton kernel 把数据尽量留在寄存器、shared memory 或 cache 里。Lecture 7 把同一个问题放大到多 GPU 和多节点：当模型状态、梯度、优化器状态和激活放不下一张卡，或者训练时间要求我们使用更多 FLOPs 时，系统瓶颈从 HBM traffic 扩展为跨 GPU、跨节点通信。
+Lecture 5 和 Lecture 6 讲的是单张 GPU 内部的并行：如何让 tensor core 吃饱，如何用 fusion 和 tiling 减少 HBM 往返，如何用 Triton 把一个算子写成更接近硬件的数据搬运程序。Lecture 7 把同一个问题放大到多 GPU 和多节点。官方源文件把这一部分命名为 \textbf{Part 1: building blocks of distributed communication/computation}，然后再进入 \textbf{Part 2: distributed training}。这两个名字很重要：先学通信语言，再学训练策略。
+
+\begin{knowledgebox}{术语消化：本讲第一批系统词}
+\begin{tabular}{L{0.2\textwidth}L{0.32\textwidth}L{0.38\textwidth}}
+\toprule
+术语 & 字面含义 & 本讲中的作用 \\
+\midrule
+HBM & High Bandwidth Memory，高带宽显存，是 GPU 上的 DRAM 形态。 & 单卡上参数、激活和中间张量主要存放在这里；上一讲优化 HBM traffic，本讲则把瓶颈扩展到 GPU 间通信。 \\
+sharding & 分片；把原本完整复制的数据切开，让每张 GPU 只存其中一部分。 & ZeRO/FSDP、tensor parallel、pipeline parallel 都是在不同对象上做 sharding。 \\
+ZeRO & Zero Redundancy Optimizer；在 data parallel rank 之间分片 optimizer state、gradients、parameters，常按 stage 1/2/3 区分。 & 本讲先用 all-gather 和 reduce-scatter 建立直觉，下一讲会系统解释 ZeRO/FSDP 如何降低显存。 \\
+collective & 集合通信；所有 rank 共同进入同一个通信原语。 & 分布式训练的基本词汇，后面所有并行策略都能拆成若干 collectives。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\textwidth]{gpu-node-overview.png}
-\caption{现代 GPU 节点：多张 GPU 通过 NVLink/NVSwitch 连接，节点再通过 InfiniBand/RoCE 与更大集群相连。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义引用图。}
+\includegraphics[width=0.92\textwidth]{gpu-node-overview.png}
+\caption{现代 GPU 节点和集群拓扑：节点内通过 NVLink/NVSwitch，节点间通过 HCA/NIC 和 InfiniBand/RoCE。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
 \end{figure}
 
-本讲有一个非常统一的主题：\textbf{compute 离 data 总是有距离，性能工程就是组织计算来避免数据搬运成为瓶颈}。在单 GPU 内，数据搬运指 HBM 到片上；在多 GPU 内，数据搬运指 GPU 间通信；在多节点内，数据搬运进一步穿过 NIC、交换机、甚至 CPU 网络栈。
+\begin{knowledgebox}{读图：这张节点拓扑图应该怎么看}
+先看最内层：每张 GPU 旁边都有自己的 HBM，计算单元访问本卡 HBM 比访问其他 GPU 的数据快得多。再看节点内互连：NVLink/NVSwitch 把多张 GPU 连成一个高带宽域，适合频繁交换激活或分片参数。最后看节点外：HCA/NIC、交换机、跨机链路把节点连成集群，带宽和延迟都明显更差。因此同样是“通信”，在一台机器里和跨机器的含义不同；tensor parallel 这种每层通信的策略必须尽量放在快互连上，data/pipeline parallel 这种通信频率较低的策略更能承受慢链路。
+\end{knowledgebox}
 
-\begin{importantbox}{从单 GPU 到多 GPU 的同构问题}
-上一讲通过 fusion/tiling 减少 HBM 往返；这一讲通过 replication/sharding 减少跨 GPU 通信。两者不是两个独立主题，而是同一条 locality 原则在不同层次上的展开。
+\begin{importantbox}{统一主题：compute 离 data 总是有距离}
+单卡性能工程是在 HBM、cache、register 之间安排数据；多卡性能工程是在 GPU、node、pod 之间安排数据。上一讲用 fusion/tiling 减少内存访问，本讲用 replication/sharding 减少或重排通信。真正的问题不是“用了多少张卡”，而是每一步训练中数据必须移动多远、移动多少、何时移动。
 \end{importantbox}
 
 \subsection{为什么要多 GPU}
 
-多 GPU 的动机可以分成两类。
+多 GPU 的动机可以分成两类。第一类是容量：模型参数、梯度、optimizer state 和激活放不进一张卡。第二类是速度：单卡算力太小，训练 wall-clock time 不可接受，需要更多 FLOPs。实际大模型训练通常先被容量推着走，然后再被速度逼着优化并行效率。
 
-\begin{enumerate}
-    \item \textbf{容量动机}：参数、梯度、优化器状态和激活放不进单卡 HBM。
-    \item \textbf{速度动机}：单卡算力不够，需要更多 GPU 的 FLOPs 缩短 wall-clock training time。
-\end{enumerate}
+\[
+M_{\text{train}}
+    \approx M_{\text{params}}
+    + M_{\text{grads}}
+    + M_{\text{optimizer}}
+    + M_{\text{activations}} .
+\]
 
-对大语言模型训练来说，容量动机往往先出现。以 AdamW 训练为例，单个参数不仅要存权重，还要存梯度、动量、一阶/二阶矩估计，混合精度训练还可能保留 fp32 master weights。粗略地，参数量 $P$ 对应的训练状态可能是 $10P$ 到 $20P$ bytes 的量级。激活内存又随 batch size、sequence length、layer count 增长。
+其中 \(M_{\text{params}}\) 是权重显存，\(M_{\text{grads}}\) 是反向传播后的梯度，\(M_{\text{optimizer}}\) 是 Adam/AdamW 的一阶动量 \(m\) 和二阶动量 \(v\) 等状态，\(M_{\text{activations}}\) 是前向保存给反向使用的激活。这个公式不是精确预算，而是告诉我们：训练显存不是只由参数量决定。
 
-\begin{knowledgebox}{多 GPU 不是“自动变快”}
-多 GPU 只增加潜在 compute。能否变快，取决于每个 step 中本地计算是否足够多，通信是否足够少，通信是否能与计算重叠，以及硬件拓扑是否支持所选并行策略。
-\end{knowledgebox}
+\begin{warningbox}{多 GPU 不是自动加速按钮}
+更多 GPU 只提供潜在算力。若每个 step 的通信量太大、通信无法与计算重叠、或并行策略与硬件拓扑不匹配，实际吞吐可能几乎不涨，甚至因为同步和调度开销变慢。
+\end{warningbox}
 
 \subsection{泛化的层次结构}
 
-官方讲义把层次结构按从快到慢整理如下：
-
-\begin{longtable}{p{4.0cm}p{4.4cm}p{5.2cm}}
+\begin{center}
+\begin{tabular}{L{0.25\textwidth}L{0.3\textwidth}L{0.35\textwidth}}
 \toprule
-\textbf{层次} & \textbf{典型介质} & \textbf{优化含义} \\
+层次 & 典型介质 & 优化含义 \\
 \midrule
-单节点、单 GPU 片上 & registers、L1、shared memory & fusion、tiling、kernel design。 \\
-单节点、单 GPU 片外 & HBM & 避免中间张量写回，提升 arithmetic intensity。 \\
-单节点、多 GPU & NVLink、NVSwitch & 适合通信频繁的 tensor parallel。 \\
-多节点、多 GPU & InfiniBand、RoCE、Ethernet & 更适合粗粒度 data/pipeline parallel，必须控制通信频率。 \\
+单 GPU 片上 & registers、L1、shared memory & fusion、tiling、kernel design，尽量不把中间结果写回 HBM。 \\
+单 GPU 片外 & HBM & 提高 arithmetic intensity，减少 HBM traffic。 \\
+单节点多 GPU & NVLink、NVSwitch、PCIe & 可承载较频繁 collective，但仍比本卡内存慢。 \\
+多节点多 GPU & InfiniBand、RoCE、Ethernet & 适合较粗粒度并行，必须减少同步次数并隐藏延迟。 \\
 \bottomrule
-\end{longtable}
-
-\begin{warningbox}{层次越远，抽象越不能救你}
-PyTorch 可以隐藏 API 细节，NCCL 可以选择通信路径，但它们不能改变物理带宽和延迟。把高频小通信放到慢网络上，仍然会慢。
-\end{warningbox}
-
-\subsection{本讲结构}
-
-本讲分成两段：
-
-\begin{itemize}
-    \item \textbf{分布式通信积木}：collective operations、硬件互连、NCCL、\texttt{torch.distributed}、通信 benchmark。
-    \item \textbf{分布式训练策略}：data parallelism、tensor parallelism、pipeline parallelism。官方讲义用深 MLP 的最小实现讲清楚每种策略的切分维度。
-\end{itemize}
+\end{tabular}
+\end{center}
 
 \subsection{本章小结}
 
-Lecture 7 的核心不是列举并行名词，而是让读者学会把一个训练 step 拆成“本地算多少、跨设备搬多少、何时同步、状态在哪里”。这个视角会贯穿后续 FSDP/ZeRO、expert parallel、sequence parallel 和 3D/4D parallelism。
+Lecture 7 的主线是：把一个训练 step 拆成\textbf{本地计算、状态放置、通信原语、硬件路径}四层来看。后面所有 data parallelism、tensor parallelism、pipeline parallelism 都是这四层的不同组合。
 
 \section{Collective Operations：分布式训练的通信积木}
 
-\subsection{Rank 与 world size}
+\subsection{rank、world size 与 process group}
 
-分布式程序中，每个参与者叫一个 rank；参与通信的总设备数叫 world size。比如四张 GPU 的进程组中，rank 可以是 0、1、2、3，world size 是 4。Collective operation 不是 rank 与 rank 之间任意发消息，而是所有 rank 共同参与的标准通信协议。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.72\textwidth]{ranks.png}
-\caption{rank/world size 的最小例子：每个设备有一个 rank，所有 rank 构成一个通信世界。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义配图。}
-\end{figure}
-
-\begin{importantbox}{Collective 的含义}
-Collective 表示“所有参与者一起执行一个通信模式”。如果某个 rank 没有进入同一个 collective，其他 rank 会等待甚至死锁。因此分布式代码中，控制流一致性和 shape 一致性与数学正确性同样重要。
-\end{importantbox}
-
-\subsection{基础原语：broadcast、scatter、gather、reduce}
-
-四个基础原语帮助我们建立语言：
-
-\begin{itemize}
-    \item \textbf{Broadcast}：rank 0 的完整张量复制到所有 rank。常用于 rank 0 读取 checkpoint 后同步给其他 rank。
-    \item \textbf{Scatter}：rank 0 的张量切成多份，分别发给各 rank。它是理解 reduce-scatter 的前置概念。
-    \item \textbf{Gather}：各 rank 的分片收集到 rank 0。它是 scatter 的反向。
-    \item \textbf{Reduce}：各 rank 的张量按 sum/min/max 等操作归约到 rank 0。
-\end{itemize}
+分布式程序通常让每张 GPU 对应一个进程。每个进程有一个 \textbf{rank}，表示它在通信组里的编号；\textbf{world size} 是通信组里的 rank 总数；\textbf{process group} 是一组共同参与通信的 rank。一个模型可能同时有 data-parallel group、tensor-parallel group、pipeline group，因此 rank 的“全局编号”和“某个 group 内编号”要区分清楚。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.76\textwidth]{broadcast.png}
-\caption{Broadcast：一个 rank 的数据复制给所有 rank。}
-\figsource{PyTorch distributed tutorial collective diagram。}
+\includegraphics[width=0.82\textwidth]{ranks.png}
+\caption{四个 rank 构成一个 world size 为 4 的通信世界。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{scatter.png}
-\caption{Scatter：源 rank 把张量切片分发给不同 rank。}
-\figsource{PyTorch distributed tutorial collective diagram。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{gather.png}
-\caption{Gather：多个 rank 的分片汇总到一个 rank。}
-\figsource{PyTorch distributed tutorial collective diagram。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{reduce.png}
-\caption{Reduce：多个 rank 的数据被求和或按其他可结合操作归约到一个 rank。}
-\figsource{PyTorch distributed tutorial collective diagram。}
-\end{figure}
-
-\begin{knowledgebox}{Reduce 要求什么}
-Reduce 通常要求操作可结合、可交换，例如 sum、min、max。训练里最常见的是梯度求和或求平均。若通信顺序不同，浮点加法会有细微数值差异，这也是分布式训练可复现性更难的原因之一。
+\begin{knowledgebox}{读图：rank 图在说明什么}
+图中每个方块代表一个参与通信的进程或 GPU。rank 不是“机器号”，也不是“模型层号”，而是 collective API 里用来指定参与者身份的编号。world size 是这个通信世界有多少参与者。读这张图时要注意：同一个物理 GPU 在不同 process group 里可能有不同的局部 rank，因此真实训练框架里常常要同时维护 global rank、local rank、data parallel rank、tensor parallel rank。
 \end{knowledgebox}
 
-\subsection{工作马：all-gather、reduce-scatter、all-reduce}
-
-真正支撑大模型训练的通常是三类 workhorse collectives。
-
-\textbf{All-gather}：每个 rank 起初只有一个分片，结束后每个 rank 都拥有完整拼接结果。在 FSDP 和 ZeRO-3 中，每个 rank 只常驻一部分参数；前向计算某一层前，再通过 all-gather 临时得到完整参数。
-
-\textbf{Reduce-scatter}：每个 rank 起初有一份完整张量，先跨 rank reduce，再把结果按 shard 分给不同 rank。数据并行反向传播后，如果不想让每个 rank 都保存完整梯度，可以用 reduce-scatter 得到梯度分片。
-
-\textbf{All-reduce}：每个 rank 起初有一份张量，结束后每个 rank 都得到跨 rank reduce 的完整结果。DDP 梯度同步就是典型 all-reduce。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{all-gather.png}
-\caption{All-gather：每个 rank 都收集到所有分片。}
-\figsource{PyTorch distributed tutorial collective diagram。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{reduce-scatter.png}
-\caption{Reduce-scatter：先归约，再把归约结果分片分给各 rank。}
-\figsource{NVIDIA NCCL user guide collective diagram。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.76\textwidth]{all-reduce.png}
-\caption{All-reduce：所有 rank 最终获得同一份归约结果。}
-\figsource{PyTorch distributed tutorial collective diagram。}
-\end{figure}
-
-\begin{importantbox}{最重要的恒等式}
-\[
-\text{all-reduce} = \text{reduce-scatter} + \text{all-gather}.
-\]
-这条恒等式不只是通信课小技巧。它解释了为什么 ZeRO/FSDP 可以把“完整梯度同步”改写成“梯度分片 + 参数临时聚合”，从而用类似通信量换取更低显存占用。
+\begin{importantbox}{collective 的执行约束}
+collective operation 是所有参与 rank 共同执行的通信模式。所有 rank 必须以相同顺序进入同一个 collective，并且张量 shape、dtype、op 语义要匹配。某个 rank 少调用一次 \code{all\_reduce}，其他 rank 就可能永久等待。
 \end{importantbox}
 
-\subsection{All-to-all：MoE 的通信核心}
+\subsection{术语消化：从基础原语到工作马}
 
-All-to-all 是更一般的模式：每个 rank 都向每个其他 rank 发送一块数据。对 MoE 来说，tokens 先按 router 分配到专家，而专家又分布在不同 rank 上，所以需要把每个 rank 上的 tokens 重新路由到拥有对应 experts 的 rank。平衡情况下，all-to-all 类似矩阵转置；不平衡情况下，它会暴露 load imbalance。
+\begin{longtable}{L{0.16\textwidth}L{0.26\textwidth}L{0.26\textwidth}L{0.16\textwidth}}
+\toprule
+Collective & 做什么 & 典型用途 & 记忆方式 \\
+\midrule
+\endhead
+broadcast & 一个 rank 的完整张量复制给所有 rank。 & rank 0 读取 checkpoint 后同步初始权重。 & 一人发，全员收。 \\
+scatter & 一个 rank 的张量切成多份，分别发给各 rank。 & 理解 reduce-scatter 的基础。 & 切开再分发。 \\
+gather & 各 rank 的分片收集到一个 rank。 & 诊断、评估、单点聚合。 & scatter 的反向。 \\
+reduce & 各 rank 张量按 sum/min/max 等归约到一个 rank。 & 指标聚合、小规模统计。 & 先算再收。 \\
+all-gather & gather 的结果给到所有 rank。 & 参数分片前向前拼回完整参数。 & gather 到所有人。 \\
+reduce-scatter & 先 reduce，再把结果分片给各 rank。 & ZeRO/FSDP 梯度同步后只保留本 rank 分片。 & all-reduce 的前半段。 \\
+all-reduce & reduce 后所有 rank 都拿到完整结果。 & DDP 梯度同步。 & reduce-scatter + all-gather。 \\
+all-to-all & 每个 rank 都给每个 rank 发送一部分。 & MoE token routing、expert parallelism。 & 分布式矩阵转置。 \\
+\bottomrule
+\end{longtable}
 
-\begin{warningbox}{All-to-all 对负载均衡很敏感}
-MoE router 如果把大量 tokens 分给少数 expert/rank，不只是计算不均衡，通信也会不均衡。系统层面的 expert parallel 不能只看平均 tokens per expert，还要看最坏 rank 的负载。
+\subsection{broadcast、scatter、gather、reduce}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{broadcast.png}
+\caption{broadcast：源 rank 的数据复制到所有 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：broadcast 的含义}
+图中只有一个 rank 拥有完整输入，通信后所有 rank 都得到相同副本。这种模式适合“小而关键”的同步，例如初始化权重、广播配置、广播随机种子。它不是训练主路径里最高频的原语，因为频繁广播大张量意味着每一步都在复制状态。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{scatter.png}
+\caption{scatter：源 rank 把张量切片后分发给不同 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：scatter 的含义}
+scatter 的输出不是每个 rank 拿到完整数据，而是每个 rank 拿到自己的切片。它最重要的教学价值是帮我们理解“分片后的所有权”：切片一旦分发出去，后续计算就应该尽量在拥有该切片的 rank 上发生，否则会重新引入通信。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{gather.png}
+\caption{gather：各 rank 的分片汇总到一个 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：gather 的含义}
+gather 是 scatter 的反向。图中多个 rank 各自持有一片数据，通信后某个目标 rank 拿到完整拼接结果。它在训练主循环中要谨慎使用，因为单个目标 rank 会成为内存和带宽热点；all-gather 则把这个完整结果复制给所有 rank。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{reduce.png}
+\caption{reduce：各 rank 的数据按某个操作聚合到一个 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：reduce 的含义}
+reduce 不是简单拼接，而是对对应位置做 sum、min、max 等结合律/交换律操作。训练里最常见的是对梯度求和或平均。若只把结果放到 rank 0，rank 0 后续会成为单点；因此大规模训练更常用 all-reduce 或 reduce-scatter。
+\end{knowledgebox}
+
+\begin{warningbox}{基础 collective 的常见误解}
+broadcast 和 gather 都会产生完整副本，但语义不同：broadcast 是一份输入复制到多人，gather 是多人输入汇总到一人。scatter 和 reduce-scatter 都让每个 rank 得到分片，但 reduce-scatter 在分片前还做了跨 rank 归约。
+\end{warningbox}
+
+\subsection{all-gather、reduce-scatter、all-reduce}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{all-gather.png}
+\caption{all-gather：每个 rank 的分片被拼接，并且完整结果分发给所有 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：all-gather 为什么是参数分片的关键}
+如果每个 rank 只保存参数的一部分，那么某一层 forward 可能需要临时看到完整权重。all-gather 的作用就是把各 rank 的参数 shard 拼回来，并让每个 rank 都得到完整参数。它节省的是长期存储，不是通信：每次需要完整参数时，通信仍然会发生。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{reduce-scatter.png}
+\caption{reduce-scatter：先跨 rank 归约，再把归约结果切片分发。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：reduce-scatter 在 ZeRO/FSDP 中做什么}
+图中每个 rank 起初都有一组向量，通信后每个 rank 只拿到归约结果的一片。把这个逻辑放到训练里：每个 data shard 产生梯度，梯度需要跨 rank 求和；但如果参数或 optimizer state 已经分片，就没有必要让每张卡都保存完整梯度。reduce-scatter 正好把“同步”和“分片保存”合成一步。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{all-reduce.png}
+\caption{all-reduce：归约结果最终复制到所有 rank。}
+\figsource{PyTorch distributed collective diagram，供 CS336 Lecture 7 配套解释使用。}
+\end{figure}
+
+\begin{knowledgebox}{读图：all-reduce 是 DDP 的心脏}
+在 data parallelism 中，每个 rank 使用不同 batch slice 做 forward/backward，因此梯度一开始不同。all-reduce 把所有 rank 的梯度求和或平均后，再把同一份结果交给所有 rank。于是每个 rank 虽然看过不同数据，但参数更新保持一致。
+\end{knowledgebox}
+
+\begin{importantbox}{核心恒等式}
+\[
+\text{all-reduce}
+    =
+\text{reduce-scatter}
+    +
+\text{all-gather}.
+\]
+左边的语义是“所有人得到完整归约结果”。右边先让每个人得到归约结果的一片，再把这些片重新拼给所有人。这个拆分是从 DDP 走向 ZeRO/FSDP 的关键：如果后续并不需要每个人长期保存完整结果，就可以停在 reduce-scatter，省掉复制状态。
+\end{importantbox}
+
+\subsection{all-to-all：MoE 的通信核心}
+
+all-to-all 是最一般的 collective：每个 rank 都向每个 rank 发送一段张量。官方讲义强调它对 MoE 很重要，因为 expert parallelism 中，每个 rank 可能持有一部分 experts；token 先在本地 batch 中产生，然后必须被路由到拥有对应 expert 的 rank 上。
+
+\begin{knowledgebox}{术语消化：all-to-all 与 MoE}
+\begin{tabular}{L{0.22\textwidth}L{0.33\textwidth}L{0.35\textwidth}}
+\toprule
+术语 & 机制 & 为什么影响训练系统 \\
+\midrule
+expert parallelism & 不同 rank 保存不同 experts，token 根据 router 分发。 & 参数容量增加，但 token routing 触发 all-to-all。 \\
+balanced split & 每个 rank 发出/接收的数据量接近。 & all-to-all 更像规则矩阵转置，通信更可预测。 \\
+unbalanced split & 某些 expert 热门，部分 rank 接收过多 token。 & 慢 rank 决定 step time，load balancing 变成系统问题。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\begin{warningbox}{all-to-all 不只是“通信量大”}
+all-to-all 的难点还包括负载不均、变长 token dispatch、buffer 管理、跨节点拥塞和反向传播中的路由一致性。MoE 的 router 如果只优化模型 loss，不控制负载，系统吞吐会被少数热门 experts 拖垮。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Collectives 是理解分布式训练的词汇表。Data parallel 的关键词是 all-reduce；FSDP/ZeRO 的关键词是 all-gather 和 reduce-scatter；tensor parallel 常用 all-gather 或 all-reduce；MoE/expert parallel 常用 all-to-all。后续每种并行策略，都可以还原成这些原语的组合。
+Collectives 是分布式训练的基础语言。读懂本讲后，看到 DDP、FSDP、tensor parallel、pipeline parallel、MoE 时，不应只记名字，而应追问：这个策略使用了哪些 collective，通信对象是什么，结果是复制还是分片。
 
-\section{硬件互连：拓扑决定并行策略}
+\section{硬件互连：拓扑决定可承受的通信频率}
 
-\subsection{从 PCIe 到 NVLink/NVSwitch}
+\subsection{从家用拓扑到数据中心拓扑}
 
-家用或普通工作站中，多张 GPU 可能主要通过 PCIe 与 CPU/root complex 相连。PCIe 带宽持续提升，但它不是为 GPU 间高频大规模 collective 最优设计的。数据中心训练节点通常使用 NVLink/NVSwitch，让 GPU 之间以更高带宽、更低延迟互联。
+官方讲义先给出一个“classic in the home”的对比：同一台机器里的 GPU 通过 PCIe 连接，不同机器通过普通 Ethernet 连接。这个图不是为了讲家庭装机，而是为了强调：如果跨机器通信还要经过 CPU 网络栈，训练系统很快会被数据搬运拖死。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\textwidth]{gpu-node-overview.png}
-\caption{节点内 NVLink/NVSwitch 与节点间网络共同组成分布式训练的通信层次。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义引用图。}
+\includegraphics[width=0.78\textwidth]{classic-home-topology.png}
+\caption{传统服务器/网络拓扑示意：设备通过 PCIe 和网络层层连接。}
+\figsource{CS336 Lecture 7 官方源引用的 Springernature 图；本地化文件名保留原始标识 \nolinkurl{42774_2021_98_Fig1_HTML.png?as=webp}。}
 \end{figure}
 
-官方讲义给出的现代典型设置是：
-
-\begin{itemize}
-    \item 每个 node 通常有 8 张 GPU，经由 NVLink 连接到 NVSwitch；
-    \item B200 NVLink 5.0 约 $1.8$ TB/s，而 B200 HBM 约 $8$ TB/s；
-    \item 一个 pod 中可能有 256 个 nodes，经由 InfiniBand 或类似网络连接；
-    \item 节点间带宽量级可以低到约 $0.05$ TB/s，远低于节点内 GPU 互联。
-\end{itemize}
-
-\begin{knowledgebox}{带宽比绝对数字更重要}
-即使 NVLink 很快，它仍然比 HBM 慢；即使 InfiniBand 很快，它仍然比 NVLink 慢很多。并行策略要尊重这些比值：高频通信放在快层次，低频粗粒度通信才放到慢层次。
+\begin{knowledgebox}{读图：为什么普通拓扑不够训练大模型}
+这张图的重点是“路径”。GPU 到 GPU 的数据若必须先过 PCIe、CPU 内存、内核网络栈、NIC，再穿过以太网到另一台机器，路径中的每一层都会增加延迟并消耗带宽。大模型训练的同步张量动辄 GB 级，普通网络设计主要服务通用 I/O，不是为每个训练 step 高频搬运梯度和激活而生。
 \end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{gpu-node-overview.png}
+\caption{数据中心 GPU 节点：NVLink/NVSwitch、HCA/NIC、InfiniBand/RoCE 形成层次化互连。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
+\end{figure}
+
+\begin{knowledgebox}{读图：现代拓扑如何支持不同并行策略}
+图中蓝色 GPU 域适合高频通信，因为 NVLink/NVSwitch 的带宽远高于跨节点链路。节点间通过 HCA/NIC 接入 InfiniBand 或 RoCE，适合 data parallel 的梯度同步、pipeline stage 边界传激活等相对粗粒度通信。读这张图时应把每种并行策略放到拓扑上：tensor parallel 的每层 all-gather/all-reduce 尽量留在节点内，pipeline parallel 的 stage 边界才更可能跨节点。
+\end{knowledgebox}
+
+\subsection{带宽数量级和路径差异}
+
+官方源给出的数量级是：PCIe 7.0 x16 约 \(242\) GB/s，B200 的 NVLink 5.0 节点内可达 TB/s 量级，HBM 约 \(8\) TB/s，而跨节点 InfiniBand 链路可能只有 \(0.05\) TB/s 量级。具体硬件会变化，但排序稳定：片上/本卡最快，节点内互连其次，跨节点最慢。
+
+\[
+T_{\text{comm}} \approx \alpha + \frac{S}{B_{\text{effective}}},
+\]
+
+其中 \(T_{\text{comm}}\) 是一次通信时间，\(\alpha\) 是启动延迟和同步开销，\(S\) 是需要移动的数据量，\(B_{\text{effective}}\) 是实际有效带宽。小张量通信常被 \(\alpha\) 主导，大张量通信常被带宽主导。
+
+\begin{warningbox}{不要把规格表带宽当成训练吞吐}
+规格表数字通常是单链路或理想条件下的峰值。训练中还有拓扑竞争、协议开销、NCCL algorithm 选择、张量大小、同步点、反向传播依赖等因素。并行策略选择必须用实际 benchmark 校准。
+\end{warningbox}
 
 \subsection{RDMA、InfiniBand 与 RoCE}
 
-普通 Ethernet 通信经常经过 CPU 和 OS 网络栈：数据从 GPU/用户态搬到 CPU memory，再进入 kernel socket buffer，打包 TCP，再交给 NIC。这个路径延迟和 CPU overhead 都高。RDMA (Remote Direct Memory Access) 的核心价值是允许一台机器直接读写另一台机器的内存，绕过 CPU 的大量参与。InfiniBand 天然支持 RDMA；RoCE 则是在 Ethernet 上提供类似能力，成本更低但工程上更微妙。
+RDMA 是 Remote Direct Memory Access，意思是一台机器可以在较少 CPU 介入的情况下直接读写另一台机器的内存或 GPU 相关 buffer。InfiniBand 原生支持 RDMA；RoCE 是 RDMA over Converged Ethernet，在以太网上提供类似能力，但部署和拥塞控制复杂度不同。对训练来说，绕过 CPU 的价值在于减少数据拷贝和内核网络栈开销，让 GPU 间同步更接近“设备到设备”的路径。
 
-\begin{importantbox}{绕过 CPU 是训练集群的刚需}
-跨节点通信若每次都让 CPU 复制和打包数据，GPU 很容易等待网络。RDMA/GPUDirect RDMA 的目标，就是让通信路径更接近“GPU memory 到 GPU memory”的直接搬运。
+\begin{importantbox}{硬件抽象的边界}
+NCCL 和 PyTorch 可以隐藏 API 细节，但不能消除物理层级。一个每层都通信的 tensor-parallel 模型放到慢跨节点链路上，仍然会慢；一个 pipeline stage 切得不均匀，即使网络很快，也会被最慢 stage 决定吞吐。
 \end{importantbox}
 
-\subsection{NCCL：把 collective 映射到底层路径}
+\subsection{NVIDIA Collective Communication Library (NCCL)}
 
-NCCL (NVIDIA Collective Communication Library) 的作用，是把 all-reduce、reduce-scatter、all-gather 等 collective 操作翻译成底层 GPU 间通信。它会检测拓扑，例如 GPU 数量、NVLink、PCIe、switch、NIC，然后选择 ring、tree 或其他算法组合，并 launch GPU kernels 负责 send/receive。
+NCCL，即 \textbf{NVIDIA Collective Communication Library (NCCL)}，把 all-reduce、all-gather、reduce-scatter 等 collective 映射到底层 GPU 通信路径。它会检测拓扑，选择 ring/tree 等算法，启动 GPU kernel 来收发数据。PyTorch 的 \code{torch.distributed} 在 GPU 场景下常用 NCCL backend。
 
-\begin{lstlisting}[caption={PyTorch 中通常通过 NCCL backend 使用 GPU collective}]
-if torch.cuda.is_available():
-    dist.init_process_group(
-        backend="nccl",
-        rank=rank,
-        world_size=world_size,
-    )
-else:
-    dist.init_process_group(
-        backend="gloo",
-        rank=rank,
-        world_size=world_size,
-    )
-\end{lstlisting}
-
-\begin{warningbox}{NCCL 优化路径，但不改变通信量}
-NCCL 可以帮你选择更好的 route 和 algorithm，但如果算法每层都要跨节点 all-reduce 大激活，通信量仍然巨大。并行策略先决定“通信什么、通信多频繁”，NCCL 再优化“怎么通信”。
-\end{warningbox}
+\begin{knowledgebox}{术语消化：NCCL 负责什么，不负责什么}
+\begin{tabular}{L{0.22\textwidth}L{0.34\textwidth}L{0.34\textwidth}}
+\toprule
+层次 & NCCL 能做 & NCCL 不能替你做 \\
+\midrule
+拓扑感知 & 识别 GPU、NVLink、PCIe、NIC 的连接关系。 & 改变硬件带宽或跨节点物理距离。 \\
+算法选择 & 为 collective 选择 ring、tree 等通信算法。 & 减少模型本身要求的同步语义。 \\
+执行路径 & 用 GPU kernel 发送/接收数据，减少 CPU 干预。 & 自动决定模型应该怎么 sharding。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-硬件层次直接约束并行策略：tensor parallel 通信频繁，通常要求节点内 NVLink/NVSwitch；pipeline parallel 通信较粗粒度，可以跨更慢链路；data parallel/FSDP 是否高效，取决于 batch size、参数大小、通信重叠和网络带宽。
+并行策略不是抽象数学题，而是拓扑选择题。通信频率越高，越要靠近高速互连；通信越粗粒度，越能跨慢链路。硬件决定“哪些策略值得尝试”，benchmark 决定“具体怎么切”。
 
-\section{\texttt{torch.distributed}：从原语到可运行代码}
+\section{\texorpdfstring{\code{torch.distributed}}{torch.distributed}：把 collective 写成代码}
 
-\subsection{初始化分布式环境}
+\subsection{初始化和 process group}
 
-官方讲义的最小分布式程序为每个 rank 启动一个进程，并通过 \texttt{MASTER\_ADDR} 和 \texttt{MASTER\_PORT} 建立 rendezvous。真实训练中通常由 \texttt{torchrun}、SLURM 或集群调度器设置这些环境变量。
+官方讲义用 \code{torch.multiprocessing.spawn} 启动多个进程，每个进程运行同一个函数，但传入不同 \code{rank}。然后用 \code{dist.init\_process\_group} 建立通信环境。若有 GPU，就用 NCCL；否则用 Gloo。
 
-\begin{lstlisting}[caption={分布式环境初始化的最小版本}]
+\begin{lstlisting}[caption={Lecture 7 中分布式初始化的最小结构}]
 def setup(rank: int, world_size: int):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "15623"
 
     if torch.cuda.is_available():
-        dist.init_process_group("nccl", rank=rank,
-                                world_size=world_size)
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
     else:
-        dist.init_process_group("gloo", rank=rank,
-                                world_size=world_size)
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
 \end{lstlisting}
 
 \begin{knowledgebox}{一个 rank 通常对应一个进程}
-单机多卡训练中，常见模式是 one process per GPU。这样每个进程设置自己的 current device，并参与同一个 process group。不要把“rank”简单理解成 Python 线程，它通常是独立进程。
+在 PyTorch DDP 风格中，常见做法是 one process per GPU。这样每个进程只管理一张卡，CUDA context、随机种子、通信 rank 都更清晰。多机训练时还要区分 local rank 和 global rank：local rank 决定本机第几张 GPU，global rank 决定全局通信身份。
 \end{knowledgebox}
 
-\subsection{All-reduce 示例}
+\subsection{all-reduce 示例}
+
+官方代码中，每个 rank 先构造一个不同的向量：
 
 \begin{lstlisting}[caption={all-reduce 会原地修改每个 rank 的 tensor}]
-data = torch.tensor([0., 1, 2, 3], device=device) + rank
-
-print(f"Rank {rank} before: {data}")
-dist.all_reduce(
-    tensor=data,
-    op=dist.ReduceOp.SUM,
-    async_op=False,
-)
-print(f"Rank {rank} after: {data}")
+data = tensor([0., 1, 2, 3], device=cuda_if_available(rank)) + rank
+dist.all_reduce(tensor=data, op=dist.ReduceOp.SUM, async_op=False)
 \end{lstlisting}
 
-如果 world size 为 4，rank 0 的输入是 $[0,1,2,3]$，rank 1 是 $[1,2,3,4]$，rank 2 是 $[2,3,4,5]$，rank 3 是 $[3,4,5,6]$，all-reduce sum 后每个 rank 都得到 $[6,10,14,18]$。这正是 DDP 梯度同步的形状：每个 rank 本地算出梯度，然后所有 rank 拿到平均后的完整梯度。
+若 world size 为 4，四个输入分别是 \([0,1,2,3]\)、\([1,2,3,4]\)、\([2,3,4,5]\)、\([3,4,5,6]\)，sum all-reduce 后每个 rank 都得到 \([6,10,14,18]\)。这正是 DDP 梯度同步的形状：每张卡最初有自己的梯度，通信后每张卡有相同平均梯度。
 
-\subsection{Reduce-scatter + all-gather 示例}
+\subsection{reduce-scatter + all-gather 示例}
 
-官方讲义紧接着执行 reduce-scatter，再把 reduce-scatter 的输出 all-gather 回来，用代码验证 all-reduce 的分解。
+\begin{lstlisting}[caption={reduce-scatter 后接 all-gather 复原 all-reduce 语义}]
+input = torch.arange(world_size, dtype=torch.float32,
+                     device=cuda_if_available(rank)) + rank
+output = torch.empty(1, device=cuda_if_available(rank))
+dist.reduce_scatter_tensor(output=output, input=input,
+                           op=dist.ReduceOp.SUM, async_op=False)
 
-\begin{lstlisting}[caption={reduce-scatter 后每个 rank 只保留归约结果的一片}]
-input = torch.arange(
-    world_size,
-    dtype=torch.float32,
-    device=device,
-) + rank
-output = torch.empty(1, device=device)
-
-dist.reduce_scatter_tensor(
-    output=output,
-    input=input,
-    op=dist.ReduceOp.SUM,
-    async_op=False,
-)
-
-gathered = torch.empty(world_size, device=device)
-dist.all_gather_into_tensor(
-    output_tensor=gathered,
-    input_tensor=output,
-    async_op=False,
-)
+input = output
+output = torch.empty(world_size, device=cuda_if_available(rank))
+dist.all_gather_into_tensor(output_tensor=output,
+                            input_tensor=input, async_op=False)
 \end{lstlisting}
 
-\begin{importantbox}{这段代码为什么重要}
-它不是为了证明一个数学恒等式而已，而是在提前铺垫 FSDP/ZeRO：如果我们愿意让每个 rank 只持有一部分状态，就可以用 reduce-scatter/all-gather 替代“所有 rank 永久持有完整状态”。
+\begin{importantbox}{这段代码为什么是后续课程的桥}
+如果做完 reduce-scatter 后就停止，每个 rank 只保留归约结果的一片；如果再做 all-gather，每个 rank 又得到完整归约结果。ZeRO/FSDP 的很多设计就在这两个点之间选择：什么时候需要完整参数，什么时候只保存分片状态。
 \end{importantbox}
 
-\subsection{Barrier 和同步}
+\subsection{barrier、同步和 deadlock}
 
-\texttt{dist.barrier()} 会等待所有 rank 到达同一点。讲义中用 barrier 让打印输出更可读，也在 benchmark 中让计时区间一致。CUDA kernel 本身又是异步执行的，所以 GPU benchmark 还需要 \texttt{torch.cuda.synchronize()}。分布式计时里，这两个同步经常都要考虑。
+\code{dist.barrier()} 让所有 rank 等到同一个同步点。它常用于 benchmark、调试打印、确保 warmup 完成。它也会暴露控制流不一致：如果某个 rank 进入了 barrier，另一个 rank 因条件分支跳过，程序就会卡住。
 
-\begin{warningbox}{分布式 deadlock 通常来自不一致}
-所有 rank 必须以相同顺序进入 collective，tensor shape/dtype 也必须匹配。某个 rank 多执行一次 all-reduce，或者某个 rank 因异常提前退出，都可能让其他 rank 卡住。
+\begin{warningbox}{分布式 deadlock 常来自不一致}
+常见错误包括：某个 rank 少调用一次 collective、不同 rank 的 tensor shape 不一致、某些 rank 提前异常退出、print 或 dataloader 导致顺序错位。调试时先确认所有 rank 的 collective 顺序完全一致，再看性能。
 \end{warningbox}
 
 \subsection{本章小结}
 
-\texttt{torch.distributed} 把 collective 暴露成 Python API，但真实执行由 backend 决定。GPU 上常用 NCCL，CPU fallback 可用 Gloo。写分布式代码时，要同时考虑 process group 初始化、rank/device 映射、collective 顺序、barrier、CUDA 同步和清理。
+\code{torch.distributed} 的 API 看起来只是函数调用，但每个调用背后都是多进程同步协议。写分布式训练代码时，正确性约束包括数学结果、shape/dtype、调用顺序和进程生命周期。
 
 \section{通信 Benchmark：测的是带宽，也是算法}
 
 \subsection{为什么要单独测 collective}
 
-分布式训练 step time 经常由 compute 和 communication 共同决定。若只测完整训练 step，很难知道慢在 matmul、attention、gradient all-reduce、parameter all-gather 还是 pipeline send/recv。单独 benchmark collective 可以建立硬件和软件栈的基线：当前节点内 all-reduce 到底能跑到多少 GB/s，reduce-scatter 是否和 all-reduce 的带宽接近，跨节点通信是否比预期慢。
+官方讲义的 benchmark 不是为了得到一个漂亮数字，而是训练读者形成判断：某个集群上 all-reduce、reduce-scatter 的实际速度是多少，是否足以支持当前并行策略。若 benchmark 已经显示通信占比过高，继续调学习率或 batch size 都解决不了根因。
 
-\begin{lstlisting}[caption={collective benchmark 的基本结构}]
-data = torch.randn(num_elements, device=device)
-
-dist.all_reduce(data, op=dist.ReduceOp.SUM)
+\begin{lstlisting}[caption={all-reduce benchmark 的关键步骤}]
+data = torch.randn(num_elements, device=cuda_if_available(rank))
+dist.all_reduce(tensor=data, op=dist.ReduceOp.SUM, async_op=False)
 torch.cuda.synchronize()
 dist.barrier()
 
 start_time = time.time()
-dist.all_reduce(data, op=dist.ReduceOp.SUM)
+dist.all_reduce(tensor=data, op=dist.ReduceOp.SUM, async_op=False)
 torch.cuda.synchronize()
 dist.barrier()
 duration = time.time() - start_time
 \end{lstlisting}
 
-\subsection{All-reduce 的通信量直觉}
+\subsection{带宽估算公式}
 
-在 ring all-reduce 的经典分析中，all-reduce 可以看成 reduce-scatter + all-gather。每个 rank 发送和接收大约 $2\frac{p-1}{p}S$ bytes，其中 $p$ 是 world size，$S$ 是 tensor size。不同工具对 bandwidth 的报告可能区分 algorithm bandwidth 和 bus bandwidth，因此读 benchmark 时要确认公式。
-
-官方讲义中的简化代码把发送量写成：
+官方代码用一个环形通信直觉估算 all-reduce 的有效带宽：
 
 \[
-\text{sent\_bytes} = S \cdot 2(p-1),
+B_{\text{all-reduce}}
+    =
+\frac{2S(N-1)}{N T},
 \]
 
-再结合 rank 数和 duration 得到一个有效带宽估计。它的教学目的不是替代 NCCL tests，而是让学生看到“通信时间”和“移动了多少数据”之间的关系。
+其中 \(S\) 是单 rank 张量大小，\(N\) 是 world size，\(T\) 是一次 all-reduce 的 wall-clock duration。分子里的 \(2\) 来自 ring all-reduce 中 reduce-scatter 与 all-gather 两段都要传输数据；\((N-1)\) 表示每个 rank 需要参与多个传输步；分母的 \(N T\) 是把全局传输工作量归一到整体通信时间上的一种有效带宽口径。
+
+reduce-scatter 的估算少一个 \(2\)：
+
+\[
+B_{\text{reduce-scatter}}
+    =
+\frac{S_{\text{input}}(N-1)}{N T}.
+\]
+
+这里 \(S_{\text{input}}\) 是每个 rank 输入矩阵的总字节数。两者带宽可能相近，因为 all-reduce 可以看成 reduce-scatter 加 all-gather：通信量和时间都约翻倍，带宽口径未必翻倍。
 
 \begin{importantbox}{不要只看 duration}
-同样是 20 ms，传 1 GB 和传 10 GB 含义完全不同。collective benchmark 应同时报告 tensor size、world size、duration 和 effective bandwidth。
+同一个 collective 的 duration 会随 tensor size、world size、拓扑、NCCL 算法、warmup、同步方式变化。报告性能时至少要同时给出 bytes、world size、dtype、硬件拓扑和有效带宽。
 \end{importantbox}
-
-\subsection{Reduce-scatter 与 all-reduce 的关系}
-
-Reduce-scatter 移动的是 all-reduce 的一半阶段；all-gather 是另一半。因此在同一网络上，两者的有效带宽通常与 all-reduce 可比。FSDP 和 ZeRO 的吸引力就在这里：把“完整同步后每卡保存完整状态”改写成“只保存必要分片”，通信账本仍可由这些 collective 估算。
-
-\begin{knowledgebox}{benchmark 是并行策略选择的输入}
-如果节点内 NVLink all-reduce 很快，tensor parallel 的通信压力可以被接受；如果跨节点 bandwidth/latency 差，跨节点 tensor parallel 会很吃亏，此时更倾向 data parallel、pipeline parallel 或更大粒度的 sharding。
-\end{knowledgebox}
 
 \subsection{常见测量陷阱}
 
-\begin{longtable}{p{3.5cm}p{5.2cm}p{5.2cm}}
-\toprule
-\textbf{陷阱} & \textbf{后果} & \textbf{处理方式} \\
-\midrule
-没有 warmup & 首次初始化/建连污染结果 & 先跑一次 collective 再计时。 \\
-没有 CUDA synchronize & 只测到 CPU launch 或排队时间 & 计时结束前同步 GPU。 \\
-没有 barrier & 不同 rank 计时区间错位 & 计时前后 barrier 对齐。 \\
-tensor 太小 & latency 主导，带宽数字无意义 & 用多个 size 扫描 latency-bound 到 bandwidth-bound 区间。 \\
-只测单节点 & 误判跨节点训练表现 & 分别测 intra-node 和 inter-node。 \\
-\bottomrule
-\end{longtable}
+\begin{warningbox}{benchmark 的四个坑}
+\begin{enumerate}
+    \item 没有 warmup：第一次通信可能包含初始化、连接建立、kernel 编译或缓存效应。
+    \item 没有 \code{torch.cuda.synchronize()}：CUDA 异步执行会让计时只测到 launch time。
+    \item 没有 barrier：不同 rank 开始/结束时间不一致，测出来的不是集体通信。
+    \item 只测一个 tensor size：小消息看 latency，大消息看 bandwidth，两个区间结论不同。
+\end{enumerate}
+\end{warningbox}
 
 \subsection{本章小结}
 
-通信 benchmark 把硬件互连从“规格表”变成“训练可用带宽”。只有知道 collective 的真实成本，才能判断一种并行策略是否值得使用，以及哪些通信应该被 overlap、shard 或避免。
+通信 benchmark 是并行策略选择的输入。它回答的问题不是“这台机器快不快”，而是“这个 collective 在这个张量大小和拓扑上是否足够快，能否放进训练 step 的关键路径”。
 
 \section{Data Parallelism：沿 batch 维切分}
 
 \subsection{基本策略}
 
-数据并行是最直观的策略：每个 rank 拥有完整模型参数，输入 batch 沿 batch dimension 切成 $p$ 份，每个 rank 处理本地 mini-batch，反向传播后对梯度 all-reduce，最后每个 rank 用同样的梯度更新同样的参数。
+Data parallelism 沿 batch dimension 切分数据。每个 rank 保留完整模型参数，读取自己的 batch slice，独立 forward/backward，然后用 all-reduce 同步梯度。同步后每个 rank 执行相同 optimizer step，因此参数保持一致。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.46\textwidth]{data-parallelism.png}
-\caption{Data parallelism：切数据，复制模型，通过梯度 all-reduce 保持参数一致。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义配图。}
+\includegraphics[width=0.54\textwidth]{data-parallelism.png}
+\caption{Data parallelism：切分 batch，复制模型。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
 \end{figure}
 
-\begin{lstlisting}[caption={数据并行：每个 rank 取 batch 的一个切片}]
-batch_size = data.size(0)
+\begin{knowledgebox}{读图：data parallel 图里的“复制”和“切分”}
+图中每个 rank 都有完整网络层，所以参数、梯度和 optimizer state 默认是复制的；被切分的是 batch。这个策略的好处是每张卡可以独立做完整 forward/backward，通信只集中在梯度同步阶段。坏处是显存不随 GPU 数量线性扩展，因为模型状态仍然每卡一份。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Lecture 7 的 data parallel 核心：本地 loss，跨 rank 平均梯度}]
 local_batch_size = batch_size // world_size
 start_index = rank * local_batch_size
-end_index = start_index + local_batch_size
-data = data[start_index:end_index].to(device)
-\end{lstlisting}
+data = data[start_index:start_index + local_batch_size].to(device)
 
-\subsection{梯度同步是唯一差异}
-
-官方讲义刻意用 bare-bones MLP 展示：除了每个 rank 只看本地数据，标准训练 loop 几乎不变。关键差异是在 \texttt{loss.backward()} 后，对每个参数的梯度执行 all-reduce。
-
-\begin{lstlisting}[caption={DDP 的核心：反向传播后同步梯度}]
+for param in params:
+    x = x @ param
+    x = F.gelu(x)
+loss = x.square().mean()
 loss.backward()
 
 for param in params:
-    dist.all_reduce(
-        tensor=param.grad,
-        op=dist.ReduceOp.AVG,
-        async_op=False,
-    )
-
-optimizer.step()
+    dist.all_reduce(tensor=param.grad, op=dist.ReduceOp.AVG,
+                    async_op=False)
 \end{lstlisting}
-
-如果各 rank 使用平均梯度并从相同参数出发，那么参数会保持一致。各 rank 的本地 loss 可以不同，因为它们看的是不同数据；但 all-reduce 后的梯度相同，更新也相同。
-
-\begin{importantbox}{Data parallel 的优点和代价}
-它实现简单、适合慢速互连、扩展吞吐直接；但每个 rank 仍保存完整参数、梯度和优化器状态。它解决了计算并行问题，不自动解决模型状态显存问题。
-\end{importantbox}
 
 \subsection{通信账本}
 
-若模型参数大小为 $P$ bytes，每个 step 需要对梯度做 all-reduce，通信量粗略是 $O(P)$，更细地看 ring all-reduce 每 rank 约 $2\frac{p-1}{p}P$ bytes。数据并行的 compute 随本地 batch 增长，通信随参数量增长。大 batch 下 compute/communication ratio 更好，小 batch 下 all-reduce 容易主导。
+若模型参数总量为 \(P\) bytes，每一步 DDP 梯度同步的主通信对象也是 \(P\) bytes 级别的梯度。由于每个 rank 都要得到完整平均梯度，典型实现使用 all-reduce。计算量随本地 batch 增长，通信量主要随参数量增长，因此 data parallel 对“大 batch、较厚计算”的场景友好。
 
-\begin{knowledgebox}{为什么大 batch 对 data parallel 友好}
-参数梯度通信量基本不随 batch size 增长，但本地 forward/backward compute 随 batch size 增长。因此 batch 越大，越容易把通信摊薄。不过 batch 过大又会带来优化稳定性、泛化和 learning-rate scaling 问题。
-\end{knowledgebox}
+\begin{importantbox}{Data parallel 的优点和代价}
+优点是实现简单、数学语义接近单机大 batch、通信集中。代价是每卡保存完整参数、梯度和 optimizer state；若单卡装不下模型，普通 DDP 无法解决容量问题，只能引入 ZeRO/FSDP 这类状态分片方法。
+\end{importantbox}
 
 \subsection{为什么引出 FSDP/ZeRO}
 
-讲义在 data parallelism 末尾提示下一讲的 FSDP/ZeRO：如果每个 rank 都复制完整参数、梯度和优化器状态，显存无法随 GPU 数线性扩展。FSDP/ZeRO 的思路是把这些状态分片保存，用 all-gather 临时重建参数，用 reduce-scatter 分发梯度结果。
+官方源写道：下一次会讲 FSDP/ZeRO，用 all-gather 和 reduce-scatter 避免每张卡都持有全部参数。直觉是：
 
-\begin{warningbox}{DDP 不等于显存线性扩展}
-增加 data parallel ranks 可以增加总 batch 和总吞吐，但单卡仍需容纳完整模型状态和本地激活。模型本身放不进单卡时，纯 DDP 无能为力。
-\end{warningbox}
+\begin{itemize}
+    \item forward 某层前，用 all-gather 临时拼出该层完整参数；
+    \item backward 后，用 reduce-scatter 同步梯度并只保留本 rank 负责的分片；
+    \item optimizer state 也按 rank 分片，减少重复存储。
+\end{itemize}
+
+\begin{knowledgebox}{术语消化：DDP、FSDP、ZeRO 的差别}
+\begin{tabular}{L{0.18\textwidth}L{0.32\textwidth}L{0.4\textwidth}}
+\toprule
+方法 & 保存方式 & 通信方式与课程关系 \\
+\midrule
+DDP & 每卡完整参数、梯度、optimizer state。 & backward 后 all-reduce 梯度，简单但显存重复。 \\
+ZeRO-1/2/3 & 按 stage 分片 optimizer state、梯度、参数。 & 用 reduce-scatter/all-gather 把复制状态改为分片状态。 \\
+FSDP & PyTorch 中的 fully sharded data parallel。 & 以模块为单位 all-gather 参数、释放参数、reduce-scatter 梯度。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-Data parallelism 沿 batch 维切分，模型复制，梯度 all-reduce。它是最基础、最稳健的并行策略，但显存复制限制明显。理解它是理解 DDP、ZeRO 和 FSDP 的起点。
+Data parallelism 是最容易理解的并行策略：数据切开，模型复制，梯度同步。它扩展吞吐，但不天然扩展模型容量；状态分片才是解决大模型显存的关键。
 
 \section{Tensor Parallelism：沿 width 维切分}
 
 \subsection{基本策略}
 
-Tensor parallelism 把单层内部的参数矩阵沿 hidden/width 维切开，每个 rank 只保存和计算一部分层宽。它解决的是“单层太宽、单卡放不下或算不过来”的问题。官方讲义的简化 MLP 中，每个 rank 拥有每层参数的 $1/p$ 列，先计算本地激活，再 all-gather 拼回完整 hidden dimension，供下一层使用。
+Tensor parallelism 沿层内部张量维度切分，例如把矩阵乘法的输出宽度切给多个 rank。每个 rank 保存该层参数的一部分，计算一部分激活，然后通过 all-gather 或 all-reduce 恢复下一层需要的完整张量。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.46\textwidth]{tensor-parallelism.png}
-\caption{Tensor parallelism：切每层宽度，每层之间需要通信激活。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义配图。}
+\includegraphics[width=0.58\textwidth]{tensor-parallelism.png}
+\caption{Tensor parallelism：切分 layer width，每层内跨 rank 协作。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
 \end{figure}
 
-\begin{lstlisting}[caption={Tensor parallel：每个 rank 保存每层参数的一部分列}]
-data = data.to(device)
-batch_size = data.size(0)
-num_dim = data.size(1)
+\begin{knowledgebox}{读图：tensor parallel 图说明的不是“多放几层”}
+图中每一层都被横向拆开，不同 rank 负责同一层的不同列或通道。这样可以让单层参数和计算分摊到多张卡上，但下一层往往需要完整激活，因此每层都可能发生通信。读图时要把它和 pipeline parallel 区分：tensor parallel 是同一层多卡一起算，pipeline parallel 是不同层放在不同卡上。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Lecture 7 的 tensor parallel 前向：局部 matmul 后 all-gather 激活}]
 local_num_dim = num_dim // world_size
+params = [get_init_params(num_dim, local_num_dim, rank)
+          for layer in range(num_layers)]
 
-params = [
-    get_init_params(num_dim, local_num_dim, rank)
-    for layer in range(num_layers)
-]
-\end{lstlisting}
-
-\subsection{每层都要恢复完整激活}
-
-在官方简化实现中，每层本地矩阵乘得到形状为 \texttt{batch\_size x local\_num\_dim} 的局部激活。下一层仍需要完整 \texttt{num\_dim} 输入，因此要 all-gather 所有 rank 的局部激活并拼接。
-
-\begin{lstlisting}[caption={Tensor parallel forward：局部 matmul 后 all-gather 激活}]
+x = data
 for layer in range(num_layers):
     x = x @ params[layer]
     x = F.gelu(x)
-
     activations = [
         torch.empty(batch_size, local_num_dim, device=device)
         for _ in range(world_size)
     ]
-    dist.all_gather(tensor_list=activations,
-                    tensor=x,
+    dist.all_gather(tensor_list=activations, tensor=x,
                     async_op=False)
     x = torch.cat(activations, dim=1)
 \end{lstlisting}
 
+\subsection{列切、行切和通信位置}
+
+设输入 \(X\in\mathbb{R}^{B\times d}\)，权重 \(W\in\mathbb{R}^{d\times h}\)。若按输出宽度切分 \(W=[W_1,W_2,\dots,W_N]\)，rank \(i\) 计算：
+
+\[
+Y_i = X W_i,\qquad
+Y = [Y_1,Y_2,\dots,Y_N].
+\]
+
+其中 \(B\) 是 batch tokens 数，\(d\) 是输入 hidden size，\(h\) 是输出 hidden size，\(N\) 是 tensor-parallel world size。每个 rank 只算 \(Y_i\)，但若下一层需要完整 \(Y\)，就要 all-gather。Megatron-LM 风格会交替使用 column-parallel 和 row-parallel linear，把某些通信推迟或合并，但基本账本不变：切 layer width 就要在层边界恢复一致语义。
+
 \begin{importantbox}{Tensor parallel 的通信频率很高}
-数据并行通常每 step 对梯度通信；tensor parallel 往往每一层 forward/backward 都要通信激活或梯度。因此它强烈依赖高速互连，实践中常限制在同一节点的 NVLink/NVSwitch 域内。
+Tensor parallel 的通信常发生在每个 Transformer block 的多个线性层或 attention 子层边界。它适合放在 NVLink/NVSwitch 这类高速节点内互连上；跨节点使用时，通信延迟和带宽很容易压过局部 matmul 的收益。
 \end{importantbox}
-
-\subsection{与生产级 Megatron 张量并行的关系}
-
-教学代码用 all-gather 拼激活来解释最基本思路。生产级 Transformer tensor parallel 更精细：MLP 的第一层可以 column parallel，第二层 row parallel；attention 的 QKV/head 可以按 head 或 hidden 维切分；一些同步点用 all-reduce，一些用 reduce-scatter/all-gather。目标是减少每层同步次数和通信量，同时保持矩阵乘法形状对 Tensor Cores 友好。
-
-\begin{knowledgebox}{切 width 的本质}
-Tensor parallel 不是“把模型任意切开”，而是利用线性层和 attention head 的代数结构，让每个 rank 做一部分矩阵乘法。切分维度必须与算子结构兼容，否则会产生过多通信。
-\end{knowledgebox}
 
 \subsection{反向传播为什么更复杂}
 
-官方讲义把 tensor parallel 的 backward 留作作业。这不是省略小细节，而是因为 backward 中激活梯度、权重梯度和输入梯度的切分关系不同。某些方向需要 all-reduce 求和，某些方向需要 all-gather 或 reduce-scatter。训练系统框架的复杂度，很大一部分来自把 forward/backward 的 sharding 语义都维护正确。
+官方源把 backward 留作 homework，是有意的：前向只要拼激活，反向还要处理梯度如何在切分维度上归约。列切时，输出梯度对应各自分片；行切时，输入梯度通常需要 reduce。真实框架会把这些规则封装到 parallel linear layers 里，但工程师仍要理解通信发生在哪个方向。
 
 \begin{warningbox}{Tensor parallel 的正确性边界}
-只写 forward demo 不代表训练可用。完整 tensor parallel 需要处理 backward、optimizer state、randomness/dropout、layernorm、attention mask、checkpointing 和 mixed precision。
+不能随意把任意 tensor 切开就叫 tensor parallel。切分维度必须与算子数学结构兼容；否则虽然张量 shape 能拼回去，结果也可能不等价，或反向梯度不正确。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Tensor parallelism 沿层宽切分参数和计算，能降低单卡参数/计算负担，但每层通信频繁，因此通常需要节点内高速互连。它是大模型训练中最重要的“节点内模型并行”策略之一。
+Tensor parallelism 解决单层太宽、单卡装不下或算不快的问题。它牺牲的是高频通信，因此硬件要求最高。判断是否适合 tensor parallel，要先问每层通信能否被节点内高速互连承受。
 
 \section{Pipeline Parallelism：沿 depth 维切分}
 
 \subsection{基本策略}
 
-Pipeline parallelism 把模型按层深度切成多个 stages，每个 rank 拥有连续的一段 layers。数据从第一个 stage 进入，经过 rank 0 的 layers 后发送给 rank 1，继续向后传。它沿 depth 维切分模型，因此可以把很深的网络放到多张 GPU 上。
+Pipeline parallelism 沿层深度切分模型：前几层放在 rank 0，中间层放在 rank 1，后几层放在后续 rank。每个 rank 只保存自己的 layers，forward 时把激活从前一 stage 发送到后一 stage。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.46\textwidth]{pipeline-parallelism.png}
-\caption{Pipeline parallelism：每个 rank 拥有一段层，激活在 stage 间传递。}
-\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义配图。}
+\includegraphics[width=0.58\textwidth]{pipeline-parallelism.png}
+\caption{Pipeline parallelism：切分 layer depth，不同 rank 保存不同层段。}
+\figsource{CS336 Spring 2026 Lecture 7 官方可执行讲义图像。}
 \end{figure}
 
-\begin{lstlisting}[caption={Pipeline parallel：每个 rank 只初始化自己的层}]
-local_num_layers = num_layers // world_size
-local_params = [
-    get_init_params(num_dim, num_dim, rank)
-    for layer in range(local_num_layers)
-]
-\end{lstlisting}
+\begin{knowledgebox}{读图：pipeline parallel 图里的 stage 和 bubble}
+图中每张卡负责连续层段，数据像流水线一样从前向后流动。优点是通信只发生在 stage 边界，频率低于 tensor parallel；缺点是流水线刚开始和结束时部分 stage 空闲，这就是 bubble。microbatch 的作用是把一个大 batch 切小，让不同 microbatch 同时处在不同 stage，从而填满流水线。
+\end{knowledgebox}
 
-\subsection{Micro-batches 与 send/recv}
+\begin{lstlisting}[caption={Lecture 7 的 pipeline 前向：microbatch + send/recv}]
+micro_batch_size = batch_size // num_micro_batches
+if rank == 0:
+    micro_batches = data.chunk(chunks=num_micro_batches, dim=0)
+else:
+    micro_batches = [
+        torch.empty(micro_batch_size, num_dim, device=device)
+        for _ in range(num_micro_batches)
+    ]
 
-如果一次把整个 batch 送进 pipeline，后面的 rank 在开始时会空等，前面的 rank 在结束后会空等。解决方法是把 batch 切成 micro-batches，让不同 micro-batches 同时处在不同 pipeline stages 中。官方代码展示了最小 forward pipeline：rank 0 拆分数据，其他 rank 预分配 activation buffer；每个 stage 收前一 rank 的 activation，计算本地 layers，再发给下一 rank。
-
-\begin{lstlisting}[caption={Pipeline forward：接收、计算、发送}]
 for x in micro_batches:
     if rank - 1 >= 0:
         dist.recv(tensor=x, src=rank - 1)
 
     for param in local_params:
-        x = x @ param
-        x = F.gelu(x)
+        x = F.gelu(x @ param)
 
     if rank + 1 < world_size:
         dist.send(tensor=x, dst=rank + 1)
 \end{lstlisting}
 
-\begin{importantbox}{Pipeline 的核心瓶颈是 bubble}
-Pipeline parallel 减少了单卡模型状态，但会产生 pipeline bubble：某些时刻部分 stages 没有 micro-batch 可算。micro-batch 越多，bubble 相对越小，但 activation 管理和调度更复杂。
+\subsection{bubble 的直觉公式}
+
+若有 \(P\) 个 pipeline stages 和 \(M\) 个 microbatches，最简单 GPipe 式调度的前向 bubble 比例近似为：
+
+\[
+\rho_{\text{bubble}}
+    \approx
+\frac{P-1}{M+P-1}.
+\]
+
+其中 \(P-1\) 是填满流水线需要等待的 stage 数，\(M\) 是实际输入的 microbatch 数。增加 \(M\) 可以降低 bubble，但 microbatch 太小会降低 kernel efficiency，也会增加调度和通信次数。
+
+\begin{importantbox}{Pipeline 的核心瓶颈是调度，而不只是带宽}
+Pipeline parallel 的通信对象通常是 stage 边界激活，频率低于 tensor parallel。但它引入调度问题：stage 时间不均、forward/backward 依赖、microbatch 数、activation 保存或重算策略，都会影响吞吐。
 \end{importantbox}
 
-\subsection{通信形态与硬件适配}
+\subsection{为什么 pipeline 能跨较慢链路}
 
-Pipeline parallel 的通信通常是相邻 stages 之间传 activation，频率按 micro-batch 和 layer partition 决定。相比 tensor parallel 每层 collective，pipeline 通信更粗粒度，更容易跨节点使用。但如果 stage 划分不均衡，最慢 stage 会决定全局吞吐；如果 micro-batch 太少，bubble 会吞掉很多 GPU 时间。
+Pipeline stage 之间的通信发生在层段边界，粒度较粗。如果每个 stage 内部有足够多层和足够大计算，通信可以被较长的 compute window 吸收。因此 pipeline parallel 更可能跨节点使用。但这要求模型切分均衡：每个 stage 的参数量、计算量、激活大小和 backward 时间都要接近。
 
-\begin{knowledgebox}{Pipeline 适合慢链路的原因}
-Pipeline 不要求每层都做全体 all-reduce，而是主要在 stage 边界传 activation。通信模式更局部、更粗粒度，因此比 tensor parallel 更能容忍较慢的跨节点网络。
-\end{knowledgebox}
-
-\subsection{Backward 与调度复杂度}
-
-完整 pipeline training 不只是 forward send/recv。Backward 需要反向传递 activation gradients，还要处理 weight update 的时序。实际系统有 GPipe、PipeDream、1F1B、interleaved 1F1B、zero-bubble 等调度策略，它们在 memory、bubble、staleness 和实现复杂度之间取舍。Lecture 7 只展示 minimal forward，是为了先建立 depth sharding 的基本形态。
-
-\begin{warningbox}{Pipeline 并不自动负载均衡}
-按层数均分不一定按时间均分。attention、MLP、embedding、输出头、MoE layers 的计算成本不同，stage 划分要按 profile 和 memory 共同决定。
+\begin{warningbox}{Pipeline parallel 不自动负载均衡}
+如果某个 stage 包含更重的 attention 或更宽的 MLP，它会成为全局吞吐瓶颈。真实系统常需要按 profiling 结果手工或自动调整层分配，而不是简单平均层数。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Pipeline parallelism 沿 depth 切分模型，降低单卡模型状态压力，通信比 tensor parallel 更粗粒度，但需要 micro-batching 减少 bubble，并在完整训练中处理复杂 backward 调度。
+Pipeline parallelism 解决深层模型容量和跨节点放置问题。它通信频率较低，但要付出 bubble、调度复杂度和 stage imbalance 的代价。
 
-\section{并行策略的比较与组合}
+\section{三种并行策略的比较与组合}
 
-\subsection{三种基本切分维度}
+\subsection{切分对象决定通信形态}
 
-Lecture 7 的三个实现可以用一句话概括：
-
-\begin{itemize}
-    \item \textbf{Data parallelism}：切 batch，复制模型，通信梯度。
-    \item \textbf{Tensor parallelism}：切 width，分片层内参数/激活，通信频繁。
-    \item \textbf{Pipeline parallelism}：切 depth，分片 layers，通信 stage boundary activations。
-\end{itemize}
-
-\begin{longtable}{p{3.2cm}p{3.8cm}p{3.8cm}p{3.5cm}}
+\begin{longtable}{L{0.18\textwidth}L{0.16\textwidth}L{0.25\textwidth}L{0.25\textwidth}}
 \toprule
-\textbf{策略} & \textbf{切分维度} & \textbf{主要通信} & \textbf{硬件偏好} \\
+并行方式 & 切分对象 & 优点 & 主要代价 \\
 \midrule
-Data parallel & batch & 梯度 all-reduce & 慢链路也可，batch 大更友好。 \\
-FSDP/ZeRO & model states & 参数 all-gather、梯度 reduce-scatter & 中高速网络，依赖 overlap。 \\
-Tensor parallel & hidden/width/head & 每层 all-gather/all-reduce & 节点内 NVLink/NVSwitch。 \\
-Pipeline parallel & layers/depth & stage 间 send/recv & 可跨节点，但要控制 bubble。 \\
-Expert parallel & experts & all-to-all token routing & 依赖负载均衡和高速网络。 \\
-Sequence parallel & sequence length & 激活与归一化分片 & 常与 tensor parallel 组合。 \\
+\endhead
+Data parallelism & batch & 简单、吞吐扩展好、每卡完整 forward/backward。 & 模型状态复制，梯度 all-reduce 随参数量增长。 \\
+Tensor parallelism & layer width / tensor dimension & 单层参数和计算可跨卡分摊。 & 每层高频通信，强依赖 NVLink/NVSwitch。 \\
+Pipeline parallelism & layer depth & 模型深度可跨卡放置，通信较粗粒度。 & pipeline bubble、调度复杂、stage 负载均衡困难。 \\
+Sequence/expert parallelism & sequence 或 experts & 支持长上下文或 MoE 参数扩展。 & attention/expert routing 通信和负载均衡复杂。 \\
 \bottomrule
 \end{longtable}
 
 \begin{importantbox}{选择并行策略的第一原则}
-先让高频通信留在高速层次，再把低频粗粒度通信放到慢速层次。通常：tensor parallel 放节点内，data/FSDP/pipeline 扩展到节点间，expert parallel 要特别关注 all-to-all 负载均衡。
+先看瓶颈是什么：如果单卡放不下状态，考虑 ZeRO/FSDP 或 pipeline；如果单层太宽，考虑 tensor parallel；如果吞吐不够但单卡放得下，先做 data parallel；如果 MoE expert 太多，考虑 expert parallel 和 all-to-all 负载均衡。
 \end{importantbox}
 
-\subsection{Recompute、memory、communication 三角}
+\subsection{recompute、memory、communication 三角}
 
-讲义总结中提到一个关键三角：可以选择重计算、存内存、或者存在另一张 GPU 的内存里并通信。比如 activation checkpointing 用更多 compute 换更少 memory；FSDP 用 communication 换更少 replicated state；pipeline 把 layers 存在不同 GPU，用 activation communication 换单卡容量。
+官方总结里有一句非常好的工程判断：可以 recompute，可以存在本地 memory，也可以存在其他 GPU 的 memory 然后 communicate。三者是同一个问题的三个出口。
 
-\begin{knowledgebox}{没有免费午餐，只有换瓶颈}
-显存不够时，你可以重算、分片、通信、offload。每种选择都把压力挪到 compute、network、CPU memory 或调度复杂度上。系统设计的关键是让最便宜的资源承担更多压力。
+\begin{knowledgebox}{术语消化：三角权衡}
+\begin{tabular}{L{0.2\textwidth}L{0.35\textwidth}L{0.35\textwidth}}
+\toprule
+选择 & 省了什么 & 付出什么 \\
+\midrule
+memory & 不重算，不通信，最快读取。 & 占 HBM，单卡容量压力大。 \\
+recompute & 少存激活或中间结果。 & 增加 FLOPs，可能拉长 backward。 \\
+communication & 把状态放到别的 rank 或分片存储。 & 消耗网络带宽，增加同步依赖。 \\
+\bottomrule
+\end{tabular}
 \end{knowledgebox}
 
-\subsection{为什么 JAX/TPU 路线看起来不一样}
+\subsection{JAX/TPU 路线为什么看起来不同}
 
-官方讲义简短提到 JAX/TPU：定义模型、sharding strategy，让编译器处理更多细节。TPU pods 的拓扑和 XLA/SPMD 编译栈让用户以更高层方式表达 sharding。PyTorch 路线在这讲中显得更“手工”，但教育价值很高：它迫使我们看见底层 primitives 如何组合成训练系统。
+官方源提到 JAX/TPU 路线：定义模型、定义 sharding strategy，编译器负责很多底层映射。PyTorch 课程选择从 primitives 讲起，是为了让读者看见底层机制。两者不是谁高谁低，而是抽象层不同：高层 sharding API 更省心，但当性能异常时，仍然需要理解 collectives、拓扑和通信账本。
 
-\begin{warningbox}{抽象层越高，越不能忘记通信账本}
-无论使用 JAX 编译器、PyTorch FSDP，还是手写 collectives，底层都绕不开数据移动。高层 API 可以减少出错面，但不会取消硬件层次。
+\begin{warningbox}{抽象越高，越不能忘记通信账本}
+自动 sharding 可以搜索或生成并行计划，但目标函数仍然受物理通信约束。性能调试时，如果不知道某个 tensor 被 all-gather 了几次、某个 expert routing 是否 all-to-all，就很难解释 step time。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Data/tensor/pipeline parallelism 不是互斥选项，而是沿 batch、width、depth 三个不同维度切分训练问题。真实大模型通常组合使用：节点内 tensor parallel，节点间 data/FSDP/pipeline，MoE 再叠 expert parallel。组合的核心仍然是通信频率和硬件层次匹配。
+Data、tensor、pipeline 不是互斥选项。真实大模型训练常把它们组合成 3D/4D parallelism：节点内 tensor parallel，节点间 data/FSDP，模型深度再 pipeline，MoE 层另加 expert parallel。组合的核心仍然是让高频通信留在快链路，让低频通信跨慢链路。
 
 \section{工程 Checklist：写分布式训练代码前先问什么}
 
 \subsection{状态在哪里}
 
-首先要明确参数、梯度、优化器状态、激活分别在哪里：
+第一组问题是状态放置：
 
 \begin{itemize}
-    \item 参数是复制还是分片？
-    \item 梯度是完整 all-reduce 后复制，还是 reduce-scatter 后分片？
-    \item 优化器状态每卡完整保存，还是按参数 shard 保存？
-    \item 激活在本地保存、checkpoint 重算，还是跨 stage 发送？
+    \item 参数、梯度、optimizer state、activation 是否复制？
+    \item 哪些对象被 sharding？按 batch、width、depth、sequence 还是 expert？
+    \item 哪个时刻需要完整副本？这个副本是长期保存还是临时 all-gather？
 \end{itemize}
 
 \subsection{通信何时发生}
 
-其次要标出每个训练 step 的同步点：
+第二组问题是通信时序：
 
 \begin{itemize}
-    \item forward 前是否 all-gather 参数？
-    \item 每层 forward/backward 是否有 tensor-parallel collective？
-    \item backward 后是否 all-reduce/reduce-scatter 梯度？
-    \item pipeline stage 间 send/recv 是否能与计算重叠？
+    \item collective 是 all-reduce、reduce-scatter、all-gather 还是 all-to-all？
+    \item 通信发生在每层、每个 block、每个 microbatch，还是每个 step？
+    \item 是否能与 backward compute overlap？
+    \item 是否有 barrier 或隐式同步破坏 overlap？
 \end{itemize}
 
 \subsection{硬件是否匹配策略}
 
-\begin{longtable}{p{4.0cm}p{5.4cm}p{4.0cm}}
-\toprule
-\textbf{场景} & \textbf{风险信号} & \textbf{常见调整} \\
-\midrule
-Tensor parallel 跨节点 & 每层通信穿过慢网络 & 限制 TP 到节点内，跨节点用 DP/FSDP/PP。 \\
-Data parallel batch 太小 & 梯度 all-reduce 占比高 & 增大 batch/gradient accumulation，或 overlap 通信。 \\
-Pipeline micro-batch 太少 & bubble 大、GPU 空闲 & 增加 micro-batches 或调整 schedule。 \\
-FSDP all-gather 频繁 & 参数通信阻塞 forward & prefetch、overlap、合理 wrap policy。 \\
-MoE all-to-all 不均衡 & 少数 rank 拖慢 step & router load balancing、capacity factor、expert placement。 \\
-\bottomrule
-\end{longtable}
+第三组问题是拓扑匹配：
 
-\begin{importantbox}{最终的判断标准}
-并行策略不是按名字先进程度排序，而是按 end-to-end step time、memory headroom、稳定性和可维护性共同评估。能用简单 data parallel 解决的问题，不必过早引入复杂 pipeline；单卡放不下时，再逐步引入 state sharding 和 model parallel。
+\begin{itemize}
+    \item 高频通信是否留在 NVLink/NVSwitch 域内？
+    \item 跨节点链路是否只承载较粗粒度通信？
+    \item NCCL benchmark 的实际带宽是否支持理论计划？
+    \item 最慢 rank 或最慢 stage 在哪里？
+\end{itemize}
+
+\begin{importantbox}{最终判断标准}
+一个并行策略的好坏不由名字决定，而由每个 step 的端到端吞吐、显存峰值、扩展效率和稳定性决定。可解释的系统账本比“用了某某 parallelism”更重要。
 \end{importantbox}
 
 \subsection{本章小结}
 
-分布式训练工程的第一步不是写 \texttt{all\_reduce}，而是画清楚状态、计算、通信和硬件拓扑。只要这个图清楚，DDP、FSDP、tensor parallel、pipeline parallel 都是不同维度上的切分选择。
+写分布式训练代码前，先画状态图和通信图。状态图告诉你什么被复制、什么被分片；通信图告诉你每个同步点移动什么张量、走什么链路。没有这两张图，调参只是猜。
 
 \section{拓展阅读}
 
@@ -783,14 +825,14 @@ MoE all-to-all 不均衡 & 少数 rank 拖慢 step & router load balancing、cap
     \item \href{https://crfm.stanford.edu/2023/06/16/levanter-1_0-release.html}{Levanter: JAX-based distributed training stack from CRFM}
 \end{itemize}
 
-\section{总结与延伸}
+\section{Summary：总结与延伸}
 
-Lecture 7 把并行训练拆回了最基础的通信和切分维度。Collectives 提供分布式程序的通信词汇；硬件互连决定哪些通信可以高频发生；NCCL/PyTorch distributed 把这些原语落到可运行代码；data/tensor/pipeline parallelism 则分别沿 batch、width、depth 切分训练工作。
+Lecture 7 的 Summary 可以压缩成一句话：分布式训练不是“把模型丢到很多 GPU 上”，而是用 collective operations 在硬件拓扑上实现某种 sharding/replication 计划。Data parallel 沿 batch 切，tensor parallel 沿 width 切，pipeline parallel 沿 depth 切；它们分别改变通信对象、通信频率和状态放置。
 
 \begin{importantbox}{最终 takeaways}
 \begin{enumerate}
     \item 多 GPU 的两个动机是容量和速度：放不下，或想更快。
-    \item Collective operations 是分布式训练的基础语言。
+    \item Collective operations 是分布式训练的基础语言；all-reduce、reduce-scatter、all-gather 是工作马。
     \item \(\text{all-reduce}=\text{reduce-scatter}+\text{all-gather}\) 是理解 DDP 到 FSDP/ZeRO 的关键。
     \item Tensor parallel 通信频繁，通常要求 NVLink/NVSwitch；pipeline parallel 通信较粗粒度，但要处理 bubble。
     \item 真实训练系统是在 recompute、memory 和 communication 之间换瓶颈。

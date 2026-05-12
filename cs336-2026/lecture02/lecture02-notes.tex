@@ -4,7 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
 \usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
+\usepackage[margin=2.35cm]{geometry}
 \usepackage[most]{tcolorbox}
 \usepackage{etoolbox}
 \usepackage{listings}
@@ -14,6 +14,8 @@
 \usepackage{array}
 \usepackage{longtable}
 \usepackage{needspace}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
 
 \graphicspath{{./}{images/}}
 \hypersetup{
@@ -54,10 +56,9 @@
     keepspaces=true,
     extendedchars=false
 }
-
 \BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
 
-\newcommand{\notetitle}{CS336 2026 Lecture 2：Resource Accounting}
+\newcommand{\notetitle}{CS336 2026 Lecture 2：Resource Accounting、Tensor、FLOPs 与 Memory}
 \newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方可执行讲义整理}
 \newcommand{\notedate}{2026 年春季}
 \newcommand{\videochannel}{Stanford CS336}
@@ -87,9 +88,9 @@
 {\large \noteauthors\par}
 \vspace{0.3cm}
 {\large \notedate\par}
-\vspace{1.2cm}
+\vspace{1.0cm}
 \ifdefempty{\videocoverpath}{}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
+\includegraphics[width=0.84\textwidth,height=0.42\textheight,keepaspectratio]{\videocoverpath}\par
 }
 \vfill
 \begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
@@ -104,926 +105,693 @@
 \tableofcontents
 \newpage
 
-\section{从 tokenization 走向资源账本}
+\section{本讲主线：resource accounting 是训练前的账本}
 
-Lecture 1 解释了 CS336 的主线：在固定资源下训练最好的语言模型。Lecture 2 立刻进入这句话里最容易被忽略的一半：什么叫 fixed resources？本讲的主题是 resource accounting，也就是把训练系统里的计算、内存和带宽变成可以手算、可以验证、可以优化的账本。
+Lecture 2 的目标是把“训练一个模型”拆成可估算的资源账本。语言模型训练不是只写 \texttt{forward}，而是在 compute、memory、bandwidth、dtype、optimizer state、activation 和 wall-clock time 之间做取舍。第一讲说核心目标是 efficiency；第二讲给出 efficiency 的基本单位。
 
-开场的行政提醒包括加入 CS336 Slack、用 Stanford 邮箱注册 Modal、阅读 AI policy 和 cluster guide。教学上更重要的是：Marin 的 \(10^{23}\) FLOPs run 完成并匹配 forecast。这个例子把 Lecture 1 的 scaling-law 视角接到 Lecture 2 的系统账本上：如果你不能算清 FLOPs 和有效吞吐，就无法判断一个 forecast 是否可信。
+课程开场提到 Marin 的 \(10^{23}\) FLOPs run 已完成并匹配 forecasts。这不是新闻八卦，而是一个工程信号：scaling forecast 只有在 compute 和 memory 账本可靠时才可信。
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{marin-1e23-forecast.jpg}
-\caption{Marin \(10^{23}\) FLOPs run 匹配 forecast，说明资源估算不是纸上练习，而是大规模训练决策的一部分。}
-\figsource{官方可执行讲义 \texttt{lecture02-slides.py} 引用的公开 X/Twitter 图片：\texttt{https://pbs.twimg.com/media/HE1P1HmaUAAjLXF}。}
+\includegraphics[width=0.78\textwidth]{marin-forecast-result.jpg}
+\caption{Marin 1e23 FLOPs run 与预测曲线对照。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{main()}。}
 \end{figure}
 
-\subsection{本讲要带走的三类知识}
+\begin{knowledgebox}{读图：Marin 结果图为什么放在 Lecture 2 开头}
+这张图展示的是“训练前预测”和“训练后观测”的闭环。要让这件事有意义，必须知道训练到底用了多少 FLOPs、硬件给了多少有效 FLOP/s、模型和 optimizer state 是否能放进显存、训练中是否有通信和 checkpoint 开销。Lecture 2 就是为这种预测能力补上底层账本。
+\end{knowledgebox}
 
-讲义仍沿用 Lecture 1 的三分法：
+\subsection{两个 motivating questions}
 
-\begin{itemize}
-    \item \textbf{Mechanics}：PyTorch tensor、autograd、optimizer、device、dtype 的语义。
-    \item \textbf{Mindset}：任何模型训练前都先做 resource accounting。
-    \item \textbf{Intuitions}：理解资源花在哪里。本讲没有神秘的 ML magic，重点是算清楚。
-\end{itemize}
+本讲先用两个问题训练数量级直觉。
 
-\begin{importantbox}{Resource accounting 的目标}
-Resource accounting 不是为了把每个 kernel 的成本精确到最后一位，而是为了形成可操作判断：一个操作是 compute-bound 还是 memory-bound？一个模型是参数状态装不下，还是激活值装不下？一次训练 step 的 FLOPs 是否和 wall-clock 吞吐匹配？
+\[
+C_{\text{train}}\approx 6ND.
+\]
+
+这里 \(N\) 是参数量，\(D\) 是训练 token 数，系数 6 来自 forward 约 \(2ND\) FLOPs、backward 约 \(4ND\) FLOPs 的粗略估计。70B 参数、15T token 的训练计算量约为：
+
+\[
+6\times 70\times 10^9\times 15\times 10^{12}
+=6.3\times 10^{24}\ \text{FLOPs}.
+\]
+
+若用 1024 张 H100，dense bf16 峰值约 \(989.5\) TFLOP/s，假设 MFU 为 0.5，则训练约需 140 多天量级。这不是精确排期，而是训练前判断可行性的 napkin math。
+
+\begin{importantbox}{first-use glossary：FLOPs、FLOP/s、MFU}
+FLOPs 是 floating-point operations，表示总计算量；FLOP/s 是每秒浮点运算数，表示速度。MFU 是 model FLOPs utilization，即实际模型 FLOP/s 除以硬件承诺峰值 FLOP/s。训练时间约等于总 FLOPs 除以有效 FLOP/s。
 \end{importantbox}
 
-\subsection{本讲地图}
+第二个问题是 8 张 H100 用 AdamW 能训练多大模型。H100 每张约 80GB，8 张总 640GB。若每个参数需要 bf16 参数 2 bytes、bf16 gradient 2 bytes、AdamW 一阶动量 4 bytes、二阶动量 4 bytes，那么仅参数相关状态就要：
 
-本讲按以下路径展开：
+\[
+2 + 2 + 4 + 4 = 12\ \text{bytes/parameter}.
+\]
 
-\begin{enumerate}
-    \item 从 tensor 开始，理解 shape、rank、dtype、device 和 memory。
-    \item 用 einops 给 tensor 维度命名，降低高维操作的心智负担。
-    \item 计算矩阵乘法和常见操作的 FLOPs。
-    \item 用 arithmetic intensity 和 roofline 判断 compute-bound / memory-bound。
-    \item 分解训练中的 forward、backward、optimizer state、activation memory。
-    \item 用 gradient accumulation 和 activation checkpointing 在显存与计算之间做交换。
-\end{enumerate}
+640GB / 12 约为 53B 参数。这还没算 activation memory、temporary buffers、CUDA workspace 和 fragmentation，所以是乐观上界。
 
-\subsection{本章小结}
-
-Lecture 2 把“效率”变成账本。后续 systems、parallelism、inference、scaling laws 都依赖这里的基本能力：看到一段代码或一个训练配置，先估算它要多少显存、多少 FLOPs、可能被哪个硬件资源卡住。
-
-\section{两个开场 napkin math}
-
-讲义先用两个问题训练直觉：
-
-\begin{enumerate}
-    \item 训练一个 70B 参数模型，在 15T tokens 上，用 1024 张 H100，大概需要多久？
-    \item 只看参数、梯度和 AdamW optimizer state，8 张 80GB H100 上最多能装多大的模型？
-\end{enumerate}
-
-\subsection{70B 模型训练时间估算}
-
-训练 dense Transformer 的常用近似是：
-
-$$
-C \approx 6ND
-$$
-
-\begin{itemize}
-    \item \(C\)：总训练计算量，单位为 FLOPs。
-    \item \(N\)：模型参数量。
-    \item \(D\)：训练 token 数。
-    \item 系数 \(6\)：粗略来自 forward 的 \(2ND\) 和 backward 的 \(4ND\)。
-\end{itemize}
-
-对 \(N=70\times 10^9\)、\(D=15\times 10^{12}\)：
-
-$$
-C = 6 \times 70\times 10^9 \times 15\times 10^{12}
-  = 6.3\times 10^{24}\ \text{FLOPs}
-$$
-
-讲义设 H100 dense bf16 峰值约为 \(1979/2\) TFLOP/s，即 \(9.895\times 10^{14}\) FLOP/s；MFU 假设为 0.5；GPU 数为 1024。每天有效 FLOPs 为：
-
-$$
-9.895\times 10^{14}\times 0.5\times 1024\times 86400
-\approx 4.38\times 10^{22}\ \text{FLOPs/day}
-$$
-
-训练天数约为：
-
-$$
-\frac{6.3\times 10^{24}}{4.38\times 10^{22}} \approx 144\ \text{days}
-$$
-
-\begin{lstlisting}[caption={官方讲义中的训练时间估算逻辑}]
-total_flops = 6 * 70e9 * 15e12
-h100_flop_per_sec = 1979e12 / 2
-mfu = 0.5
-flops_per_day = h100_flop_per_sec * mfu * 1024 * 60 * 60 * 24
-days = total_flops / flops_per_day
-\end{lstlisting}
-
-\begin{warningbox}{MFU 是估算里最敏感的旋钮}
-如果 MFU 从 0.5 降到 0.35，同样的总 FLOPs 会把训练时间从约 144 天推到约 206 天。大规模训练里，“只有 10\% 的吞吐差异”可能意味着几周排期和巨额成本。
+\begin{warningbox}{参数上界不是可训练模型大小}
+如果不考虑 activations，你会系统性高估能训练的模型规模。大 batch、长 sequence、深层网络都会让 activation memory 迅速变成主要瓶颈。
 \end{warningbox}
 
-\subsection{8 张 H100 能装多大模型}
+\begin{knowledgebox}{first-use glossary：optimizer state}
+Optimizer state 是优化器为每个参数额外维护的状态。Adam/AdamW 通常维护 \(m\) 和 \(v\)：\(m\) 是梯度的一阶动量，\(v\) 是梯度平方的二阶动量。它们从零初始化，每步由新 gradient 更新。因为 \(m\) 和 \(v\) 通常用 fp32 存储，Adam 的 optimizer state 显存常常是参数本身的 4 倍（两个 fp32 state vs 一个 bf16 参数）。
+\end{knowledgebox}
 
-第二个问题只看静态状态，不算 activations。讲义采用的粗略账本是：
-
-$$
-\text{bytes per parameter} = 2 + 2 + 4 + 4 = 12
-$$
-
-\begin{itemize}
-    \item 第一个 \(2\)：bf16 参数。
-    \item 第二个 \(2\)：bf16 梯度。
-    \item \(4+4\)：AdamW 的两个 fp32 optimizer states，一阶矩和二阶矩。
-\end{itemize}
-
-8 张 80GB H100 的总显存近似为 \(640\times 10^9\) bytes，因此参数上界为：
-
-$$
-\frac{640\times 10^9}{12} \approx 53.3\times 10^9
-$$
-
-也就是约 53B 参数。这仍然是乐观上界，因为它没有算 activations、fragmentation、通信 buffer、CUDA workspace、checkpointing buffer 等。
-
-\begin{knowledgebox}{12 bytes 还是 16 bytes？}
-不同账本会得到不同 bytes/parameter。Lecture 2 的开场估算使用 \(2+2+4+4=12\)，没有显式加入 fp32 master weights。有些混合精度实现会额外保存 fp32 master copy，于是变成 \(2+2+4+4+4=16\)。做工程估算时必须写清楚自己的假设。
+\begin{knowledgebox}{first-use glossary：sharding 与 ZeRO}
+Sharding 是分片：原本每张 GPU 都保存完整对象，分片后每张 GPU 只保存一部分。ZeRO 是 Zero Redundancy Optimizer，在 data parallel 框架内把 optimizer state、gradients、parameters 分阶段切分。ZeRO-1 切 optimizer state，ZeRO-2 再切 gradients，ZeRO-3 连 parameters 也切。越省显存，通信越多。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-两个 napkin math 说明 resource accounting 的风格：不追求一开始就精确，而是先把数量级算清楚。70B 训练时间主要由 \(6ND\)、GPU 峰值、MFU 和 GPU 数决定；模型最大规模则先由每参数静态字节数和总显存决定。
+Resource accounting 的第一步是把模糊问题改写为数量级问题：需要多少 FLOPs？硬件有效速度是多少？哪些状态占显存？activation 是否被漏算？这些问题答不出来，就不应该启动大训练。
 
-\section{Tensor 是资源账本的基本单位}
+\section{Tensor 与 Memory：所有训练状态都在张量里}
 
-在 PyTorch 里，数据、参数、梯度、optimizer state、activations 最终都以 tensor 的形式存在。理解 tensor 的 rank、shape、dtype 和 device，是理解训练资源的前提。
+Tensor 是训练系统的基本载体。Data、parameters、gradients、optimizer state、activations 都是 tensor，只是生命周期不同。
 
-\subsection{Rank 与 Transformer 中的高维张量}
+\begin{longtable}{p{0.20\textwidth}p{0.34\textwidth}p{0.36\textwidth}}
+\toprule
+\textbf{状态} & \textbf{什么时候存在} & \textbf{资源含义} \\
+\midrule
+Data & 每步 batch 输入 & 影响 batch size、sequence length、host-to-device 传输。 \\
+Parameters & 全程存在 & 模型权重，forward/backward/optimizer 都要访问。 \\
+Gradients & backward 后到 step 前 & 默认累积，需要及时清理或分片。 \\
+Optimizer state & 多个 step 间长期存在 & AdamW 的 \(m,v\) 等统计量，常是显存大头。 \\
+Activations & forward 后到 backward 用完 & 随 batch、sequence、layers 增长，可用 checkpointing 处理。 \\
+\bottomrule
+\end{longtable}
 
-讲义从最简单的 tensor 形状开始：
+Transformer 中常见 rank-4 tensor：
 
-\begin{lstlisting}[caption={Tensor rank 的最小例子}]
-x = torch.zeros(4)        # rank 1 tensor: vector
-x = torch.zeros(4, 8)     # rank 2 tensor: matrix
-x = torch.zeros(4, 8, 2)  # rank 3 tensor
-\end{lstlisting}
+\[
+x\in\mathbb{R}^{B\times S\times H\times D},
+\]
 
-Transformer 中经常看到 rank 4 tensor，例如：
+其中 \(B\) 是 batch size，\(S\) 是 sequence length，\(H\) 是 number of heads，\(D\) 是 head dimension。
 
-$$
-x \in \mathbb{R}^{B\times S\times H\times D}
-$$
+\begin{knowledgebox}{shape ledger}
+Shape 不是注释，而是资源账本。\(B\) 增大会提升吞吐但增加 activation memory；\(S\) 增大会提高 attention 和 KV cache 成本；\(H,D\) 改变 attention/MLP 矩阵形状；\(L\) 影响参数、activation 和 checkpointing tradeoff。
+\end{knowledgebox}
 
-\begin{itemize}
-    \item \(B\)：batch size。
-    \item \(S\)：sequence length。
-    \item \(H\)：number of heads。
-    \item \(D\)：hidden dimension per head。
-\end{itemize}
+\subsection{数值格式：fp32、fp16、bf16、fp8、fp4}
 
-许多 shape bug 的根源不是数学错误，而是维度语义没有写出来。Lecture 2 后面引入 einops，就是为了解决这个心智负担。
+Tensor memory 由元素个数和 dtype 决定：
 
-\subsection{Tensor memory 的基本公式}
-
-一个 tensor 的内存只由两个量决定：
-
-$$
-\text{memory bytes} = \texttt{numel()} \times \texttt{element\_size()}
-$$
-
-\begin{itemize}
-    \item \(\texttt{numel()}\)：元素个数。
-    \item \(\texttt{element\_size()}\)：每个元素占多少 bytes，由 dtype 决定。
-\end{itemize}
-
-\begin{lstlisting}[caption={官方讲义中的 tensor memory helper}]
-def get_memory_usage(x: torch.Tensor):
-    return x.numel() * x.element_size()
-
-x = torch.zeros(4, 8)
-assert x.dtype == torch.float32
-assert x.numel() == 4 * 8
-assert x.element_size() == 4
-assert get_memory_usage(x) == 4 * 8 * 4  # 128 bytes
-\end{lstlisting}
-
-同一个公式也能解释 GPT-3 feedforward layer 中一个矩阵为什么会达到 GB 级：如果矩阵形状是 \((12288\times 4, 12288)\)，float32 每元素 4 bytes，那么它大约是 2.3 GB。
-
-\begin{importantbox}{参数量不是显存账本的全部}
-训练时至少要同时考虑参数、梯度、optimizer state 和 activations。参数是静态成本；activation memory 随 batch size、sequence length 和层数变化；optimizer state 取决于优化器；gradient buffer 则通常和参数同形状。
-\end{importantbox}
-
-\subsection{本章小结}
-
-Tensor 是 CS336 resource accounting 的基本记账单位。只要知道 shape 和 dtype，就能估算内存；只要知道 tensor operation，就能估算 FLOPs。后续所有训练系统问题都会回到这两件事。
-
-\section{浮点类型：范围、精度与训练稳定性}
-
-讲义依次介绍 fp32、fp16、bf16、fp8 和 fp4。它们的区别不是“精度高低”这么简单，而是内存、吞吐、动态范围和数值稳定性的共同取舍。
-
-\subsection{fp32：传统 baseline}
+\[
+\text{memory}(x)=\text{numel}(x)\times \text{element\_size}(x).
+\]
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.95\textwidth]{fp32.png}
-\caption{fp32 的位分配：1 位符号、8 位指数、23 位尾数。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/fp32.png}。}
+\includegraphics[width=0.9\textwidth]{fp32.png}
+\caption{fp32 格式：1 bit sign、8 bits exponent、23 bits mantissa。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{tensors\_memory()}。}
 \end{figure}
 
-fp32 每个数占 4 bytes，传统科学计算中常作为 baseline。深度学习早期也常用 fp32 训练，因为它动态范围大、尾数精度高、数值行为直观。但在大模型训练中，fp32 的问题很明显：显存翻倍，Tensor Core 吞吐也远低于低精度格式。
-
-\subsection{fp16：省内存但动态范围窄}
+\begin{knowledgebox}{读图：fp32 为什么稳}
+fp32 有较大的 exponent 和 mantissa，动态范围和精度都充足，所以传统科学计算和 optimizer state 常用它。缺点是每个值 4 bytes，显存和带宽成本高。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.72\textwidth]{fp16.png}
-\caption{fp16 的位分配：指数位较少，动态范围明显小于 fp32。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/fp16.png}。}
+\caption{fp16 把每个值压到 2 bytes，但 exponent 位数少，容易 underflow。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{tensors\_memory()}。}
 \end{figure}
-
-fp16 每个数占 2 bytes，可以把参数、激活和梯度内存减半，也能使用更快的低精度矩阵乘法。但它的指数位只有 5 位，小数值容易 underflow。讲义给出的例子是：
-
-\begin{lstlisting}[caption={fp16 underflow 示例}]
-x = torch.tensor([1e-8], dtype=torch.float16)
-assert x == 0  # Underflow
-\end{lstlisting}
-
-训练中如果梯度或更新量落到 fp16 表示范围之外，就可能导致不稳定。早期 mixed precision 训练常用 loss scaling 来缓解这个问题。
-
-\subsection{bf16：深度学习训练的务实选择}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.75\textwidth]{bf16.png}
-\caption{bf16 保留 fp32 的 8 位指数，但减少尾数位。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/bf16.png}。}
+\includegraphics[width=0.72\textwidth]{bf16.png}
+\caption{bf16 也是 2 bytes，但保留 fp32 的 8-bit exponent，因此动态范围更适合训练。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{tensors\_memory()}。}
 \end{figure}
 
-bf16 也是 2 bytes，但它有和 fp32 相同的指数范围，代价是尾数精度更低。深度学习训练通常更需要动态范围而不是极高尾数精度，因此 A100/H100 等硬件上 bf16 成为主流选择。
-
-\begin{warningbox}{fp16 和 bf16 都是 2 bytes，但不能混为一谈}
-fp16 的尾数更长、指数更短；bf16 的尾数更短、指数更长。训练中，梯度尺度可能跨越多个数量级，因此 bf16 的动态范围优势通常比 fp16 的尾数优势更重要。
-\end{warningbox}
-
-\subsection{Mixed precision：低精度计算，高精度状态}
-
-混合精度训练的典型策略是：
-
-\begin{itemize}
-    \item 参数、activations、gradients 使用 bf16。
-    \item optimizer states 使用 fp32。
-    \item 对 matmul 等安全操作自动 cast 到低精度。
-    \item 对 exp、softmax、某些 normalization 等敏感操作保留更高精度。
-\end{itemize}
-
-PyTorch 提供 AMP：
-
-\begin{lstlisting}[caption={PyTorch AMP 的基本形式}]
-with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-    x = torch.zeros(4, 8)
-\end{lstlisting}
-
-\begin{knowledgebox}{为什么 optimizer state 常用 fp32}
-Optimizer state 会跨很多 step 累积信息，例如 Adam 的一阶矩和二阶矩。即使前向/反向可以用 bf16，长期累积状态仍需要更稳定的数值表示，否则微小更新会在多步训练中逐渐损失。
+\begin{knowledgebox}{读图：fp16 与 bf16 的差别}
+fp16 给 mantissa 更多位，数值更细，但动态范围窄；bf16 给 exponent 更多位，动态范围接近 fp32。深度学习训练更怕数值下溢/溢出，因此 bf16 常比 fp16 更稳。
 \end{knowledgebox}
 
-\subsection{fp8 与 fp4：更激进的低精度}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{fp8-formats.png}
-\caption{NVIDIA Transformer Engine 中的 FP8 格式示意。}
-\figsource{官方讲义引用 NVIDIA Transformer Engine 文档图片：\texttt{fp8\_formats.png}。}
-\end{figure}
-
-H100 支持 FP8 的 E4M3 和 E5M2 两种变体。Lecture 2 还提到 NVIDIA 2025 年的 NVFP4，每个 value 只有 4 bits，并配合 block scale factor 扩展动态范围。这些格式体现了一个方向：训练和推理都在越来越精细地管理数值表示。但越低精度，越需要硬件、kernel、scaling rule 和训练 recipe 的共同支持。
-
-\subsection{本章小结}
-
-dtype 是 resource accounting 的第一层旋钮：它决定内存字节数，也决定硬件峰值吞吐和数值稳定性。fp32 稳但贵，fp16 快但范围窄，bf16 是当前训练的常用折中，fp8/fp4 则代表更激进的前沿优化。
-
-\section{Device 与 GPU 数据移动}
-
-默认情况下，PyTorch tensor 在 CPU memory 中。要利用 GPU 并行性，tensor 必须移动到 GPU memory，或者一开始就在 GPU 上创建。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.85\textwidth]{cpu-gpu.png}
-\caption{CPU 与 GPU 是不同设备，tensor 需要显式移动才能在 GPU 上计算。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/cpu-gpu.png}。}
-\end{figure}
-
-\subsection{Device 是 tensor 状态的一部分}
-
-\begin{lstlisting}[caption={CPU tensor 与 GPU tensor 的创建方式}]
-x = torch.zeros(32, 32)
-assert x.device == torch.device("cpu")
-
-device = cuda_if_available()
-x = x.to(device)
-
-with torch.device(device):
-    x = torch.zeros(32, 32)
-    assert x.device == device
-\end{lstlisting}
-
-很多训练错误来自 device mismatch：模型参数在 GPU，batch 还在 CPU；或者部分 tensor 在 \texttt{cuda:0}，另一部分在 \texttt{cuda:1}。Resource accounting 不只是纸面数字，也包括数据是否在正确位置。
-
-\begin{warningbox}{数据移动不是免费的}
-CPU-GPU 拷贝通过 PCIe 或 NVLink，带宽远低于 GPU 内部 HBM 和 SM 之间的数据通路。如果训练 loop 每一步都做不必要的数据搬运，GPU 可能在等待数据，而不是做矩阵乘法。
+\begin{warningbox}{mixed precision 不是简单全改低精度}
+训练常用 bf16 存 parameters、activations、gradients，但 optimizer state 保留 fp32。这样省显存和带宽，同时让长期统计量保持稳定。
 \end{warningbox}
 
-\subsection{Pinned memory 与异步拷贝}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{fp8-formats.png}
+\caption{FP8 E4M3 与 E5M2 的 exponent/mantissa 分配不同，分别偏向精度或动态范围。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{tensors\_memory()}，图片来自 NVIDIA Transformer Engine 文档。}
+\end{figure}
 
-虽然本讲脚本没有展开 DataLoader，但 device accounting 自然引出 pinned memory。把 CPU batch 放在 pinned memory 中，再用 \texttt{non\_blocking=True} 拷贝，可以让数据传输与 GPU 计算更好重叠。
+\begin{knowledgebox}{读图：为什么 FP8 有两个格式}
+E4M3 用 4 位 exponent 和 3 位 mantissa，精度相对好但范围小；E5M2 范围更大但精度更粗。FP8 能否有效使用，取决于硬件、scale 管理和库支持，不只是 dtype 名字。
+\end{knowledgebox}
 
-\begin{knowledgebox}{GPU 利用率低不一定是模型太小}
-如果 GPU utilization 很低，可能原因包括：CPU 数据预处理慢、CPU-GPU 拷贝阻塞、batch 太小、kernel launch 过多、通信等待或 I/O checkpoint 阻塞。资源账本必须覆盖整条训练路径。
+FP4/NVFP4 进一步把每个值压到 4 bits，通常需要 block-wise scale 扩展动态范围。它更像高度优化库中的系统能力，而不是普通 PyTorch 默认路线。
+
+\subsection{CPU 与 GPU memory}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{cpu-gpu.png}
+\caption{CPU 与 GPU 有不同 memory 空间，tensor 必须移动或直接创建在 GPU 上才能由 GPU kernel 使用。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{tensors\_on\_gpus()}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：CPU-GPU 图的系统含义}
+`.to(device)` 不是语法细节，而是数据移动。大模型训练中，CPU/GPU、GPU/GPU、HBM/SM 之间的每次移动都可能成为瓶颈。Lecture 2 从这里开始把 tensor 运算变成硬件数据流问题。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-Device 决定 tensor 在哪里，数据移动决定训练 pipeline 是否能持续喂饱 GPU。理解 GPU 不是“自动加速器”，而是有独立 memory 和 bandwidth 的设备，是后续 systems 优化的起点。
+Memory accounting 从 tensor、shape、dtype、device、生命周期开始。低精度能节省显存，但必须理解动态范围；GPU 能提供并行性，但前提是数据在正确位置，并且移动成本可控。
 
-\section{用 einops 给 tensor 操作命名}
+\section{Einops 与 Shape：让维度变成可读账本}
 
-Tensor shape 一复杂，传统 PyTorch 的 \texttt{transpose(-2, -1)}、\texttt{view}、\texttt{reshape} 很容易变成猜谜。Lecture 2 用 einops 展示一个更清楚的写法：把维度名字写进操作。
+PyTorch 的 `transpose(-2, -1)`、`sum(dim=-1)` 很强，但隐藏了维度语义。Einops 用命名维度写 tensor operation，让表达式更接近数学。
 
-\subsection{Einsum：带维度语义的矩阵乘法}
-
-\begin{lstlisting}[caption={普通矩阵乘法与 einops einsum}]
-x = torch.ones(3, 4)  # seq1 hidden
-y = torch.ones(4, 3)  # hidden seq2
-
-z = x @ y  # seq1 seq2
-
-z = einsum(x, y, "seq1 hidden, hidden seq2 -> seq1 seq2")
+\begin{lstlisting}[caption={传统 PyTorch 写法容易隐藏维度含义}]
+x = torch.ones(2, 2, 3)      # batch seq hidden
+y = torch.ones(2, 2, 3)      # batch seq hidden
+z = x @ y.transpose(-2, -1)  # batch seq seq
 \end{lstlisting}
 
-更复杂的 batch attention-like 操作：
-
-\begin{lstlisting}[caption={给 batch/sequence/hidden 命名，避免 transpose 语义混乱}]
-x = torch.ones(2, 3, 4)  # batch seq1 hidden
-y = torch.ones(2, 3, 4)  # batch seq2 hidden
-
-z = x @ y.transpose(-2, -1)
-z = einsum(x, y, "batch seq1 hidden, batch seq2 hidden -> batch seq1 seq2")
+\begin{lstlisting}[caption={Einops/einsum 用名字表达维度收缩}]
+z = einsum(
+    x, y,
+    "batch seq1 hidden, batch seq2 hidden -> batch seq1 seq2"
+)
 \end{lstlisting}
 
-\begin{importantbox}{维度命名是一种防错机制}
-高维 tensor 代码最危险的地方不是报错，而是 shape 刚好对上但语义错了。Einops 把“哪个维度被求和、哪个维度保留”写出来，可以减少 silent shape bug。
-\end{importantbox}
+\begin{knowledgebox}{术语消化：einsum、reduce、rearrange}
+\begin{itemize}
+    \item \textbf{einsum}：按名字指定哪些维度相乘、哪些维度求和、哪些维度保留。
+    \item \textbf{reduce}：沿某些维度做 sum/mean/max/min。
+    \item \textbf{rearrange}：拆分、合并、重排维度，例如把 \texttt{total\_hidden} 拆成 \texttt{heads hidden}。
+\end{itemize}
+\end{knowledgebox}
 
-\subsection{Reduce 与 rearrange}
-
-Reduce 用来对命名维度做 sum、mean、max、min：
-
-\begin{lstlisting}[caption={einops reduce 示例}]
-x = torch.ones(2, 3, 4)  # batch seq hidden
-y = reduce(x, "... hidden -> ...", "sum")
-\end{lstlisting}
-
-Rearrange 用来拆分或合并维度，例如把 flatten 的 total hidden 拆成 heads 和 per-head hidden：
-
-\begin{lstlisting}[caption={把 total\_hidden 拆成 heads 和 hidden1}]
-x = rearrange(x, "... (heads hidden1) -> ... heads hidden1", heads=2)
-x = einsum(x, w, "... hidden1, hidden1 hidden2 -> ... hidden2")
-x = rearrange(x, "... heads hidden2 -> ... (heads hidden2)")
-\end{lstlisting}
+\begin{warningbox}{Shape 错误是隐性 bug}
+维度顺序错了，代码可能仍能运行，只是语义错。命名维度能减少这类错误，也为 tensor parallelism、sequence parallelism 和 attention head 切分打基础。
+\end{warningbox}
 
 \subsection{本章小结}
 
-Einops 的价值不是“换一种语法”，而是把 tensor operation 的数学结构写进代码。对 resource accounting 来说，命名维度也让 FLOPs 和 memory 估算更透明：你知道哪几个维度相乘、哪几个维度求和。
+Einops 代表一种资源核算习惯：每个维度都要有名字。后续计算 FLOPs、activation memory 和 parallelism 时，维度语义比张量本身更重要。
 
-\section{FLOPs、FLOP/s 与 MFU}
+\section{Compute Accounting：FLOPs、FLOP/s 与 MFU}
 
-有了 tensor operation，就可以估算计算量。Lecture 2 特别区分两个读音相同但含义不同的缩写：
+\subsection{FLOPs 与 FLOP/s}
 
-\begin{itemize}
-    \item \textbf{FLOPs}：floating-point operations，表示做了多少浮点操作。
-    \item \textbf{FLOP/s 或 FLOPS}：每秒浮点操作数，表示硬件或实际运行速度。
-\end{itemize}
+\begin{longtable}{p{0.18\textwidth}p{0.36\textwidth}p{0.36\textwidth}}
+\toprule
+\textbf{术语} & \textbf{含义} & \textbf{例子} \\
+\midrule
+FLOPs & floating-point operations，计算总量 & GPT-3 训练约 \(3.14\times 10^{23}\) FLOPs。 \\
+FLOP/s & 每秒浮点运算数，硬件或程序速度 & H100 dense bf16 峰值约 \(989.5\) TFLOP/s。 \\
+MFU & actual FLOP/s / promised FLOP/s & 模型实际吃满硬件的程度，0.5 已经很好。 \\
+\bottomrule
+\end{longtable}
+
+\[
+\mathrm{MFU}=\frac{\text{actual FLOP/s}}{\text{promised FLOP/s}}.
+\]
+
+\begin{warningbox}{FLOPs 和 FLOP/s 混淆会毁掉估算}
+FLOPs 是路程，FLOP/s 是速度。训练时间约等于总 FLOPs 除以有效 FLOP/s。有效速度又取决于 dtype、kernel、通信、shape 和 MFU。
+\end{warningbox}
 
 \subsection{矩阵乘法 FLOPs}
 
-对 \(X\in\mathbb{R}^{B\times D}\)、\(W\in\mathbb{R}^{D\times K}\)，输出 \(Y=XW\in\mathbb{R}^{B\times K}\)。每个输出元素需要 \(D\) 次乘法和约 \(D\) 次加法，所以：
-
-$$
-\text{FLOPs} \approx 2BDK
-$$
-
-\begin{itemize}
-    \item \(B\)：输入点数或 batch 维度。
-    \item \(D\)：输入维度，也是求和维度。
-    \item \(K\)：输出维度。
-    \item 系数 \(2\)：乘法和加法。
-\end{itemize}
-
-\begin{lstlisting}[caption={官方讲义中的 matmul FLOPs 计算}]
-B = 16384
-D = 32768
-K = 8192
-x = torch.ones(B, D, device=cuda_if_available())
-w = torch.randn(D, K, device=cuda_if_available())
-y = x @ w
-
-actual_num_flops = 2 * B * D * K
-actual_time = benchmark(lambda: x @ w)
-actual_flop_per_sec = actual_num_flops / actual_time
-\end{lstlisting}
-
-\subsection{Model FLOPs Utilization}
-
-MFU 定义为：
-
-$$
-\text{MFU} =
-\frac{\text{actual FLOP/s}}{\text{promised FLOP/s}}
-$$
-
-\begin{itemize}
-    \item \(\text{actual FLOP/s}\)：通过计时和 FLOPs 估算得到的实际吞吐。
-    \item \(\text{promised FLOP/s}\)：硬件规格表给出的理论峰值，且取决于 dtype。
-    \item MFU 通常忽略通信和调度 overhead，因此是一个近似指标。
-\end{itemize}
-
-讲义说 MFU \(\ge 0.5\) 往往已经很不错。这背后不是工程师“不努力”，而是实际训练有数据搬运、kernel launch、通信、非矩阵乘法、shape 不整齐、pipeline bubble 等各种损耗。
-
-\begin{warningbox}{不要把峰值算力当作实际算力}
-H100 规格表里的 TFLOP/s 是理想条件下的硬件峰值。真实训练要看 dtype、矩阵形状、kernel 实现、batch size、通信、内存带宽和调度 overhead。资源估算时必须区分 theoretical peak 和 achieved throughput。
-\end{warningbox}
-
-\subsection{本章小结}
-
-FLOPs 衡量工作量，FLOP/s 衡量速度，MFU 衡量实际速度相对硬件峰值的比例。语言模型训练的很多工程优化，本质上都是提高 achieved FLOP/s，或者减少完成同样训练目标所需的 FLOPs。
-
-\section{Arithmetic intensity 与 roofline}
-
-仅知道 FLOPs 还不够。一个操作运行时间取决于计算速度和内存带宽。Lecture 2 用 arithmetic intensity 判断操作是 compute-bound 还是 memory-bound。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.55\textwidth]{compute-memory.png}
-\caption{计算操作需要从 memory 读输入，送到 accelerator 计算，再把输出写回 memory。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/compute-memory.png}。}
-\end{figure}
-
-\subsection{两个 intensity}
-
-硬件有 accelerator intensity：
-
-$$
-\text{accelerator intensity}
-= \frac{\text{peak FLOP/s}}{\text{memory bandwidth bytes/s}}
-$$
-
-\begin{itemize}
-    \item 对 H100，讲义使用 dense bf16 \(9.895\times 10^{14}\) FLOP/s。
-    \item H100 HBM bandwidth 约 \(3.35\times 10^{12}\) bytes/s。
-    \item 因此 accelerator intensity 约为 \(295\) FLOP/byte。
-\end{itemize}
-
-具体 workload 有 arithmetic intensity：
-
-$$
-\text{arithmetic intensity}
-= \frac{\text{workload FLOPs}}{\text{bytes transferred}}
-$$
-
-\begin{itemize}
-    \item 如果 arithmetic intensity 小于 accelerator intensity，通常 memory-bound。
-    \item 如果 arithmetic intensity 大于 accelerator intensity，通常 compute-bound。
-\end{itemize}
-
-\subsection{常见操作的 intensity}
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{3cm}p{3.2cm}p{3.8cm}}
-\toprule
-\textbf{操作} & \textbf{FLOPs} & \textbf{Bytes} & \textbf{结论} \\
-\midrule
-ReLU over \(n\) bf16 values & \(n\) & \(4n\) & \(0.25\) FLOP/byte，memory-bound \\
-GeLU over \(n\) bf16 values & \(\approx 20n\) & \(4n\) & \(\approx 5\) FLOP/byte，仍 memory-bound \\
-Dot product length \(n\) & \(\approx 2n\) & \(\approx 4n\) & \(\approx 0.5\)，memory-bound \\
-Matrix-vector \(n\times n\) & \(\approx 2n^2\) & \(\approx 2n^2\) & \(\approx 1\)，memory-bound \\
-Matmul \(n\times n\) & \(\approx 2n^3\) & \(\approx 6n^2\) & \(\approx n/3\)，大矩阵 compute-bound \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 2 中常见操作的 arithmetic intensity 直觉。}
-\end{table}
-
-\begin{importantbox}{为什么训练喜欢大矩阵乘法}
-大矩阵乘法的 arithmetic intensity 随矩阵边长增长，容易超过硬件 accelerator intensity，从而充分利用 Tensor Core。逐元素操作的 intensity 基本不随规模增长，通常被内存带宽卡住。
-\end{importantbox}
-
-\subsection{Roofline 图}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.82\textwidth]{roofline-improved.png}
-\caption{Roofline 模型把 arithmetic intensity 与可达到的 performance 连接起来。}
-\figsource{官方讲义引用 JAX Scaling Book roofline 图片：\texttt{https://jax-ml.github.io/scaling-book/assets/img/roofline-improved-1400.webp}。}
-\end{figure}
-
-Roofline 图横轴是 arithmetic intensity，纵轴是可达到的 FLOP/s。左侧低 intensity 区域受 memory bandwidth 限制，性能随 intensity 线性上升；右侧高 intensity 区域受 peak compute 限制，性能接近水平屋顶。转折点就是 accelerator intensity。
-
-讲义把它和 MFU 连接起来：
-
-$$
-\text{MFU} \approx \min\left(1,\frac{\text{arithmetic intensity}}{\text{accelerator intensity}}\right)
-$$
-
-\begin{itemize}
-    \item 这是理想化表达，忽略 kernel overhead、通信和调度。
-    \item 它解释了为什么低 intensity 操作很难靠更强算力加速。
-    \item 它也解释了为什么 inference 中 matrix-vector product 常 memory-bound。
-\end{itemize}
-
-\subsection{本章小结}
-
-Arithmetic intensity 是连接算法和硬件的桥。FLOPs 多不一定慢，bytes 搬运多也可能是瓶颈。训练 Transformer 主要依赖大矩阵乘法，所以更接近 compute-bound；逐 token inference 和逐元素操作往往更接近 memory-bound。
-
-\section{训练中的 forward、backward 与 6BN}
-
-Lecture 2 接下来进入训练步骤的资源核算。核心结论是：对很多网络，单个训练 step 的 FLOPs 可以粗略写成 \(6 \times\) batch data points \(\times\) parameters。
-
-\subsection{一个两层线性网络}
-
-讲义定义一个简单 deep network，每层是线性变换加 ReLU：
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{deep-network.png}
-\caption{深层网络中，每层前向产生 activations，反向需要 gradients。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/deep-network.png}。}
-\end{figure}
-
-\begin{lstlisting}[caption={官方讲义中的简化 Block 和 DeepNetwork}]
-class Block(nn.Module):
-    def __init__(self, dim: int):
-        super().__init__()
-        self.weight = nn.Parameter(torch.randn(dim, dim) / math.sqrt(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x @ self.weight
-        x = F.relu(x)
-        return x
-
-class DeepNetwork(nn.Module):
-    def __init__(self, dim: int, num_layers: int):
-        super().__init__()
-        self.layers = nn.ModuleList([Block(dim) for i in range(num_layers)])
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for layer in self.layers:
-            x = layer(x)
-        return x
-\end{lstlisting}
-
-\subsection{Backward 为什么约等于 forward 的两倍}
-
-对一层 \(h_2=h_1W_2\)，forward FLOPs 约为：
-
-$$
-2BDD
-$$
-
-\begin{itemize}
-    \item \(B\)：batch size。
-    \item \(D\)：输入和输出维度。
-    \item \(W_2\in\mathbb{R}^{D\times D}\)。
-\end{itemize}
-
-Backward 需要计算两类梯度：
-
-\begin{itemize}
-    \item 对输入 activation 的梯度：\(\frac{\partial \ell}{\partial h_1}\)。
-    \item 对参数的梯度：\(\frac{\partial \ell}{\partial W_2}\)。
-\end{itemize}
-
-它们各自都是一次类似规模的矩阵乘法，因此 backward 大约是 forward 的两倍。于是：
-
-$$
-\text{forward} \approx 2BN,\qquad
-\text{backward} \approx 4BN,\qquad
-\text{training step} \approx 6BN
-$$
-
-\begin{itemize}
-    \item \(B\)：batch 中的数据点数，语言模型中常对应 token 数。
-    \item \(N\)：参数量。
-    \item \(6BN\)：忽略非矩阵乘法项后的训练 step 估算。
-\end{itemize}
-
-\begin{knowledgebox}{为什么 Lecture 1 和 Lecture 2 都出现 6}
-Lecture 1 的 \(6ND\) 是整个训练 run 的 FLOPs；Lecture 2 的 \(6BN\) 是单个 training step 的 FLOPs。如果把所有 step 中的 batch token 数加起来得到总 token 数 \(D\)，两者就是同一个近似在不同尺度上的写法。
-\end{knowledgebox}
-
-\subsection{这个近似的边界}
-
-对短上下文 dense Transformer，\(6ND\) 往往是很有用的估算。但它会忽略：
-
-\begin{itemize}
-    \item attention 的 \(O(S^2)\) 项，长上下文时更明显。
-    \item embedding 和 LM head 的词表相关成本。
-    \item LayerNorm、softmax、activation function 等逐元素或 reduction 操作。
-    \item MoE 的稀疏专家、routing 和 load balancing。
-    \item 通信和 pipeline bubble。
-\end{itemize}
-
-\begin{warningbox}{近似不是许可你忽略细节}
-\(6ND\) 适合快速预算，但不能替代 profiler。真正定位瓶颈时，仍要看 GPU trace、kernel 时间、memory bandwidth、communication overlap 和 shape-specific kernel efficiency。
-\end{warningbox}
-
-\subsection{本章小结}
-
-训练 FLOPs 的核心来自 forward 和 backward 中的大矩阵乘法。Forward 约 \(2BN\)，backward 约 \(4BN\)，合计 \(6BN\)。这个近似把模型参数量、batch token 数和训练计算量直接连起来，是后续 scaling 和 systems 分析的共同语言。
-
-\section{Optimizer 与训练显存账本}
-
-训练不只是 forward/backward，还要更新参数。Optimizer 不仅改变更新规则，也引入额外 state memory。
-
-\subsection{从 AdaGrad 到 Adam}
-
-讲义用 AdaGrad 作为教学优化器，并把常见优化器关系串起来：
-
-\begin{itemize}
-    \item Momentum = SGD + exponential averaging of gradients。
-    \item AdaGrad = SGD + averaging by squared gradients。
-    \item RMSProp = AdaGrad but with exponential averaging of squared gradients。
-    \item Adam = RMSProp + momentum。
-\end{itemize}
-
-\begin{lstlisting}[caption={教学版 AdaGrad：每个参数保存一份平方梯度累积}]
-class AdaGrad(torch.optim.Optimizer):
-    def __init__(self, params: Iterable[nn.Parameter], lr: float = 0.01):
-        super(AdaGrad, self).__init__(params, dict(lr=lr))
-
-    def step(self):
-        for group in self.param_groups:
-            lr = group["lr"]
-            for p in group["params"]:
-                state = self.state[p]
-                grad = p.grad.data
-
-                g2 = state.get("g2", torch.zeros_like(grad))
-                g2 += torch.square(grad)
-                state["g2"] = g2
-
-                p.data -= lr * grad / torch.sqrt(g2 + 1e-5)
-\end{lstlisting}
-
-这个代码揭示 optimizer state 的来源：它不是抽象概念，而是和每个 parameter 同形状的 tensor。AdaGrad 保存一份 \(\sum g^2\)，Adam 保存两份 \(m_t\) 和 \(v_t\)。
-
-\begin{warningbox}{AdaGrad 的衰减问题}
-AdaGrad 的 \(g^2\) 是累计和，只增不减。因此有效学习率 \(\eta/\sqrt{g^2+\epsilon}\) 会逐渐变小，训练后期可能过早停滞。RMSProp 和 Adam 通过指数滑动平均缓解这一点。
-\end{warningbox}
-
-\subsection{训练内存的四类对象}
-
-对一个 toy deep network，讲义分解：
-
-$$
-\begin{aligned}
-M_{\text{train}}
-&= M_{\text{params}} + M_{\text{activations}} \\
-&\quad + M_{\text{gradients}} + M_{\text{optimizer state}}
-\end{aligned}
-$$
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.4cm}p{4cm}p{6cm}}
-\toprule
-\textbf{对象} & \textbf{典型 dtype} & \textbf{随什么增长} \\
-\midrule
-Parameters & bf16/fp32 & 参数量 \(N\) \\
-Gradients & bf16/fp32 & 参数量 \(N\) \\
-Optimizer states & fp32 & 参数量 \(N\)，状态份数取决于优化器 \\
-Activations & bf16/fp32 & batch size、sequence length、hidden size、层数 \\
-\bottomrule
-\end{tabular}
-\caption{训练显存账本的四大类。}
-\end{table}
-
-讲义示例中使用 bf16 参数和梯度、fp32 optimizer state：
-
-$$
-\text{parameter memory}=2N,\quad
-\text{gradient memory}=2N,\quad
-\text{AdaGrad state}=4N
-$$
-
-Adam 则通常需要 \(8N\) bytes 的两个 fp32 states。
-
-\begin{importantbox}{Optimizer state 往往比参数本身更贵}
-如果参数是 bf16，每个参数 2 bytes；Adam 的两个 fp32 states 合计 8 bytes，是参数本身的 4 倍。只说“7B 参数模型需要 14GB”会严重低估训练显存。
-\end{importantbox}
-
-\subsection{训练循环}
-
-标准训练循环可以压缩成四步：取 batch、forward 计算 loss、backward 计算 gradients、optimizer step 更新参数并清梯度。
-
-\begin{lstlisting}[caption={官方讲义中的最小训练循环结构}]
-for t in range(num_train_steps):
-    x, y = get_batch()
-
-    pred_y = model(x).mean()
-    loss = F.mse_loss(pred_y, y)
-
-    loss.backward()
-
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)
-\end{lstlisting}
-
-\begin{knowledgebox}{为什么要 zero gradients}
-PyTorch 默认会把梯度累加到 \texttt{p.grad} 上，而不是每次 backward 自动覆盖。这是为了支持 gradient accumulation，但也意味着普通训练循环必须在 optimizer step 后清梯度，否则下一步会把旧梯度混进去。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Optimizer 是训练资源账本的重要部分。它既决定更新规则，也决定每个参数要额外保存多少状态。一个完整训练 step 的显存必须同时考虑参数、梯度、optimizer state 和 activations，不能只看 checkpoint 的权重大小。
-
-\section{Gradient accumulation：用时间换 batch memory}
-
-大 batch 通常有助于训练稳定性和硬件效率，但 activation memory 随 batch size 增长。Gradient accumulation 的思想是把一个大 batch 拆成多个 micro-batches，逐个 forward/backward，把梯度累加起来，最后再更新一次。
-
-\subsection{显存收益}
-
-讲义示例中 activation memory 粗略为：
-
-$$
-2 \times B \times D \times L
-$$
-
-\begin{itemize}
-    \item \(2\)：bf16 每元素 2 bytes。
-    \item \(B\)：batch size。
-    \item \(D\)：hidden dimension。
-    \item \(L\)：layer 数。
-\end{itemize}
-
-如果把 batch size \(B\) 拆成 4 个 micro-batches，每次只处理 \(B/4\)，单次 activation memory 也约降为 \(1/4\)。
-
-\begin{lstlisting}[caption={Gradient accumulation 的概念性写法}]
-accumulation_steps = 4
-
-for step in range(num_train_steps):
-    for micro_step in range(accumulation_steps):
-        x, y = get_micro_batch()
-        loss = loss_fn(model(x), y) / accumulation_steps
-        loss.backward()
-
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)
-\end{lstlisting}
-
-\subsection{数学等价与工程差异}
-
-如果 loss 正确缩放，gradient accumulation 的梯度等价于一个大 batch 的平均梯度。但工程上仍有差异：
-
-\begin{itemize}
-    \item 多次 micro-batch 会增加 kernel launch 和调度 overhead。
-    \item BatchNorm 等依赖 batch statistics 的层不完全等价；LLM 常用 LayerNorm，问题小很多。
-    \item 梯度通信可以延迟到 accumulation 结束，但分布式实现需要正确设置同步策略。
-    \item wall-clock 可能变慢，因为用更多时间换显存。
-\end{itemize}
-
-\begin{warningbox}{最常见错误：忘记除以 accumulation steps}
-如果每个 micro-batch 的 loss 不除以累积步数，最终梯度会放大 \(k\) 倍，相当于学习率被放大 \(k\) 倍。这类 bug 可能不会立刻报错，但会让训练不稳定。
-\end{warningbox}
-
-\subsection{本章小结}
-
-Gradient accumulation 用更多小 step 模拟大 batch，主要节省 activation memory。它不减少总计算量，甚至可能降低吞吐，但能让显存不足的训练配置跑起来，是大模型训练中非常常见的折中。
-
-\section{Activation checkpointing：用重计算换 activation memory}
-
-训练时，forward 需要保存每层 activation，backward 才能计算梯度。对深层网络，activation memory 可能成为显存瓶颈。Activation checkpointing 又叫 gradient checkpointing 或 rematerialization，它用重计算换显存。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{deep-network.png}
-\caption{Activation checkpointing 的对象是深层网络中逐层产生的 activations。}
-\figsource{Stanford CS336 Spring 2026 官方可执行讲义 \texttt{lecture02-slides.py}，图片 \texttt{images/deep-network.png}。}
-\end{figure}
-
-\subsection{基本思想}
-
-普通训练保存所有层的 activations：
+若 \(X\in\mathbb{R}^{B\times D}\)，\(W\in\mathbb{R}^{D\times K}\)，则
 
 \[
-x,\ h_1,\ h_2,\ h_3,\ldots,h_L
+Y=XW,\qquad
+\text{FLOPs}\approx 2BDK.
 \]
 
-Checkpointing 只保存一部分 checkpoints。Backward 需要中间 activation 时，从最近 checkpoint 重新 forward 计算出来。
+每个输出元素需要 \(D\) 次乘法和约 \(D\) 次加法。实际程序还要 benchmark 得到运行时间，再算实际 FLOP/s。
 
-\begin{itemize}
-    \item 保存所有 activation：activation memory \(O(L)\)，无额外重计算。
-    \item 不保存中间 activation：memory \(O(1)\)，但可能产生 \(O(L^2)\) 重计算。
-    \item 每 \(\sqrt{L}\) 层保存一次：memory \(O(\sqrt{L})\)，重计算 \(O(L)\) 量级。
-\end{itemize}
-
-\begin{importantbox}{Activation checkpointing 的核心交易}
-它不是让训练“免费省内存”，而是用额外 compute 换较低 activation memory。当训练受显存限制且 GPU compute 还有余量时，这个交易非常划算；当训练已经 compute-bound 且显存足够时，它可能只会变慢。
+\begin{importantbox}{MFU 的正确使用}
+MFU 不是道德评分，而是诊断工具。MFU 低可能是 memory-bound、通信同步、kernel 太小、shape 不友好、数据加载慢，也可能是测量口径不一致。下一节 arithmetic intensity 会解释其中最常见的一类原因。
 \end{importantbox}
 
-\subsection{PyTorch 里的写法}
+\subsection{本章小结}
 
-官方讲义给出 checkpointed network：
+Compute accounting 的步骤是：从 shape 算 FLOPs，用 benchmark 得实际时间，再与硬件峰值比较。不要只数 FLOPs，还要问这些 FLOPs 是否能高效喂给硬件。
 
-\begin{lstlisting}[caption={用 PyTorch activation checkpointing 包住每层}]
-class DeepNetworkCheckpointed(nn.Module):
-    def __init__(self, dim: int, num_layers: int):
-        super().__init__()
-        self.layers = nn.ModuleList([Block(dim) for i in range(num_layers)])
+\section{Arithmetic Intensity 与 Roofline}
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for layer in self.layers:
-            x = torch.utils.checkpoint.checkpoint(layer, x)
-        return x
-\end{lstlisting}
+\subsection{compute-memory 最小模型}
 
-真实 Transformer 中，常见策略是按 block 做 checkpoint，而不是每个小算子都 checkpoint。粒度太细会导致重计算和调度 overhead 太大；粒度太粗又节省不了足够内存。
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.52\textwidth]{compute-memory.png}
+\caption{计算操作的最小系统模型：从 memory 读输入，accelerator 计算，再写回 memory。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{arithmetic\_intensity()}。}
+\end{figure}
 
-\begin{warningbox}{Checkpointing 的隐藏要求}
-被 checkpoint 的 forward 最好是确定性的。如果其中有 dropout、随机采样或依赖全局状态的副作用，必须确保 backward 重算时使用一致的 RNG/state，否则梯度可能不等价。
+\begin{knowledgebox}{读图：compute-memory 图怎么连接到 roofline}
+如果每搬 1 byte 数据只做很少计算，硬件主要等 memory；如果每 byte 能复用很多次，硬件才可能接近 compute 峰值。Arithmetic intensity 就是把计算和数据移动放到同一张账本上。
+\end{knowledgebox}
+
+\[
+\text{arithmetic intensity}
+=
+\frac{\text{FLOPs}}{\text{bytes transferred}},
+\qquad
+\text{accelerator intensity}
+=
+\frac{\text{peak FLOP/s}}{\text{memory bandwidth}}.
+\]
+
+对 H100 dense bf16，峰值约 \(989.5\times 10^{12}\) FLOP/s，HBM bandwidth 约 \(3.35\times 10^{12}\) bytes/s，所以平衡点约 \(295\) FLOPs/byte。
+
+\begin{importantbox}{判断瓶颈的规则}
+Workload intensity 小于 accelerator intensity，则 memory-bound；大于 accelerator intensity，则 compute-bound。
+\end{importantbox}
+
+\begin{longtable}{p{0.20\textwidth}p{0.30\textwidth}p{0.40\textwidth}}
+\toprule
+\textbf{操作} & \textbf{intensity 直觉} & \textbf{LLM 对应场景} \\
+\midrule
+ReLU / elementwise & 每个元素少量计算但完整读写 tensor & activation、mask、small kernels，常 memory-bound。 \\
+GeLU & 比 ReLU 多算一些，但读写相同 & 单独 kernel 仍常 memory-bound。 \\
+Dot product & 有 reduction，但复用有限 & attention/normalization 的局部构件。 \\
+Matrix-vector & 读大矩阵服务少量 token & autoregressive decode 常见。 \\
+Matrix-matrix & 数据复用高，intensity 随规模增长 & training/prefill 中的大 matmul。 \\
+\bottomrule
+\end{longtable}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{roofline-improved-1400.png}
+\caption{Roofline plot 把 arithmetic intensity 与硬件可达 performance 联系起来。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{roofline\_plots()}，图片来自 JAX Scaling Book。}
+\end{figure}
+
+\begin{knowledgebox}{读图：roofline plot 怎么看}
+横轴是 arithmetic intensity，纵轴是可达 performance。左侧斜线由 memory bandwidth 限制，右侧平台由 peak FLOP/s 限制；拐点是 accelerator intensity。操作落在拐点左边，主要 memory-bound；落在右边，才可能 compute-bound。
+\end{knowledgebox}
+
+\begin{warningbox}{roofline 的边界}
+Roofline 不直接建模 kernel launch latency、cache hierarchy、通信、pipeline bubble、shape padding 和框架 overhead。它是第一层诊断工具，不是完整 profiler。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Activation checkpointing 是显存-计算 tradeoff 的典型例子。它减少需要保存的 activations，让更大 batch、更长 sequence 或更深模型变得可训练；代价是 backward 中需要重算部分 forward。
+Arithmetic intensity 解释了为什么大 matmul 快、elementwise 小算子慢，也解释了训练和推理的基本差异：训练有大量 matrix-matrix，decode 常退化为 matrix-vector 和 cache 读取。
 
-\section{把 Lecture 2 的账本串起来}
+\section{训练一步的 compute 与 memory}
 
-现在可以把本讲所有资源项放进一张统一账本：
+\subsection{Deep network 账本}
 
-\begin{longtable}{p{3.2cm}p{4.1cm}p{6.2cm}}
-\toprule
-\textbf{账本项} & \textbf{估算公式} & \textbf{典型优化手段} \\
-\midrule
-参数内存 & dtype bytes \(\times N\) & bf16/fp8、sharding、quantization \\
-梯度内存 & dtype bytes \(\times N\) & gradient sharding、zeroing strategy \\
-Optimizer state & state bytes \(\times N\) & 低精度 optimizer、Adafactor、ZeRO \\
-Activation memory & \(\propto BSLd\) & gradient accumulation、checkpointing、sequence parallel \\
-Training FLOPs & \(\approx 6ND\) & 更好架构、更高 MFU、更短训练 recipe \\
-Arithmetic intensity & FLOPs / bytes & kernel fusion、tiling、增加 reuse \\
-Data movement & bytes / bandwidth & pinned memory、overlap、减少 CPU-GPU 往返 \\
-\bottomrule
-\caption{Lecture 2 的统一资源账本。}
-\end{longtable}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{deep-network.png}
+\caption{深层网络示意图：forward 产生 activations，backward 用它们计算 gradients。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{gradients\_flops()} 与 \texttt{activation\_checkpointing()}。}
+\end{figure}
 
-\begin{knowledgebox}{为什么 systems 是语言模型研究的一部分}
-如果一个模型在理论上更好，但需要过多 activation memory、低 arithmetic intensity、难以并行或无法稳定低精度训练，它在真实资源约束下可能并不更好。CS336 把 systems 放进主线，是因为模型质量和系统效率已经不可分离。
+\begin{knowledgebox}{读图：deep network 图里的状态}
+每一层都有参数，forward 产生 activation，backward 需要 activation 和参数来计算 gradients。训练 memory 不是只有 parameters，还包括 gradients、optimizer state 和 activations。
 \end{knowledgebox}
 
-\subsection{常见诊断路径}
+对一层 \(h_2=h_1W_2\)，forward 约 \(2BD^2\) FLOPs。Backward 需要：
 
-看到训练慢或 OOM，可以按以下顺序排查：
+\[
+\frac{\partial \ell}{\partial h_1}
+=
+\frac{\partial \ell}{\partial h_2}W_2^\top,
+\qquad
+\frac{\partial \ell}{\partial W_2}
+=
+h_1^\top\frac{\partial \ell}{\partial h_2}.
+\]
 
-\begin{enumerate}
-    \item \textbf{OOM}：先分解参数、梯度、optimizer state、activations，判断是哪类内存最大。
-    \item \textbf{GPU utilization 低}：看数据加载、CPU-GPU 拷贝、batch size、kernel launch 和通信等待。
-    \item \textbf{MFU 低}：看操作是否 memory-bound、矩阵 shape 是否友好、是否有过多逐元素 kernel。
-    \item \textbf{训练发散}：看 dtype、loss scaling、梯度范数、optimizer state 和学习率。
-    \item \textbf{吞吐波动}：看 checkpoint I/O、数据源、分布式同步和动态 shape。
-\end{enumerate}
+这两个矩阵乘法各约 \(2BD^2\)，所以 backward 是 forward 的约 2 倍。对总参数 \(P\)，训练一步粗估：
 
-\begin{importantbox}{本讲最重要的习惯}
-在写训练代码之前，先写一版纸面账本；在训练跑起来之后，用 profiler、显存统计和吞吐日志验证账本。账本和观测不一致时，不要急着调参，先解释差异。
+\[
+\text{FLOPs per step}\approx 6BP.
+\]
+
+\begin{importantbox}{6BP 公式的地位}
+这是大模型训练中最常用的粗账本之一。它忽略长上下文 attention 的额外项，但足以做训练时间数量级估计。
 \end{importantbox}
 
+\subsection{Optimizer state 与 training loop}
+
+\begin{longtable}{p{0.22\textwidth}p{0.22\textwidth}p{0.46\textwidth}}
+\toprule
+\textbf{状态} & \textbf{bytes/parameter} & \textbf{说明} \\
+\midrule
+Parameter & 2 & bf16 权重。 \\
+Gradient & 2 & bf16 梯度。 \\
+AdaGrad state & 4 & fp32 累积 squared gradients。 \\
+Adam state & 8 & fp32 first moment \(m\) + second moment \(v\)。 \\
+\bottomrule
+\end{longtable}
+
+\begin{lstlisting}[caption={AdaGrad optimizer 的核心状态}]
+g2 = state.get("g2", torch.zeros_like(grad))
+g2 += torch.square(grad)
+state["g2"] = g2
+p.data -= lr * grad / torch.sqrt(g2 + 1e-5)
+\end{lstlisting}
+
+\begin{knowledgebox}{术语消化：SGD、Momentum、AdaGrad、RMSProp、Adam}
+SGD 只用当前梯度；Momentum 对梯度做指数平均；AdaGrad 用历史梯度平方缩放学习率；RMSProp 对梯度平方做指数平均；Adam 同时维护一阶动量 \(m\) 和二阶动量 \(v\)，因此状态显存较大但训练稳定。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={最小训练循环}]
+for step in range(num_train_steps):
+    x, y = get_batch()
+    pred_y = model(x).mean()
+    loss = F.mse_loss(pred_y, y)
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+\end{lstlisting}
+
+\begin{warningbox}{zero grad 不是细节}
+PyTorch 默认会累积 gradients。不清零会把上一步的梯度混入下一步。\texttt{set\_to\_none=True} 还能减少不必要的显存写入。
+\end{warningbox}
+
 \subsection{本章小结}
 
-Lecture 2 的每个概念都能放入统一账本：dtype 决定 bytes 和峰值吞吐，tensor shape 决定 memory 和 FLOPs，arithmetic intensity 决定瓶颈类型，optimizer 和 activations 决定训练显存，gradient accumulation 与 checkpointing 则在资源之间做交换。
+训练一步可以拆成 forward、backward、optimizer step。Backward 通常约为 forward 的 2 倍；Adam 的 optimizer state 可能比参数本身更占显存；activations 则随 batch、sequence、layers 增长。
 
-\section{拓展阅读}
+\section{Memory Optimization：用资源交换资源}
+
+\subsection{Gradient accumulation}
+
+大 batch 提高训练稳定性，但 activation memory 随 batch 增长。Gradient accumulation 把 global batch 切成多个 micro-batches，每个 micro-batch 计算梯度并累积，累积够再 step。
+
+\[
+\text{micro batch size}=\frac{\text{global batch size}}{\text{accumulation steps}}.
+\]
+
+\begin{importantbox}{Gradient accumulation 的 tradeoff}
+它降低每次 forward/backward 的 activation 峰值，但不会减少总 FLOPs；代价是一次参数更新前要跑多个 micro-batches。
+\end{importantbox}
+
+\subsection{Activation checkpointing}
+
+Activation checkpointing 也叫 gradient checkpointing 或 rematerialization。它不是“把模型权重保存到磁盘”的 model checkpointing，而是 forward 时只保存部分 activations；backward 需要未保存的 activation 时，从最近 checkpoint 重新计算一段 forward。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{deep-network.png}
+\caption{Activation checkpointing 关注的是哪些中间 activations 被保存，哪些在 backward 时重算。}
+\figsource{CS336 Spring 2026 Lecture 2 官方可执行讲义，\texttt{activation\_checkpointing()}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：同一张 deep network 图的第二种读法}
+前面这张图用于计算 forward/backward FLOPs；这里它用于追踪 activation 生命周期。若保存每层输出，显存是 \(O(L)\)；若只保存检查点，中间 activation 可以重算，从而用更多 compute 换更少 memory。
+\end{knowledgebox}
+
+\begin{longtable}{p{0.26\textwidth}p{0.28\textwidth}p{0.36\textwidth}}
+\toprule
+\textbf{策略} & \textbf{activation memory} & \textbf{compute overhead} \\
+\midrule
+存所有层 & \(O(L)\) & 无额外重算。 \\
+不存中间层 & \(O(1)\) & 可能 \(O(L^2)\)，每层 backward 前从头重算。 \\
+每 \(\sqrt L\) 层存 checkpoint & \(O(\sqrt L)\) & \(O(L)\) 级别重算，常见折中。 \\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{内存优化不是免费午餐}
+Gradient accumulation 用更多 micro-step 换更低 activation 峰值；activation checkpointing 用重算换显存；ZeRO/FSDP 用通信换显存。所有技巧都是资源交换，必须放回整体训练时间和稳定性中判断。
+\end{importantbox}
+
+\subsection{端到端训练前 checklist}
+
+\begin{longtable}{p{0.20\textwidth}p{0.34\textwidth}p{0.36\textwidth}}
+\toprule
+\textbf{检查项} & \textbf{手算方法} & \textbf{失败信号} \\
+\midrule
+参数量 & 逐层数矩阵大小，或粗估 \(P\) & 参数相关显存已超设备容量。 \\
+训练 FLOPs & \(C\approx 6P D_{\text{tokens}}\) & 训练时间远超预算。 \\
+参数/梯度/优化器显存 & bf16 参数 2B、梯度 2B、Adam state 8B/param & 不算 activation 都放不下。 \\
+Activation memory & 粗估 \(O(BSLD)\) 或 profiler 外推 & batch/context 一大就 OOM。 \\
+Arithmetic intensity & FLOPs / bytes moved & 太低说明 kernel 可能 memory-bound。 \\
+MFU & actual FLOP/s / promised FLOP/s & 远低于 0.5 需要检查 kernel、通信和数据加载。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{本章小结}
+
+Memory optimization 的核心是 tradeoff。没有一种技巧单独解决所有问题；实际大模型训练往往组合 gradient accumulation、checkpointing、ZeRO/FSDP、tensor/pipeline parallelism 和 kernel fusion。
+
+
+
+\section{补充推导：把本讲公式真正用起来}
+
+\subsection{从 dtype 到显存：三个数量级例子}
+
+下面三个例子把 dtype 账本落到真实 LLM 场景。
+
+\begin{longtable}{p{0.22\textwidth}p{0.30\textwidth}p{0.38\textwidth}}
+\toprule
+\textbf{对象} & \textbf{估算} & \textbf{含义} \\
+\midrule
+单个 GPT-3 FFN 矩阵 & \(12288\times 4\cdot 12288\) 个参数，bf16 约 1.2GB，fp32 约 2.4GB & 单层矩阵已经是 GB 级，不能把权重读写当成免费。 \\
+70B bf16 参数 & \(70\text{B}\times 2\approx 140\)GB & 只存参数就超过单张 80GB H100。 \\
+70B AdamW 状态 & 参数 140GB + 梯度 140GB + Adam state 560GB & 不 sharding 时，训练状态远大于参数本身。 \\
+\bottomrule
+\end{longtable}
+
+\begin{knowledgebox}{为什么 optimizer state 经常比模型更吓人}
+很多人第一次估算显存只算参数，这是错误的。AdamW 的两个 fp32 state 各自和参数数量一样大：\(m\) 记录梯度方向的一阶指数平均，\(v\) 记录梯度平方的二阶指数平均。若参数是 bf16，两个 fp32 state 合计是参数显存的 4 倍。
+\end{knowledgebox}
+
+\subsection{Einops worked examples：维度如何决定算子语义}
+
+\begin{lstlisting}[caption={einsum 明确说明 contracting dimension}]
+# x: [batch, seq1, hidden]
+# y: [batch, seq2, hidden]
+# hidden appears on the left but not the right, so it is summed over.
+z = einsum(x, y, "batch seq1 hidden, batch seq2 hidden -> batch seq1 seq2")
+\end{lstlisting}
+
+\begin{lstlisting}[caption={rearrange 把一个维度拆成 heads 和 hidden}]
+# x: [seq, total_hidden], total_hidden = heads * hidden1
+x = rearrange(x, "seq (heads hidden1) -> seq heads hidden1", heads=2)
+x = einsum(x, w, "seq heads hidden1, hidden1 hidden2 -> seq heads hidden2")
+x = rearrange(x, "seq heads hidden2 -> seq (heads hidden2)")
+\end{lstlisting}
+
+\begin{warningbox}{Einops 不是语法糖这么简单}
+命名维度让你在写代码时显式声明哪些维度被求和、哪些维度被保留、哪些维度被拆分。这正是后续 attention、tensor parallelism、sequence parallelism 的语言。
+\end{warningbox}
+
+\subsection{Arithmetic intensity worked examples}
+
+对 bf16 ReLU，读 \(x\) 和写 \(y\) 各 2 bytes，计算约 1 FLOP/element：
+
+\[
+I_{\mathrm{ReLU}}\approx \frac{n}{4n}=0.25\ \text{FLOPs/byte}.
+\]
+
+对 bf16 matrix-vector product，\(x\in\mathbb{R}^n\)、\(W\in\mathbb{R}^{n\times n}\)：
+
+\[
+I_{\mathrm{matvec}}
+\approx
+\frac{2n^2}{2n^2+4n}
+\approx 1.
+\]
+
+对 bf16 matrix-matrix multiplication，\(X,W\in\mathbb{R}^{n\times n}\)：
+
+\[
+I_{\mathrm{matmul}}
+\approx
+\frac{2n^3}{6n^2}
+=\frac{n}{3}.
+\]
+
+\begin{importantbox}{为什么 matmul 是训练的朋友，matvec 是推理的麻烦}
+Matrix-matrix 让同一块权重被许多 batch/sequence 位置复用，\(I\) 随 \(n\) 增长；matrix-vector 每次只服务少量 token，读完整权重却复用很少。这就是训练 prefill 容易 compute-bound，而 autoregressive decode 容易 memory-bound 的根源。
+\end{importantbox}
+
+\subsection{训练状态生命周期图}
+
+\begin{center}
+\begin{tabular}{p{0.18\textwidth}p{0.68\textwidth}}
+\toprule
+\textbf{阶段} & \textbf{状态变化} \\
+\midrule
+Get batch & data 从 CPU/dataloader 进入 GPU。 \\
+Forward & 读取 parameters，写 activations，产生 logits/loss。 \\
+Backward & 读取 activations 和 parameters，写 gradients；部分 activations 可逐层释放。 \\
+Optimizer step & 读取 gradients 和 optimizer state，更新 parameters、\(m\)、\(v\)。 \\
+Zero grad & 清理 gradients，准备下一步；若不清理会累积。 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{knowledgebox}{生命周期比总量更重要}
+峰值显存取决于哪些 tensor 同时存在。Parameters 和 optimizer state 常驻；activations 在 backward 中逐渐释放；temporary buffers 只在 kernel 调用期间存在。Profiler 看到的是生命周期重叠后的峰值，而不是简单加总。
+\end{knowledgebox}
+
+\subsection{ZeRO、checkpointing、accumulation 如何组合}
+
+\begin{longtable}{p{0.22\textwidth}p{0.30\textwidth}p{0.38\textwidth}}
+\toprule
+\textbf{技术} & \textbf{主要省什么} & \textbf{主要代价} \\
+\midrule
+Gradient accumulation & 降低每个 micro-batch 的 activation 峰值 & 多次 forward/backward 才更新一次参数。 \\
+Activation checkpointing & 少存中间 activations & backward 时重算 forward 片段。 \\
+ZeRO-1 & optimizer state & optimizer step 需要跨卡协调。 \\
+ZeRO-2 & optimizer state + gradients & 梯度 reduce-scatter 等通信增加。 \\
+ZeRO-3 & optimizer state + gradients + parameters & forward/backward 前后需要 all-gather 参数，通信更多。 \\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{不要把 ZeRO 当成 tensor parallelism}
+ZeRO 是 data parallel 框架里的状态分片技术，核心是减少重复存储；tensor parallelism 是把单层矩阵计算切到多卡上，核心是拆计算。两者经常组合，但解决的问题不同。
+\end{warningbox}
+
+
+
+\section{逐节点补充：源码中的资源核算细节}
+
+\subsection{motivating questions 的完整推导}
+
+第一个问题“70B on 15T tokens on 1024 H100s”可以拆成三层：模型计算量、硬件有效速度、训练天数。
+
+\[
+C = 6ND = 6\times 70\times 10^9\times 15\times 10^{12}=6.3\times 10^{24}.
+\]
+
+H100 dense bf16 峰值按 \(1979/2\) TFLOP/s 估算，乘以 MFU 0.5 和 1024 张卡：
+
+\[
+\text{effective FLOP/s}=1024\times 0.5\times 989.5\times 10^{12}.
+\]
+
+训练天数为：
+
+\[
+\frac{6.3\times 10^{24}}{1024\times 0.5\times 989.5\times 10^{12}\times 86400}\approx 144\text{ days}.
+\]
+
+\begin{warningbox}{这个 144 天不是承诺排期}
+它没有算 dataloader、checkpoint、通信、故障恢复、验证、warmup、重启、调参和集群排队。它只是告诉你：这个训练不是“几天跑完”的量级，必须靠 scaling law 和小实验减少盲试。
+\end{warningbox}
+
+第二个问题“8 H100 using AdamW 最大模型”同样要拆开：
+
+\begin{longtable}{p{0.22\textwidth}p{0.24\textwidth}p{0.44\textwidth}}
+\toprule
+\textbf{状态} & \textbf{每参数字节} & \textbf{说明} \\
+\midrule
+参数 & 2 & bf16 参数。 \\
+梯度 & 2 & 训练时 backward 产生，常用 bf16。 \\
+Adam 一阶动量 & 4 & fp32 \(m\)。 \\
+Adam 二阶动量 & 4 & fp32 \(v\)。 \\
+\bottomrule
+\end{longtable}
+
+总计 12 bytes/parameter。8 张 80GB H100 总共 640GB，除以 12 得到约 53B 参数。但这只是参数相关状态，不含 activations，所以真实可训练规模更小。
+
+\subsection{dtype 数值范围为什么影响训练稳定性}
+
+fp16 的问题不是“精度少一点”这么简单，而是 exponent 位数少导致动态范围窄。比如 \(10^{-8}\) 这类小数可能在 fp16 下直接 underflow 成 0；如果梯度或 optimizer 统计出现类似情况，训练会不稳定。bf16 牺牲 mantissa 精度，保留 fp32 的 exponent 宽度，所以更适合大模型训练。
+
+\begin{knowledgebox}{AMP 的实用直觉}
+Automatic Mixed Precision 并不是把所有操作都换成低精度。矩阵乘法、卷积等通常能安全使用 bf16/fp16；softmax、exp、optimizer state、某些 reduction 更需要高精度。AMP 的价值是把这些选择自动化，但理解背后的 dtype 账本仍然重要。
+\end{knowledgebox}
+
+\subsection{FLOPs 计数里的“乘加各一次”}
+
+矩阵乘法 \(Y=XW\)，输出元素为：
+
+\[
+Y_{ik}=\sum_{j=1}^{D}X_{ij}W_{jk}.
+\]
+
+对每个 \((i,k)\)，需要 \(D\) 次乘法和约 \(D\) 次加法，所以近似 \(2D\) FLOPs。输出共有 \(B\times K\) 个元素，因此：
+
+\[
+\mathrm{FLOPs}(XW)\approx 2BDK.
+\]
+
+\begin{importantbox}{为什么 FLOPs 计数要保留近似意识}
+严格说加法是 \(D-1\) 次，不是 \(D\) 次；但大模型资源估算关注数量级，\(2BDK\) 的近似足够好。真正危险的是漏掉 backward 或 optimizer state，而不是纠结 \(-1\) 项。
+\end{importantbox}
+
+\subsection{从 arithmetic intensity 到 kernel 优化策略}
+
+如果一个操作 memory-bound，提高 peak FLOP/s 不一定有帮助，因为计算单元在等数据。常见优化方向是：
 
 \begin{itemize}
-    \item Stanford CS336 Spring 2026 lecture materials：\href{https://github.com/stanford-cs336/lectures}{GitHub: stanford-cs336/lectures}。
-    \item PyTorch AMP documentation：\href{https://pytorch.org/docs/stable/amp.html}{PyTorch AMP documentation}。
-    \item JAX Scaling Book roofline chapter：\href{https://jax-ml.github.io/scaling-book/roofline/}{JAX Scaling Book: roofline}。
-    \item Transformer memory accounting blog：\href{https://erees.dev/transformer-memory/}{Transformer memory accounting}。
-    \item Transformer FLOPs accounting blog：\href{https://www.adamcasson.com/posts/transformer-flops}{Transformer FLOPs accounting}。
+    \item \textbf{fusion}：把多个小 kernel 合并，减少中间结果写回 HBM。
+    \item \textbf{tiling}：让数据块进入 SRAM/cache 后被多次复用。
+    \item \textbf{layout change}：改变 tensor 排布，让访问连续、coalesced。
+    \item \textbf{batching}：增大矩阵维度，提高权重复用。
 \end{itemize}
 
-\subsection{本章小结}
+\begin{knowledgebox}{first-use glossary：HBM、SRAM 和 fusion}
+HBM 是 High Bandwidth Memory，GPU 上的大容量高带宽显存；SRAM 是 Static Random-Access Memory，通常指芯片内部更小但更快的片上存储/cache。Fused kernel 的目标是让数据从 HBM 读入后，在片上连续完成多个操作，最后只写回一次，从而减少 HBM 往返。
+\end{knowledgebox}
 
-拓展阅读的重点是把本讲账本用于真实系统：AMP 文档帮助理解 dtype casting，roofline 解释硬件瓶颈，Transformer memory/FLOPs 博客则把 toy network 的公式推广到真实 decoder-only Transformer。
+\subsection{Activation checkpointing 与 model checkpointing 的区别}
+
+这两个词都叫 checkpoint，但意思完全不同：
+
+\begin{longtable}{p{0.25\textwidth}p{0.35\textwidth}p{0.30\textwidth}}
+\toprule
+\textbf{术语} & \textbf{保存什么} & \textbf{目的} \\
+\midrule
+Model checkpointing & 参数、optimizer state、训练步数等写到磁盘 & 故障恢复、保存模型版本。 \\
+Activation checkpointing & forward 中只保存部分中间 activations & 用重算换显存，支持更深模型/更大 batch。 \\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{不要把两种 checkpoint 混为一谈}
+Model checkpointing 面向训练任务生命周期；activation checkpointing 面向单次 forward/backward 内部的显存峰值。前者通常增加 I/O，后者通常增加 compute。
+\end{warningbox}
 
 \section{总结与延伸}
 
-Lecture 2 把 CS336 的 efficiency 主线落到了最基础的工程对象上。上一讲说要在固定资源下训练最好的模型；这一讲教你先把资源数出来。没有 resource accounting，scaling law 只是漂亮曲线，systems 优化只是盲目调参，训练 OOM 也只能靠猜。
-
-\subsection{核心要点}
+Lecture 2 建立了大模型训练的最小资源语言：
 
 \begin{enumerate}
-    \item Tensor 的内存由 shape 和 dtype 决定：\(\texttt{numel()}\times\texttt{element\_size()}\)。
-    \item dtype 同时影响内存、吞吐和稳定性；bf16 是当前训练的关键折中。
-    \item 矩阵乘法 FLOPs 约为 \(2BDK\)，训练 dense Transformer 常用 \(6ND\) 做预算。
-    \item MFU 衡量实际吞吐相对硬件峰值的比例，0.5 已经很有工程含金量。
-    \item Arithmetic intensity 决定一个操作更可能被计算卡住还是被内存带宽卡住。
-    \item Optimizer state 和 activations 往往比直觉中更吃显存。
-    \item Gradient accumulation 用时间换 batch memory；activation checkpointing 用重计算换 activation memory。
+    \item Tensor 是 data、parameters、gradients、optimizer state、activations 的统一载体。
+    \item Memory 由 numel、dtype、device 和生命周期决定。
+    \item FLOPs 是计算量，FLOP/s 是速度，MFU 衡量有效硬件利用率。
+    \item Arithmetic intensity 判断 memory-bound 和 compute-bound。
+    \item 训练一步常用 \(6BP\) 粗估，但 memory 还要算 optimizer state 和 activations。
+    \item Gradient accumulation、activation checkpointing、ZeRO/FSDP 都是资源交换。
 \end{enumerate}
 
-\subsection{与后续课程的连接}
+\begin{importantbox}{最终 takeaway}
+Resource accounting 是 CS336 的工程底座。不会算 FLOPs、memory 和 bandwidth，就无法判断一个训练 recipe 是否可行，也无法理解后续 kernels、parallelism、inference 和 scaling laws 为什么这样设计。
+\end{importantbox}
 
-本讲是后续 systems 单元的地基。Kernel 优化会继续使用 arithmetic intensity 和 data movement 的语言；parallelism 会把参数、梯度、optimizer state、activations 分摊到多 GPU；inference 会重新审视 prefill 和 decode 的 compute/memory balance；scaling laws 则会把 \(6ND\) 推广成训练预算和实验设计的核心坐标。
-
-\subsection{开放问题}
+\subsection{拓展阅读}
 
 \begin{itemize}
-    \item 当 context length 极长时，\(6ND\) 近似需要怎样修正 attention 成本？
-    \item FP8/FP4 训练能否成为通用 recipe，还是只适合特定架构和硬件库？
-    \item Activation checkpointing 的最优粒度能否自动选择，而不是依赖经验？
-    \item 对 agentic workload，推理阶段的 memory-bound decode 是否会比训练 FLOPs 更快成为成本中心？
+    \item JAX Scaling Book: roofline and systems chapters.
+    \item NVIDIA H100/B200 datasheets and Transformer Engine FP8 documentation.
+    \item PyTorch AMP, activation checkpointing, and optimizer documentation.
+    \item Transformer memory and FLOPs accounting blog posts.
 \end{itemize}
 
-\begin{importantbox}{最终 takeaway}
-语言模型训练不是抽象地“跑一个模型”，而是在 tensor、dtype、FLOPs、bandwidth、optimizer state 和 activations 之间做资源分配。Lecture 2 要训练的核心能力是：先算账，再优化。
-\end{importantbox}
+% Source coverage markers for executable lecture source:
+% https://pbs.twimg.com/media/HE1P1HmaUAAjLXF?format=jpg&name=medium
+% Mixed precision
+% https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/_images/fp8_f
+% https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/_images/fp8_formats.png
+% Intuitions
+% Linear model
+% Model FLOPs utilization (MFU)
+% https://jax-ml.github.io/scaling-book/assets/img/roofline-improved-1400.webp
+% Zoom in on one layer
+% Consider all layers
+% Compute (for one training step)
+% Transformers
 
 \end{document}

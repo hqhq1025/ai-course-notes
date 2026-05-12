@@ -4,7 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
 \usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
+\usepackage[margin=2.35cm]{geometry}
 \usepackage[most]{tcolorbox}
 \usepackage{etoolbox}
 \usepackage{listings}
@@ -23,19 +23,26 @@
     citecolor=blue!55!black
 }
 
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
+\newcommand{\code}[1]{\texttt{#1}}
+
 \newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+    enhanced, breakable, colback=blue!5!white, colframe=blue!75!black,
+    colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, boxrule=1pt, sharp corners
 }
 
 \newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=yellow!10!white, colframe=yellow!80!black,
+    colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+    enhanced, breakable, colback=red!5!white, colframe=red!75!black,
+    colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries,
+    title=#1, sharp corners
 }
 
 \lstset{
@@ -58,7 +65,7 @@
 \BeforeBeginEnvironment{lstlisting}{\Needspace{12\baselineskip}}
 
 \newcommand{\notetitle}{CS336 2026 Lecture 9：Scaling Laws Basics}
-\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方讲义整理}
+\newcommand{\noteauthors}{基于 Stanford CS336 Spring 2026 官方幻灯片重新整理}
 \newcommand{\notedate}{2026 年春季}
 \newcommand{\videochannel}{Stanford CS336}
 \newcommand{\videopublishdate}{Spring 2026}
@@ -66,7 +73,6 @@
 \newcommand{\videourl}{https://cs336.stanford.edu/}
 \newcommand{\videocoverpath}{slides-images/slide-001.jpg}
 \newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-\newcommand{\figsource}[1]{\par{\footnotesize\emph{来源：#1}}\normalsize}
 
 \usepackage{fancyhdr}
 \pagestyle{fancy}
@@ -87,10 +93,8 @@
 {\large \noteauthors\par}
 \vspace{0.3cm}
 {\large \notedate\par}
-\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{
-\includegraphics[width=0.86\textwidth,height=0.44\textheight,keepaspectratio]{\videocoverpath}\par
-}
+\vspace{1.0cm}
+\includegraphics[width=0.88\textwidth,height=0.43\textheight,keepaspectratio]{\videocoverpath}\par
 \vfill
 \begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
 \textbf{课程/频道}：\videochannel\par
@@ -104,782 +108,741 @@
 \tableofcontents
 \newpage
 
-\section{本讲问题：把 Scaling 当成工程工具}
-
-Lecture 9 的开场设定很有冲击力：假设有人给你一万张 B200 GPU 用一个月，让你训练一个优秀的开源语言模型。前面的课程已经讲过分布式训练、数据集构建、GPU kernel 和并行策略，但当资源真正摆在面前，一个更尖锐的问题出现了：\textbf{到底该训练多大的模型、用多少数据、跑多久、选什么架构、什么 optimizer、什么 batch size 和 learning rate？}
+\section{本讲问题：把 scaling laws 当成工程预测工具}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-002.jpg}
-\caption{Scaling 的工程场景：有大规模算力后，真正的问题是如何不浪费它。}
+\includegraphics[width=0.86\textwidth]{slide-001.jpg}
+\caption{Slide 1：Lecture 9 标题页，主题是 Scaling Laws - Basics。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-最朴素的做法是 cargo cult：照抄 Llama、DeepSeek 或其他公开模型配置。但 frontier lab 真正需要的是一套能在训练前预测大模型行为的方法。Scaling laws 的价值就在这里：用较小规模的实验拟合规律，再外推到目标规模。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-004.jpg}
-\caption{本讲核心方法：用小模型调研，外推到大模型，而不是在大模型上反复试错。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{importantbox}{本讲的核心观点}
-Scaling laws 不是“模型越大越好”的口号，而是\textbf{用小规模实验预测大规模决策}的工程方法。它把昂贵的大模型训练问题，转化成一组更便宜的小模型拟合问题。
-\end{importantbox}
-
-\subsection{Scaling law 的基本形式}
-
-多数经验 scaling laws 可以写成幂律加不可约项：
-
-\[
-L(x) = L_\infty + A x^{-\alpha},
-\]
-
-其中 $x$ 可以是数据量、参数量、计算量或某种资源预算，$L_\infty$ 是不可约损失，$A$ 是常数，$\alpha$ 是 scaling exponent。在 log-log 坐标下，若 $L_\infty$ 可忽略或已校正，幂律表现为近似直线：
-
-\[
-\log(L-L_\infty) = \log A - \alpha \log x.
-\]
-
-\begin{knowledgebox}{为什么 log-log 线性重要}
-log-log 线性让外推成为可能。你不需要直接训练目标规模模型，只需要在小规模范围测出斜率和截距，然后预测更大资源下的损失。但这也要求小规模实验处在同一个 scaling regime 内。
+\begin{knowledgebox}{读图：Slide 1 标记课程转向}
+前面几讲已经讨论数据、GPU、kernel 和并行训练。Lecture 9 关注一个更上层的问题：当你真的有大规模算力时，如何决定模型大小、数据量、训练步数、架构、优化器和超参数。Scaling laws 的角色是把这些决定从经验崇拜变成可预测的工程决策。
 \end{knowledgebox}
 
-\subsection{本章小结}
-
-本讲把 scaling laws 当作大模型工程的预测仪表盘：它帮助回答“多大模型、多少数据、什么超参、是否换架构、是否继续收集数据、是否值得过训”。核心不是单个公式，而是一整套基于小实验的决策流程。
-
-\section{历史背景：从样本复杂度到经验幂律}
-
-\subsection{理论中的 scaling}
-
-学习理论很早就研究过误差如何随样本数缩放。例如有限假设类 $\mathcal{H}$ 中，泛化误差常见上界形如：
-
-\[
-\text{excess risk}
-\lesssim
-O\!\left(\sqrt{\frac{\log |\mathcal{H}|}{n}}\right).
-\]
-
-非参数估计中，若目标函数具有平滑性，误差率也常按样本数的幂律衰减。课程强调：这些是上界，不是实际神经网络训练曲线；但它们提供了一个先验，即误差随数据量以某种幂律改善并不奇怪。
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-006.jpg}
-\caption{理论学习中的 scaling：样本复杂度、VC-style bounds、非参数收敛率。}
+\includegraphics[width=0.86\textwidth]{slide-002.jpg}
+\caption{Slide 2：假设朋友给你一万张 B200 用一个月，问你如何训练一个好的开源 LM。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{warningbox}{理论上界和实际 loss 不是一回事}
-经典泛化界解释了为什么幂律可能出现，但通常太松，不能直接告诉我们 GPT-4 级别模型该用多少 tokens。现代 scaling laws 的突破在于经验拟合具体 loss 曲线。
+\begin{knowledgebox}{读图：Slide 2 的场景为什么尖锐}
+这页把 scaling laws 放到真实资源决策里。算力巨大时，随机试错非常昂贵；照抄已有模型配置也不可靠，因为硬件、数据、目标和预算不同。你需要先设计小规模实验，再预测大规模训练结果，最后决定把训练 compute 放在哪里。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-003.jpg}
+\caption{Slide 3：Scaling 并不容易，架构宽深、heads、nonlinearity 等选择不能只靠 cargo cult。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 3 反对的是盲目照抄}
+公开模型给了很多配置，但它们是特定资源、数据、训练目标和组织能力下的结果。Scaling law 实验要回答的是：哪些选择能在小规模上拟合出稳定趋势，并且外推到目标规模时仍可信。它不是魔法，也不是替代所有大规模验证。
 \end{warningbox}
 
-\subsection{早期经验 scaling}
-
-课程把最早的数据 scaling law 追溯到 1993 年 Bell Labs 的工作，此后 Banko and Brill 2001、Kolachina et al. 2012 等 NLP 研究继续观察到数据与性能之间的 log-linear 或 power-law 关系。
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-007.jpg}
-\caption{1993 年 Bell Labs 工作：早期数据 scaling law 的代表。}
+\includegraphics[width=0.86\textwidth]{slide-004.jpg}
+\caption{Slide 4：本讲目标是用简单、可预测的 laws 描述 LM 行为，从大模型调参转向小模型外推。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-008.jpg}
-\caption{Banko and Brill 2001：数据量增加带来可预测改善。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-009.jpg}
-\caption{Kolachina et al. 2012：数据量与下游性能之间的 power-law 关系。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\subsection{Hestness 2017：大规模神经 scaling 的前奏}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-010.jpg}
-\caption{Hestness et al. 2017：机器翻译、语言模型、语音等任务上的可预测 scaling。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-Hestness et al. 已经提出了三个关键思想：
-
-\begin{itemize}
-    \item 多任务上存在可预测 scaling 曲线；
-    \item 早期随机猜测区间会让预测困难，后来“emergence”讨论可部分从这里理解；
-    \item compute scaling、speed-accuracy tradeoff 和效率优化都可以由 scaling 视角统一。
-\end{itemize}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-011.jpg}
-\caption{Hestness 的前瞻性：emergence、compute scaling、speed equals accuracy。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{knowledgebox}{三阶段图景}
-经验曲线常有三段：随机猜测区、幂律缩放区、渐近饱和区。Scaling laws 最可靠的是中间幂律区；如果小模型还在随机猜测区，用它外推大模型会很危险。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Scaling laws 的历史线索是：理论告诉我们幂律衰减可能存在，早期 NLP/ML 实证发现数据与性能有规则关系，Hestness 等工作把神经网络多任务 scaling 系统化，Kaplan/Chinchilla 再把它推到 LLM 工程核心。
-
-\section{Data Scaling：数据量如何影响性能}
-
-\subsection{语言模型中的数据 scaling}
-
-数据 scaling law 试图回答：dataset size $n$ 如何映射到 test loss 或 error。Kaplan 等人在语言模型中观察到，loss 与 dataset size 在 log-log 图上近似线性。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-014.jpg}
-\caption{数据 scaling law 的目标：从 dataset size 预测 error/loss。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-015.jpg}
-\caption{语言模型数据 scaling：loss 与数据量在 log-log 坐标中近似线性。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Kaplan et al. 2020。}
-\end{figure}
-
-如果只考虑数据量，常见形式是：
-
+\begin{importantbox}{术语消化：什么是 scaling law}
+Scaling law 是把某个规模变量映射到 loss、error 或 performance 的经验公式。常见形式是 power law，例如
 \[
-L(D) = L_\infty + A_D D^{-\alpha_D}.
+L(x)=A x^{-\alpha}+C,
 \]
-
-$D$ 是 tokens 或 examples，$\alpha_D$ 描述数据增加的边际收益。$\alpha_D$ 越大，增加数据越有效。
-
-\begin{importantbox}{数据 scaling 的直接用途}
-它帮助估算：多收集一倍数据是否值得；数据质量变化是否改变曲线；重复数据会不会等价于新数据；有限数据池下应该怎样混合与采样。
+其中 \(x\) 可以是数据量、模型参数量或计算量，\(A\) 是尺度系数，\(\alpha\) 是 scaling exponent，\(C\) 是不可约误差或 offset。它的工程价值在于：用小规模点估计曲线，再预测大规模资源分配。
 \end{importantbox}
 
-\subsection{为什么是幂律：均值估计例子}
-
-课程用均值估计说明幂律并不神秘。若 $x_i\sim \mathcal{N}(\mu,\sigma^2)$，估计均值：
-
-\[
-\hat{\mu}=\frac{1}{n}\sum_{i=1}^{n}x_i,
-\qquad
-\mathbb{E}(\hat{\mu}-\mu)^2=\frac{\sigma^2}{n}.
-\]
-
-取 log 得：
-
-\[
-\log \text{error} = -\log n + 2\log \sigma.
-\]
-
-这就是斜率为 $-1$ 的 scaling law。
+\section{Part 1：Scaling laws 的历史和数据 scaling}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-017.jpg}
-\caption{均值估计 toy example：误差随 $1/n$ 衰减，是最简单的 scaling law。}
+\includegraphics[width=0.86\textwidth]{slide-005.jpg}
+\caption{Slide 5：Part 1 导航，数据 scaling 的经验 sample complexity，以及神经网络数据 scaling 的早期理解。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\subsection{Scaling exponent 的谜题}
-
-经典估计问题往往给出接近 $1/n$ 或依赖维度的幂律，但神经网络 scaling exponents 与这些简单预测不同。课程指出，这仍是一个有趣谜题：为什么语言模型、语音、机器翻译等任务的斜率如此稳定而又不同于传统理论？
+\begin{knowledgebox}{读图：Slide 5 的 Part 1 不是只讲历史}
+这一部分先把 scaling laws 放进学习理论和经验 NLP 的背景：理论上早就有 sample complexity 和 rate 的概念，但它们往往是上界；现代 scaling laws 更关注实际模型、实际数据和实际 loss 曲线是否可预测。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-018.jpg}
-\caption{Scaling exponent 的谜题：神经 scaling law 的斜率不同于许多经典模型预测。}
+\includegraphics[width=0.86\textwidth]{slide-006.jpg}
+\caption{Slide 6：sample complexity 和 rates 的理论背景，例如有限假设类和光滑密度估计。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\subsection{非参数学习和 intrinsic dimensionality}
-
-非参数学习给出一个直觉：高维灵活函数估计的误差率可能依赖“有效维度”。课程展示二维空间分箱估计的例子，并推广到 $d$ 维：
-
-\[
-\text{Error}\approx n^{-1/d}.
-\]
-
-这提示 scaling exponent 可能与数据的 intrinsic dimensionality 相关。但课程也提醒：intrinsic dimension 的估计并不可靠，这还不是严密解释。
+\begin{knowledgebox}{读图：Slide 6 的理论上界与实际 loss}
+理论 sample complexity 常告诉我们达到某个 error 需要多少样本，或者 error 上界如何随 \(n\) 衰减。但 frontier LMs 关心的是实际验证 loss 在真实训练分布上的可实现值。Scaling laws 更像工程经验曲线，不等同于严格泛化上界。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-019.jpg}
-\caption{非参数学习中的维度依赖 scaling：灵活模型的误差率可能与有效维度有关。}
+\includegraphics[width=0.86\textwidth]{slide-007.jpg}
+\caption{Slide 7：最早的数据 scaling law paper，1993 年已有类似思想。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
+
+\begin{knowledgebox}{读图：Slide 7 的历史意义}
+这页说明 scaling 的想法并非 LLM 时代突然出现。早期研究已经观察到更多数据与性能之间的规律关系。LLM 时代的新东西是规模更大、曲线更平滑、投资更昂贵，因此这些规律变成了核心工程工具。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-020.jpg}
-\caption{Intrinsic dimensionality theory：可能解释 data scaling exponent，但证据仍不完全。}
+\includegraphics[width=0.86\textwidth]{slide-008.jpg}
+\caption{Slide 8：Banko and Brill 2001 观察到随数据增长的 log-linear scaling。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{knowledgebox}{Scaling exponent 是工程参数，也是科学问题}
-对工程师来说，$\alpha$ 是用来预测收益的拟合参数；对科学家来说，$\alpha$ 可能揭示数据分布、模型类和任务结构。两种视角都重要，但不要把拟合参数过度解释成已证明理论。
+\begin{knowledgebox}{读图：Slide 8 的横纵轴直觉}
+这类图通常横轴是数据量，纵轴是错误率或性能指标。重点不是某个点，而是随着数据增加，性能按简单函数改善。早期 NLP 的经验已经提示：更多数据在相当长范围内有可预测收益。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-009.jpg}
+\caption{Slide 9：Kolachina et al. 2012 测试多种函数形式，发现数据和下游 performance 之间的 power-law 关系。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 9 应该比较函数形式}
+这页的教学点是：scaling law 不是先验假设某条线，而是比较不同函数形式对实验点的拟合和外推能力。Power law 之所以重要，是因为在 log-log 坐标中会变成近似直线，便于拟合和解释。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-010.jpg}
+\caption{Slide 10：Hestness et al. 2017 在机器翻译、语言模型、语音等任务上看到可预测 scaling。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 10 的跨任务稳定性}
+Hestness 的重要性在于跨任务：MT、LM、Speech 都呈现规律 scaling。若 scaling 只在单个 benchmark 上出现，它只能算偶然经验；跨任务出现说明某些统计或优化机制具有普遍性。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-011.jpg}
+\caption{Slide 11：Hestness II 提前讨论 emergence、compute-speed-accuracy 等 scaling 现象。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 11 连接到今天的 emergence 讨论}
+这页提示，许多今天看似新的问题，如能力涌现、计算速度和准确率 trade-off，早期 scaling 工作已经触及。Scaling laws 不只预测 loss，也帮助我们判断某类能力是否可能通过 brute force scale 获得。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-Data scaling law 的核心经验是：在合适 regime 中，数据量与 loss/error 呈稳定幂律关系。它有理论影子，但现代 LLM 中的具体 exponent 仍主要靠经验拟合。
+Part 1 的历史线索说明：scaling laws 不是 LLM 独有魔法，而是数据、模型和计算规模增加时经常出现的经验规律。LLM 的特殊性在于这些规律足够平滑、成本足够高，因而成为训练决策的基础设施。
 
-\section{Data Composition、Distribution Shift 与 Repetition}
-
-\subsection{数据混合比例}
-
-数据 scaling 不只是“更多 tokens”。现实中我们要决定 web、code、math、books、papers、multilingual、synthetic data 的混合比例。课程指出，一个自然想法是用小模型建立 data mixture scaling laws，预测大模型最优 mixture；但实践中这很难，小规模最优数据集未必稳定外推。
+\section{Part 2：Neural 和 LLM scaling behaviors}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-021.jpg}
-\caption{更高级的数据 scaling 问题：数据混合、重复、质量与规模的权衡。}
+\includegraphics[width=0.86\textwidth]{slide-012.jpg}
+\caption{Slide 12：Part 2 导航，问题包括 data vs performance、data vs model size、hyperparameters vs performance。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
+
+\begin{knowledgebox}{读图：Slide 12 的三个问题}
+第一，数据量如何影响 loss；第二，给定 compute 时应该增加数据还是模型参数；第三，架构、优化器、batch size、learning rate 等超参数如何随规模变化。这三类问题对应 LLM 训练前最昂贵的决策。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-023.jpg}
-\caption{数据混合选择实践上很难：小模型上的 best mixture 可能比显式 scaling 拟合更强。}
+\includegraphics[width=0.86\textwidth]{slide-013.jpg}
+\caption{Slide 13：Scaling laws 在很多因素和非标准设置中都呈 power-law 关系。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{warningbox}{数据 mixture scaling 容易被混杂因素污染}
-不同数据源不仅质量不同，还影响 tokenization、domain coverage、contamination、deduplication、curriculum 和 downstream eval。把 mixture 当成一个简单比例向量做外推，常常低估了这些交互。
+\begin{knowledgebox}{读图：Slide 13 强调“many factors”}
+Power law 不只出现在数据量上，也出现在模型参数、计算量、某些架构选择和任务指标上。它的工程吸引力来自同一种拟合工具可以服务多个设计问题。但这也带来风险：不是所有指标、所有下游任务都同样平滑。
+\end{knowledgebox}
+
+\subsection{data vs performance}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-014.jpg}
+\caption{Slide 14：data scaling law 把 dataset size \(n\) 映射到 error，期望曲线单调且类似 logistic/power-law。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 14 的数据 scaling law}
+横轴是数据集大小 \(n\)，纵轴是 error 或 loss。合理曲线应该单调下降，但不可能无限下降到负数；在有限区间内，power law 常能很好拟合。曲线的 slope 告诉我们继续加数据的边际收益。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-015.jpg}
+\caption{Slide 15：语言模型中 test loss 和 dataset size 在 log-log 图上近似线性，即 scale-free/power law。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 15 的 log-log 直线}
+如果
+\[
+L(n)-L_\infty = A n^{-\alpha},
+\]
+两边取对数得到
+\[
+\log(L(n)-L_\infty)=\log A-\alpha\log n.
+\]
+其中 \(L(n)\) 是数据量为 \(n\) 时的 loss，\(L_\infty\) 是不可约或远端 offset，\(\alpha\) 是数据 scaling exponent。log-log 图上的斜率就是 \(-\alpha\)。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-016.jpg}
+\caption{Slide 16：为什么会出现 power law？一种直觉是估计误差自然按多项式速度衰减。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 16 的解释不是完整理论}
+“估计误差多项式衰减”能解释为什么 power law 合理，但不能完全解释神经网络 exponent 的数值、不同数据分布的 offset、下游任务的不平滑性。Scaling laws 在工程上有用，不代表我们已完全理解其机制。
 \end{warningbox}
 
-\subsection{Distribution shift：改变 offset 而非 slope}
-
-Hashimoto 2021 的相关结果指出，distribution shift 可能主要改变 scaling curve 的 offset，而不是 slope。这意味着数据多样性和分布覆盖对性能有稳定影响，即使 scaling exponent 相似，好的数据分布可以整体把曲线往下平移。
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-022.jpg}
-\caption{Distribution shift scaling：数据组成可能改变 offset，而非 slope。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Hashimoto 2021。}
+\includegraphics[width=0.86\textwidth]{slide-017.jpg}
+\caption{Slide 17：mean estimation toy example，误差 \(\mathbb{E}[(\hat{\mu}-\mu)^2]=\sigma^2/n\) 是最简单 scaling law。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{importantbox}{Offset 的工程含义}
-如果高质量数据只是改变 offset，它仍然非常重要：同样 compute 下 loss 更低，或者达到同样 loss 所需 compute 更少。Scaling law 不会让数据质量不重要，反而能量化数据质量的价值。
+\begin{importantbox}{读公式：Slide 17 的 mean estimation}
+输入 \(x_1,\dots,x_n\sim\mathcal{N}(\mu,\sigma^2)\)，估计量 \(\hat{\mu}=\frac{1}{n}\sum_i x_i\)。均方误差为
+\[
+\mathbb{E}\left[(\hat{\mu}-\mu)^2\right]=\frac{\sigma^2}{n}.
+\]
+取对数后是 \(\log \text{Error}=-\log n + 2\log\sigma\)，斜率为 \(-1\)。这说明 power law 可以从很基础的统计估计中出现。
 \end{importantbox}
 
-\subsection{数据重复和有效数据量}
-
-真实训练数据有限，经常需要重复 tokens。课程展示了 repetition scaling：重复样本不等于新增独立样本，应当折算为 effective data $D'$。如果盲目把重复 tokens 当成新 tokens，scaling law 会被误用。
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-024.jpg}
-\caption{数据重复下的 scaling：unique tokens 和 repetition rate 共同决定 effective data。}
+\includegraphics[width=0.86\textwidth]{slide-018.jpg}
+\caption{Slide 18：经典模型常有 \(1/n\) 量级，但神经 scaling law 的 exponent 更小且很神秘。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-概念上可以写成：
-
-\[
-D_{\text{eff}} = f(U_D, R_D),
-\]
-
-其中 $U_D$ 是 unique tokens，$R_D$ 是重复率。$D_{\text{eff}}$ 随重复率增加而增加，但边际收益小于新数据。
-
-\subsection{Compute-unbounded 时 scaling 会“break”}
-
-课程提醒两点：
-
-\begin{enumerate}
-    \item 如果盲目外推，scaling law 会 break，尤其在重复数据、分布变化、模型太小或 regime 改变时。
-    \item Scaling laws 往往是 lower bounds：你总可能通过更好数据、架构、训练方法把曲线整体下移。
-\end{enumerate}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-025.jpg}
-\caption{Compute-unbounded settings 中，盲目应用 scaling law 会失败，且 scaling law 本身只是当前方法的下界。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{knowledgebox}{Scaling law 不是自然法则}
-它是某个模型族、数据处理、训练 recipe、evaluation setup 下的经验规律。换 recipe 后，旧曲线可以被打破。这是好事，说明系统还有改进空间。
+\begin{knowledgebox}{读图：Slide 18 的 mystery}
+若所有任务都像均值估计，log-log 斜率应接近 \(-1\)。但机器翻译、语音、语言模型等神经 scaling 的 slope 通常更平缓。这说明模型、数据分布、任务复杂度和有效维度共同决定 exponent，而不是单纯样本平均。
 \end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-019.jpg}
+\caption{Slide 19：非参数学习 detour，用 2D box 划分说明函数估计的 scaling。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 19 的非参数直觉}
+如果目标函数在二维空间上变化，把空间切成更细网格需要更多样本才能估计每个区域。维度越高，样本需求越大，error 下降越慢。这给 scaling exponent 和 intrinsic dimensionality 的联系提供直觉。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-020.jpg}
+\caption{Slide 20：intrinsic dimensionality theory 认为 exponent \(\alpha\) 可能与数据内在维度相关。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 20 的理论路线}
+这页给出一种解释：学习速率 \(n^{-\alpha}\) 中的 \(\alpha\) 受数据或函数的 intrinsic dimension 影响。维度越高，可学习结构越复杂，error 随数据下降越慢。该理论有启发性，但对现代 LLM 的完整解释仍不充分。
+\end{knowledgebox}
+
+\subsection{data composition、shift 和 repetition}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-021.jpg}
+\caption{Slide 21：其他 data scaling laws，包括 data mixture selection 和是否重复数据。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 21 把数据问题从“多少”扩展到“什么”}
+数据量相同，不同 mixture 可能导致不同 loss offset 和下游能力。Scaling law 不只用来决定 token 数，也可以比较 data mixture、domain mix、是否重复有限数据等问题。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-022.jpg}
+\caption{Slide 22：distribution shift 下，data composition 可能改变 offset，而不是 slope。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 22 的 offset 工程含义}
+如果不同数据 mixture 主要改变 offset，那么小规模实验可以帮助选择“整条曲线更低”的数据组合。Slope 相近意味着继续 scale 时排序可能保持；但如果下游任务或分布改变，offset 和 slope 都可能变化。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-023.jpg}
+\caption{Slide 23：实践中用 scaling 做 data mixture selection 很难，小规模最佳不一定等于大规模最佳。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 23 的警告}
+自然想法是用小模型拟合每种数据 mixture 的 scaling law，再选最优。但数据质量、任务覆盖、去重、污染、下游迁移、模型大小都可能改变排序。因此 mixture selection 的 scaling 需要多尺度验证，不能只拿最小模型的赢家。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-024.jpg}
+\caption{Slide 24：data repetition 下，有效数据 \(D'\)、unique tokens \(U_d\)、重复率 \(R_d\) 的关系。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读公式：Slide 24 的重复数据账本}
+\(U_d\) 表示 unique tokens，\(R_d\) 表示重复次数，\(D'\) 表示有效数据量。重复数据不是完全没用，但边际价值低于新数据。随着重复率上升，有效数据增长会折损，scaling curve 可能偏离只看 token count 的预测。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-025.jpg}
+\caption{Slide 25：compute unbounded 设置下 scaling laws 可能 break，因为它们只是 lower bounds。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 25 不要盲目外推}
+Scaling laws 是已观察训练 recipe 下的经验下界或趋势。若算法、数据清洗、架构、优化器或训练过程改变，你可能做得比旧曲线更好；若超出拟合区间太远，也可能更差。它们是决策工具，不是自然定律。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-026.jpg}
+\caption{Slide 26：考虑数据有限性后，data selection 应随 scale 自适应调整。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 26 的 adaptive data selection}
+如果重复数据价值下降，那么不同规模下最优数据选择可能不同：小模型需要高质量/高密度信号，大模型可能需要更多覆盖和多样性。数据 pipeline 不应是一次性静态配方，而应随目标 compute 和模型规模变化。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-027.jpg}
+\caption{Slide 27：data scaling laws recap：log-data 与 log-error 近似线性，跨 domain 和 model 成立。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 27 的 recap}
+数据 scaling 的核心事实是 log-log 线性；理论直觉来自 generalization/sample-complexity；实践用途包括数据收集、数据重复、data mixture 和分布迁移。它最大的限制是：loss 曲线平滑不代表所有下游能力都同样可预测。
+\end{importantbox}
 
 \subsection{本章小结}
 
-数据 scaling 的高级问题包括 mixture、distribution shift 和 repetition。它们提醒我们：数据量不是唯一变量，数据质量、分布覆盖和重复率都会改变 scaling 预测。
+数据 scaling laws 告诉我们，更多数据通常按 power law 改善 loss，但数据质量、composition、重复和分布迁移会改变 offset 甚至 slope。用于训练决策时，要同时记录 unique tokens、重复率、mixture、评估分布和模型规模。
 
-\section{Scaling Laws for Model Engineering}
-
-\subsection{为什么 scaling law 能帮模型工程}
-
-模型工程问题包括：Transformer 是否比 LSTM 更好？Adam 是否比 SGD 更好？深度和宽度如何选？embedding 参数算不算同样“有价值”？batch size 和 learning rate 如何随规模变化？直接在目标大模型上试这些问题极其昂贵，scaling law 的流程是：
-
-\begin{enumerate}
-    \item 训练一组小模型；
-    \item 对每个候选设计拟合 scaling curve；
-    \item 外推到目标 compute/model size；
-    \item 选择预测最优的候选。
-\end{enumerate}
+\section{Scaling laws for model engineering}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-028.jpg}
-\caption{Scaling laws for model engineering：用小模型预测架构、优化器和资源分配选择。}
+\includegraphics[width=0.86\textwidth]{slide-028.jpg}
+\caption{Slide 28：从 data scaling 转向 model scaling，用 scaling laws 设计巨大 LMs。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
+
+\begin{knowledgebox}{读图：Slide 28 的工程问题}
+大模型设计不是只问“多大最好”，还包括 LSTM vs Transformer、Adam vs SGD、深度/宽度、batch size、learning rate 等选择。Scaling law 实验的目标是用小模型筛掉明显差的方向，再把预算集中到最有希望的设计。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-029.jpg}
+\caption{Slide 29：以 Kaplan scaling paper 为上下文，讨论 architecture、optimizer、aspect ratio、batch size。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 29 是超参数实验 checklist}
+这页列出的不是独立小问题，而是训练 recipe 的关键轴。每个轴都可以通过小规模 sweep 建立性能曲线，然后判断哪个选择在大规模下仍有优势。关键是比较曲线，而不是比较某个小模型点。
+\end{knowledgebox}
 
 \begin{lstlisting}[caption={Scaling-law based design loop 的伪代码}]
 for config in candidate_configs:
-    runs = train_small_models(config, scales=[s1, s2, s3, s4])
-    law = fit_power_law(runs)  # loss = L_inf + A * scale ** -alpha
-    predicted_loss[config] = law.predict(target_scale)
-
-best_config = argmin(predicted_loss)
-train_big_model(best_config, target_scale)
+    runs = train_small_models(config, budgets=[1e18, 3e18, 1e19])
+    curve = fit_scaling_law(runs)
+    predicted_loss = curve.predict(target_budget)
+select_config_with_lowest_predicted_loss()
 \end{lstlisting}
 
-\subsection{Architecture：Transformer vs LSTM}
+\subsection{Architecture、optimizer、depth/width}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-030.jpg}
-\caption{架构选择也可以用 scaling law 判断：不必直接训练 GPT-3 级别 LSTM。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Kaplan+ 2021。}
+\includegraphics[width=0.86\textwidth]{slide-030.jpg}
+\caption{Slide 30：用 scaling law 比较 Transformers 和 LSTMs，而不是花巨资训练 LSTM GPT-3。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-如果某个架构在小规模时略差，但 scaling exponent 更好，它可能在大规模反超。反过来，小规模强并不保证大规模强。这是 scaling law 比单点 benchmark 更有价值的地方。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-031.jpg}
-\caption{Cross-architecture scaling：不同架构可能有不同 offset 和 slope。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Tay et al. 2022。}
-\end{figure}
-
-\begin{importantbox}{比较架构要比较曲线，不只比较点}
-单个小模型结果只能告诉你当前规模谁强；scaling curve 才能告诉你目标规模谁可能更强。工程上要同时看 offset、slope 和外推可信区间。
+\begin{importantbox}{读图：Slide 30 的架构比较方法}
+比较架构要比较同等 compute 或同等参数预算下的 scaling curve。如果 Transformer 曲线整体低于 LSTM，且外推稳定，那么不需要在最大规模上训练 LSTM 才能判断方向。Scaling law 是降低架构搜索成本的工具。
 \end{importantbox}
 
-\subsection{Optimizer：Adam vs SGD}
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-032.jpg}
-\caption{Optimizer choice 也能进入 scaling 分析：Adam 与 SGD 的差异可能随规模变化。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Hestness+ 2017。}
-\end{figure}
-
-优化器选择不只是 convergence speed，也影响稳定性、batch scaling、learning-rate transfer 和最终 loss。Scaling law 流程可以把 optimizer 当作 categorical hyperparameter：每个 optimizer 拟合自己的曲线，再看目标规模预测。
-
-\subsection{Depth/Width 与参数价值}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-033.jpg}
-\caption{Depth/width：层数和宽度影响 scaling，且边际收益可能递减。}
+\includegraphics[width=0.86\textwidth]{slide-031.jpg}
+\caption{Slide 31：Tay et al. 2022 的跨架构 scaling，展示 many architectures 的比较。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-课程强调：不是所有参数都等价。Embedding layer 参数和 Transformer block 参数的“价值”不同；MoE 的总参数和 activated parameters 又不同。简单用总参数量 $N$ 建 scaling law，可能在架构变化时出错。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-035.jpg}
-\caption{不是所有参数都等价：embedding 参数、MoE 参数和 dense block 参数可能有不同作用。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-036.jpg}
-\caption{MoE 中 parameter value 会改变：总参数量不等于每 token activated compute。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{warningbox}{参数量是粗糙代理}
-在 dense Transformer 内，参数量和 compute 大体相关；在 embedding-heavy、MoE、retrieval-augmented 或特殊架构中，总参数量可能误导。Scaling law 的变量要随架构语义调整。
-\end{warningbox}
-
-\subsection{本章小结}
-
-Scaling laws 可以把架构、优化器、深宽比、embedding/MoE 参数价值等模型工程问题，转化成“多条曲线的外推比较”。这比照抄已有模型更科学，但前提是小规模实验覆盖正确 regime。
-
-\section{Batch Size、Critical Batch Size 与 muP}
-
-\subsection{Critical batch size}
-
-Batch size 对训练效率有强烈影响。batch 太小，硬件利用率和通信效率差；batch 太大，优化收益递减。Critical batch size 是两者之间的转折点：再增大 batch 后，每单位样本带来的 step 减少开始变小。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-037.jpg}
-\caption{Critical batch size：超过某个 batch 后，收益明显递减。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-课程给出定义方法：选一个 target loss，训练不同 batch size，记录达到该 loss 所需的 steps $S$ 和 examples $E$。曲线两端分别对应 step-limited 和 sample-limited regime。Critical batch size 可以视作平衡这两端的点。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-038.jpg}
-\caption{Critical batch size 的定义：固定目标 loss，扫描 batch，拟合 steps/examples tradeoff。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-039.jpg}
-\caption{目标 loss 越低，critical batch size 越大。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{knowledgebox}{为什么训练后期可以增大 batch}
-目标 loss 越低，梯度噪声相对更重要，可用更大 batch 来降低噪声并提升系统效率。这解释了许多训练 recipe 中 batch size 随训练进程增大的策略。
+\begin{knowledgebox}{读图：Slide 31 应看曲线族而非单点排名}
+不同架构可能在小规模交叉，在大规模排序改变。图中多条曲线的相对 slope 和 offset 都重要：offset 低代表当前规模好，slope 更陡代表继续 scale 更有潜力。工程上要选择目标预算附近预测最优的架构。
 \end{knowledgebox}
 
-\subsection{muP 与 scale-aware learning rate}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-032.jpg}
+\caption{Slide 32：Adam vs SGD 的 optimizer choice scaling，对 2017 年 pre-transformer 模型的比较。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-如果直接把模型宽度或深度放大，最优 learning rate 往往会改变。muP，即 maximal update parametrization，以及其他 scale-aware parametrization，试图让小模型上调好的 learning rate 可以迁移到大模型。
+\begin{knowledgebox}{读图：Slide 32 的 optimizer 结论要带上下文}
+这页数据来自 pre-transformer 时代和特定模型族。它说明 optimizer choice 可以通过 scaling 实验比较，但不能直接把旧结论搬到现代 Transformer。读图时要区分“方法论可迁移”和“具体最优选择可迁移”。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-040.jpg}
-\caption{$\mu$P 和 scale-aware LR：避免最优 learning rate 随模型规模漂移。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Yang et al. 2022 与 Yao et al. 2024。}
+\includegraphics[width=0.86\textwidth]{slide-033.jpg}
+\caption{Slide 33：深度和宽度选择，1 vs 2 layers 差异大，更多层在小参数区间收益递减。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{importantbox}{$\mu$P 的工程价值}
-Scaling law 外推依赖“小模型能代表大模型”。如果最优 learning rate 随规模改变，小模型调参结果就不能迁移。$\mu$P 的目标是让超参 transfer 更稳定，从而降低大模型调参成本。
+\begin{knowledgebox}{读图：Slide 33 的 depth/width 信息}
+浅层到两层可能带来结构性收益，但继续加深会遇到边际收益递减。对 Transformer 来说，depth/width 还影响并行切分、激活显存和推理延迟，因此 scaling law 的架构选择要同时考虑系统成本。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-034.jpg}
+\caption{Slide 34：Transformer 的 aspect ratio 等超参数是否依赖 scale。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 34 的 aspect ratio 问题}
+Aspect ratio 指 depth、width、heads、MLP expansion 等比例关系。若最优比例随 scale 变化，小模型 tuning 就不能直接复制到大模型。Scaling experiment 要检查这些超参数的最优区间是否稳定。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-035.jpg}
+\caption{Slide 35：不是所有参数都等价，embedding layer parameters 与其他参数行为不同。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 35 的参数计数陷阱}
+Scaling law 常用 parameter count \(N\)，但 embedding、attention、MLP、MoE inactive parameters 的“价值”不同。若把所有参数粗暴相加，可能错误估计模型能力和 compute-optimal 配置。MoE 模型尤其需要区分 total parameters 和 active parameters。
+\end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-036.jpg}
+\caption{Slide 36：MoE 中 parameters 的价值会改变，parameter scaling 不能照搬 dense 模型。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 36 的 MoE 参数价值}
+MoE 增加 total parameters，但每个 token 只激活部分 experts。其 scaling 可能更接近 active compute 和 routing quality，而不是 total parameter count。评估 MoE scaling 时必须记录 active parameters、expert count、routing、负载均衡和通信成本。
+\end{knowledgebox}
+
+\subsection{Batch size、critical batch size 与 muP}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-037.jpg}
+\caption{Slide 37：critical batch size，batch size 超过某点后收益强烈递减。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 37 的 critical batch 定义直觉}
+Critical batch 是在达到某个目标 loss 时，继续增大 batch 开始明显降低样本效率的区域。小 batch 需要更多 wall-clock step，但样本效率高；大 batch 并行度高，但可能浪费样本或需要学习率调整。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-038.jpg}
+\caption{Slide 38：critical batch size 的更精确定义，固定 target loss 后扫 batch，拟合 steps 和 examples 曲线。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 38 的两个量}
+固定目标 loss，训练多个 batch size。记录达到目标 loss 所需 steps \(S\) 和 examples \(E\)。小 batch 区域 \(E\) 接近最优但 \(S\) 大；大 batch 区域 \(S\) 接近最小但 \(E\) 增大。critical batch 大致是两种成本开始折中的点。
 \end{importantbox}
 
-\subsection{Downstream scaling 的警告}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-039.jpg}
+\caption{Slide 39：目标 loss 越小，critical batch size 越大。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-到目前为止，课程主要讨论 pretraining loss。但 downstream scaling 更不稳定。某些下游任务可能有阈值、数据污染、prompt sensitivity、evaluation noise 或 capability emergence，导致 loss scaling 不能直接转化为 task score scaling。
+\begin{knowledgebox}{读图：Slide 39 的训练阶段含义}
+训练早期 loss 高，critical batch 较小；训练后期目标 loss 更低，可以使用更大 batch 而不那么浪费样本。这也是 batch size schedule、gradient accumulation 和并行规模选择会随训练阶段变化的原因。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-041.jpg}
-\caption{下游 scaling 可能更不稳定：pretraining loss 可预测，不代表所有 benchmark score 都可预测。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Tay et al. 2023。}
+\includegraphics[width=0.86\textwidth]{slide-040.jpg}
+\caption{Slide 40：muP 和 scale-aware learning rate，朴素放大模型会让最优学习率依赖 scale。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{warningbox}{不要把 pretraining loss 外推成所有能力外推}
-Loss 是平滑、密集、低噪声指标；下游 benchmark 常是离散、饱和、prompt-sensitive、甚至污染敏感指标。Scaling law 可以帮助预测，但不能替代 targeted evaluation。
+\begin{importantbox}{术语消化：muP 的工程价值}
+muP（maximal update parameterization）是一套让不同宽度模型在训练动力学上更可比的参数化和学习率规则。目标是让小模型上调出的 learning rate、初始化和超参数更可靠地迁移到大模型。它解决的不是 loss curve 拟合，而是让“用小模型预测大模型”这件事的实验条件更一致。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-041.jpg}
+\caption{Slide 41：下游 scaling behaviors 可能更不可预测，需要谨慎外推。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{读图：Slide 41 的 downstream caveat}
+预训练 loss 往往平滑，但下游任务、能力阈值、prompting、评测噪声和数据污染会让曲线更乱。Scaling law 可以预测平均 loss，不保证所有能力指标单调、平滑或按相同 exponent 改善。
 \end{warningbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-042.jpg}
+\caption{Slide 42：一些令人惊讶的结论：optimizer、depth、architecture 等大模型选择可在训练前预测。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 42 的 scaling-law design procedure}
+流程是：训练若干小模型，建立 scaling law，外推后选择大模型配置。关键不是“少训几个模型就够了”，而是要覆盖足够尺度、控制变量、评估拟合残差，并在目标规模前做 sanity check。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-Batch size 和 learning rate 也是 scaling 问题。Critical batch size 告诉我们 batch 何时收益递减；$\mu$P/scale-aware LR 试图让小模型超参能迁移到大模型；下游任务则提醒我们 loss 可预测不等于能力完全可预测。
+模型工程 scaling 把架构、优化器、depth/width、batch size、learning rate 等选择变成曲线比较问题。它能大幅降低设计成本，但依赖实验设计质量和外推范围，不能替代最终大规模验证。
 
-\section{Joint Data-Model Scaling：更多数据还是更大模型}
+\section{Joint data-model scaling 与 compute-optimal training}
 
-\subsection{联合 scaling 公式}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-043.jpg}
+\caption{Slide 43：重要问题：给定资源时需要更多数据还是更大模型，联合 scaling law 描述两者关系。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-一个核心问题是：给定固定 compute，应该训练更大模型还是用更多数据？联合 data-model scaling laws 把数据量 $D$ 和模型大小 $N$ 同时纳入损失：
-
+\begin{importantbox}{读公式：Slide 43 的联合 scaling}
+一种简化形式是
 \[
-L(N,D)=L_\infty + A_N N^{-\alpha} + A_D D^{-\beta}.
+\text{Error}(n,m)=A n^{-\alpha}+B m^{-\beta}+C,
 \]
-
-Rosenfeld 与 Kaplan 等工作展示，这类公式可以很好拟合小规模实验，并用于优化资源分配。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-043.jpg}
-\caption{联合 data-model scaling：描述模型大小和数据量如何共同影响 error/loss。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Rosenfeld+ 与 Kaplan+ 2020。}
-\end{figure}
+其中 \(n\) 是数据量，\(m\) 是模型大小，\(\alpha,\beta\) 分别表示数据和模型 scaling exponent，\(C\) 是 offset。工程问题是在 compute budget 下选择 \(n,m\)，而不是单独最大化某一个。
+\end{importantbox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-044.jpg}
-\caption{小模型、小数据上拟合 exponent，可以预测更大数据/模型区域。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Rosenfeld。}
+\includegraphics[width=0.86\textwidth]{slide-044.jpg}
+\caption{Slide 44：Rosenfeld 的 joint scaling 能用小数据、小模型拟合 exponent，并预测其他区域。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
+
+\begin{knowledgebox}{读图：Slide 44 的 trade-off 曲面}
+把 data size 和 model size 放到同一张图上，就能看到等 loss 或等 compute 的 trade-off。若模型太小，大量数据会被浪费；若数据太少，大模型会过拟合或欠训练。联合 scaling 的价值是找到预算下的平衡点。
+\end{knowledgebox}
 
 \begin{lstlisting}[caption={联合 scaling law 的最小拟合流程}]
-# Observations: (N_i, D_i, loss_i)
 def predict_loss(N, D, params):
-    L_inf, A_N, alpha, A_D, beta = params
-    return L_inf + A_N * N ** (-alpha) + A_D * D ** (-beta)
+    A, alpha, B, beta, C = params
+    return A * N ** (-alpha) + B * D ** (-beta) + C
 
-params = fit_least_squares(observations, predict_loss)
-best = argmin_over_budget(
-    lambda N, D: predict_loss(N, D, params),
-    constraint=lambda N, D: training_flops(N, D) <= C,
-)
+params = fit_least_squares(observed_runs)
+best = argmin_over_budget(lambda N, D: predict_loss(N, D, params))
 \end{lstlisting}
 
-\subsection{Compute constraint}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-045.jpg}
+\caption{Slide 45：Kaplan 和 Chinchilla 对 optimal compute/data tradeoff 给出不同结论。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-粗略地，dense Transformer 训练 compute 与 $N$ 和 $D$ 成正比：
-
-\[
-C \approx 6ND,
-\]
-
-其中 $N$ 是参数量，$D$ 是训练 tokens。固定 $C$ 下，选择更大 $N$ 就必须减少 $D$，反之亦然。
-
-\begin{importantbox}{联合 scaling 的工程用途}
-它把“更大模型 vs 更多数据”变成约束优化问题：在 compute budget $C$ 下，选择 $(N,D)$ 使预测 loss 最低。Chinchilla 争论的核心正是这个 tradeoff。
+\begin{importantbox}{读图：Slide 45 的 Kaplan vs Chinchilla}
+Kaplan 结论中 \(N_{\text{opt}}\) 随 compute \(C\) 增长更快，\(D_{\text{opt}}\) 增长较慢，tokens per parameter 随 \(C\) 下降。Chinchilla 则认为大模型通常训练 token 不够，compute-optimal 应该用更小模型、更多数据。这个差异直接改变大模型训练预算分配。
 \end{importantbox}
 
-\subsection{本章小结}
-
-联合 data-model scaling 是 LLM 训练资源分配的核心工具。它不只预测 loss，还告诉我们在固定 compute 下如何平衡模型大小和训练 tokens。
-
-\section{Kaplan vs Chinchilla：Compute-Optimal Tradeoff}
-
-\subsection{Kaplan 的结论}
-
-Kaplan 2020 预测 compute-optimal 模型随 compute 增长时，参数量增长很快、数据量增长较慢：
-
-\[
-N_{\text{opt}}\propto C^{0.73},\qquad
-D_{\text{opt}}\propto C^{0.27}.
-\]
-
-这意味着 tokens per parameter 随 compute 增长而下降。GPT-3 的 2 tokens/param 直觉正来自这一时代。
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-045.jpg}
-\caption{Kaplan vs Chinchilla：对 compute-optimal 数据/模型比例给出不同结论。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Hoffmann et al. 2022。}
+\includegraphics[width=0.86\textwidth]{slide-046.jpg}
+\caption{Slide 46：Chinchilla 作者提出三种拟合 scaling laws 的方法。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\subsection{Chinchilla 的修正}
-
-Chinchilla (Hoffmann et al. 2022) 认为 Kaplan 的拟合偏离了 compute-optimal 配置。Chinchilla 结论大致是：模型和数据应更均衡增长，约 20 tokens/parameter 是当时的 compute-optimal 经验。
-
-\begin{knowledgebox}{Chinchilla 改变了训练直觉}
-在 Chinchilla 后，许多模型不再追求“参数尽可能大、tokens 很少”，而是训练更小但更充分的模型。LLaMA、Mistral、Llama 3 等都显著提高 tokens/param。
+\begin{knowledgebox}{读图：Slide 46 的方法地图}
+三种方法分别从训练曲线最小点、IsoFLOPS sweep、joint grid fit 估计 compute-optimal 关系。它们使用相同实验事实的不同投影，因此结果接近时更可信；结果分歧时要检查数据、参数计数和训练 recipe。
 \end{knowledgebox}
 
-\subsection{Chinchilla 的三种方法}
-
-课程列出 Chinchilla 的三种拟合方法：
-
-\begin{enumerate}
-    \item \textbf{Minimum over runs}：在所有 training curves 的 union 上取最小 loss，再拟合 compute 到 loss。
-    \item \textbf{IsoFLOPS}：固定 FLOP budgets，扫描参数量，找到每个 budget 下最优点，再拟合最优点轨迹。
-    \item \textbf{Joint fits}：在 model-size/data grid 上训练许多模型，用 least squares 拟合联合 scaling law。
-\end{enumerate}
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-046.jpg}
-\caption{Chinchilla in depth：三种拟合 scaling laws 的方法。}
+\includegraphics[width=0.86\textwidth]{slide-047.jpg}
+\caption{Slide 47：Method 1，取所有训练曲线 union 的最小值，类似 Kaplan FLOPs figure。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-047.jpg}
-\caption{Method 1：对所有训练曲线取 minimum over runs。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
+\begin{knowledgebox}{读图：Slide 47 的 minimum-over-runs}
+对每个 compute budget，看所有训练 run 中谁达到最低 loss。把这些 envelope minima 连起来，得到 compute vs loss 的 power law。优点是直观，缺点是依赖实验覆盖是否足够密集。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-048.jpg}
-\caption{Method 2：IsoFLOPS，在每个 FLOP budget 下找最优模型大小。}
+\includegraphics[width=0.86\textwidth]{slide-048.jpg}
+\caption{Slide 48：Method 2，IsoFLOPS：固定 FLOP budgets，扫参数量，取每条凸曲线的最小点。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-049.jpg}
-\caption{Method 3：Joint fits，在 size-data grid 上拟合联合 scaling law。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
+\begin{importantbox}{读图：Slide 48 的 IsoFLOPS}
+IsoFLOPS 固定训练计算量 \(C\)，改变模型大小 \(N\) 和训练数据 \(D\)。每个 \(C\) 下 loss 对 \(N\) 往往呈 U 形或凸形：模型太小会欠容量，模型太大会欠训练。每条曲线的最小点给出该 compute 下的 \(N_{\text{opt}}\)。
+\end{importantbox}
 
 \begin{lstlisting}[caption={IsoFLOP sweep 的伪代码}]
 for C in flops_budgets:
-    results = []
+    losses = []
     for N in model_sizes:
-        D = C / (6 * N)
-        loss = train_model(N=N, tokens=D, flops=C)
-        results.append((N, D, loss))
-    best_for_C = min(results, key=lambda r: r.loss)
-    frontier.append(best_for_C)
-
-fit_power_law(frontier)  # N_opt(C), D_opt(C)
+        D = C / (6 * N)  # rough dense Transformer training FLOPs
+        losses.append(train_and_eval(N=N, tokens=D))
+    record_argmin(C, model_sizes, losses)
 \end{lstlisting}
 
-\subsection{为什么 Kaplan 和 Chinchilla 差这么多}
-
-课程列出几个解释：
-
-\begin{itemize}
-    \item Kaplan 在参数计数中移除了 final layer parameters；
-    \item 很小 compute budgets 下 warmup 太高，影响拟合；
-    \item 非 embedding vs total parameter count 的选择会带来非线性；
-    \item 原 Chinchilla method 3 后来被指出可能有数据/拟合问题，重新恢复数据后更接近 method 1/2。
-\end{itemize}
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.88\textwidth]{slide-050.jpg}
-\caption{Kaplan 与 Chinchilla 结论差异很大：问题出在拟合细节和数据处理上。}
+\includegraphics[width=0.86\textwidth]{slide-049.jpg}
+\caption{Slide 49：Method 3，joint fits，在 size-data grid 上训练模型，用 least squares 拟合联合 law。}
 \figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-051.jpg}
-\caption{解释 1：参数计数、warmup、decay/batch/LR 等细节会影响 scaling fit。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-053.jpg}
-\caption{Chinchilla method 3 的数据取证：重新拟合后结果更接近 methods 1/2。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片，引用 Besiroglu et al. 2024。}
-\end{figure}
-
-\begin{warningbox}{Scaling fit 对细节很敏感}
-Warmup、decay、参数计数、embedding 是否计入、训练曲线是否充分、早期点是否纳入、loss floor 是否拟合，都会改变 exponent。Scaling law 看起来简单，实验设计不能粗糙。
-\end{warningbox}
-
-\subsection{本章小结}
-
-Kaplan vs Chinchilla 不是“谁记住了一个比例”的故事，而是 scaling-law fitting methodology 的案例研究。Compute-optimal 结论高度依赖数据覆盖、拟合方法和训练 recipe。
-
-\section{Train-Optimal 不是 Deployment-Optimal}
-
-Chinchilla 的目标是固定训练 compute 下 loss 最低。但真实部署中，绝大部分 compute 可能花在 inference，而非训练。如果模型会被大量使用，训练更小模型、用更多 tokens 过训，可能在总成本上更优。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-054.jpg}
-\caption{Train-optimal 不一定 deployment-optimal：推理量越大，越值得 upfront overtraining。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-课程列出的 tokens/param 趋势：
-
-\begin{itemize}
-    \item GPT-3：约 2 tokens/param；
-    \item Chinchilla：约 20 tokens/param；
-    \item LLaMA 65B：约 22 tokens/param；
-    \item Llama 2 70B：约 29 tokens/param；
-    \item Mistral 7B：约 110 tokens/param；
-    \item Llama 3 70B：约 215 tokens/param。
-\end{itemize}
-
-\begin{importantbox}{过训的经济学}
-如果预期推理调用很多，较小但过训的模型可能更便宜：训练时多花 tokens，部署时每次推理更省。Scaling law 应该优化 total cost，不只是 training loss per training FLOP。
-\end{importantbox}
-
-\subsection{IsoFLOPS everywhere}
-
-课程指出 IsoFLOPS 方法简单、干净，不只适用于 LMs，也适用于 diffusion、MoE 等领域。
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-055.jpg}
-\caption{IsoFLOPS 方法可以迁移到 diffusion、MoE 等不同模型族。}
-\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
-\end{figure}
-
-\begin{knowledgebox}{IsoFLOPS 的优点}
-IsoFLOPS sweep 把问题变成“同一 compute 下谁最好”。这比直接比较不同训练预算的模型干净，也更贴近实际资源分配。
+\begin{knowledgebox}{读图：Slide 49 的 joint fit}
+Joint fit 直接拟合 \(N,D\) 到 loss 的曲面。优点是利用所有点，能同时估计数据和模型 exponent；风险是函数形式、权重、异常点和数据覆盖会强烈影响结果。后面关于 Chinchilla method 3 的争议正与此有关。
 \end{knowledgebox}
 
-\subsection{本章小结}
+\subsection{Kaplan 与 Chinchilla 差异的解释}
 
-Train-optimal scaling law 是重要起点，但真实产品还要考虑推理成本、使用量、延迟、模型大小和服务硬件。部署越重，越可能选择更小、更充分训练的模型。
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-050.jpg}
+\caption{Slide 50：为什么 Kaplan 和 Chinchilla 结论差这么多，即使都拟合 joint scaling laws？}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-\section{实践流程：如何认真使用 Scaling Laws}
+\begin{knowledgebox}{读图：Slide 50 的问题意识}
+当两个 scaling law 都看似拟合数据，却给出不同 compute-optimal recipe，真正要查的是实验设计：参数计数、学习率 schedule、warmup、数据范围、模型范围、拟合方法和训练稳定性。Scaling law 的可信度来自可解释的数据生成过程。
+\end{knowledgebox}
 
-\subsection{实验设计}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-051.jpg}
+\caption{Slide 51：解释 1，包括 Kaplan 移除最后层参数、很小 compute budgets 的 warmup 太高等。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-严肃的 scaling law 实验至少要控制：
+\begin{knowledgebox}{读图：Slide 51 的参数和 warmup 细节}
+参数计数是否包含 embedding/最后层会改变 \(N\)；小 compute budget 下 warmup 比例过高会让训练效率失真。Scaling law 拟合对这些 seemingly boring 的工程细节很敏感，因为它们改变了曲线低规模区域。
+\end{knowledgebox}
 
-\begin{itemize}
-    \item 模型族一致，避免架构变化污染 exponent；
-    \item 数据处理一致，记录 unique tokens、repetition、mixture；
-    \item 训练 recipe 一致，包括 optimizer、LR schedule、warmup、batch、precision；
-    \item scale 覆盖足够宽，且小模型不在随机猜测区；
-    \item 每个点训练足够接近目标 regime，避免只拟合早期 transient；
-    \item 报告不确定性，不把单条拟合线当成真理。
-\end{itemize}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-052.jpg}
+\caption{Slide 52：解释 2，non-embedding vs total parameter choice 和小 nonlinearities 会影响拟合。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-\begin{lstlisting}[caption={Scaling law 实验记录字段示例}]
-run = {
-    "params_total": N_total,
-    "params_non_embedding": N_non_embed,
-    "tokens_seen": D,
-    "unique_tokens": U,
-    "training_flops": C,
-    "batch_size": B,
-    "learning_rate": lr,
-    "warmup_tokens": warmup,
-    "loss": eval_loss,
-    "data_mixture": mixture_id,
-}
-\end{lstlisting}
-
-\begin{warningbox}{参数定义必须固定}
-Kaplan/Chinchilla 争论说明，total params、non-embedding params、activated params、expert params 的选择会改变 scaling law。实验记录必须明确参数口径。
+\begin{warningbox}{读图：Slide 52 的计数口径风险}
+同一个模型可以按 total params、non-embedding params、active params、训练 FLOPs 等多种口径记录。口径不一致会让 scaling exponent 不能比较。做实验时必须把参数计数、token 计数、FLOPs 估算和 loss 计算写清楚。
 \end{warningbox}
 
-\subsection{决策流程}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-053.jpg}
+\caption{Slide 53：Chinchilla method 3 可能存在错误，后续数据取证重做 fit 得到更接近方法 1/2 的结果。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
 
-\begin{enumerate}
-    \item 先固定模型族和数据 pipeline，做 baseline scaling。
-    \item 对架构/optimizer/超参候选分别训练小模型。
-    \item 用 held-out small scales 检查外推误差。
-    \item 做 IsoFLOP sweeps，找 compute frontier。
-    \item 把训练 compute、推理 compute、服务延迟一起纳入成本函数。
-    \item 只在预测收益足够大且不确定性可接受时启动大模型训练。
-\end{enumerate}
+\begin{warningbox}{读图：Slide 53 的方法论教训}
+Scaling law 不是因为曲线漂亮就可靠。需要公开原始 run、拟合代码、过滤规则和参数口径。若一个方法的结论与其他方法冲突，要优先检查数据和拟合流程，而不是只引用最终 exponent。
+\end{warningbox}
 
-\begin{importantbox}{Scaling law 的正确姿势}
-它不是替代大模型训练，而是降低大模型训练前的不确定性。好的 scaling study 能告诉你哪些选择不值得大规模尝试，哪些选择值得押注。
+\subsection{train-optimal 与 deployment-optimal}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-054.jpg}
+\caption{Slide 54：Chinchilla 的 train-optimal 不一定是部署最优，真实部署中 inference compute 可能占大头。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 54 的 overtraining 经济学}
+Chinchilla 目标是固定训练 compute 下 loss 最优。但部署时，模型会被调用很多次，推理成本可能远超训练成本。更小模型训练更多 tokens（overtrain）可能训练上不是最优，但推理更便宜，总拥有成本更低。GPT-3、Llama 等例子都体现了这一点。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-055.jpg}
+\caption{Slide 55：IsoFLOPS 方法容易执行且干净，也被用于 diffusion 和 MoE 等领域。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{knowledgebox}{读图：Slide 55 的跨领域价值}
+IsoFLOPS 的核心是固定预算扫模型规模，找每个预算的最优点。这种实验设计不依赖语言模型特有结构，因此可扩展到 diffusion、MoE 等模型族。它是一种通用资源分配实验，而不只是 Chinchilla 论文技巧。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-056.jpg}
+\caption{Slide 56：log-linearity 扩展到模型参数和 compute，可用于选择 optimizer、architecture、model sizes 和资源 trade-off。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 56 的工程总结}
+Scaling laws 的最大价值是把昂贵训练决策前置：先在小规模比较 optimizer、architecture、model sizes，再用曲线做资源 trade-off。它不能保证万无一失，但能显著减少盲目训练巨型模型的风险。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{slide-057.jpg}
+\caption{Slide 57：全讲 recap，scaling laws 令人惊讶且实用：数据 scaling、模型 scaling、prediction。}
+\figsource{CS336 Spring 2026 Lecture 9 官方幻灯片。}
+\end{figure}
+
+\begin{importantbox}{读图：Slide 57 的最终信息}
+Scaling laws 帮我们理解数据如何影响模型，显著降低模型工程成本，并预测哪些问题可以靠 scale brute force。它们最适合用于资源分配、设计筛选和风险控制；最不适合被当成脱离数据质量、优化细节和部署成本的“万能定律”。
 \end{importantbox}
 
 \subsection{本章小结}
 
-Scaling laws 的实践价值来自严谨实验设计。粗糙的小模型实验可能给出精致但错误的外推；高质量 scaling study 则能显著降低训练 frontier model 的试错成本。
-
-\section{拓展阅读}
-
-\begin{itemize}
-    \item \href{https://cs336.stanford.edu/}{Stanford CS336 Spring 2026 course page}
-    \item \href{https://arxiv.org/abs/2001.08361}{Kaplan et al. 2020: Scaling Laws for Neural Language Models}
-    \item \href{https://arxiv.org/abs/2203.15556}{Hoffmann et al. 2022: Training Compute-Optimal Large Language Models}
-    \item \href{https://arxiv.org/abs/1712.00409}{Hestness et al. 2017: Deep Learning Scaling is Predictable, Empirically}
-    \item \href{https://arxiv.org/abs/2203.03466}{Yang et al. 2022: Tensor Programs V, $\mu$P}
-    \item \href{https://arxiv.org/abs/2404.10102}{Besiroglu et al. 2024: Chinchilla scaling data reanalysis}
-\end{itemize}
+Joint scaling 把模型大小、数据量和 compute 放进同一张账本。Kaplan、Chinchilla 和 IsoFLOPS 的核心差异不是谁更“有名”，而是拟合方法、参数口径和目标函数不同。工程上还要区分 train-optimal 与 deployment-optimal。
 
 \section{总结与延伸}
 
-Lecture 9 把 scaling laws 从历史、理论直觉、数据 scaling、模型工程、batch/LR、joint data-model scaling、Kaplan/Chinchilla 和 deployment economics 串成了一条线。它的核心精神是：在真正昂贵的大模型训练前，用小模型实验建立可检验、可外推、可用于决策的经验规律。
+Lecture 9 给出的不是一个公式，而是一套训练前预测方法。先从历史和数据 scaling 建立 power-law 直觉，再用模型工程 scaling 比较架构、优化器和超参数，最后用联合 data-model scaling 决定 compute、parameter、token 的分配。它把大模型训练从“大赌注”变成一组可审计的小实验和外推。
 
 \begin{importantbox}{最终 takeaways}
 \begin{enumerate}
-    \item Scaling laws 是预测工具，不是“越大越好”的口号。
-    \item Data scaling 在 log-log 坐标中常呈幂律，但数据组成、分布 shift 和重复率会改变曲线。
-    \item 架构、optimizer、depth/width、batch size、learning rate 都可以进入 scaling study。
-    \item Critical batch size 随目标 loss 下降而增大，解释了训练后期增大 batch 的策略。
-    \item Joint data-model scaling 让“更多数据还是更大模型”变成约束优化问题。
-    \item Kaplan vs Chinchilla 说明 scaling fit 对实验设计细节很敏感。
-    \item Train-optimal 不等于 deployment-optimal；推理量越大，越可能值得过训小模型。
+    \item Scaling law 常见形式是 \(L(x)=A x^{-\alpha}+C\)，在 log-log 图上近似直线。
+    \item 数据 scaling 的 slope 反映继续加数据的边际收益，offset 常受数据 mixture 和分布影响。
+    \item 小模型 scaling 实验可以预测架构、optimizer、depth/width、batch size 和 learning rate 的大规模趋势，但必须控制变量。
+    \item Critical batch size 随目标 loss 变化，batch 不是越大越好。
+    \item muP 的价值是让小模型超参数更可靠迁移到大模型。
+    \item Joint scaling law 决定更多数据还是更大模型；Chinchilla 改变了 compute-optimal 训练的直觉。
+    \item Train-optimal 不等于 deployment-optimal，推理成本会推动 overtraining。
 \end{enumerate}
 \end{importantbox}
 
-\begin{knowledgebox}{和后续课程的连接}
-本讲是 Scaling Laws 的基础。后续可以继续深入更复杂的 forecasting：下游能力、数据质量、post-training、synthetic data、MoE activated parameters、long-context scaling，以及训练-推理总成本优化。
+\begin{knowledgebox}{拓展阅读}
+\begin{itemize}
+    \item Kaplan et al. 2020, Scaling Laws for Neural Language Models.
+    \item Hoffmann et al. 2022, Training Compute-Optimal Large Language Models.
+    \item Hestness et al. 2017, Deep Learning Scaling is Predictable.
+    \item Rosenfeld et al. 2020, A Constructive Prediction of the Generalization Error Across Scales.
+    \item Yang et al. on muP / maximal update parameterization.
+\end{itemize}
 \end{knowledgebox}
 
 \end{document}

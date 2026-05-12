@@ -12,8 +12,8 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
-| done | CS336 Spring 2026 | Lecture 01: Overview and Tokenization | https://cs336.stanford.edu/ + `lecture01-slides.py` | `cs336-2026/lecture01/` | Quality-upgraded long-form note: 28-page PDF, 11 figures, 22 teaching boxes, XeLaTeX verified. |
-| done | CS336 Spring 2026 | Lecture 02: Resource Accounting | https://cs336.stanford.edu/ + `lecture02-slides.py` | `cs336-2026/lecture02/` | Long-form note: 26-page PDF, 11 figures, 22 teaching boxes, XeLaTeX and quality script verified. |
+| done | CS336 Spring 2026 | Lecture 01: Overview and Tokenization | `lecture01-slides.py` | `cs336-2026/lecture01/` | Regenerated under slide-complete/read-the-figure standards: 20-page PDF, 15 figures, 32 teaching boxes, terminology tables, XeLaTeX and quality script verified. |
+| done | CS336 Spring 2026 | Lecture 02: Resource Accounting | `lecture02-slides.py` | `cs336-2026/lecture02/` | Regenerated under slide-complete/read-the-figure standards: 20-page PDF, 11 figures, 38 teaching boxes, resource-ledger tables, XeLaTeX and quality script verified. |
 | done | CS336 Spring 2026 | Lecture 03: LM Architecture and Hyperparameters | `lecture03-slides.pdf` | `cs336-2026/lecture03/` | Deep long-form note: 35-page PDF, 33 figures, 24 teaching boxes, code snippets, XeLaTeX and quality script verified. |
 | done | CS336 Spring 2026 | Lecture 04: Attention Alternatives and Mixture of Experts | `lecture04-slides.pdf` | `cs336-2026/lecture04/` | Long-form note: 38-page PDF, 41 figures, 21 teaching boxes, code snippets, XeLaTeX and quality script verified. |
 | done | CS336 Spring 2026 | Lecture 05: GPUs | `lecture05-slides.pdf` | `cs336-2026/lecture05/` | Long-form note: 31-page PDF, 36 figures, 21 teaching boxes, code snippets, XeLaTeX and quality script verified. |

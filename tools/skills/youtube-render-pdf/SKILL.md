@@ -49,11 +49,13 @@ Before downloading the video, search for official slides, lecture notes, or othe
 - the downloaded cover image
 - any extracted or generated figure assets
 - the compiled PDF
+- evidence that the compiled PDF was visually inspected via rendered pages/contact sheet and corrected if needed
 
 ## Rules
 
 - Follow `ai-course-notes/CLAUDE.md` conventions for LaTeX structure, boxes, and figures
 - Always compile PDF twice (`xelatex` two passes) to resolve references
+- After the final compile, follow the PDF Visual QA workflow in `../video-render-common/writing-and-figures.md`; do not mark the note complete until rendered pages have been inspected and layout/rendering issues fixed
 - Prefer manual subtitles; fall back to auto-generated or `youtube-transcript-api`
 - Skip non-teaching content (intros, sponsor segments, channel promos)
 - Use `[H]` float placement for all figures
