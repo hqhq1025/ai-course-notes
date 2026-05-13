@@ -1,6 +1,6 @@
 # Lecture 12 Blueprint
 
-Status: implemented under the new source-first workflow on 2026-05-12.
+Status: rewritten under the prose-led / teacher-voice workflow on 2026-05-13.
 
 ## Goal
 
@@ -22,4 +22,6 @@ Generate Lecture 12 as a source-node-complete note on evaluation: what it means 
 - Localize and include every source image asset referenced by `lecture12-slides.py`.
 - Add nearby `读图` explanations for important leaderboards, benchmark examples, result tables, pipelines, and diagrams.
 - Explain first-use terms: perplexity, zero-shot, ELO, LLM judge, agent scaffold, ecological validity, train-test overlap, contamination, private/fresh evals.
+- Preserve teacher voice: why there is no one true evaluation, why benchmark difficulty differs from realism, why Arena is real but biased, why agent benchmarks evaluate model + scaffold, and why validity is a trust problem.
+- Add transition prose before every major benchmark family and synthesis prose after dense figure clusters.
 - Perform visual PDF QA after compilation.
