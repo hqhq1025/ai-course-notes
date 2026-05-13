@@ -96,6 +96,12 @@ x = y + z
 E = mc^2
 \]
 
+$$\text{SFT（模仿）: } \hat{p}(y|x) \approx p^*(y|x)$$
+
+其中 $p^*$ 是某个参考分布。单行 display math 之间的正文不应该被吞进公式块。
+
+$$\text{RLHF（优化）: } \max_p \mathbb{E}_p[R(y,x)]$$
+
 \[
 \texttt{decode}(\texttt{encode}(x)) = x
 \]
@@ -344,6 +350,19 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "第二层条目" in page
     assert "未转换的 LaTeX 环境：itemize" not in page
     assert "$$" in page and "E = mc^2" in page
+    assert r"\text{SFT（模仿）: } \hat{p}(y|x) \approx p^*(y|x)" in page
+    assert "其中 $p^*$ 是某个参考分布。单行 display math 之间的正文不应该被吞进公式块。" in page
+    assert r"\text{RLHF（优化）: } \max_p \mathbb{E}_p[R(y,x)]" in page
+    assert (
+        "$$\n"
+        r"\text{SFT（模仿）: } \hat{p}(y|x) \approx p^*(y|x)"
+        "\n$$\n\n其中 $p^*$ 是某个参考分布。单行 display math"
+    ) in page
+    assert (
+        "不应该被吞进公式块。\n\n$$\n"
+        r"\text{RLHF（优化）: } \max_p \mathbb{E}_p[R(y,x)]"
+        "\n$$"
+    ) in page
     assert r"\texttt{decode}(\texttt{encode}(x)) = x" in page
     assert r"\(\texttt{encode}(x)\)" in page
     assert "Wrapped LaTeX content" in page

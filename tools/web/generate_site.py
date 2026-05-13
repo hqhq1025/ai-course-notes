@@ -1075,7 +1075,7 @@ def strip_document_shell(tex: str) -> str:
 
 def convert_display_math(text: str) -> str:
     text = re.sub(r"\\\[(.*?)\\\]", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text, flags=re.S)
-    text = re.sub(r"(?m)^(?![ \t])\$\$(.*?)^(?![ \t])\$\$", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text, flags=re.S)
+    text = re.sub(r"(?m)^(?![ \t])\$\$([^\n]*?)\$\$[ \t]*$", lambda m: "\n$$\n" + m.group(1).strip() + "\n$$\n", text)
 
     def env_math(match: re.Match[str]) -> str:
         env = match.group(1)
