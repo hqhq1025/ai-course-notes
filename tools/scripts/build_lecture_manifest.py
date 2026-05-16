@@ -92,7 +92,7 @@ def nodes_from_pdf(pdf: Path) -> list[SourceNode]:
 
 def local_images(lecture_dir: Path) -> list[Path]:
     images: list[Path] = []
-    for dirname in ["slides-images", "images", "frames"]:
+    for dirname in ["slides-images", "images", "figures", "frames"]:
         d = lecture_dir / dirname
         if d.exists():
             images.extend(sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS))

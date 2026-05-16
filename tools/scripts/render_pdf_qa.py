@@ -66,6 +66,9 @@ def main() -> None:
     pdf = args.pdf.resolve()
     out_dir = args.out_dir or (pdf.parent / "qa" / pdf.stem)
     out_dir.mkdir(parents=True, exist_ok=True)
+    clear_pages(out_dir)
+    for stale in (out_dir / "contact.png", out_dir / "qa-report.md"):
+        stale.unlink(missing_ok=True)
 
     renderer = ""
     render_log: Path | None = None

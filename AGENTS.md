@@ -79,6 +79,13 @@ python3 tools/scripts/check_note_coverage.py <lecture-dir>/<lecture>-notes.tex -
 python3 tools/scripts/render_pdf_qa.py <lecture-dir>/<lecture>-notes.pdf
 ```
 
+Podcast/interview batches have extra workflow requirements in
+`docs/PODCAST_INTERVIEW_WORKFLOW.md`. Before generating a large podcast series,
+build a deduplicated `queue.json`/`QUEUE.md`, classify items, choose canonical
+uploads, and set the media retention policy. Use
+`tools/scripts/audit_podcast_notes.py` to detect thin legacy notes, missing
+manifests, missing visual QA, and duplicate-prone queue entries.
+
 ## Writing Standard
 
 Notes are written in Chinese, with technical terms preserved in English where useful. They should be self-contained teaching notes, not thin summaries or translated slide captions.
@@ -104,6 +111,63 @@ Boxes must carry concrete teaching content. Do not use boxes as decoration, and 
 
 Important figures cannot be dropped into the note with only a caption. A figure is important if it is a dense table, plot, benchmark, scaling curve, architecture diagram, resource breakdown, multi-panel result, or visual evidence for a claim.
 
+## Prose-Led Teaching Flow Is Required
+
+Slide-complete coverage must not turn a note into a screenshot album. Figures are evidence and anchors; prose is the actual lecture. Before inserting a cluster of figures, write the narrative problem that the cluster answers, define the variables and stakes, and tell the reader what question to carry into the figure.
+
+Every non-summary `\section{}` and `\subsection{}` should begin with a short bridge paragraph before the first figure, table, formula, or code block. That bridge should answer at least two of:
+
+1. What question does this subsection answer?
+2. How does it follow from the previous subsection?
+3. What source slides or lecture nodes are being synthesized here?
+4. What should the reader understand before looking at the figure?
+
+Avoid section patterns like:
+
+```tex
+\subsection{Some topic}
+\begin{figure}
+...
+\end{figure}
+\begin{knowledgebox}{读图：...}
+...
+\end{knowledgebox}
+```
+
+Prefer:
+
+```tex
+\subsection{Some topic}
+前一节已经说明了 A 的瓶颈；本节转向 B，因为 ...
+读这组图时先看 ...
+\begin{figure}
+...
+\end{figure}
+```
+
+For CS336-style notes, a figure-heavy note should target at least 260 prose characters per figure on average, excluding captions and LaTeX boilerplate. Dense slides need local explanations of roughly 220+ prose characters nearby. These are heuristics, not a substitute for judgment, but a note that fails them is usually too thin.
+
+## Teacher Voice Must Be Captured
+
+Slides are not the full lecture. The instructor's spoken explanations often contain the motivation, caveats, practical heuristics, jokes that reveal common mistakes, and "why this matters" links that do not appear on slides. A high-quality note must preserve this teacher voice.
+
+When subtitles, transcript, executable lecture `text(...)` nodes, speaker notes, or video audio are available:
+
+1. Build a teacher-voice digest before writing prose.
+2. Extract the instructor's motivations, warnings, informal definitions, examples, caveats, and transitions.
+3. Add these to the coverage matrix as `teacher voice` or `spoken explanation` nodes.
+4. Weave them into normal paragraphs and boxes. Do not relegate them to quotes or appendices.
+5. Mark at least several places with language such as `课堂提示`、`老师强调`、`讲义提醒`、`实践经验` when the note is preserving a spoken insight that is not obvious from the slide alone.
+
+For executable lecture sources, optional `text(...)` nodes are not disposable filler. They are often the closest available proxy for the teacher's spoken narration. The blueprint must sample and synthesize them, especially when they explain why a slide appears, what to compare, or what can go wrong.
+
+For video transcripts, use a "teacher voice ledger" with rows like:
+
+| Time / source node | Spoken point | Why it matters | Where it appears in note |
+|---|---|---|---|
+
+If a note has many optional transcript/source text nodes but contains no teacher-voice markers or spoken explanations, treat that as a quality failure even if slide coverage is complete.
+
 ## Slide-Complete Coverage
 
 When a lecture has official slides, a slide PDF, an executable slide source, or the video visibly uses slides, the note should include every slide page screenshot, not just a hand-picked subset. Treat the slide deck as the visual spine of the lecture.
@@ -127,6 +191,13 @@ For every important figure, add nearby explanatory text or boxes that answer:
 4. What claim does this figure support?
 5. What does the figure not prove?
 6. How does it connect to later chapters, systems bottlenecks, or engineering decisions?
+
+The explanation should be a mini-lesson, not a label. A good figure treatment usually has:
+
+- a pre-figure setup paragraph that says why the figure appears now;
+- the figure and source caption;
+- a `读图` block that explains how to read it;
+- a follow-up paragraph that connects the visual evidence back to the section argument.
 
 Recommended pattern:
 
@@ -234,6 +305,9 @@ Use the canonical PDF count command above; raw `find . -name '*-notes.pdf'` can 
 - `pdfinfo`, `pdftotext`, and `pdfimages` are available via `poppler-utils`.
 - `ffmpeg` is available.
 - `faster-whisper` large-v3 has been used for transcription on available GPUs.
+- For faster-whisper, check CTranslate2 CUDA support directly; this host may
+  have CPU-only Torch while `ctranslate2` can still see A100 GPUs. Use
+  `tools/scripts/transcribe_faster_whisper.py` for long podcast transcription.
 - `nvidia-smi` may hang on this host; prefer lightweight GPU visibility checks or known cached transcription tooling.
 - Bilibili full downloads often require cookies. Never commit cookie files or credentials.
 

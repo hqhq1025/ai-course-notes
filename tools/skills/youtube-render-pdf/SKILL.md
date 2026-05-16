@@ -38,10 +38,17 @@ Before downloading the video, search for official slides, lecture notes, or othe
 ## Source Acquisition
 
 1. Inspect video metadata first (title, chapters, duration, thumbnails, subtitles)
-2. Probe formats and choose highest downloadable resolution
+2. Probe formats and choose the best working format for the task.
+   - For a one-off user request to download the original video, keep the highest usable original.
+   - For large podcast/interview batches, default to a low/medium-resolution work copy for frames/transcription and do not retain full-resolution originals unless requested.
 3. Download original cover image (highest-res thumbnail), save locally for front page
 4. Prefer manual subtitles over auto-generated; preserve timestamps
-5. Keep all artifacts local (metadata, cover, subtitles, video, frames)
+5. If YouTube requires authentication, use the repository helper:
+   ```bash
+   tools/scripts/youtube_auth_check.sh "<URL>"
+   ```
+   This validates cookies, browser impersonation, bgutil PO-token support, and EJS challenge solving.
+6. Keep all required artifacts local (metadata, cover, subtitles/transcript, selected frames, final TeX/PDF). Avoid committing large media.
 
 ## Delivery
 
@@ -57,6 +64,8 @@ Before downloading the video, search for official slides, lecture notes, or othe
 - Always compile PDF twice (`xelatex` two passes) to resolve references
 - After the final compile, follow the PDF Visual QA workflow in `../video-render-common/writing-and-figures.md`; do not mark the note complete until rendered pages have been inspected and layout/rendering issues fixed
 - Prefer manual subtitles; fall back to auto-generated or `youtube-transcript-api`
+- For videos with no usable subtitles, use `tools/scripts/transcribe_faster_whisper.py` with CUDA as described in the shared rules
+- For fixed-camera interviews with no slides/demos/whiteboard, use the cover only and do not repeat speaker-head frames in the body; generate concept diagrams/tables instead
 - Skip non-teaching content (intros, sponsor segments, channel promos)
 - Use `[H]` float placement for all figures
 - Set `\noteauthors` to "基于公开课程资料整理" or "基于 [Speaker Name] 授课内容整理" — never "XX \& Codex" or similar

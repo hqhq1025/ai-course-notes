@@ -39,6 +39,10 @@ Refresh the repository status and course update tracking, then add a first feasi
 | 23. CS336 lecture11 generation under new standards | complete | Generated lecture11 from the 58-page official slide deck with slide-complete coverage, read-the-figure/formula explanations, quality/coverage checks, and visual PDF QA. |
 | 24. CS336 lecture12 generation under new standards | complete | Generated lecture12 from the official executable source with localized images, source-node-complete coverage, read-the-figure explanations, quality/coverage checks, and visual PDF QA. |
 | 25. CS336 lecture13 generation under new standards | complete | Generated lecture13 from the official executable source with localized images, source-node-complete coverage, read-the-figure explanations, quality/coverage checks, and visual PDF QA. |
+| 26. YouTube ttkd0t5qTD4 authentication | complete | Root-solved YouTube extraction with account cookies, bgutil PO-token provider, compatible curl_cffi, and EJS remote challenge solver; format listing succeeds. |
+| 27. YouTube ttkd0t5qTD4 video note | complete | Downloaded original 4K video/subtitles/cover/metadata, extracted frames, wrote 21-page Chinese TeX note, compiled PDF, passed quality/coverage checks, and completed visual QA. |
+| 28. Zhang Xiaojun YouTube interview batch | in_progress | Build deduplicated queue for all Zhang Xiaojun Podcast YouTube interviews, then generate notes one video at a time under the authenticated YouTube workflow. |
+| 29. CS336 prose-density workflow audit | complete | User feedback showed figure-heavy notes lacked enough prose and transitions; added prose-density/weak-opener checks, updated standards, and documented repair plan. |
 
 ## Decisions
 - Do not attempt a full CS336/CS153/CS25 generation batch in one pass; those are multi-lecture long-form courses.
@@ -66,3 +70,4 @@ Refresh the repository status and course update tracking, then add a first feasi
 | L08 overfull boxes | First L08 XeLaTeX pass compiled but showed overfull lines from a long memory formula and a wide parallelism summary table | Split the formula into an `align*` block, tightened the table, shortened long English labels, and recompiled. |
 | L09 PDF bookmark warnings | First L09 XeLaTeX pass warned about math symbols in section titles for `muP` | Replaced math in section/subsection titles with text `muP`, shortened the paragraph, and recompiled until rerun warnings cleared. |
 | L10 tcolorbox math title | First L10 XeLaTeX pass stopped with `Missing $ inserted` from math in a box title | Rephrased the box title as plain text and recompiled until rerun warnings cleared. |
+| YouTube anti-bot login challenge | Anonymous `yt-dlp --dump-single-json` and `yt-dlp -F` for `ttkd0t5qTD4` | Root cause: YouTube requires sign-in/bot confirmation for this host; next attempt will use local browser cookies if available, without committing cookie data. |

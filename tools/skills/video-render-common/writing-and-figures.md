@@ -33,12 +33,51 @@ with open('subs_clean.txt', 'w') as f:
 
 This typically achieves **10x compression** (86k → 8k lines) with zero information loss. Save the result as `subs_clean.txt` next to the original SRT. For videos over 2 hours, this step is essential to avoid agent timeouts.
 
+## Transcription Standard
+
+For long podcasts/interviews with no usable platform subtitles, prefer
+`faster-whisper` on CTranslate2 CUDA:
+
+```bash
+tools/scripts/transcribe_faster_whisper.py <audio-or-video> \
+  --out-prefix <episode-dir>/transcript.zh \
+  --model large-v3 \
+  --device cuda \
+  --compute-type float16 \
+  --language zh
+```
+
+Do not infer GPU availability from `torch.cuda.is_available()` alone. This host
+may have CPU-only Torch while CTranslate2 can still use CUDA. Check:
+
+```bash
+python3 - <<'PY'
+import ctranslate2
+print(ctranslate2.get_cuda_device_count())
+print(ctranslate2.get_supported_compute_types("cuda"))
+PY
+```
+
+If CUDA transcription fails, record the exact error in `findings.md` and fix the
+CTranslate2/CUDA path. Do not silently fall back to CPU for multi-hour videos
+unless the user approves.
+
 ## Writing Rules
 
 1. Write the notes in Chinese unless the user explicitly requests another language.
 
 2. Organize the document with `\section{...}` and `\subsection{...}`.
    Reconstruct the teaching flow when needed; do not blindly mirror subtitle order.
+   Each non-summary section/subsection must start with a bridge paragraph before
+   any figure, table, formula, or code block. The bridge should explain what
+   question the section answers, why it follows from the previous section, and
+   what to look for in the coming visual or example.
+
+   Preserve the teacher's spoken voice. Slides and on-screen visuals are not the
+   whole lecture; the transcript often contains the instructor's motivation,
+   caveats, informal definitions, common-mistake warnings, and transitions. Make
+   a small teacher-voice ledger before writing, then weave those points into the
+   prose using labels like `课堂提示`、`老师强调`、`讲义提醒`、`实践经验` when helpful.
 
 3. Start from `assets/notes-template.tex`.
    Fill in the metadata block, including the local cover image path, and replace the body content block with the generated notes.
@@ -59,6 +98,20 @@ This typically achieves **10x compression** (86k → 8k lines) with zero informa
    Every important figure must be interpreted, not merely captioned.
    After dense plots, benchmark tables, architecture diagrams, scaling curves, or multi-panel figures, add a nearby `knowledgebox` titled like `读图：...` that explains axes/columns/legend/baselines, the key trend, and the teaching conclusion.
    If the figure can be misread, add a `warningbox` explaining what the figure does not prove.
+
+   For fixed-camera podcasts/interviews with no slides, whiteboard, product
+   demo, charts, or meaningful visual changes, use the cover image on the title
+   page and do **not** repeat speaker-head frames throughout the note. Repeated
+   speaker frames are a quality problem, not evidence. Replace them with concept
+   diagrams, timelines, process maps, and terminology tables that carry the
+   actual teaching content.
+
+   Figure-heavy notes must remain prose-led. A slide screenshot is not an
+   explanation. For CS336-style notes, target at least 260 prose characters per
+   figure on average, excluding captions and LaTeX boilerplate. Dense figures
+   should have roughly 220+ prose characters nearby. If a draft fails this,
+   expand the section narrative or merge/remove low-value screenshots rather
+   than adding more pictures.
 
 6. Do not place images inside custom message boxes.
 
@@ -117,6 +170,21 @@ Keep the speaker's closing discussion when it carries actual teaching value, suc
 
 The notes must be self-explanatory for a technically strong reader who has not seen the original lecture. When the lecture introduces dense concepts quickly, slow down and add local scaffolding.
 
+### Teacher Voice Coverage
+
+When subtitles/transcripts, speaker notes, or executable `text(...)` lecture
+nodes are available, extract and preserve spoken teaching points:
+
+- the instructor's reason for introducing a topic;
+- caveats and "this does not mean..." warnings;
+- informal examples or analogies;
+- practical heuristics and default choices;
+- transitions between topics;
+- comments that explain why a slide should be read in a particular way.
+
+Do not turn a slide lecture into a visual deck summary. A reader should hear the
+instructor's reasoning in the prose, not just see slide screenshots with captions.
+
 ### Important Figure Interpretation
 
 For every important figure, especially plots, tables, screenshots of paper results, resource breakdowns, scaling curves, and architecture diagrams, add a nearby explanation that answers:
@@ -129,6 +197,17 @@ For every important figure, especially plots, tables, screenshots of paper resul
 - How does it connect to later course topics or engineering decisions?
 
 Do not write only “这张图说明 X 很重要”. Explain how the visual evidence leads to X.
+
+Every important figure should live inside a prose chain:
+
+1. Pre-figure setup: why this figure appears here and what question it answers.
+2. Figure and source caption.
+3. `读图` explanation: how to read the visual.
+4. Post-figure synthesis: what conclusion follows and how it connects to the next paragraph or section.
+
+If several slides form one evidence chain, introduce the chain before the first
+figure and explain each slide's role in the chain. Avoid writing a sequence of
+isolated "Slide N" captions.
 
 Recommended LaTeX pattern:
 
@@ -181,6 +260,23 @@ A good background concept explanation usually has:
 ## Figure Handling
 
 Select figures by necessity and teaching value, not by an arbitrary quota or a bias toward keeping the document visually sparse.
+
+### Podcast / Interview Visual Policy
+
+For interview-style videos:
+
+- Always use the original cover image on the front page.
+- If the body video has no slides, product demo, whiteboard, charts, screen
+  share, or meaningful visual change, do not insert repeated speaker frames in
+  the body.
+- Use body frames only when they add information beyond the cover: visible
+  slides, product UI, code/demo, whiteboard, a rare scene change, or a
+  genuinely important provenance anchor.
+- If a body frame is only a speaker frame, add a `读图` box explaining that it is
+  a source/time anchor and not technical evidence.
+- Prefer generated diagrams/tables for conceptual content. A high-quality
+  podcast note can be `⭐⭐⭐` with fewer images than a slide lecture if the images
+  are substantive and visual QA is complete.
 
 ### Slides-First Rule
 

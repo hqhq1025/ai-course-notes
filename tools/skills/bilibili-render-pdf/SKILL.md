@@ -56,7 +56,12 @@ yt-dlp --write-subs --sub-langs "zh-Hans,zh-CN,zh,ai-zh" --convert-subs srt \
 **Priority 2: Whisper speech-to-text**
 ```
 yt-dlp -x --audio-format wav -o "audio.%(ext)s" "<URL>"
-whisper audio.wav --model medium --language zh --output_format srt --output_dir .
+tools/scripts/transcribe_faster_whisper.py audio.wav \
+  --out-prefix transcript.zh \
+  --model large-v3 \
+  --device cuda \
+  --compute-type float16 \
+  --language zh
 ```
 
 **Priority 3: Visual-only mode** — skip subtitles, rely on dense frame sampling.
@@ -82,6 +87,8 @@ whisper audio.wav --model medium --language zh --output_format srt --output_dir 
 - Always compile PDF twice (`xelatex` two passes) to resolve references
 - After the final compile, follow the PDF Visual QA workflow in `../video-render-common/writing-and-figures.md`; do not mark the note complete until rendered pages have been inspected and layout/rendering issues fixed
 - Prefer CC subtitles; fall back to Whisper only when unavailable
+- For long videos, use the faster-whisper CUDA helper from the shared rules; do not silently run multi-hour CPU transcription
+- For fixed-camera interviews with no slides/demos/whiteboard, use the cover only and do not repeat speaker-head frames in the body; generate concept diagrams/tables instead
 - Skip non-teaching content (intros, sponsor segments, 一键三连, 关注投币)
 - Use `[H]` float placement for all figures
 - Set `\noteauthors` to "基于公开课程资料整理" or "基于 [Speaker Name] 授课内容整理" — never "XX \& Codex" or similar
