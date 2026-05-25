@@ -31,6 +31,34 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
+> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 303 份讲义。
+
+## 📥 克隆指南
+
+仓库历史中累积了大量 PDF、图片和字幕，完整克隆体积较大（数 GB）。请按需选择克隆方式：
+
+| 方式 | 命令 | 适用场景 | 体积量级 |
+|------|------|----------|----------|
+| **浅克隆** | `git clone --depth=1 https://github.com/hqhq1025/ai-course-notes.git` | 只想读最新版本（推荐） | 几百 MB |
+| **无 blob 克隆** | `git clone --filter=blob:none https://github.com/hqhq1025/ai-course-notes.git` | 想保留完整历史，但按需下载文件内容 | ~2 GB |
+| **稀疏 checkout** | 见下方 | 只关心某一门课（例如 cs336） | 几十 MB |
+| **完整克隆** | `git clone https://github.com/hqhq1025/ai-course-notes.git` | 想拿到所有历史与文件 | 数 GB |
+
+只克隆某门课（以 cs336 为例）：
+
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/hqhq1025/ai-course-notes.git
+cd ai-course-notes
+git sparse-checkout init --cone
+git sparse-checkout set cs336
+git checkout main
+```
+
+> **关于 PDF**：`*-notes.pdf`（由本仓库 `.tex` 编译生成的讲义 PDF）不再随仓库分发。
+> - 在线站点本身已经渲染了讲义全文，无需 PDF
+> - 需要 PDF 的用户可在本地用 `xelatex` 编译 `*-notes.tex` 自行生成
+> - 课程方的官方 `*-slides.pdf` 仍保留在仓库内
+
 ## 📊 内容规模
 
 | 分类 | 数量 | 说明 |
