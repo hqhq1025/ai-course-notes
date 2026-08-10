@@ -1,0 +1,393 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 7：搜索式自我改进与 Deep Research Agent}
+\newcommand{\lecturers}{Aakanksha Chowdhery}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-10-17}
+\newcommand{\videoduration}{1:12:26}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=Uni9dqyuuDM}
+
+\begin{document}
+\makelecturetitle
+
+\section{统一视角：答案已经在搜索空间里，难点是把它找出来}
+
+本讲讨论两种看似不同、实则共享同一结构的搜索式自我改进：一类是 AlphaCode/AlphaCode 2 在\textbf{候选程序空间}中大规模采样、过滤、聚类和排序；另一类是 Search-o1 在\textbf{推理过程}中识别知识缺口、发起检索、压缩文档并继续推理。
+
+它们都把单次模型调用扩展为一个系统：
+
+$$
+\text{Generator}\rightarrow \text{Candidate Set}\rightarrow
+\text{Selector/Verifier}\rightarrow \text{Answer}.
+$$
+
+\begin{itemize}
+    \item Generator：从模型分布产生多个候选程序、推理分支或查询；
+    \item Candidate Set：保留多样的可行轨迹，而不是只看最高概率输出；
+    \item Selector/Verifier：使用测试、聚类、打分模型或检索证据压缩搜索空间；
+    \item Answer：输出满足提交预算、正确性和成本约束的少量结果。
+\end{itemize}
+
+\begin{importantbox}{搜索式自我改进的核心不是“多采样”}
+真正决定收益的是候选覆盖率、候选之间的多样性，以及选择器能否把正确候选从大量近似错误中分离出来。没有可靠选择器，更多采样只会更快地产生垃圾。
+\end{importantbox}
+
+\begin{knowledgebox}{并行搜索与串行修正互补}
+并行采样用于探索不同算法或证据路径；串行修正用于沿一条路径定位错误、补充信息和回溯。复杂 agent 往往需要先宽搜，再对少量候选深挖。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+AlphaCode 与 Search-o1 都把 LLM 当作可搜索的 proposal distribution。系统能力取决于“生成--筛选--验证--回馈”的闭环，而不只取决于基础模型的 next-token loss。
+
+\section{AlphaCode：在程序空间里做大规模搜索}
+
+\subsection{为什么竞赛编程比代码补全难}
+
+HumanEval 常给出函数签名、局部说明与较短实现；Codeforces 问题则要求理解长题意、选择算法、满足复杂度约束并写出完整程序。错误可能来自题意理解、算法、边界条件、复杂度、语法或输入输出协议中的任一环节。
+
+\videofigure{figures/alphacode-pipeline.jpg}{AlphaCode 将代码预训练、竞赛题微调、大规模采样、过滤聚类和最终提交串成完整流水线。}{00:03:48--00:05:42}
+
+训练数据主要来自 GitHub 代码与 CodeContests。原始 AlphaCode 仍需要自建模型：预训练学习通用代码分布，竞赛数据微调让模型适应“题面--解法”结构，之后才进入测试时搜索。
+
+\begin{warningbox}{验证集 loss 不是 solve rate 的可靠代理}
+token-level loss 衡量局部预测是否接近训练分布，但竞赛题按整段程序是否通过隐藏测试计分。一个 token 的边界错误就可能让整题归零；因此训练 loss 的小幅改善未必转化为题目通过率。
+\end{warningbox}
+
+\subsection{一题采样一百万个程序}
+
+\videofigure{figures/large-scale-sampling.jpg}{AlphaCode 对每道题生成约一百万个 Python/C++ 候选，并用高温度与提示扰动维持算法多样性。}{00:06:08--00:07:28}
+
+设基础模型对程序 $y$ 的条件分布为 $p_\theta(y\mid x)$。若单次采样命中正确程序的概率为 $p$，独立采样 $n$ 次至少命中一次的概率为：
+
+$$
+P(\text{hit})=1-(1-p)^n.
+$$
+
+\begin{itemize}
+    \item $x$：题面、样例和可选标签；
+    \item $y$：完整候选程序；
+    \item $p$：单次采样落入正确解集合的概率；
+    \item $n$：采样预算。
+\end{itemize}
+
+当 $p$ 极小时，大规模采样能显著提高覆盖率；但收益最终受选择器限制，因为平台只允许提交很少的程序。
+
+\begin{importantbox}{高温度的目标是覆盖算法族，而非随机制造语法差异}
+理想多样性来自动态规划、贪心、图算法、数据结构等不同解题思路。如果候选只是变量名不同或同一错误模板的改写，样本数再大也不增加有效覆盖。
+\end{importantbox}
+
+\subsection{先过样例，再按语义聚类}
+
+\videofigure{figures/filter-cluster.jpg}{系统先过滤无法通过公开样例的程序，再用生成测试输入上的行为把语义近似的程序聚成一类。}{00:07:28--00:09:04}
+
+AlphaCode 训练额外的 test-input generator。对同一题生成输入集合 $T=\{t_j\}$，把程序 $y$ 映射为行为签名：
+
+$$
+\phi_T(y)=\bigl(y(t_1),y(t_2),\ldots,y(t_m)\bigr).
+$$
+
+若两个程序的行为签名相近，它们可能实现同一种算法或共享同一错误；聚类后每簇只保留少数代表，可以在固定提交预算下覆盖更多不同语义。
+
+\begin{knowledgebox}{聚类是一种预算分配器}
+平台提交次数是稀缺资源。聚类不是为了让程序看起来整齐，而是避免把十次提交都浪费在同一种失败模式上。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+AlphaCode 的关键是把极大的程序空间压缩成少量多样候选：模型负责 proposal，公开样例做廉价过滤，生成测试做行为聚类，隐藏测试完成最终验证。
+
+\section{如何评估：pass@k、10@k 与真实排名}
+
+\subsection{搜索覆盖与提交选择要分开看}
+
+\videofigure{figures/pass-k-metrics.jpg}{pass@$k$ 衡量候选覆盖，10@$k$ 衡量从 $k$ 个样本中选出十个提交后的实际成功率。}{00:14:18--00:16:26}
+
+若 $n$ 个样本中有 $c$ 个正确程序，无放回选择 $k$ 个时，常用估计为：
+
+$$
+\operatorname{pass@}k=1-\frac{\binom{n-c}{k}}{\binom{n}{k}}.
+$$
+
+\begin{itemize}
+    \item $n$：总候选数；
+    \item $c$：其中通过隐藏测试的候选数；
+    \item $k$：允许观察或抽取的候选预算；
+    \item pass@$k$：至少存在一个正确候选的概率。
+\end{itemize}
+
+10@$k$ 更接近真实竞赛：先生成 $k$ 个候选，再通过过滤与聚类选出至多十个提交。它同时考察 generator 与 selector，而不仅是“正确答案是否曾出现”。
+
+\videofigure{figures/codecontests-results.jpg}{CodeContests 结果显示模型规模和聚类都能提高有限提交预算下的 solve rate。}{00:16:26--00:18:08}
+
+\begin{warningbox}{pass@$k$ 高不代表系统可部署}
+如果正确候选藏在几十万条程序中，但选择器无法识别，它对真实用户没有价值。部署指标必须显式包含提交预算、执行成本、延迟和误选率。
+\end{warningbox}
+
+\subsection{真实 Codeforces 评估}
+
+\videofigure{figures/codeforces-evaluation.jpg}{AlphaCode 在十场大型 Codeforces 竞赛中现场生成、筛选并提交程序，平均排名约在参赛者中位附近。}{00:09:04--00:13:58}
+
+课程强调这类评估比静态 benchmark 更可信：题目是在模型训练完成后出现的，系统按真实提交规则运行，并与数千名人类参赛者比较。AlphaCode 在当时达到约前 54\% 的排名，证明完整端到端程序生成不再只是玩具任务。
+
+\videofigure{figures/alphacode-tradeoffs.jpg}{AlphaCode 的强项是完整问题求解与可重复验证，弱点是高计算成本、隐藏测试依赖和选择瓶颈。}{00:22:42--00:24:34}
+
+\subsection{本章小结}
+
+评估搜索系统时必须拆开三件事：模型能否生成正确候选、选择器能否在小预算下找到它、最终程序能否在真实平台通过并具备可接受效率。
+
+\section{AlphaCode 2：更强基础模型加学习式选择器}
+
+\subsection{从自建代码模型切换到 Gemini Pro}
+
+\videofigure{figures/alphacode2-overview.jpg}{AlphaCode 2 用 Gemini Pro 替换原始代码模型，并在采样与筛选端加入更多学习组件。}{00:25:14--00:26:48}
+
+AlphaCode 2 不再从头预训练代码模型，而是利用更强的通用 foundation model，再针对竞赛编程微调多个 solver family。这将“知识与代码能力”交给基础模型，把系统创新集中在多样采样与排序。
+
+\videofigure{figures/alphacode2-contributions.jpg}{AlphaCode 2 的主要变化包括 Gemini 微调、多个 solver family，以及提交前的正确性 scoring model。}{00:26:48--00:27:42}
+
+\begin{importantbox}{基础模型与搜索器是乘法关系}
+更强模型提高单次命中率 $p$；更好的搜索和选择提高预算利用率。二者共同决定最终 solve rate，不能把全部进步归因于“模型更大”或“采样更多”。
+\end{importantbox}
+
+\subsection{Scoring model 学习“哪个候选更可能正确”}
+
+\videofigure{figures/scoring-model.jpg}{独立 scoring model 根据题目与候选程序估计正确性，用于提交前排序。}{00:27:42--00:29:18}
+
+设候选为 $y_i$，打分器输出 $s_\phi(x,y_i)$。最终系统不是按 solver 的生成概率排序，而是组合：
+
+$$
+\operatorname{rank}(y_i)=
+\lambda s_\phi(x,y_i)+(1-\lambda)d(y_i,\mathcal S),
+$$
+
+其中 $d(y_i,\mathcal S)$ 表示相对已选集合的语义多样性。高分候选更可能正确，多样性项避免全部提交来自同一错误簇。
+
+\begin{warningbox}{生成概率不能直接当正确性概率}
+模型偏好的往往是常见、流畅、模板化的代码，而不是通过所有边界测试的代码。课程结尾进一步指出，语言模型常对错误答案过度自信，概率校准本身就是开放问题。
+\end{warningbox}
+
+\videofigure{figures/alphacode2-sampling.jpg}{AlphaCode 2 聚合多个 solver family 的大规模样本，经测试、聚类和打分后保留少量提交。}{00:29:18--00:30:42}
+
+\subsection{用更少样本达到更高 solve rate}
+
+\videofigure{figures/solve-rate-scaling.jpg}{AlphaCode 2 的 solve rate 随采样预算增长，并以远少于旧系统的样本达到可比或更好结果。}{00:30:42--00:32:10}
+
+AlphaCode 2 的重要工程结论是：提高 proposal quality 与 selector quality 后，不必永远把样本数推到一百万。对简单题，较小预算已能覆盖正确解；对难题，额外采样才更有价值。
+
+\videofigure{figures/alphacode2-percentile.jpg}{AlphaCode 2 在模拟竞赛评估中达到约第 85 百分位，明显超过原始 AlphaCode。}{00:37:18--00:39:02}
+
+\videofigure{figures/alphacode2-tradeoffs.jpg}{AlphaCode 2 提升样本效率和候选质量，但运行成本高、方法仍高度依赖代码可执行验证。}{00:39:02--00:40:02}
+
+\begin{knowledgebox}{Adaptive compute 是自然下一步}
+先用轻量模型估计题目难度和当前候选置信度，再动态决定采样数、温度、solver family 与是否进入串行修正，可把平均成本从“每题固定一百万样本”降到按需分配。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+AlphaCode 2 通过更强基础模型、多 solver family 和 learned scorer 改善 proposal 与 selection，说明测试时计算的价值不只来自规模，还来自任务自适应和更准确的候选排序。
+
+\section{从平行采样走向可回溯推理}
+
+课堂讨论提出两条改进路线：简单题少采样、困难题多采样；以及把“先想算法再写代码”的 reasoning 直接纳入训练与搜索。
+
+对复杂任务，可以把一次完整程序生成改写成分层搜索：
+
+\begin{enumerate}
+    \item 生成若干算法草案与复杂度分析；
+    \item 对每个草案生成关键不变量和边界测试；
+    \item 只为高潜力草案生成完整代码；
+    \item 执行失败后定位到相应阶段，允许回溯而非整段重写。
+\end{enumerate}
+
+\begin{importantbox}{树搜索需要可恢复的中间状态}
+如果每一步只输出不可解释的长文本，系统难以判断应继续、修正还是回退。结构化计划、显式假设、测试结果和工具状态是长轨迹搜索的基本接口。
+\end{importantbox}
+
+\begin{warningbox}{分解并不自动解决错误传播}
+第一步的错误算法可能让后续所有步骤“局部正确、全局错误”。每个子目标都需要验证，系统还要允许回到上层重新选择分支。
+\end{warningbox}
+
+\subsection{本章小结}
+
+大规模平行采样擅长覆盖，分层 reasoning 与回溯擅长利用反馈。下一代 coding agent 会把两者结合：先探索算法族，再沿少量路径执行、验证和修复。
+
+\section{Search-o1：在推理途中自主检索}
+
+\subsection{长推理为何更容易出现知识缺口}
+
+\videofigure{figures/search-o1-intro.jpg}{Search-o1 为大型 reasoning model 增加自主检索能力，使其在推理中按需补知识。}{00:46:56--00:48:02}
+
+\videofigure{figures/reasoning-knowledge-gaps.jpg}{推理链越长，遇到陌生实体、公式、实验事实或跨领域知识的机会越多，早期缺口会持续传播。}{00:48:02--00:49:28}
+
+大型 reasoning model 可能具有强演绎能力，却缺少完成某一步所需的事实。若模型用“perhaps”“might”“likely”一类模糊表达掩盖缺口，后续推理会在错误前提上继续展开。
+
+\begin{importantbox}{Reasoning failure 不总是 reasoning 能力不足}
+有些失败来自缺少知识，有些来自不会推理。Search-o1 的价值在于把两者分开：遇到知识缺口先检索，拿到证据后再判断模型是否仍不能完成推导。
+\end{importantbox}
+
+\subsection{为什么一次性 RAG 不够}
+
+\videofigure{figures/standard-rag-limitations.jpg}{标准 RAG 通常只在开始时按原问题检索一次，无法响应推理途中才暴露的新问题。}{00:49:28--00:50:24}
+
+原始问题往往无法直接表达真正的检索需求。例如多步化学题需要先识别中间产物，再查询某个反应性质；第二步的查询只有在第一步推理完成后才知道。
+
+\begin{warningbox}{更多文档可能让 reasoning 更差}
+把 top-$k$ 文档全部塞进 context 会引入冗余、冲突和长上下文注意力稀释。检索系统必须同时解决“何时搜”“搜什么”“保留什么”。
+\end{warningbox}
+
+\subsection{Agentic RAG 与 Reason-in-Documents}
+
+\videofigure{figures/search-o1-framework.jpg}{Search-o1 在 vanilla reasoning 与一次性 RAG 之上加入多轮搜索和文档内推理。}{00:50:24--00:54:42}
+
+可把第 $t$ 轮表示为：
+
+$$
+u_t=g(r_{\le t}),\quad
+q_t=h(u_t),\quad
+D_t=\operatorname{Retrieve}(q_t),\quad
+z_t=\operatorname{Compress}(D_t,q_t),
+$$
+
+$$
+r_{t+1}\sim p_\theta(\cdot\mid x,r_{\le t},z_t).
+$$
+
+\begin{itemize}
+    \item $r_{\le t}$：当前 reasoning 前缀；
+    \item $u_t$：模型识别到的不确定点或知识缺口；
+    \item $q_t$：针对该缺口构造的搜索查询；
+    \item $D_t$：检索到的原始文档；
+    \item $z_t$：只保留与当前推理相关的压缩证据。
+\end{itemize}
+
+\videofigure{figures/agentic-rag-mechanism.jpg}{模型用特殊搜索标记暂停 reasoning、生成 query、调用检索器并把证据插回推理链。}{00:54:42--00:56:22}
+
+\videofigure{figures/reason-in-documents.jpg}{Reason-in-Documents 模块独立分析检索文档，提取相关信息，避免长文档直接破坏主 reasoning chain。}{00:56:22--00:58:48}
+
+\begin{knowledgebox}{压缩器本质上是信息瓶颈}
+它既要保留足以支持下一步推理的事实，又要丢弃无关细节。压缩过度会漏证据，压缩不足会把噪声重新带回主模型。
+\end{knowledgebox}
+
+\subsection{Worked example：多步化学问题}
+
+\videofigure{figures/search-o1-example.jpg}{在多步反应题中，Search-o1 先定位陌生化合物结构，再结合检索证据完成碳原子计数。}{00:58:48--01:00:34}
+
+Vanilla reasoning 会对陌生化合物直接猜测；普通 agentic RAG 虽然取回文档，但长文本可能打断原推理。Search-o1 将流程拆成“发现缺口--查结构--提炼事实--继续计算”，因此最终答案更稳定。
+
+\subsection{本章小结}
+
+Search-o1 把检索从开场前处理改成 reasoning 内部动作，并增加文档压缩层。它解决的是长链推理中知识需求逐步显现的问题。
+
+\section{Search-o1 的结果、边界与 Search-R1}
+
+\subsection{随着文档增加，性能仍能扩展}
+
+\videofigure{figures/search-o1-scaling.jpg}{Search-o1 在多个科学领域随检索文档数量增加持续提升，而标准 RAG 很快饱和。}{01:00:34--01:01:28}
+
+\videofigure{figures/gpqa-results.jpg}{Search-o1 在 GPQA 扩展集上超过直接推理和标准 RAG，并缩小与人类专家的差距。}{01:01:28--01:03:18}
+
+\videofigure{figures/retrieved-doc-scaling.jpg}{从 top-1 扩展到 top-10 文档时，Search-o1 能利用更多证据；普通 RAG 更容易被噪声拖累。}{01:03:18--01:04:38}
+
+\videofigure{figures/multihop-qa.jpg}{在 HotpotQA、2Wiki、MuSiQue 与 Bamboogle 等多跳 QA 上，迭代搜索优于单跳检索。}{01:04:38--01:06:12}
+
+这些结果支持一个系统设计原则：检索规模要与证据提炼能力共同扩展。只增加文档数量而不提高 query refinement 和 compression，无法获得稳定收益。
+
+\subsection{不确定性减少不等于事实完全可靠}
+
+\videofigure{figures/search-o1-insights.jpg}{论文从不确定词、文档规模与多轮查询三个角度分析 Search-o1 的收益来源。}{01:06:12--01:06:46}
+
+\videofigure{figures/reasoning-quality.jpg}{加入搜索后，推理中的模糊措辞减少，证据支持的陈述增加。}{01:06:46--01:08:02}
+
+\begin{warningbox}{“说得更确定”不是正确性的充分条件}
+检索器可能返回错误网页，压缩器可能误读证据，模型也可能把引用与结论错误绑定。仍需来源质量、claim-level citation 与最终答案验证。
+\end{warningbox}
+
+\subsection{Search-o1 与 Search-R1}
+
+Search-o1 主要通过 prompting 和显式 agent loop 教模型何时搜索；Search-R1 则尝试用 reinforcement learning 把搜索策略学进 policy。二者差异可概括为：
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3cm}>{\raggedright\arraybackslash}p{4.7cm}>{\raggedright\arraybackslash}p{4.7cm}}
+\toprule
+\textbf{维度} & \textbf{Search-o1} & \textbf{Search-R1} \\
+\midrule
+控制方式 & prompt、特殊 token 与手写循环 & RL 学习何时搜索和如何使用结果 \\
+优点 & 易调试、可替换检索组件、无需训练 & 可减少手工规则，策略可能更自适应 \\
+风险 & prompt 脆弱、调用策略未必最优 & reward 设计复杂，可能学会投机搜索 \\
+适用阶段 & 快速构建与分析系统 & 有可靠 reward 和足够在线交互预算 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{importantbox}{搜索行为本身也需要 reward}
+若只奖励最终答案，agent 可能过度搜索、完全不搜或利用 benchmark 漏洞。理想目标还应考虑答案质量、证据覆盖、查询次数、延迟和文档成本。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Search-o1 证明多轮、按需、可压缩的检索能显著改善知识密集推理；Search-R1 进一步把调用策略视为可学习行为。两者都要求验证检索证据，而不是把 retrieval 当作天然真相。
+
+\section{模型概率、置信度与校准}
+
+课程问答指出，输出 token 的平均 log probability 与正确性有相关性，但通常校准不足：错误回答也可能得到很高内部概率，且模型在被纠正时仍坚持原答案。
+
+可用可靠性图或 Expected Calibration Error 衡量：
+
+$$
+\operatorname{ECE}=\sum_{b=1}^{B}\frac{|S_b|}{N}
+\left|\operatorname{acc}(S_b)-\operatorname{conf}(S_b)\right|.
+$$
+
+\begin{itemize}
+    \item $S_b$：预测置信度落入第 $b$ 个区间的样本；
+    \item $\operatorname{acc}(S_b)$：该区间真实正确率；
+    \item $\operatorname{conf}(S_b)$：该区间平均置信度；
+    \item ECE 越小，置信度越接近经验正确率。
+\end{itemize}
+
+\begin{knowledgebox}{选择器最好学习可验证信号，而非只读模型自信}
+代码任务可加入编译、样例、变异测试、复杂度分析和行为聚类；研究 agent 可加入来源质量、引用一致性和交叉证据。外部信号通常比生成模型的自报置信度更可靠。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+语言模型概率不是经过校准的“答案正确率”。候选排序、停止条件和是否触发搜索都应结合外部验证与专门校准，而不能只看原始 token probability。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/abs/2203.07814}{Li et al., \emph{Competition-Level Code Generation with AlphaCode}}
+    \item \href{https://storage.googleapis.com/deepmind-media/AlphaCode2/AlphaCode2_Tech_Report.pdf}{Google DeepMind, \emph{AlphaCode 2 Technical Report}}
+    \item \href{https://arxiv.org/search/?query=Search-o1%3A+Agentic+Search-Enhanced+Large+Reasoning+Models\&searchtype=all}{\emph{Search-o1: Agentic Search-Enhanced Large Reasoning Models}}
+    \item \href{https://arxiv.org/search/?query=Search-R1\&searchtype=all}{\emph{Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning}}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲把 test-time compute 从“多想一会儿”具体化为两个可执行系统。
+
+\begin{enumerate}
+    \item \textbf{AlphaCode}：用大规模并行采样覆盖程序空间，用样例、行为聚类和隐藏测试压缩候选；
+    \item \textbf{AlphaCode 2}：用更强 foundation model、多个 solver family 与 learned scorer 提高样本效率和提交质量；
+    \item \textbf{Search-o1}：在 reasoning 内识别知识缺口，多轮检索并压缩文档，让新证据进入后续推理；
+    \item \textbf{Search-R1}：把“何时搜、搜什么、何时停止”进一步视为可通过 RL 学习的策略。
+\end{enumerate}
+
+跨越代码搜索与知识搜索后，可以提炼出同一套 agent 设计准则：
+
+\begin{itemize}
+    \item 生成器负责扩大候选覆盖，但必须维持语义多样性；
+    \item 选择器要基于任务相关的可验证信号，而非生成概率；
+    \item 计算预算应按难度和当前不确定性动态分配；
+    \item 长轨迹必须保存结构化中间状态，支持局部验证和回溯；
+    \item 外部工具会引入新错误面，检索结果、测试与 reward model 自身也要被验证。
+\end{itemize}
+
+下一讲转向 agentic evaluation：当任务需要几十分钟到数小时、输出是 CAD、报告、表格或文献综述时，如何测量可靠性、经济价值和真实工作差距。
+
+\end{document}

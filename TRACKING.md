@@ -1,6 +1,6 @@
 # 📡 进行中课程追踪列表
 
-> 由 Hermes Agent 维护，每周自动检查更新。最后更新：2026-05-04
+> 由 Hermes Agent 维护，每周自动检查更新。最后更新：2026-08-10
 
 ---
 
@@ -65,6 +65,14 @@
 ---
 
 ## ⏸ 已结束（可能有新学期）
+
+### Stanford CS329A - Self-Improving AI Agents (Autumn 2025)
+- **状态**：官方 9-Part 公开视频系列已完整收录
+- **讲师**：Aakanksha Chowdhery、Azalia Mirhoseini
+- **网站**：https://cs329a.stanford.edu/
+- **YouTube**：https://www.youtube.com/playlist?list=PLangBM27OtEA
+- **已收录**：`cs329a/lecture01-09/`，9 讲中文 LaTeX 讲义；本地最终 PDF 共 215 页，质量审计全部通过
+- **发布方式**：仓库提交 LaTeX、字幕、封面和教学图片，生成 PDF 按仓库策略仅本地保留
 
 ### Berkeley CS294 - LLM Agents (f25 已结束)
 - **状态**：Fall 2025 (Agentic AI) 已于 2025-12-08 结课

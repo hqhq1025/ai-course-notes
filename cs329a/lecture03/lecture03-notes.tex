@@ -1,0 +1,372 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 3：稳健验证}
+\newcommand{\lecturers}{Azalia Mirhoseini}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-09-29}
+\newcommand{\videoduration}{1:12:58}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=p7TdPUcPoik}
+
+\begin{document}
+\makelecturetitle
+
+\section{为什么验证是自我改进的瓶颈}
+
+上一讲说明，大量采样可以让候选集合包含更多正确答案；但真实系统必须从候选中选出一个结果。Robust verification 研究的就是：\textbf{如何判断最终答案是否正确、哪一步开始出错，以及怎样把验证信号用于推理选择和模型训练。}
+
+本讲沿时间顺序讨论四代方法：
+
+\begin{enumerate}
+    \item \textbf{Outcome verifier}：只判断完整答案对错；
+    \item \textbf{Process reward model}：逐步标注推理过程；
+    \item \textbf{自动 process supervision}：用 rollout 成功率替代昂贵人工步骤标注；
+    \item \textbf{弱验证器集成}：组合多个不完美 verifier，估计更可靠的正确性信号。
+\end{enumerate}
+
+\begin{importantbox}{验证器有两种完全不同的用途}
+在\textbf{推理阶段}，verifier 用于 rerank、剪枝和停止；在\textbf{训练阶段}，verifier 作为 reward 或数据过滤器改变模型参数。前者的错误影响一次答案，后者的系统性偏差会被模型学习并放大，因此训练用 verifier 的稳健性要求更高。
+\end{importantbox}
+
+\subsection{理想 verifier 的性质}
+
+给定问题 $x$ 与候选解 $y$，verifier 输出 $v(x,y)\in[0,1]$。理想情况下：
+
+$$
+v(x,y)\approx P(y\text{ correct}\mid x,y).
+$$
+
+除准确率外，还要关注 calibration、对分布外样本的泛化、对答案风格的鲁棒性、计算成本以及是否能抵抗 reward hacking。
+
+\subsection{本章小结}
+
+验证不是附属评分步骤，而是 inference scaling 和 reinforcement learning 的共同接口。它决定哪些轨迹被选中、哪些数据被保留、哪些行为获得梯度。
+
+\section{Outcome Verification：从 GSM8K 开始}
+
+\subsection{Training Verifiers to Solve Math Word Problems}
+
+Cobbe 等人的工作同时贡献了 GSM8K 数据集与训练 verifier 的系统方法。GSM8K 包含约 8.5K 道小学数学文字题，每道题附自然语言推理过程和最终数值答案。
+
+\videofigure{figures/gsm8k-contributions.jpg}{GSM8K 与 outcome verifier 构成该工作的两项核心贡献。}{00:02:10--00:04:26}
+
+核心流程是：先训练 generator；对每道训练题采样大量 completion；根据最终答案是否匹配 ground truth 赋二元标签；再训练 verifier 预测整条解答是否正确。
+
+\videofigure{figures/generator-verifier-pipeline.jpg}{Generator 产生带标签候选，verifier 学习对完整解答评分。}{00:04:26--00:06:20}
+
+\subsection{Verifier 的联合目标}
+
+Verifier 可以在语言模型骨干上增加分类头，同时保留 next-token 目标：
+
+$$
+\mathcal L(\phi)
+=\mathcal L_{\mathrm{LM}}(\phi)
++\lambda\,\mathcal L_{\mathrm{cls}}(\phi),
+$$
+
+$$
+\mathcal L_{\mathrm{cls}}
+=-z\log v_{\phi}(x,y)-(1-z)\log(1-v_{\phi}(x,y)).
+$$
+
+\begin{itemize}
+    \item $\phi$：verifier 参数；
+    \item $z\in\{0,1\}$：最终答案是否正确；
+    \item $v_{\phi}(x,y)$：候选正确概率；
+    \item $\lambda$：语言建模与正确性分类的权重。
+\end{itemize}
+
+\videofigure{figures/verifier-objective.jpg}{Verifier 同时建模文本与完整解答的正确性。}{00:06:20--00:08:16}
+
+\begin{knowledgebox}{为什么保留语言建模目标}
+纯分类可能只学习最终答案格式、长度或关键词等捷径。语言建模目标迫使表示继续理解完整推理文本，在数据有限时还能起到正则化作用。但它并不能自动消除 shortcut，仍需通过对抗样本和分布外评估检查。
+\end{knowledgebox}
+
+\subsection{训练数据必须来自模型自己的错误分布}
+
+如果 verifier 只看人工构造的明显错误，它未必能识别 generator 的真实失败模式。该方法为每道题采样大量模型 completion，使训练集包含“看起来很像正确解”的困难负例。
+
+\begin{warningbox}{Verifier 不能只在静态数据上高分}
+Generator 升级、prompt 改变或推理长度增加都会改变错误分布。一个在旧候选上准确的 verifier 可能在新模型上失效。因此 verifier 数据应持续从当前 generator 采样，并进行版本化评估。
+\end{warningbox}
+
+\subsection{Best-of-N 与测试时计算}
+
+推理时生成 $N$ 个候选，选择 verifier 分数最高者：
+
+$$
+y^*=\arg\max_{y_j\sim\pi_\theta(\cdot\mid x)} v_\phi(x,y_j).
+$$
+
+随着 $N$ 增大，候选 coverage 提升；只要 verifier 的排序仍有区分力，最终准确率也会提高。实验观察到性能可持续提升到数百个 completion。
+
+\videofigure{figures/testtime-compute.jpg}{增加候选数可继续提高 verifier 选择后的准确率。}{00:16:50--00:19:04}
+
+\subsection{Outcome supervision 的根本限制}
+
+最终答案标签无法指出推理在哪一步出错。一个轨迹可能前面完全错误，却巧合得到正确数值；也可能过程基本正确，仅在最后算术失误。ORM 把两者分别标为正例和负例，信用分配非常粗糙。
+
+\subsection{本章小结}
+
+Outcome verifier 首次证明 learned verification 能把 inference sampling 转化为实际性能，并构成后续 RL reward 的基础。但只看最终答案会混淆正确过程、偶然正确和局部错误，促使研究转向 process supervision。
+
+\section{Process Supervision：逐步验证推理}
+
+\subsection{Outcome 与 Process 的差别}
+
+假设一条推理包含步骤 $s_{1:T}$。Outcome supervision 只给完整轨迹标签 $R\in\{0,1\}$；process supervision 为每一步提供 $r_t\in\{0,1\}$ 或连续分数。
+
+\videofigure{figures/outcome-supervision.jpg}{Outcome supervision 只在整条推理结束后提供标签。}{00:22:20--00:24:00}
+
+\videofigure{figures/process-supervision.jpg}{Process supervision 精确定位错误步骤并改善信用分配。}{00:24:00--00:26:02}
+
+\begin{importantbox}{Process supervision 的两个价值}
+第一，它能在错误刚出现时剪枝，节省后续 token；第二，它减少“错误过程碰巧得到正确答案”的假阳性。对训练而言，步骤级 reward 也比单一终局 reward 提供更密集的学习信号。
+\end{importantbox}
+
+\subsection{PRM800K：人工步骤标签}
+
+Let's Verify Step by Step 收集约 80 万个人工步骤标签。标注者阅读模型解答，在每个步骤后判断目前过程是否仍然正确。为了提高数据效率，方法使用 active learning，把最有区分度或最可能暴露模型弱点的样本优先送给人类。
+
+\videofigure{figures/prm-labeling.jpg}{PRM800K 对模型生成的数学推理进行步骤级人工标注。}{00:26:02--00:29:08}
+
+训练后，PRM 输出每一步的正确概率 $q_t$。整条轨迹可用最弱步骤、乘积或对数和聚合，例如：
+
+$$
+S(y)=\sum_{t=1}^{T}\log q_t.
+$$
+
+\begin{itemize}
+    \item $q_t=P(s_t\text{ correct}\mid x,s_{1:t})$；
+    \item $S(y)$：轨迹总体过程分数；
+    \item 对数和会惩罚任一低概率错误步骤，同时避免直接连乘下溢。
+\end{itemize}
+
+\subsection{PRM 相比 ORM 的收益}
+
+\videofigure{figures/prm-vs-orm.jpg}{PRM 在候选选择上优于 ORM 与 majority voting。}{00:29:08--00:30:44}
+
+PRM 的收益在长链推理中特别明显，因为轨迹越长，局部错误被最终答案掩盖的机会越多。它还支持 beam search：每生成一段就评分，只扩展高分前缀。
+
+\subsection{Active Learning 与大规模标注}
+
+随机抽样会浪费大量人力在明显正确或明显错误的步骤上。Active learning 选择 verifier 当前最不确定、模型间分歧最大或最接近决策边界的样本。
+
+\videofigure{figures/active-learning.jpg}{Active learning 提高步骤标注的单位人力收益。}{00:30:44--00:33:02}
+
+\subsection{分布外泛化}
+
+\videofigure{figures/prm-ood.jpg}{训练后的 PRM 在分布外数学数据上仍保持相对优势。}{00:33:02--00:35:20}
+
+这种泛化说明 PRM 学到了一部分通用的数学步骤合理性，但不能据此认为它掌握了严格证明。自然语言推理中的隐含假设、跳步和符号歧义仍可能骗过 verifier。
+
+\begin{warningbox}{Process reward 也会产生新的 reward hacking}
+模型可能学会写出“每一步都很像教科书”的冗长轨迹以取悦 PRM，而不是更有效地解决问题。若 verifier 偏好格式、长度或常见措辞，RL 会放大这些偏好。步骤级监督提高了分辨率，但没有消除代理目标风险。
+\end{warningbox}
+
+\subsection{本章小结}
+
+人工 process supervision 提供精确、密集且可用于搜索的验证信号，代价是昂贵的专家标注。下一步自然问题是：能否让模型和环境自动产生步骤标签？
+
+\section{Math-Shepherd：无需人工步骤标注}
+
+\subsection{用“可继续到正确答案的潜力”定义步骤质量}
+
+Math-Shepherd 把一个推理前缀的质量定义为：从这个前缀继续采样，最终到达正确答案的概率。对前缀 $s_{1:t}$ 采样 $K$ 个后续 rollout：
+
+$$
+\hat q_t=\frac{1}{K}\sum_{k=1}^{K}
+\mathbf 1\!\left[\mathrm{Answer}(s_{1:t},\tilde s^{(k)}_{t+1:T})=a^*\right].
+$$
+
+\begin{itemize}
+    \item $\tilde s^{(k)}_{t+1:T}$：从当前前缀继续生成的第 $k$ 条后续轨迹；
+    \item $a^*$：ground-truth 最终答案；
+    \item $\hat q_t$：该步骤前缀可导向正确解的经验概率。
+\end{itemize}
+
+\videofigure{figures/math-shepherd-annotation.jpg}{Math-Shepherd 用后续 rollout 成功率自动标注步骤质量。}{00:38:30--00:40:42}
+
+\subsection{Hard 与 Soft Annotation}
+
+\begin{itemize}
+    \item \textbf{Hard label}：只要存在一个 rollout 成功，就把前缀标为正；
+    \item \textbf{Soft label}：使用成功 rollout 的比例 $\hat q_t$；
+    \item Hard label 强调“是否仍有希望”，soft label 反映“有多大希望”。
+\end{itemize}
+
+\videofigure{figures/step-label-example.jpg}{同一解题过程的 outcome 标签与步骤潜力标签示例。}{00:40:42--00:43:36}
+
+\begin{knowledgebox}{这是一种 Monte Carlo value estimation}
+Math-Shepherd 实际在估计状态价值：给定当前推理前缀，继续执行当前策略能以多大概率得到正确答案。它不要求人工判断每一步的逻辑，只要求最终答案可自动验证。
+\end{knowledgebox}
+
+\subsection{一个 verifier，三种使用方式}
+
+\videofigure{figures/math-shepherd-uses.jpg}{自动训练的 PRM 可用于 rerank，也可作为 PPO reward。}{00:43:36--00:44:36}
+
+\begin{enumerate}
+    \item \textbf{Verification}：对多个完整答案排序；
+    \item \textbf{Search}：对中间前缀评分并剪枝；
+    \item \textbf{Reinforcement learning}：将步骤 reward 用于 PPO，直接提高 generator。
+\end{enumerate}
+
+\videofigure{figures/math-shepherd-verification.jpg}{Math-Shepherd 在 GSM8K 与 MATH500 上提升候选选择。}{00:44:36--00:47:02}
+
+\videofigure{figures/math-shepherd-rl.jpg}{以自动 PRM 为 reward 的 PPO 进一步提升 generator。}{00:47:02--00:48:06}
+
+\subsection{自动标注的偏差来源}
+
+\begin{itemize}
+    \item Rollout policy 太弱时，正确前缀也可能无人完成，被误标为低价值；
+    \item Rollout 数量有限，$\hat q_t$ 方差很大；
+    \item 最终答案可验证不代表中间推理真实有效；
+    \item 训练 generator 与 rollout generator 变化后，步骤价值会发生分布漂移。
+\end{itemize}
+
+\begin{warningbox}{“没有人工标注”不等于没有监督}
+Math-Shepherd 仍依赖可自动检查的最终答案，并消耗大量 rollout compute。它把人力成本转换成采样成本，适用于数学、代码等可验证领域；对开放式任务，最终 reward 本身仍是难题。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Math-Shepherd 用环境可验证的终局结果反推步骤价值，实现自动 process supervision，并把 verifier 同时用于推理和 RL。它展示了自我改进闭环的雏形：模型生成轨迹，终局反馈标注步骤，PRM 再指导模型生成更好轨迹。
+
+\section{Weaver：从多个弱 Verifier 得到强信号}
+
+\subsection{为什么单一 verifier 不够}
+
+不同 verifier 捕捉不同侧面：ORM 看最终结果，PRM 看步骤，LLM judge 看语义质量，规则检查器看格式或约束。每个都不完美，但错误模式可能不完全重合。
+
+\videofigure{figures/weak-verifiers.jpg}{Reward model、LM judge 和规则函数都可作为弱 verifier。}{00:51:50--00:54:26}
+
+\subsection{Score--Weight--Select}
+
+Weaver 的流程是：
+
+\begin{enumerate}
+    \item \textbf{Score}：收集多个 verifier 对每个候选的分数并归一化；
+    \item \textbf{Weight}：用少量标注数据或弱监督估计各 verifier 的准确性与相关性；
+    \item \textbf{Select}：加权聚合后选择最高分候选。
+\end{enumerate}
+
+\videofigure{figures/weaver-pipeline.jpg}{Weaver 的 score、weight、select 三阶段。}{00:54:26--00:57:10}
+
+最简单的聚合形式是：
+
+$$
+S(y)=\sum_{m=1}^{M} w_m\,\tilde v_m(x,y),
+\qquad
+ y^*=\arg\max_y S(y).
+$$
+
+\begin{itemize}
+    \item $\tilde v_m$：归一化后的第 $m$ 个 verifier 分数；
+    \item $w_m$：估计得到的可靠性权重；
+    \item $S(y)$：集成正确性分数。
+\end{itemize}
+
+\subsection{弱监督与相关性建模}
+
+简单平均隐含所有 verifier 独立且同样可靠。Weak supervision 会显式估计准确率和相关性，避免多个高度相似 verifier 重复投票造成虚假自信。
+
+\videofigure{figures/weak-supervision.jpg}{弱监督通过建模 noisy voters 的可靠性与相关性推断潜在真值。}{00:57:10--00:59:36}
+
+\begin{importantbox}{多 verifier 的收益来自误差互补}
+如果所有 verifier 都是同一基础模型、同一 prompt 和同一训练数据，它们可能共享盲点，数量增加并不会带来独立证据。有效集成需要来源、粒度或归纳偏置上的多样性。
+\end{importantbox}
+
+\subsection{Weaver 与朴素 ensemble}
+
+\videofigure{figures/weaver-vs-naive.jpg}{可靠性加权的 Weaver 优于直接平均多个 verifier。}{00:59:36--01:00:18}
+
+课程进一步从三个轴讨论 scaling verification compute：增加 generator 候选数、增大 verifier 模型规模、增加 verifier 数量。它们分别提高 coverage、单 verifier 判断能力和误差互补。
+
+\videofigure{figures/scaling-verification.jpg}{验证计算可沿候选数、模型规模和 verifier 数量扩展。}{01:00:18--01:02:12}
+
+\subsection{缩小模型级别差距}
+
+\videofigure{figures/model-class-gap.jpg}{Weaver 缩小 8B 与 70B、70B 与 frontier model 的最终性能差距。}{01:02:12--01:04:32}
+
+这里的关键不是弱 generator 变成了强 generator，而是更好的选择器从其候选分布中提取了更多已有能力。若 generator 的 coverage 上限很低，集成 verifier 同样无法突破。
+
+\subsection{Distillation：把昂贵集成压缩成轻量 verifier}
+
+Weaver 可生成软标签，再训练一个小 verifier 模仿集成输出。部署时只运行蒸馏模型，大幅降低计算。
+
+\videofigure{figures/weaver-distillation.jpg}{蒸馏 verifier 保留绝大部分集成收益，同时显著降低推理成本。}{01:04:32--01:06:08}
+
+\videofigure{figures/accuracy-compute.jpg}{Weaver 改善 accuracy--compute Pareto frontier。}{01:06:08--01:06:44}
+
+\begin{warningbox}{蒸馏会固化 ensemble 的系统性偏差}
+小模型不仅学习正确的集体判断，也会学习 ensemble 共享的盲点。蒸馏后应重新做分布外、对抗与 calibration 评估，而不能只验证平均准确率复现。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Weaver 用弱监督把多个 noisy verifier 转化为更强选择信号，并可进一步蒸馏以降低部署成本。它把 robust verification 从“训练一个更大 judge”扩展为“设计多样信号并学习如何组合”。
+
+\section{Verifier 如何进入完整自我改进闭环}
+
+\subsection{推理阶段}
+
+\begin{itemize}
+    \item Best-of-$N$：完整生成后 rerank；
+    \item Beam / tree search：对前缀评分并剪枝；
+    \item Early stopping：置信度足够时停止生成；
+    \item Critique and revise：把低分原因反馈给 generator 修订。
+\end{itemize}
+
+\subsection{训练阶段}
+
+\begin{itemize}
+    \item 数据过滤：只保留高分 synthetic trajectory；
+    \item Rejection sampling fine-tuning：用 verifier 选择的轨迹做 SFT；
+    \item Reinforcement learning：把 verifier 分数作为 reward；
+    \item Curriculum：按步骤难度和错误类型组织训练样本。
+\end{itemize}
+
+\subsection{闭环稳定性检查}
+
+\begin{enumerate}
+    \item Generator 和 verifier 是否使用独立评估集？
+    \item Verifier 更新后，旧 reward 是否仍可比较？
+    \item RL 是否提高 verifier 分数却降低真实正确率？
+    \item 新 generator 是否产生 verifier 未见过的攻击性分布？
+    \item 是否保留人工审计与外部 ground truth 作为锚点？
+\end{enumerate}
+
+\begin{importantbox}{Generator--Verifier 共进化必须有外部锚点}
+如果 generator 只优化 verifier，而 verifier 又只从 generator 数据学习，两者可能共同漂移到一个自洽但错误的协议。可执行测试、形式化规则、人工抽检和保留 benchmark 是防止闭环失真的关键。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Verifier 是选择器、搜索启发式、数据过滤器和 reward model。它的偏差会沿闭环被放大，因此自我改进系统的首要工程任务不是“多跑几轮”，而是证明反馈信号仍与真实目标一致。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/abs/2110.14168}{Cobbe et al., \emph{Training Verifiers to Solve Math Word Problems}}
+    \item \href{https://arxiv.org/abs/2305.20050}{Lightman et al., \emph{Let's Verify Step by Step}}
+    \item \href{https://arxiv.org/abs/2312.08935}{Wang et al., \emph{Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations}}
+    \item \href{https://arxiv.org/abs/2506.18203}{\emph{Shrinking the Generation--Verification Gap with Weak Verifiers}}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲展示了 verifier 的演进路径。Outcome verifier 通过最终答案标签支持 best-of-$N$；process reward model 用步骤监督改善信用分配和搜索；Math-Shepherd 通过 rollout 成功率自动估计步骤价值；Weaver 则组合多个弱 verifier，利用误差互补缩小 generation--verification gap，并通过蒸馏降低成本。
+
+四种方法分别回答了四个问题：
+
+\begin{enumerate}
+    \item \textbf{结果对不对？} ORM；
+    \item \textbf{从哪一步开始错？} PRM；
+    \item \textbf{步骤标签能否自动产生？} rollout-based process supervision；
+    \item \textbf{多个不可靠 judge 如何组合？} weak supervision ensemble。
+\end{enumerate}
+
+下一讲把反馈从“判断答案”推进到“与工具和环境交互”：ReAct 使用观察结果修正推理，RLEF 用代码执行作为训练 reward，Constitutional AI 用原则驱动模型自我批评和 AI feedback。
+
+\end{document}

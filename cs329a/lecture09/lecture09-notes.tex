@@ -1,0 +1,448 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 9：未来研究方向}
+\newcommand{\lecturers}{Aakanksha Chowdhery \& Azalia Mirhoseini}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-12-05}
+\newcommand{\videoduration}{1:07:42}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=AyO6wyu4DEg}
+
+\begin{document}
+\makelecturetitle
+
+\section{课程总览：自我改进是一个系统闭环}
+
+课程从语言模型扩展到 agent：agent 有目标、环境、工具、状态和反馈，并通过多步规划与自我修正完成任务。前八讲反复出现同一个闭环：
+
+$$
+\text{Propose}\rightarrow \text{Act/Search}\rightarrow
+\text{Verify}\rightarrow \text{Learn or Revise}.
+$$
+
+Test-time scaling 在参数不变时增加采样、搜索和验证；train-time scaling 把成功轨迹与 reward 写回参数；open-ended search 则进一步允许系统探索预先没有列出的解法或任务。
+
+\videofigure{figures/lecture-roadmap.jpg}{最终讲聚焦四个未来方向：多 agent reasoning diversity、数学 meta-verification、零外部数据的任务自生成，以及 intelligence per watt。}{00:03:58--00:05:08}
+
+\videofigure{figures/improvement-bottlenecks.jpg}{下一代自我改进要突破 reasoning 多样性、robust verification 和训练任务静态选择三类瓶颈。}{00:05:08--00:07:28}
+
+\begin{importantbox}{自我改进的三个稀缺资源}
+第一是新颖且正确的 reasoning trajectory，第二是可信 verifier，第三是处在当前能力边界上的训练任务。缺少任何一个，闭环都会早早平台化或被 reward hacking 破坏。
+\end{importantbox}
+
+\begin{knowledgebox}{Agent 是 LLM 与外部机制的联合系统}
+当前 LLM 往往不足以单独承担完整目标。实际系统会编排多个模型、工具、搜索器、judge 和 memory；能力来自组件与反馈路径的共同设计。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+课程的长期价值不在某篇最新论文，而在一组可复用原语：生成、搜索、工具、验证、reward、记忆、回溯和训练。最终讲用四项研究展示这些原语将如何继续演化。
+
+\section{Multi-Agent Fine-Tuning：用多样 reasoning 延长自举}
+
+\subsection{单模型 synthetic data 为什么会平台化}
+
+\videofigure{figures/multiagent-finetuning.jpg}{Multi-Agent Fine-Tuning 用多个 generation agent 与 critic agent 产生、讨论并筛选 synthetic reasoning data。}{00:07:28--00:08:42}
+
+\videofigure{figures/diversity-bottleneck.jpg}{单一模型反复生成自己的训练数据时，reasoning 逐渐同质化，迭代收益很快停滞。}{00:08:42--00:09:58}
+
+Pretraining 数据由大量人类长期生成，天然覆盖不同文体、知识和思维路径；单一 LLM 即使提高 temperature，也常围绕少数高概率模板采样。Rejection sampling 只保留正确答案，会进一步压缩分布，造成 mode collapse。
+
+可把第 $m$ 轮 synthetic data 分布记为 $q_m(r\mid x)$，若模型始终在自身输出上微调：
+
+$$
+q_{m+1}(r\mid x)\propto q_m(r\mid x)\,w(r),
+$$
+
+其中 $w(r)$ 是正确性或偏好过滤权重。若 $w$ 总偏爱已有高概率模式，低概率但有效的 reasoning 会逐轮消失。
+
+\begin{warningbox}{Temperature 不等于语义多样性}
+高温可能增加措辞和局部 token 变化，却未必产生不同解题策略。真正有用的 diversity 应在假设、分解、算法和证据路径层面测量。
+\end{warningbox}
+
+\subsection{Generation agents 与 critic agents}
+
+\videofigure{figures/generate-data.jpg}{多个 generation agent 先独立作答，再汇总其他 agent 的答案并进入下一轮讨论。}{00:09:58--00:10:56}
+
+\videofigure{figures/finetune-generators.jpg}{Generation model 在与多数结果一致的高质量 prompt--response 对上继续微调。}{00:10:56--00:11:26}
+
+\videofigure{figures/finetune-critics.jpg}{Critic model 学习区分一开始就正确的轨迹，以及经过讨论才被修正的轨迹。}{00:11:26--00:11:58}
+
+设有 $N$ 个 generator，第 $t$ 轮回答为 $a_i^{(t)}$。系统把其他 agent 的回答摘要 $s_{-i}^{(t)}$ 和 critic 反馈 $c_i^{(t)}$ 加入下一轮：
+
+$$
+a_i^{(t+1)}\sim p_{\theta_i}
+\left(a\mid x,a_i^{(t)},s_{-i}^{(t)},c_i^{(t)}\right).
+$$
+
+\begin{itemize}
+    \item $x$：原始问题；
+    \item $a_i^{(t)}$：第 $i$ 个 generator 当前答案；
+    \item $s_{-i}^{(t)}$：其他 agent 观点的摘要；
+    \item $c_i^{(t)}$：critic 对答案缺陷的反馈。
+\end{itemize}
+
+\videofigure{figures/multiagent-debate.jpg}{多轮 debate 让 specialized agents 相互暴露盲点，最后用 majority vote 产生训练标签。}{00:11:58--00:13:08}
+
+\begin{importantbox}{多 agent 的收益来自差异化 inductive bias}
+若所有 agent 是同一 checkpoint、同一 prompt、同一 decoding 设置，它们会共享失败模式。需要通过数据子集、角色、超参或模型族制造稳定专长。
+\end{importantbox}
+
+\subsection{多样性与持续改进结果}
+
+\videofigure{figures/diversity-results.jpg}{Embedding dissimilarity 显示 multi-agent 方案在多轮微调后仍能维持更高回答多样性。}{00:13:08--00:13:38}
+
+\videofigure{figures/multiagent-results.jpg}{在多个开源模型上，multi-agent fine-tuning 随迭代继续提高准确率，而 single-agent 方案更早平台化或下降。}{00:13:38--00:14:08}
+
+\videofigure{figures/generalization-results.jpg}{多 agent 生成的 reasoning 不只改善训练域，也在相邻数学 benchmark 上表现出迁移。}{00:14:08--00:15:02}
+
+\begin{knowledgebox}{需要同时监控 performance 与 diversity}
+准确率上升但 embedding diversity 快速下降，可能意味着系统正在透支未来探索空间；diversity 很高但准确率不升，则可能只是产生无效噪声。二者应构成 Pareto frontier。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Multi-Agent Fine-Tuning 用 specialized generators 扩大 reasoning 分布，用 critics 和多数投票控制质量，从而缓解单模型 synthetic data 的同质化与迭代平台期。
+
+\section{DeepSeekMath-V2：让 verifier 也接受验证}
+
+\subsection{Outcome reward 无法保证证明过程}
+
+\videofigure{figures/outcome-reward-models.jpg}{Outcome reward 只检查最终答案，无法判断中间证明是否存在跳步、循环论证或幸运猜中。}{00:15:02--00:16:52}
+
+\videofigure{figures/proof-verification-problem.jpg}{LLM 可生成形式流畅但数学无效的证明，而没有参考解时，普通 judge 也难稳定定位问题。}{00:16:52--00:18:18}
+
+数学证明不是短答案匹配。一个 theorem proof 可能结论正确，但某一步不从前提推出；只给终局 reward 会把这种 flawed trajectory 当作正样本。Process reward model 又依赖昂贵的逐步人工标签。
+
+\begin{warningbox}{Verifier 可能“分数对、理由错”}
+LLM judge 即使给出大致正确的总分，也可能编造不存在的错误。若这些 critique 被用于训练 generator，系统会把 verifier 的幻觉写回模型。
+\end{warningbox}
+
+\subsection{Generator--Verifier--Meta-Verifier}
+
+\videofigure{figures/deepseekmath-v2-architecture.jpg}{DeepSeekMath-V2 构建 generator、verifier 与 meta-verifier 的协同闭环。}{00:18:18--00:19:34}
+
+结构可以形式化为：
+
+$$
+y\sim G_\theta(x),\qquad
+(e,s)=V_\phi(x,y),\qquad
+m=M_\psi(x,y,e,s),
+$$
+
+其中 generator 产生证明 $y$，verifier 给出问题分析 $e$ 和分数 $s$，meta-verifier 判断“问题是否真实存在、分数是否由分析推出”。
+
+\videofigure{figures/meta-verification.jpg}{Meta-verifier 对 verifier 的分析做二次检查，降低 fabricated issue，并提升解释可信度。}{00:19:34--00:20:18}
+
+\begin{importantbox}{Meta-verification 检查的是评价的证据链}
+它不只是再投一次票，而是验证 critique 中每个 issue 是否能在原证明中定位，以及最终 score 是否与这些 issue 一致。
+\end{importantbox}
+
+\subsection{迭代优化与结果}
+
+\videofigure{figures/evaluation-methodology.jpg}{系统结合 GRPO、迭代生成--验证，以及多类数学证明 benchmark 评估自验证能力。}{00:20:18--00:20:52}
+
+\videofigure{figures/proof-results.jpg}{在 IMO Shortlist 2024 上，pass@1 与 best@32 都随多轮 self-verification 迭代持续上升。}{00:20:52--00:21:22}
+
+\videofigure{figures/self-verification-improvement.jpg}{自选高 verifier score 的证明用于下一轮训练，形成 generator 与 verifier 共同爬坡。}{00:21:22--00:22:22}
+
+若从 $K$ 个证明中选择 verifier 分数最高者：
+
+$$
+y^*=\arg\max_{y_k,\,k\le K}V_\phi(x,y_k),
+$$
+
+则前提是 $V_\phi$ 的 ranking 与真实证明质量一致。Meta-verification 的作用正是改善这一 alignment，使 best@$K$ 不只是挑出“最会讨好 judge”的证明。
+
+\begin{warningbox}{更多 judge 层不自动带来真理}
+Generator、verifier 和 meta-verifier 可能共享训练数据与偏见，产生 correlated error。仍需要形式化检查、独立模型、专家审计或 adversarial test 来打破共谋。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DeepSeekMath-V2 把 verifier 从不可质疑的裁判改造成可审计对象。它展示了没有参考证明时的自动过程验证路径，但仍依赖数学领域相对清晰的逻辑结构。
+
+\section{Absolute Zero：让模型自己提出下一道题}
+
+\subsection{训练任务本身成为数据瓶颈}
+
+\videofigure{figures/task-data-bottleneck.jpg}{当前 reasoning training 依赖人类专家编写 prompt、答案或 reasoning trace，能力越强越难找到足够前沿任务。}{00:23:46--00:24:38}
+
+传统 RLVR 的 verifier 可以自动评分，但问题集合仍由人静态提供。模型进步后，简单题失去梯度，过难题又全错；训练需要持续处于 current frontier 的任务。
+
+\videofigure{figures/proposer-solver.jpg}{Absolute Zero 用同一个模型同时扮演 proposer 与 solver，在可执行代码环境中自生成任务并自我求解。}{00:24:38--00:25:24}
+
+\videofigure{figures/absolute-zero-loop.jpg}{Proposer 根据 learnability reward 生成任务，solver 根据 accuracy reward 解题，两种信号联合更新模型。}{00:25:24--00:26:18}
+
+\begin{importantbox}{Absolute Zero 消除的是外部 task data，不是环境}
+系统仍需要代码执行器提供可验证反馈。所谓 zero data 指不依赖人类预先编写的问题集，而不是在没有环境和 reward 的真空中学习。
+\end{importantbox}
+
+\subsection{Deduction、Abduction 与 Induction}
+
+\videofigure{figures/proposer-modes.jpg}{Proposer 通过 deduction、abduction 与 induction 三种代码任务模式扩大自生成课程。}{00:26:18--00:27:10}
+
+三类任务可理解为：
+
+\begin{itemize}
+    \item \textbf{Deduction}：给程序与输入，预测执行输出；
+    \item \textbf{Abduction}：给程序与输出，反推出满足条件的输入；
+    \item \textbf{Induction}：给若干输入输出与自然语言描述，推断程序或规则。
+\end{itemize}
+
+这些任务都能由执行器判定，因此适合自动生成、求解和验证；三种方向又要求不同 reasoning，有助于避免课程过于单一。
+
+\subsection{Learnability reward：不要太简单，也不要完全不可能}
+
+设同一任务上 solver 的经验成功率为 $\bar p$。课程描述的简化 proposer reward 为：
+
+$$
+r_{\mathrm{learn}}=
+\begin{cases}
+0, & \bar p=0,\\
+1-\bar p, & \bar p>0.
+\end{cases}
+$$
+
+\begin{itemize}
+    \item $\bar p=1$：任务已掌握，learnability 低；
+    \item $\bar p=0$：任务可能无效或远超当前能力，也不给奖励；
+    \item $0<\bar p<1$：任务处在能力边界，既有成功样本又有改进空间。
+\end{itemize}
+
+\begin{knowledgebox}{这是自动化 curriculum learning}
+随着 solver 变强，过去困难任务变简单，proposer 必须持续增加复杂度。课程不再由固定题库定义，而由模型当前失败边界动态生成。
+\end{knowledgebox}
+
+\subsection{Task validation 与 buffer management}
+
+\videofigure{figures/task-validation.jpg}{任务进入训练前要通过可执行性、安全性与确定性检查，并写入带成功统计的 task buffer。}{00:28:10--00:29:28}
+
+验证包括程序能否运行、是否触发危险操作、相同输入是否确定地产生相同输出。Buffer 保存程序、输入、输出、成功率和参考任务，使 proposer 能从历史课程取样并生成不同但可学习的新任务。
+
+\begin{warningbox}{Task proposer 也会 reward hack}
+它可能生成利用解释器漏洞的题、伪装成困难但实际无意义的题，或重复稍作改写的旧任务。需要 sandbox、去重、复杂度约束和独立 validation。
+\end{warningbox}
+
+\subsection{结果与开放问题}
+
+\videofigure{figures/absolute-zero-takeaways.jpg}{Absolute Zero 在无人工 prompt 数据下获得强代码 reasoning，并呈现任务复杂度与多样性随训练增长的 emergent curriculum。}{00:29:28--00:33:34}
+
+课程强调 proposer 与 solver 带有轻微对抗性：proposer 想找到 solver 还不会但能学会的问题，solver 则不断压缩这一区域。结果表明自生成任务可以超过用大量专家例子训练的基线。
+
+\begin{importantbox}{真正的开放性来自任务分布也能变化}
+只在固定题库上重复 RL，最多逼近该分布的上限；让模型改变问题本身，才有机会持续扩展学习边界。但任务有效性与现实相关性随之成为新 verifier 问题。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Absolute Zero 把 synthetic data 从“自己生成答案”推进到“自己生成题目与答案”。代码执行环境提供即时验证，使 proposer--solver 能形成动态课程；向开放现实领域推广时，环境真实性和 reward 成为核心限制。
+
+\section{当领域无法快速验证：慢环境、reward model 与分解}
+
+\videofigure{figures/self-improvement-directions.jpg}{未来自我改进需要更强的跨域泛化、robust/meta verification，以及自动选择 train-time scaling 数据。}{00:33:34--00:40:08}
+
+数学和代码之所以率先成功，是因为 reward 快且明确。芯片设计仿真、科学实验、机器人和创意任务可能需要数小时、数天或主观判断，无法在 RL 中执行成千上万次。
+
+\begin{importantbox}{不可快速验证不等于完全不可验证}
+可以把昂贵真实评估转为稀疏 gold signal，再训练 surrogate reward model；也可把大任务分解为编译、局部仿真、性能 profile 等较快子验证器。但代理信号必须定期用真实环境校准。
+\end{importantbox}
+
+一种近似方式是学习 reward model $\hat R_\phi(x,y)$ 预测昂贵环境回报 $R(x,y)$：
+
+$$
+\phi^*=\arg\min_\phi
+\mathbb E_{(x,y,R)\sim \mathcal D}
+\left[\hat R_\phi(x,y)-R(x,y)\right]^2.
+$$
+
+随后 RL 在 $\hat R_\phi$ 上快速迭代，但策略会主动寻找 reward model 的盲点，因此需要 active sampling 把高不确定样本送回真实仿真或专家。
+
+\begin{warningbox}{Surrogate reward 的泛化范围决定安全上限}
+如果策略走出训练数据分布，reward model 可能高分奖励物理上无效或危险的设计。模型越会优化，越会放大 evaluator 的小误差。
+\end{warningbox}
+
+\begin{knowledgebox}{任务分解是能力桥梁，不是最终答案}
+当前模型无法优化完整芯片时，可以先做 kernel、局部模块和 profile 分析。分解让现有能力参与复杂流程，但最终仍要验证子任务组合后是否满足全局目标。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+在慢验证和主观领域，自我改进需要 surrogate reward、分层任务与稀疏真实反馈。关键挑战从“有没有 reward”变成“代理 reward 在策略优化后是否仍可信”。
+
+\section{Intelligence per Watt：把能耗纳入能力扩展}
+
+\subsection{从云端 mainframe 到 local AI}
+
+\videofigure{figures/intelligence-per-watt-title.jpg}{课程后半提出 intelligence per watt，用单位功耗可提供的模型能力衡量本地 AI 效率。}{00:40:08--00:42:00}
+
+\videofigure{figures/mainframe-era.jpg}{当前 AI 类似 mainframe 时代：大部分推理由集中云端基础设施提供，而需求增长快于供给。}{00:43:48--00:45:22}
+
+课程观察到大量真实 chatbot query 只需要写作、信息查询、一般建议和常见 reasoning，并不总需要 frontier cloud model。若小于约 20B 参数的本地模型能处理多数请求，就可以降低网络延迟、云端成本与隐私暴露。
+
+\videofigure{figures/local-model-progress.jpg}{本地小模型的能力随模型和设备代际快速增长，为计算从云端部分迁移到端侧创造条件。}{00:45:22--00:46:12}
+
+\videofigure{figures/local-inference-question.jpg}{核心系统问题是：哪些推理应本地执行，哪些请求值得升级到云端 frontier model。}{00:46:12--00:47:18}
+
+\begin{importantbox}{Local/cloud 不是二选一，而是动态路由}
+简单、隐私敏感、低延迟请求优先本地；需要大模型知识、长 context 或昂贵工具的请求升级云端。路由器本身要估计难度、风险和资源。
+\end{importantbox}
+
+\subsection{IPW 的定义}
+
+\videofigure{figures/intelligence-per-watt-metric.jpg}{Intelligence per watt 将可解决请求比例与平均功耗结合，比较不同模型--硬件组合。}{00:47:18--00:48:18}
+
+课程使用的直觉指标可写为：
+
+$$
+\operatorname{IPW}(m,h)=
+\frac{C(m)}{\overline P(m,h)},
+$$
+
+\begin{itemize}
+    \item $m$：模型；
+    \item $h$：运行硬件；
+    \item $C(m)$：模型对目标 query workload 的可解决比例或能力分数；
+    \item $\overline P(m,h)$：该模型在硬件上的平均功耗；
+    \item IPW 越高，单位功耗提供的可用智能越多。
+\end{itemize}
+
+\videofigure{figures/efficiency-study.jpg}{研究跨多个本地模型、设备与真实 query workload 测量能力、延迟、准确率和能耗。}{00:48:18--00:49:04}
+
+\begin{warningbox}{IPW 必须绑定 workload 和质量阈值}
+若一个模型只擅长简单问答，它可能功耗极低却无法处理复杂请求。比较时必须固定查询分布、输出质量标准、context 长度和 batch 设置。
+\end{warningbox}
+
+\subsection{两年 5.3 倍效率提升}
+
+\videofigure{figures/local-ai-findings.jpg}{本地模型可准确处理约 88.7\% 的研究 query；两年内模型能力提高约 3.1 倍，硬件效率提高约 1.7 倍，IPW 合计提高约 5.3 倍。}{00:49:04--00:52:18}
+
+课程同时指出 Apple M4 Max 的 IPW 仍约比 B200 低 1.5 倍，因为企业 GPU 专门针对 LLM workload 优化，而本地芯片还要服务图形、媒体和通用应用。未来端侧 accelerator、kernel 和模型架构仍有巨大优化空间。
+
+\begin{knowledgebox}{5.3 倍近似来自软硬件乘法}
+$3.1\times1.7\approx5.27$。模型压缩、训练方法与架构提高 numerator，编译器、kernel、内存系统和芯片提高 denominator；联合优化通常比只优化一端更有效。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Intelligence per watt 把“更强模型”改写为“在真实 workload 上用更少能量提供足够能力”。Local AI 的快速进步支持混合推理，但硬件专用化和任务路由仍是关键。
+
+\section{未来系统方向：hybrid serving、test-time infrastructure 与 continual learning}
+
+\videofigure{figures/research-directions.jpg}{未来研究覆盖 synthetic data 的学习原则、continual learning，以及高吞吐低延迟的 test-time scaling 基础设施。}{00:52:18--00:57:06}
+
+Test-time scaling 不再是一次 forward pass：它包含重复采样、多轮 agent 更新、tool call、KV cache 重用、并行分支和 verifier。传统 chatbot serving 针对单轮解码优化，无法自动满足这种不规则 workload。
+
+\begin{importantbox}{推理基础设施必须感知 agent graph}
+Scheduler 需要看到分支依赖、可共享 prefix、工具等待和候选优先级，才能在延迟、吞吐与能耗之间做全局优化。
+\end{importantbox}
+
+\videofigure{figures/intelligence-efficiency-future.jpg}{下一阶段需要 local/cloud 混合 serving、新模型与 kernel，以及更细粒度的 intelligence-per-watt 测量。}{00:57:06--00:59:02}
+
+可把动态路由写成成本敏感决策：
+
+$$
+a^*=\arg\min_{a\in\{\text{local},\text{cloud}\}}
+\left(C_a+\lambda_L L_a+\lambda_E E_a+\lambda_R R_a\right),
+$$
+
+\begin{itemize}
+    \item $C_a$：货币成本；
+    \item $L_a$：延迟；
+    \item $E_a$：能耗；
+    \item $R_a$：失败、隐私或安全风险；
+    \item $\lambda$：应用对各项代价的权重。
+\end{itemize}
+
+\subsection{Memory 与 weight update 的分工}
+
+课程问答讨论 continual learning：更新外部 memory 更容易、可追踪，也不易破坏已有能力；但若目标是获得新的 reasoning skill、跨领域抽象或机器人跨 embodiment 泛化，仅增加 memory 未必足够，仍可能需要参数更新。
+
+\begin{knowledgebox}{Knowledge acquisition 与 skill acquisition 不同}
+数据库适合存事实、历史和用户偏好；weight update 更适合改变模型如何组合信息、如何行动和如何迁移技能。实际系统需要决定哪些经验写 memory，哪些经验进入训练。
+\end{knowledgebox}
+
+\begin{warningbox}{无限 context 不是免费 continual learning}
+即使能存下所有经历，模型也可能无法在超长 context 中准确检索和组合。有效 memory 仍需压缩、索引、遗忘策略与冲突处理。
+\end{warningbox}
+
+\subsection{本章小结}
+
+未来 agent 系统将同时优化模型、serving、硬件和学习机制：本地与云端动态路由，基础设施支持不规则 test-time search，memory 保存可检索经验，weight update 学习可迁移技能。
+
+\section{四条研究主线如何连接}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{3.4cm}}
+\toprule
+\textbf{方向} & \textbf{突破的瓶颈} & \textbf{核心机制} & \textbf{新的风险} \\
+\midrule
+Multi-Agent FT & reasoning data 同质化 & 多 generator、critic、debate & correlated error、成本 \\
+DeepSeekMath-V2 & verifier 不可信 & verifier + meta-verifier & judge 共谋、域外失效 \\
+Absolute Zero & 训练任务静态且昂贵 & proposer--solver 动态课程 & 无效任务、环境投机 \\
+Intelligence/Watt & 能耗与云端供给限制 & workload-aware 能效与混合路由 & 质量退化、测量偏差 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{importantbox}{未来自我改进是四层共设计}
+数据层生成新任务与轨迹；验证层阻止错误进入训练；策略层学习搜索、工具与协作；系统层提供可负担的计算。只优化其中一层，收益会被另一层瓶颈截断。
+\end{importantbox}
+
+\subsection{开放问题}
+
+\begin{itemize}
+    \item 如何度量真正的 reasoning diversity，而不是表面 embedding 差异？
+    \item Meta-verifier 如何在没有专家标签的开放领域校准？
+    \item 自生成任务如何保证与现实目标相关，而非形成封闭“自娱自乐”的课程？
+    \item 如何让慢仿真与真实实验进入高频 RL loop，而不被 surrogate reward 劫持？
+    \item Local/cloud router 如何联合考虑质量、隐私、延迟、能耗和数据驻留？
+    \item 哪些经验应该写 memory，哪些应该触发 parameter update？
+\end{itemize}
+
+\subsection{本章小结}
+
+四条主线分别扩展数据、验证、任务与计算效率，但最终必须合并为一个可审计、可持续、资源感知的 self-improvement stack。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/search/?query=Multi-Agent+Fine-Tuning\&searchtype=all}{\emph{Multi-Agent Fine-Tuning}: Self-Improvement with Diverse Reasoning Chains}
+    \item \href{https://arxiv.org/search/?query=DeepSeekMath-V2\&searchtype=all}{\emph{DeepSeekMath-V2}: Self-Verifiable Mathematical Reasoning}
+    \item \href{https://arxiv.org/search/?query=Absolute+Zero+Reinforced+Self-play+Reasoning+with+Zero+Data\&searchtype=all}{\emph{Absolute Zero}: Reinforced Self-Play Reasoning with Zero Data}
+    \item \href{https://scalingintelligence.stanford.edu/}{Stanford Scaling Intelligence Lab：模型、系统与硬件协同研究}
+\end{itemize}
+
+\section{总结与延伸}
+
+CS329A 的九讲形成了一条完整递进链：从 LLM 与 agent 基础出发，在测试时用采样、搜索、工具和 verifier 提升解题；再把成功轨迹转成 STaR、GRPO、DAPO 等训练信号；随后面对长时程规划、deep research、真实工作评估与开放环境。
+
+最终讲提出四个决定下一阶段进展的研究问题：
+
+\begin{enumerate}
+    \item \textbf{如何持续产生新 reasoning？} Multi-agent specialization 用结构化差异维持 synthetic data diversity；
+    \item \textbf{如何相信反馈？} DeepSeekMath-V2 用 meta-verification 审计 verifier 的问题分析；
+    \item \textbf{如何突破题库？} Absolute Zero 让 proposer 与 solver 共同生成动态 curriculum；
+    \item \textbf{如何负担更多计算？} Intelligence per watt 把能力、硬件、能耗和 local/cloud serving 放到同一优化框架。
+\end{enumerate}
+
+最值得保留的工程判断是：自我改进不是模型在真空中“自己变聪明”，而是一个由环境、数据、搜索、验证、训练、系统和能源共同约束的闭环。闭环的能力上限由最弱 verifier、最窄数据分布和最昂贵资源共同决定。
+
+因此，一个高质量自我改进 agent 应具备：
+
+\begin{itemize}
+    \item 多样 proposal 与可度量的探索覆盖；
+    \item 分层、独立、能被反驳的 verifier；
+    \item 随能力变化的动态任务课程；
+    \item 对慢反馈和 subjective reward 的不确定性建模；
+    \item memory 与 parameter learning 的明确边界；
+    \item workload-aware 的 local/cloud 路由与能效监控；
+    \item 在真实环境和人类目标上的持续外部校准。
+\end{itemize}
+
+课程结束，但这一领域变化极快。论文会过时，系统原理仍会复用：扩大搜索空间、改善反馈质量、选择恰当训练信号，并把每单位计算转化为更多可靠智能。
+
+\end{document}

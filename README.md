@@ -2,13 +2,13 @@
 
 # 📚 AI Course Notes
 
-**303 份 AI / LLM 中文讲义，支持在线阅读、PDF 下载和 LaTeX 源码查看**
+**353 份 AI / LLM 中文讲义，支持在线阅读、PDF 下载和 LaTeX 源码查看**
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-303份-blue?style=for-the-badge)](.)
-[![Collections](https://img.shields.io/badge/内容系列-16个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-353份-blue?style=for-the-badge)](.)
+[![Collections](https://img.shields.io/badge/内容系列-17个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20PDF%20%7C%20LaTeX-red?style=for-the-badge)](.)
 
 [🌐 在线阅读](https://hqhq1025.github.io/ai-course-notes/) · [📄 浏览目录](#-课程一览) · [🤝 参与贡献](CONTRIBUTING.md)
@@ -31,7 +31,7 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
-> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 303 份讲义。
+> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 353 份讲义。
 
 ## 📥 克隆指南
 
@@ -63,24 +63,25 @@ git checkout main
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
-| Stanford 课程 | 142 | CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
+| Stanford 课程 | 154 | CS329A、CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
 | MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
 | Berkeley 课程 | 35 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
 | B 站系列课程 | 47 | Modern Agent、LLM Architect、Agentic RL |
-| 演讲与访谈 | 29 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
+| 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **303** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| **合计** | **353** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
 ## 📋 课程一览
 
-### 🏫 Stanford 课程 (142 份)
+### 🏫 Stanford 课程 (154 份)
 
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
-| [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 10 | Percy Liang, Tatsu Hashimoto |
+| [**CS329A**](cs329a/) | Self-Improving AI Agents | 9 | Aakanksha Chowdhery, Azalia Mirhoseini |
+| [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 13 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
 | [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
 | [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
@@ -180,7 +181,7 @@ git checkout main
 CS336 → CS224R L09 (RLHF) → CS25 V2 Karpathy (Transformer 入门)
 
 深入 Agent
-Berkeley F24 姚顺雨 Agent 概述 → Modern Agent 全系列 → Agentic RL 全系列
+Berkeley F24 姚顺雨 Agent 概述 → CS329A → Modern Agent 全系列 → Agentic RL 全系列
 
 模型架构
 LLM Architect 全系列 → CS25 V4 Mixtral → CS336 L04 MoE
@@ -193,8 +194,9 @@ Ilya Sutskever → Dario Amodei → Lex Fridman State of AI 2026
 
 ```text
 ai-course-notes/
+├── cs329a/                   # Stanford CS329A Self-Improving AI Agents (9 讲)
 ├── cs336/                    # Stanford CS336 (17 讲)
-├── cs336-2026/               # Stanford CS336 Spring 2026 (10 讲, 进行中)
+├── cs336-2026/               # Stanford CS336 Spring 2026 (13 讲, 进行中)
 ├── cs153/                    # Stanford CS153 Infra @ Scale (11 讲)
 ├── cs224n/                   # Stanford CS224N (17 讲)
 ├── cs231n/                   # Stanford CS231N (18 讲)
@@ -260,6 +262,7 @@ mkdocs build -f .web-build/mkdocs.yml --strict
 
 | 课程 | 官网 | YouTube | Slides |
 |------|------|---------|--------|
+| CS329A | [cs329a.stanford.edu](https://cs329a.stanford.edu/) | [9-Part 播放列表](https://www.youtube.com/playlist?list=PLangBM27OtEA) | 视频内课件 |
 | CS336 | [cs336.stanford.edu](https://cs336.stanford.edu/) | [Spring 2025 播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_) | [Spring 2026 GitHub](https://github.com/stanford-cs336/lectures) |
 | CS153 | [cs153.stanford.edu](https://cs153.stanford.edu/) | [W25](https://www.youtube.com/playlist?list=PL2aDf5-VARtCwgVceDClce1OcnUk1vIvR) · [S26](https://www.youtube.com/playlist?list=PL2aDf5-VARtBwz1kz5FsuSZXOig2U6aJI) | — |
 | CS224R | [cs224r.stanford.edu](https://cs224r.stanford.edu/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rPwxE0ONYRa_itZFdaKCylL) | [官网](https://cs224r.stanford.edu/spring_2025/slides/) |

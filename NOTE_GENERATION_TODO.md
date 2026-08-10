@@ -1,6 +1,6 @@
 # Note Generation Todo
 
-> Maintained by Codex. Last updated: 2026-05-04.
+> Maintained by Codex. Last updated: 2026-08-10.
 
 ## Status Legend
 - `todo`: not started
@@ -22,6 +22,7 @@
 | done | CS336 Spring 2026 | Lecture 08: Parallelism Basics | `lecture08-slides.pdf` | `cs336-2026/lecture08/` | Long-form note: 41-page PDF, 51 figures, 23 teaching boxes, ZeRO/FSDP and 3D/4D parallelism synthesis, XeLaTeX and quality script verified. |
 | done | CS336 Spring 2026 | Lecture 09: Scaling Laws Basics | `lecture09-slides.pdf` | `cs336-2026/lecture09/` | Long-form note: 36-page PDF, 44 figures, 23 teaching boxes, scaling-law fitting/code snippets, XeLaTeX and quality script verified. |
 | done | CS336 Spring 2026 | Lecture 10: Inference | `lecture10-slides.py` | `cs336-2026/lecture10/` | Long-form note: 30-page PDF, 29 figures, 41 teaching boxes, inference/KV-cache/systems synthesis, XeLaTeX and quality script verified. |
+| done | CS329A | Official 9-Part Self-Improving AI Agents series | `PLangBM27OtEA` | `cs329a/lecture01-09/` | Nine long-form Chinese LaTeX notes completed; local PDFs total 215 pages, all nine pass the course-level audit, and generated PDFs remain local under the repository's current publishing policy. |
 | blocked | CS153 Spring 2026 | 5 public videos | `PL2aDf5-VARtBwz1kz5FsuSZXOig2U6aJI` | `cs153-spring2026/lectureXX/` | YouTube currently requires cookies/sign-in for yt-dlp subtitle and media access. |
 | blocked | CS25 V6 | First 3 public recordings | `PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM` | `cs25/lecture42+` or `cs25-v6/lectureXX/` | YouTube currently requires cookies/sign-in for yt-dlp subtitle and media access. |
 | done | Modern Agent | 17 Codex Plan Mode and update_plan | `BV1NdDtBjEg7` | `modern-agent/lecture17/` | Downloaded via public playurl API, transcribed with faster-whisper large-v3 on A100, TeX/PDF compiled. |

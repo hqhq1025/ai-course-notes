@@ -1,0 +1,313 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 6：训练时扩展与 Scaling RL}
+\newcommand{\lecturers}{Aakanksha Chowdhery}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-10-10}
+\newcommand{\videoduration}{1:12:38}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=yVnmHSAy3ck}
+
+\begin{document}
+\makelecturetitle
+
+\section{从测试时扩展到训练时扩展}
+
+前几讲通过采样、搜索和 verifier 在参数固定时提高成功率。本讲进一步问：\textbf{能否把这些成功 reasoning trajectory 变成训练信号，使模型的单次输出分布本身发生改善？}
+
+AIME 是主要动机 benchmark。它包含近期竞赛数学题，能减少老 benchmark 被训练数据污染的问题，并对长链推理、回溯和自检提出更高要求。
+
+\videofigure{figures/aime.jpg}{AIME 2024/2025 用于衡量近期数学推理能力。}{00:01:16--00:03:28}
+
+训练时与测试时计算是两条可同时扩展的轴：训练让正确轨迹在模型分布中更常见；测试时扩展从该分布中进行更深或更广搜索。
+
+\videofigure{figures/train-test-scaling.jpg}{增加 train-time 与 test-time compute 都能提高 AIME pass@1。}{00:05:48--00:07:20}
+
+\begin{importantbox}{训练时扩展的目标是重塑概率分布}
+Repeated sampling 主要提高“至少采到一次正确答案”的机会；RL 则试图把奖励高的轨迹概率整体推高，使正确答案更常出现、更一致。理想结果是用更少测试时采样获得同样准确率。
+\end{importantbox}
+
+\subsection{为什么 reasoning RL 容易失败}
+
+长 CoT 的 action space 极大、reward 稀疏、轨迹长度变化大。训练还会遇到 reward hacking、熵坍塌、梯度方差、内存压力和在线采样吞吐等系统问题。因此课程强调：scaling RL 的“魔法”往往来自实现细节，而非单一目标函数。
+
+\subsection{本章小结}
+
+Train-time scaling 把 verifier 或环境 reward 转化为参数更新。它可以提高单次回答与多数投票的稳定性，但也可能降低探索多样性；理解这一张力是 STaR、GRPO 和 DAPO 的共同主线。
+
+\section{STaR：用推理自举推理}
+
+\subsection{少量 rationale 如何扩展成大数据}
+
+STaR（Self-Taught Reasoner）从少量带 reasoning step 的示例开始，让模型为大量只有问题--答案的数据生成 rationale；只保留最终答案正确的轨迹，加入训练集微调，再重复这一过程。
+
+\videofigure{figures/star-bootstrapping.jpg}{STaR 从少量 reasoning examples 迭代生成、过滤和训练。}{00:17:30--00:18:42}
+
+若训练集为 $\{(x_i,a_i)\}$，第 $m$ 轮模型生成 rationale $r_i$：
+
+$$
+r_i\sim p_{\theta_m}(r\mid x_i),\qquad
+\mathcal D_m=\{(x_i,r_i,a_i):\hat a(r_i)=a_i\}.
+$$
+
+然后在累积的正确 rationale 上训练：
+
+$$
+\theta_{m+1}=\arg\max_\theta
+\sum_{(x,r,a)\in\mathcal D_m}\log p_\theta(r,a\mid x).
+$$
+
+\subsection{Rationalization：从已知答案反向解释}
+
+困难问题上，模型可能始终无法自行生成正确答案，因而没有新正例。STaR 的关键创新是把正确答案提供给模型，要求它生成一个能解释该答案的 rationale。
+
+\videofigure{figures/rationalization.jpg}{Rationalization 用正确答案帮助模型为原本失败的问题构造解释。}{00:18:42--00:20:00}
+
+\begin{knowledgebox}{Rationalization 类似 answer-conditioned proposal}
+它不是证明模型原先会解题，而是利用答案作为额外条件搜索一条解释。若解释质量可靠，这能把困难问题加入训练；若模型只是事后编造看似合理的故事，就会引入伪推理。
+\end{knowledgebox}
+
+\subsection{完整自举循环}
+
+\videofigure{figures/star-contributions.jpg}{STaR 通过生成、正确性过滤、rationalize 与再训练迭代扩展 rationale 数据。}{00:20:00--00:22:42}
+
+\videofigure{figures/star-method.jpg}{Vanilla STaR 与加入 rationalization 的数据流。}{00:24:50--00:27:28}
+
+算法可概括为：
+
+\begin{enumerate}
+    \item 用当前模型为所有问题生成 rationale 与答案；
+    \item 按最终答案过滤正确轨迹；
+    \item 对失败问题，在给定正确答案条件下 rationalize；
+    \item 用新 rationale 数据微调模型；
+    \item 重复直到收益饱和或数据质量下降。
+\end{enumerate}
+
+\subsection{隐藏假设与错误模式}
+
+\videofigure{figures/star-assumptions.jpg}{STaR 假设最终正确性可以近似 reasoning 质量。}{00:22:42--00:24:50}
+
+这个假设会产生：
+
+\begin{itemize}
+    \item \textbf{False positive rationale}：过程错误但最终答案碰巧正确；
+    \item \textbf{False negative rationale}：过程有价值但最终小错，被整条丢弃；
+    \item \textbf{Selection bias}：训练数据越来越集中在模型已经能解的问题；
+    \item \textbf{Confirmation loop}：模型偏好某类解释，下一轮继续复制同一模式。
+\end{itemize}
+
+\subsection{结果与 Rationalization Gap}
+
+\videofigure{figures/star-results.jpg}{STaR 在 commonsense 与数学 reasoning 上优于无 scratchpad 或仅答案微调。}{00:27:28--00:31:22}
+
+\videofigure{figures/rationalization-challenge.jpg}{给定答案生成的 rationale 与无答案推理存在分布差异。}{00:31:22--00:33:34}
+
+Rationalization 训练数据条件中含答案，但部署时没有答案；模型可能学习只有在答案已知时才成立的解释模式。这一 distribution mismatch 是 STaR 的核心局限。
+
+\begin{warningbox}{最终答案过滤不是 process verification}
+STaR 的 reward 只检查终局，因此不能识别中间逻辑漏洞。更稳健的扩展可以引入 PRM、formal checker 或多个 verifier，对 rationale 本身做质量控制。
+\end{warningbox}
+
+\subsection{本章小结}
+
+STaR 展示了低成本 reasoning data bootstrapping：用模型生成自己的训练数据，并通过可验证答案过滤。它样本效率高、实现简单，但容易受终局标签和 answer-conditioned rationalization 偏差限制。
+
+\section{DeepSeekMath 与 GRPO}
+
+\subsection{Data Scaling：数学数据不等于 arXiv 论文}
+
+DeepSeekMath 的第一项贡献是数据工程：从大规模网页中识别高质量数学相关内容，而不是简单扩大 arXiv 文本。课程强调，形式化公式密集不一定等于有助于解题；包含自然语言推导、例题和解法的网站可能更有训练价值。
+
+\videofigure{figures/deepseekmath.jpg}{DeepSeekMath-7B 通过数据与 RL 获得强数学表现。}{00:41:10--00:42:06}
+
+\videofigure{figures/math-data.jpg}{高质量数学网页数据与 practical RL 构成方法主线。}{00:42:06--00:43:34}
+
+\videofigure{figures/data-results.jpg}{数据来源选择会显著影响数学推理，盲目加入 arXiv 甚至可能伤害性能。}{00:43:34--00:44:24}
+
+\begin{importantbox}{Data scaling 的单位应是有效学习信号}
+更多 token 不等于更多能力。数据是否包含问题--推导--答案结构、难度覆盖、错误纠正与多样表达，通常比“领域关键词比例”更重要。
+\end{importantbox}
+
+\subsection{PPO 的 critic 成本}
+
+标准 PPO 通常维护 policy、reference policy、reward model 和 value/critic model，多份大模型占用显存并增加同步成本。
+
+\videofigure{figures/ppo-memory.jpg}{大模型 PPO 的 policy、reference、reward 与 critic 带来高内存压力。}{00:44:24--00:45:12}
+
+\subsection{GRPO：用组内相对奖励替代 critic}
+
+Group Relative Policy Optimization 对同一问题采样一组 $G$ 个回答，用组内均值与标准差构造 advantage：
+
+$$
+A_i=\frac{r_i-\mu_G}{\sigma_G+\epsilon},
+\qquad
+\mu_G=\frac{1}{G}\sum_{j=1}^{G}r_j.
+$$
+
+\videofigure{figures/grpo.jpg}{GRPO 用同题候选组作为 baseline，不再训练独立 critic。}{00:45:12--00:46:02}
+
+直觉是：reward 的绝对尺度可能因题目难度变化，但同一道题内“谁比同组更好”更稳定。正确候选得到正 advantage，错误候选得到负 advantage。
+
+GRPO 仍使用 clipped policy update 和 reference KL：
+
+$$
+J(\theta)=\mathbb E_i\left[
+\min(\rho_i A_i,\operatorname{clip}(\rho_i,1-\epsilon,1+\epsilon)A_i)
+-\beta D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}})
+\right].
+$$
+
+\videofigure{figures/grpo-gradient.jpg}{多种 RL 方法都可理解为对 $\nabla\log p(\text{output}\mid\text{question})$ 乘以不同梯度系数。}{00:46:02--00:52:46}
+
+\subsection{Online RL 优于固定离线样本}
+
+如果训练始终使用旧 policy 生成的数据，随着 policy 更新，样本分布逐渐过时。Online RL 持续从当前模型采样，reward 和 gradient 更贴近当前失败模式。
+
+\videofigure{figures/online-rl.jpg}{从当前 policy 在线采样优于反复使用旧模型生成的离线轨迹。}{00:52:46--00:53:34}
+
+\begin{warningbox}{组内 advantage 可能为零}
+若同一组所有回答都正确或都错误，组内 reward 方差为零，没有有效排序信号。随着模型变强，容易题会频繁出现全对组；难题则可能全错。DAPO 的 dynamic sampling 正是为解决这一浪费。
+\end{warningbox}
+
+\subsection{本章小结}
+
+DeepSeekMath 表明 train-time scaling 依赖数据与 RL 系统一起优化。GRPO 用组内相对 reward 移除 critic，降低显存与工程复杂度，但长 reasoning 训练仍会出现熵坍塌、无效 batch 和长度偏差。
+
+\section{DAPO：让长链 Reasoning RL 稳定扩展}
+
+\subsection{Naive GRPO 的四类问题}
+
+\videofigure{figures/dapo-problems.jpg}{Naive GRPO 在长 reasoning 上出现熵坍塌、无效样本、长度偏差和不稳定。}{00:53:34--00:54:24}
+
+DAPO（Decoupled Clip and Dynamic sAmpling Policy Optimization）通过一组相互配合的技术，把 AIME 表现逐步从 naive baseline 推高。
+
+\subsection{Clip-Higher：允许优质低概率动作更快上升}
+
+标准 PPO 对概率上升和下降使用对称 clipping。对长 CoT，正确但稀有的 token/action 初始概率很低，过紧的上界会阻止它们快速增长。Clip-Higher 使用更宽的上升 clipping 区间：
+
+$$
+\operatorname{clip}(\rho,1-\epsilon_{\rm low},1+\epsilon_{\rm high}),
+\qquad \epsilon_{\rm high}>\epsilon_{\rm low}.
+$$
+
+\videofigure{figures/clip-higher.jpg}{Asymmetric Clip-Higher 保留更多对优质稀有行为的正向更新。}{00:54:24--00:55:46}
+
+这有助于维持探索，但上界过宽也可能导致 policy 突然偏向少数轨迹，因此仍需监控 KL 与 entropy。
+
+\subsection{Dynamic Sampling：只训练有对比信号的问题}
+
+对每题采样 64 个回答。若 64 个全对或全错，组内 advantage 都接近零。Dynamic sampling 丢弃这类组，补采“部分正确、部分错误”的题目。
+
+\videofigure{figures/dynamic-sampling.jpg}{Dynamic sampling 过滤全对与全错组，保留有效梯度。}{00:55:46--00:57:46}
+
+\begin{knowledgebox}{Dynamic sampling 是在线 curriculum}
+题目只有在当前 policy 既会成功又会失败时最有学习价值。随着模型能力变化，这个“学习边界”会移动，采样器自动把训练计算集中到当前适中难度样本。
+\end{knowledgebox}
+
+\subsection{Token-Level Loss：修正长度权重}
+
+Sample-level loss 让每个回答贡献相同权重；长回答的每个 token 因此被平均稀释。Token-level loss 按所有 token 聚合，使长 reasoning 的局部决策得到更直接的梯度。
+
+\videofigure{figures/token-loss.jpg}{Token-level objective 避免长回答的每个 token 被过度降权。}{00:57:46--00:58:48}
+
+\begin{warningbox}{Token-level weighting 也可能偏爱长答案}
+若 reward 只看终局，长轨迹拥有更多被更新 token，可能诱导模型无意义延长 reasoning。必须与长度成本、停止策略和 overlong punishment 配合。
+\end{warningbox}
+
+\subsection{Soft Overlong Punishment}
+
+硬截断把刚超过最大长度的高质量推理与严重超长回答同样判罚，产生高方差噪声。Soft punishment 在接近长度上限时逐步增加惩罚，让模型平滑学习收束。
+
+\videofigure{figures/overlong.jpg}{Soft overlong punishment 避免最大长度硬边界带来的噪声。}{00:58:48--00:59:42}
+
+\subsection{渐进式收益}
+
+\videofigure{figures/dapo-results.jpg}{Clip-Higher、soft overlong、token loss 与 dynamic sampling 逐项提升 AIME。}{00:59:42--01:00:42}
+
+课程总结的趋势是：naive GRPO 约 30，加入 overlong filtering、asymmetric clipping、soft punishment、token-level loss 与 dynamic sampling 后逐步提升到 40+ 区间。重点不是单个数字，而是每项技术修复一个具体训练病理。
+
+\subsection{Scaling RL 应监控什么}
+
+\videofigure{figures/rl-monitoring.jpg}{长 reasoning RL 需监控响应长度、entropy、reward 分布与有效样本率。}{01:00:42--01:02:26}
+
+仅看 training loss 容易误判。至少应监控：
+
+\begin{itemize}
+    \item 响应长度是否增长后稳定，而非无限膨胀；
+    \item token entropy 是否快速坍塌；
+    \item 全对/全错组比例与有效 batch 比例；
+    \item KL、clip fraction 与梯度范数；
+    \item pass@1、majority@$k$、pass@$k$ 的不同变化；
+    \item reward 与独立真实评估是否仍一致。
+\end{itemize}
+
+\subsection{本章小结}
+
+DAPO 的贡献是把 reasoning RL 视为完整系统：clip 控制探索，dynamic sampling 保证梯度，token loss 修正长度权重，soft punishment 平滑约束输出。Scaling RL 的成败由这些机制共同决定。
+
+\section{STaR、GRPO 与 DAPO 如何选择}
+
+\videofigure{figures/method-selection.jpg}{不同数据规模、轨迹长度与计算预算对应不同训练方法。}{01:02:26--01:03:34}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.2cm}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{4.0cm}}
+\toprule
+\textbf{方法} & \textbf{适用条件} & \textbf{主要优势} & \textbf{主要风险} \\
+\midrule
+STaR & 少量 rationale examples、答案可验证 & 简单高效、自举数据 & 终局过滤偏差、rationalization mismatch \\
+GRPO & 可在线采样一组候选、reward 可计算 & 无 critic、系统较轻 & 全对/全错组无梯度、熵坍塌 \\
+DAPO & 长 CoT、大规模在线 RL & 稳定扩展、提高有效计算率 & 实现复杂、超参耦合、监控要求高 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{三个指标为何会不同}
+
+\videofigure{figures/metrics.jpg}{RL 可能同时改变 pass@1、majority@$k$ 与 pass@$k$。}{01:03:34--01:06:20}
+
+\begin{itemize}
+    \item \textbf{pass@1}：单次采样变得更正确；
+    \item \textbf{majority@$k$}：正确答案成为更常见的模态；
+    \item \textbf{pass@$k$}：候选集合的多样覆盖。
+\end{itemize}
+
+RL 常显著提高 majority@$k$，却不一定提高 pass@$k$。一种解释是 policy 把概率集中到已有正确模式，提升一致性但减少多样探索；这也是“训练变强”与“覆盖变广”之间的张力。
+
+\subsection{开放问题}
+
+\videofigure{figures/open-problems.jpg}{Scaling RL 仍缺少对多数一致性、覆盖、多样性与自评行为的完整理论。}{01:06:20--01:10:46}
+
+\begin{importantbox}{最值得追问的问题}
+为什么 RL 让正确答案更常见，却未必让模型能解更多不同问题？回答这一问题需要同时分析 reward 形状、entropy、数据难度分布和 verifier 盲点，而不能只看平均 benchmark 分数。
+\end{importantbox}
+
+\subsection{本章小结}
+
+STaR 适合低成本自举，GRPO 适合去 critic 的组内相对优化，DAPO 适合长 reasoning 的大规模稳定训练。方法选择应由反馈可验证性、在线采样成本和轨迹长度决定。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/abs/2203.14465}{Zelikman et al., \emph{STaR: Bootstrapping Reasoning With Reasoning}}
+    \item \href{https://arxiv.org/abs/2402.03300}{Shao et al., \emph{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}}
+    \item \href{https://arxiv.org/abs/2503.14476}{Yu et al., \emph{DAPO: An Open-Source LLM Reinforcement Learning System at Scale}}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲把自我改进从 inference-time selection 推进到 train-time distribution shift。STaR 从少量 rationale 出发，通过答案过滤和 rationalization 自举推理数据；DeepSeekMath 说明高质量领域数据与 practical RL 同样重要，并以 GRPO 用组内相对 reward 移除 critic；DAPO 则针对长 CoT RL 的真实病理，引入非对称 clipping、dynamic sampling、token-level loss 和 soft overlong punishment。
+
+三个层次形成递进关系：
+
+\begin{enumerate}
+    \item \textbf{数据层}：生成并选择有学习价值的 reasoning trajectory；
+    \item \textbf{目标层}：用相对 reward 提高正确轨迹概率；
+    \item \textbf{系统层}：维持 entropy、有效梯度、长度与在线采样吞吐。
+\end{enumerate}
+
+下一讲转向“通过搜索实现自我改进”：AlphaCode 如何用海量采样、聚类和打分解决竞赛编程，Search-O1 如何在 reasoning 过程中按不确定性触发检索，并与 RL-based Search-R1 比较。
+
+\end{document}

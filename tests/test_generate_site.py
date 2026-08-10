@@ -33,6 +33,7 @@ def write_sample_repo(root: Path) -> None:
     (root / "sample-course" / "lecture01" / "images").mkdir(parents=True)
     write_image(root / "sample-course" / "lecture01" / "cover.jpg", (2000, 1000))
     write_image(root / "sample-course" / "lecture01" / "diagram.jpg", (2000, 1000))
+    write_image(root / "sample-course" / "lecture01" / "video-frame.jpg", (1600, 900))
     write_image(root / "sample-course" / "lecture01" / "images" / "fallback.png", (1800, 900), mode="RGBA")
     (root / "sample-course" / "lecture01" / "lecture01-notes.pdf").write_bytes(b"%PDF-1.4")
     (root / "sample-course" / "lecture01" / "slides.pdf").write_bytes(b"%PDF-1.4")
@@ -61,6 +62,7 @@ def write_sample_repo(root: Path) -> None:
 \newcommand{\videourl}{https://example.com/watch}
 \newcommand{\videocoverpath}{cover.jpg}
 \begin{document}
+\makelecturetitle
 \tableofcontents
 \newpage
 
@@ -126,6 +128,8 @@ v = \begin{pmatrix}1 \\ 2\end{pmatrix}
 \caption{示意图：网页阅读器结构，缩放 $\sqrt{\text{layers}}$\protect\footnotemark}
 \end{figure}
 \footnotetext{测试来源。}
+
+\videofigure[0.9]{video-frame.jpg}{视频关键帧宏}{00:01:00--00:02:00}
 
 数学 caption 后的 \textbf{粗体} 也要继续转换。
 
@@ -331,6 +335,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     ).read_text(encoding="utf-8")
 
     assert "# Sample Lecture & Agents" in page
+    assert r"\makelecturetitle" not in page
     assert "基于 Test Teacher 授课内容整理" in page
     assert "[观看视频](https://example.com/watch)" in page
     assert "[备用 PDF](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/lecture01-notes.pdf)" in page
@@ -376,6 +381,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "未转换的 LaTeX 环境：pmatrix" not in page
     assert f"![示意图：网页阅读器结构，缩放 $√layers$](diagram.jpg)" in page
     assert "测试来源。" in page
+    assert "![视频关键帧宏](video-frame.jpg)" in page
+    assert "视频讲解区间：00:01:00–00:02:00。" in page
+    assert r"\videofigure" not in page
     assert "数学 caption 后的 **粗体** 也要继续转换。" in page
     assert r"数学 caption 后的 \textbf" not in page
     assert "图片资源缺失" in page
@@ -429,6 +437,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "??? quote \"未转换的 LaTeX 环境：mystery\"" in page
 
     assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg").is_file()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "video-frame.jpg").is_file()
     assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "images" / "fallback.png").is_file()
     assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.pdf").exists()
     assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "slides.pdf").exists()

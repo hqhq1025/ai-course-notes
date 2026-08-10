@@ -1,0 +1,345 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 4：从工具、代码与 AI 反馈中学习}
+\newcommand{\lecturers}{Aakanksha Chowdhery}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-10-03}
+\newcommand{\videoduration}{1:11:13}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=Lxh9RF5S-K0}
+
+\begin{document}
+\makelecturetitle
+
+\section{统一视角：反馈从哪里来}
+
+自我改进系统需要一个信号告诉模型“刚才做得怎样”。本讲比较三类反馈：
+
+\begin{enumerate}
+    \item \textbf{工具观察（tool observation）}：搜索结果、网页内容或环境状态；
+    \item \textbf{执行反馈（execution feedback）}：编译错误、单元测试、运行时行为；
+    \item \textbf{AI feedback}：模型依据人类编写的原则批评、修订并比较回答。
+\end{enumerate}
+
+\videofigure{figures/thought-action-feedback.jpg}{思考指导行动，行动产生反馈，反馈再修正思考。}{00:01:32--00:03:32}
+
+三类方法分别对应 ReAct、RLEF 和 Constitutional AI。它们共享同一闭环：
+
+$$
+\text{state}\rightarrow\text{reason / act}\rightarrow\text{feedback}
+\rightarrow\text{revision or update}.
+$$
+
+\begin{importantbox}{反馈可以只改当前轨迹，也可以改模型参数}
+ReAct 主要在推理时读取 observation 并调整下一步；RLEF 把执行结果作为 RL reward 更新代码模型；Constitutional AI 先把 critique--revision 数据用于 SFT，再把 AI preference 用于 RL。区分这两层能避免把“会重试”误认为“已经学会”。
+\end{importantbox}
+
+\subsection{评价反馈质量的四个维度}
+
+\begin{itemize}
+    \item \textbf{真实性}：是否来自真实环境而非模型自说自话；
+    \item \textbf{粒度}：只告诉最终成败，还是指出具体错误；
+    \item \textbf{成本}：是否需要人类专家、沙箱执行或额外大模型；
+    \item \textbf{可扩展性}：能否自动产生大量训练样本。
+\end{itemize}
+
+\subsection{本章小结}
+
+反馈是模型与目标之间的接口。工具和代码提供外部可观测信号，AI feedback 提供可扩展但更主观的规范信号；系统的可靠性取决于这些信号是否真实对应最终目标。
+
+\section{ReAct：交错 Reasoning 与 Acting}
+
+\subsection{为什么只思考或只行动都不够}
+
+Chain-of-thought 能分解问题，但内部推理无法自动纠正过时知识或幻觉；纯工具调用能取得新信息，却缺少长期计划和跨观察整合。ReAct 让模型交替生成：
+
+\begin{itemize}
+    \item \textbf{Thought}：当前判断、子目标和下一步理由；
+    \item \textbf{Action}：搜索、点击、查询或环境操作；
+    \item \textbf{Observation}：工具返回的外部状态。
+\end{itemize}
+
+\videofigure{figures/react-contribution.jpg}{ReAct 用统一轨迹交错语言推理与环境动作。}{00:04:40--00:06:46}
+
+\videofigure{figures/react-loop.jpg}{Reasoning 负责计划与整合，Action 提供新证据并校正推理。}{00:06:46--00:07:32}
+
+\subsection{形式化为序列决策过程}
+
+在时间步 $t$，Agent 根据历史上下文 $c_t$ 选择动作：
+
+$$
+a_t\sim\pi_\theta(a\mid c_t),\qquad
+c_{t+1}=c_t\oplus a_t\oplus o_{t+1},
+$$
+
+其中 $o_{t+1}$ 是环境执行动作后返回的 observation。ReAct 的特殊之处是 $a_t$ 可包含语言 thought 和可执行 action，两者共享同一个上下文。
+
+\videofigure{figures/react-setup.jpg}{Agent 观察环境、选择动作并把新 observation 写回上下文。}{00:07:32--00:09:06}
+
+\begin{knowledgebox}{Thought 也是一种内部状态压缩}
+模型不需要把全部历史原样保留为结构化程序状态，而是用自然语言总结当前假设、证据与待办项。这很灵活，但也会产生状态漂移：早期错误总结可能在后续上下文中被当作事实。
+\end{knowledgebox}
+
+\subsection{Reason-only、Act-only 与 ReAct}
+
+\videofigure{figures/react-example.jpg}{在多跳问答中，ReAct 通过搜索 observation 修正内部推理。}{00:09:06--00:17:18}
+
+\begin{itemize}
+    \item \textbf{Reason-only}：能形成计划，但可能基于错误记忆持续推理；
+    \item \textbf{Act-only}：能获得事实，却容易缺少子目标管理和跨步骤整合；
+    \item \textbf{ReAct}：用 thought 决定查什么，用 observation 验证并更新 thought。
+\end{itemize}
+
+\subsection{知识密集任务：HotpotQA 与 FEVER}
+
+HotpotQA 要求跨多个 Wikipedia 页面完成多跳问答；FEVER 要求检索证据判断声明真假。它们测试的不只是最终答案，还包括能否找到支撑证据。
+
+\videofigure{figures/knowledge-tasks.jpg}{ReAct 在多跳问答与事实验证任务上结合检索和推理。}{00:17:18--00:20:46}
+
+ReAct 的优势是轨迹可解释：研究者能看到模型查了什么、在哪一步接受了错误证据、是否重复搜索。但“可见 thought”并不保证真实反映模型内部因果过程，它更适合作为可调试工作记忆。
+
+\subsection{决策任务：WebShop}
+
+WebShop 要求 Agent 根据用户约束在模拟购物网站中导航、筛选并购买商品。成功不仅依赖知识，还依赖状态化操作与不可跳过的页面流程。
+
+\videofigure{figures/webshop.jpg}{WebShop 将自然语言约束转化为多步网页行动。}{00:20:46--00:22:10}
+
+\subsection{优势与失败模式}
+
+\videofigure{figures/react-strengths.jpg}{ReAct 的优势是简单、可解释且无需更新模型参数。}{00:22:10--00:23:22}
+
+常见失败包括：
+
+\begin{itemize}
+    \item 搜索查询过窄，第一条错误证据锁定后续方向；
+    \item observation 太长，关键信息被噪声淹没；
+    \item thought 重复描述状态但没有推进计划；
+    \item 工具错误或页面变化导致轨迹失效；
+    \item 缺少停止条件，Agent 在同一动作上循环。
+\end{itemize}
+
+\begin{warningbox}{工具结果不是天然可信 ground truth}
+搜索结果可能过时、网页可能含恶意 prompt injection、数据库可能权限不足。Agent 必须记录来源、验证证据并限制工具权限，而不能把 observation 无条件提升为系统指令。
+\end{warningbox}
+
+\subsection{本章小结}
+
+ReAct 把语言推理从封闭生成过程变成可与环境交互的轨迹。它主要提升当前任务中的自我修正能力，但参数并未更新；要让模型从大量执行经历中长期改进，需要训练时反馈。
+
+\section{RLEF：从代码执行反馈中强化学习}
+
+\subsection{代码环境为何特别适合 RL}
+
+代码生成具有明确动作和观察：动作是提交或修改代码，观察是编译结果、测试输出与错误日志。与人类偏好相比，执行反馈便宜、可重复、接近客观，并能自动扩展到大量问题。
+
+\videofigure{figures/rlef-contributions.jpg}{RLEF 将代码作为动作、执行结果作为 observation，构建端到端 RL。}{00:28:00--00:30:08}
+
+\subsection{交互式训练框架}
+
+RLEF 中，policy 生成程序；沙箱运行公开或私有测试；反馈返回给模型，模型可进行多轮修复；episode 结束后根据测试通过情况计算 reward，并用 PPO 更新 policy。
+
+\videofigure{figures/rlef-framework.jpg}{RLEF 的探索、执行反馈、轨迹收集与 policy update。}{00:30:08--00:31:08}
+
+可将 episode 表示为：
+
+$$
+\tau=(c_0,o_0,c_1,o_1,\ldots,c_T,o_T),
+$$
+
+其中 $c_t$ 是第 $t$ 轮代码输出或修改，$o_t$ 是执行反馈。终局 reward 可写为：
+
+$$
+R(\tau)=\frac{1}{M}\sum_{j=1}^{M}\mathbf 1[\mathrm{test}_j(c_T)=\mathrm{pass}].
+$$
+
+\begin{itemize}
+    \item $M$：测试用例数；
+    \item $R(\tau)$：最终代码通过测试的比例；
+    \item 私有测试可减少模型针对公开测试硬编码的风险。
+\end{itemize}
+
+\subsection{Hybrid Token / Turn-Level Policy}
+
+代码 Agent 的动作既包含 token 级生成，也包含 turn 级“提交、运行、修改”决策。RLEF 将两类粒度结合：token 概率决定代码内容，turn reward 反映完整执行结果。
+
+\videofigure{figures/hybrid-policy.jpg}{PPO 同时处理 token 生成与多轮执行反馈。}{00:31:08--00:34:28}
+
+PPO 的抽象目标为：
+
+$$
+\max_\theta\;\mathbb E_t\left[
+\min\left(r_t(\theta)A_t,
+\operatorname{clip}(r_t(\theta),1-\epsilon,1+\epsilon)A_t\right)
+\right],
+$$
+
+\begin{itemize}
+    \item $r_t(\theta)=\pi_\theta(a_t\mid s_t)/\pi_{\theta_{\rm old}}(a_t\mid s_t)$；
+    \item $A_t$：执行反馈导出的 advantage；
+    \item $\epsilon$：限制单次 policy 更新幅度的 clipping 系数。
+\end{itemize}
+
+\subsection{随着执行反馈扩展的性能}
+
+\videofigure{figures/rlef-scaling.jpg}{RLEF 训练后的 solve rate 随可用执行反馈提升。}{00:34:28--00:36:24}
+
+反馈不仅用于训练，也改变推理时行为。模型学会根据错误类型进行针对性修改，而不是每轮完全重写代码。
+
+\videofigure{figures/rlef-generalization.jpg}{RLEF 对 CodeContests、HumanEval+ 与 MBPP+ 的推理行为和泛化。}{00:36:24--00:36:54}
+
+\videofigure{figures/multiturn-feedback.jpg}{多轮 execution feedback 逐步修复前一轮错误。}{00:36:54--00:39:22}
+
+\begin{importantbox}{Execution feedback 同时是 verifier 与 curriculum}
+测试结果判断当前程序是否正确；错误日志还指出模型下一轮应学习什么。随着训练推进，容易错误减少，policy 会遇到更难的边界案例，环境自然形成自适应 curriculum。
+\end{importantbox}
+
+\subsection{Reward Hacking 与测试覆盖}
+
+如果 reward 只来自有限测试，模型可能写出特判、利用沙箱漏洞或生成超时但侥幸通过的程序。需要：
+
+\begin{itemize}
+    \item 隐藏测试与动态生成测试；
+    \item 资源限制、网络隔离和确定性沙箱；
+    \item 正确性之外加入效率、安全、可读性等约束；
+    \item 对训练期间发现的 exploit 做回归测试。
+\end{itemize}
+
+\begin{warningbox}{测试通过只证明“满足测试”，不证明程序正确}
+Unit tests 是规范的有限采样。测试覆盖不足时，RL 会系统性寻找未覆盖区域。训练用测试若泄漏到模型上下文，还会把问题退化为记忆或硬编码。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RLEF 将代码执行环境变成可扩展 reward source，让模型不仅在当前轨迹中修复错误，还能通过 PPO 把修复策略写入参数。其上限由测试质量、沙箱安全与 reward 设计决定。
+
+\section{Constitutional AI：从 AI Feedback 中学习}
+
+\subsection{为什么要用原则替代大量偏好标签}
+
+RLHF 需要大量人类比较。Constitutional AI 尝试把人类价值判断压缩为少量明确原则，再由模型依据原则批评、修订和比较回答，从而用 AI feedback 扩大后训练数据。
+
+\videofigure{figures/ai-feedback-scaling.jpg}{少量人类原则驱动大量 AI critique 与 preference labels。}{00:46:32--00:48:42}
+
+\begin{knowledgebox}{Constitution 是可执行规范，不是口号列表}
+有效原则应能被应用到具体回答：指出哪一段违反了什么要求，并给出如何修订。过于抽象、互相冲突或缺少优先级的原则会让模型产生不稳定判断。
+\end{knowledgebox}
+
+\subsection{阶段一：Critique--Revision Supervised Learning}
+
+流程如下：
+
+\begin{enumerate}
+    \item 用 red-team prompt 诱导基础助手产生问题回答；
+    \item 选择一条 constitutional principle，请模型批评回答；
+    \item 请模型根据批评重写回答；
+    \item 用修订后的回答做 supervised fine-tuning。
+\end{enumerate}
+
+\videofigure{figures/constitutional-pipeline.jpg}{Constitutional AI 用原则驱动自我批评与修订。}{00:48:42--00:49:38}
+
+\videofigure{figures/constitution-example.jpg}{针对有害、偏见与儿童适宜性的 critique / revision principle 示例。}{00:49:38--00:50:48}
+
+\videofigure{figures/constitutional-sft.jpg}{第一阶段把模型修订后的安全回答用于 SFT。}{00:50:48--00:51:24}
+
+\subsection{多轮修订的收益与代价}
+
+随着 revision 次数增加，harmlessness 提升，但 helpfulness 可能下降：模型为了避免风险而过度拒答。总目标不是单独最大化安全，而是在帮助性与无害性之间找到 Pareto 改进。
+
+\videofigure{figures/revision-results.jpg}{多轮 revision 提高 harmlessness，同时可能损失 helpfulness。}{00:51:24--00:52:20}
+
+\begin{warningbox}{原则越多不一定越好}
+多条原则可能相互冲突，例如“尽量回答用户”与“避免任何潜在风险”。如果没有适用条件与优先级，模型会选择最保守的拒绝策略，表面安全却失去实用性。
+\end{warningbox}
+
+\subsection{阶段二：RLAIF}
+
+在 RL 阶段，模型对多个候选回答依据 constitution 做比较，生成 AI preference labels；再训练 preference model，并像 RLHF 一样优化助手策略。
+
+\videofigure{figures/rlaif.jpg}{RLAIF 用 AI 依据原则产生偏好，再训练 reward model 与 policy。}{00:52:20--00:56:36}
+
+若候选为 $y_a,y_b$，AI judge 给出偏好概率：
+
+$$
+P(y_a\succ y_b\mid x,\mathcal C)
+=\sigma\!\left(r_\phi(x,y_a,\mathcal C)-r_\phi(x,y_b,\mathcal C)\right),
+$$
+
+\begin{itemize}
+    \item $\mathcal C$：constitution；
+    \item $r_\phi$：依据原则评分的 preference model；
+    \item $\sigma$：logistic 函数。
+\end{itemize}
+
+\subsection{结果：把原则规模化为训练信号}
+
+\videofigure{figures/constitutional-results.jpg}{Constitutional SFT 与 RL 在 helpfulness--harmlessness 上形成 Pareto 改进。}{00:56:36--01:00:02}
+
+Constitutional AI 的价值是把人类从逐样本标注者变成规则设计者；但 AI judge 仍可能误解原则、共享 generator 的偏差，或对提示措辞敏感。
+
+\begin{importantbox}{AI feedback 必须由外部评估校准}
+模型自评可以扩大数据，却不能自己证明自己正确。应使用独立红队、人类抽检、行为 benchmark 和真实部署反馈持续校准 constitution 与 judge，避免闭环自洽但偏离人类目标。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Constitutional AI 把原则转化为 critique、revision 和 preference labels，分别用于 SFT 与 RL。它显著降低逐样本人类标注成本，但把难题转移到原则设计、冲突处理和 AI judge 校准。
+
+\section{三种反馈方法的系统比较}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{4.2cm}}
+\toprule
+\textbf{方法} & \textbf{反馈来源} & \textbf{主要用途} & \textbf{关键风险} \\
+\midrule
+ReAct & 搜索、网页、工具 observation & 当前轨迹规划与纠错 & 不可信内容、循环、状态漂移 \\
+RLEF & 编译器、测试、运行日志 & 多轮修复与 RL 更新 & 测试投机、沙箱 exploit、覆盖不足 \\
+Constitutional AI & 原则驱动的 AI critique / preference & SFT 与 RLAIF & 原则冲突、judge 偏差、过度拒答 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{共同架构}
+
+三者都可以拆成：
+
+$$
+\text{proposal}\rightarrow\text{feedback function}
+\rightarrow\text{revised proposal}\rightarrow\text{selection / update}.
+$$
+
+区别在于 feedback function 的客观性和成本。执行反馈最接近 ground truth，但只适用于可执行任务；AI feedback 覆盖面广，却需要更强外部校准。
+
+\subsection{设计原则}
+
+\begin{enumerate}
+    \item 能用真实环境验证时，优先环境信号；
+    \item 将反馈分解到可行动的错误粒度；
+    \item 把不可逆动作放在权限边界之外；
+    \item 训练 reward 与最终评估指标保持独立；
+    \item 记录所有反馈来源与模型版本，支持回放。
+\end{enumerate}
+
+\subsection{本章小结}
+
+反馈越自动化，系统越容易扩展；反馈越接近真实结果，系统越不易漂移。高质量自我改进系统通常混合多种信号：外部执行作为锚点，模型 critique 提供密集解释，人类负责原则与高风险边界。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/abs/2210.03629}{Yao et al., \emph{ReAct: Synergizing Reasoning and Acting in Language Models}}
+    \item \href{https://arxiv.org/abs/2410.02089}{\emph{RLEF: Grounding Code LLMs in Execution Feedback with Reinforcement Learning}}
+    \item \href{https://arxiv.org/abs/2212.08073}{Bai et al., \emph{Constitutional AI: Harmlessness from AI Feedback}}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲从三种反馈来源解释 Agent 如何改进。ReAct 在推理时交错 thought、action 和 observation，用工具反馈修正当前轨迹；RLEF 把代码执行结果作为可扩展 reward，通过多轮交互和 PPO 学习修复策略；Constitutional AI 把人类原则扩展为 AI critique、revision 和 preference labels，用于监督微调与 RLAIF。
+
+最重要的统一结论是：\textbf{反馈的价值不取决于它是否由人或 AI 产生，而取决于它与真实目标的对应关系、错误粒度、可扩展性和抗投机能力。} 环境反馈通常更客观但领域受限，AI feedback 更通用但需要外部锚点。
+
+下一讲讨论 planning 与 multi-step reasoning：当任务需要很长的行动链时，系统应如何搜索计划树、把串行计划转化为并行执行，以及如何用 synthetic trajectories 训练多步工具使用能力。
+
+\end{document}

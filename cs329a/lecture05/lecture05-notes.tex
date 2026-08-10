@@ -1,0 +1,341 @@
+\documentclass[a4paper]{article}
+\input{../notes-shared.tex}
+
+\newcommand{\notetitle}{Stanford CS329A：自我改进 AI Agent\\Part 5：规划与多步推理}
+\newcommand{\lecturers}{Azalia Mirhoseini}
+\newcommand{\noteauthors}{AI Course Notes \& Codex}
+\newcommand{\notedate}{2026 年 8 月 10 日}
+\newcommand{\lecturedate}{2025-10-06}
+\newcommand{\videoduration}{1:14:55}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=Ml_fp9XkB8Y}
+
+\begin{document}
+\makelecturetitle
+
+\section{多步任务为何比单轮问答困难}
+
+旅行规划、网页购物、科研检索和代码调试都需要一串相互依赖的决策。Agent 不仅要生成下一步，还要维护目标、判断依赖、处理失败并决定何时停止。
+
+\videofigure{figures/planning-motivation.jpg}{复杂任务同时要求推理、计划、行动与环境反馈。}{00:01:10--00:03:18}
+
+本讲从三条互补路线展开：
+
+\begin{enumerate}
+    \item \textbf{LATS}：在推理时用树搜索统一 reasoning、acting 与 planning；
+    \item \textbf{SPRINT}：识别独立子步骤，把长串行推理改造成可并行执行计划；
+    \item \textbf{SWiRL}：离线生成多步工具轨迹，用步骤级 RL 学习可泛化的工具使用策略。
+\end{enumerate}
+
+\begin{importantbox}{宽度、深度与并行度是三个不同维度}
+树搜索扩大候选宽度并允许回溯；长链推理增加深度；并行计划减少关键路径上的串行步骤。一个系统可以同时拥有大量分支、很深的轨迹和高并行度，但三者的成本与收益不同。
+\end{importantbox}
+
+\subsection{计划质量的评价维度}
+
+\begin{itemize}
+    \item 正确性：最终是否完成目标；
+    \item 可执行性：每个步骤是否满足前置条件；
+    \item 鲁棒性：失败后能否恢复或切换路线；
+    \item 效率：token、工具调用、wall-clock 与资源占用；
+    \item 安全性：是否包含不可逆或越权动作。
+\end{itemize}
+
+\subsection{本章小结}
+
+多步推理的核心不是“写得更长”，而是显式管理搜索空间、依赖关系和反馈。LATS、SPRINT 与 SWiRL 分别从在线搜索、执行调度和训练数据三个层面解决这一问题。
+
+\section{LATS：Language Agent Tree Search}
+
+\subsection{从单条轨迹升级为搜索树}
+
+普通 ReAct 一旦选择了错误动作，后续通常沿该轨迹继续。LATS 维护多个候选状态，借鉴 Monte Carlo Tree Search（MCTS）进行选择、扩展、评估、模拟、回传和反思。
+
+\videofigure{figures/lats-intuition.jpg}{LATS 结合 CoT、快慢思考、ReAct 与树搜索。}{00:06:54--00:08:02}
+
+\videofigure{figures/lats-operations.jpg}{LATS 的六个操作：selection、expansion、evaluation、simulation、backpropagation、reflection。}{00:08:02--00:08:46}
+
+每个节点 $s$ 表示当前环境状态和历史轨迹，边表示一个语言动作或工具动作。搜索目标是找到高 reward 的终止节点。
+
+\subsection{Selection 与 UCB}
+
+LATS 选择兼顾当前价值和未探索程度的节点。典型 UCB 形式为：
+
+$$
+\mathrm{UCB}(s)=\bar V(s)+c\sqrt{\frac{\log N(\mathrm{parent}(s))}{N(s)+1}}.
+$$
+
+\begin{itemize}
+    \item $\bar V(s)$：节点历史平均价值；
+    \item $N(s)$：节点访问次数；
+    \item $c$：exploration coefficient；
+    \item 第二项鼓励探索访问较少的分支。
+\end{itemize}
+
+\subsection{Expansion 与候选动作}
+
+被选节点由 LLM 生成多个下一步动作。不同温度、prompt 或模型可提高分支多样性。若所有候选只是同一思路的措辞变化，树的宽度不会带来实质探索。
+
+\subsection{Evaluation：LM Judge 与 Self-Consistency}
+
+LATS 用两类启发式评估新节点：模型 judge 判断状态是否有希望，自一致性判断多个 rollout 是否趋向相同结果。
+
+\videofigure{figures/lats-evaluation.jpg}{LATS 用 LLM-as-a-judge 与 self-consistency 组合节点价值。}{00:10:42--00:12:58}
+
+课程给出的组合形式为：
+
+$$
+V(s)=\lambda\,V_{\mathrm{LM}}(s)+(1-\lambda)V_{\mathrm{SC}}(s).
+$$
+
+\begin{itemize}
+    \item $V_{\mathrm{LM}}$：judge 对当前状态潜力的评分；
+    \item $V_{\mathrm{SC}}$：从该状态采样后续结果的一致性；
+    \item $\lambda$：两种信号的权重。
+\end{itemize}
+
+\begin{warningbox}{一致性可能稳定地指向错误}
+Self-consistency 衡量的是输出分布集中程度，不是正确性。若模型具有系统性偏差，多个 rollout 会一致地犯错。因此 LATS 仍需要环境 reward 或独立 verifier 作为锚点。
+\end{warningbox}
+
+\subsection{Simulation、Backpropagation 与 Reflection}
+
+从候选节点继续 rollout 到终止或预算耗尽，获得 reward；随后把 reward 沿路径回传，更新祖先节点统计。
+
+\videofigure{figures/lats-backprop.jpg}{终止状态 reward 沿搜索路径回传。}{00:12:58--00:15:42}
+
+\videofigure{figures/lats-value.jpg}{节点价值、selection 与 backpropagation 共同控制搜索。}{00:15:42--00:17:26}
+
+失败轨迹还会生成自然语言 reflection，记录为何失败并影响后续扩展。这使搜索树不仅累积数值统计，也积累显式错误经验。
+
+\begin{knowledgebox}{Reflection 是局部记忆，不是参数更新}
+反思文本只在当前搜索上下文中帮助避开重复错误。若希望跨任务保留，需要把反思写入长期记忆、训练数据或参数；否则新请求仍会重新犯错。
+\end{knowledgebox}
+
+\subsection{HotpotQA 与 WebShop}
+
+\videofigure{figures/lats-hotpotqa.jpg}{HotpotQA 使用检索环境与 oracle correctness feedback。}{00:17:26--00:18:16}
+
+\videofigure{figures/lats-webshop.jpg}{WebShop 测试包含搜索、选择与购买的长行动轨迹。}{00:18:16--00:20:02}
+
+LATS 在两类任务上统一 reasoning、acting 和 planning，但计算成本高：每个节点可能触发多次 LLM 和工具调用，搜索树还会遇到环境不可逆动作与状态复制问题。
+
+\subsection{本章小结}
+
+LATS 把单轨迹 Agent 变成可回溯搜索器。它通过价值估计和环境 reward 在多条计划间分配预算，适合高价值、可模拟、可验证的任务；对不可逆环境，必须限制探索或使用世界模型预演。
+
+\section{SPRINT：规划后并行执行}
+
+\subsection{长 CoT 的串行瓶颈}
+
+Reasoning model 常通过更长 chain-of-thought 提高准确率，但自回归解码具有严格串行性：第 $t+1$ 个 token 必须等待第 $t$ 个 token。很多推理步骤实际上互不依赖，例如分别计算多个子表达式或查询多个事实。
+
+\videofigure{figures/parallel-reasoning.jpg}{许多推理步骤彼此独立，不必排成一条长串行链。}{00:24:42--00:27:18}
+
+若任务依赖图为 DAG，wall-clock 下界由 critical path 决定，而不是总步骤数：
+
+$$
+T_{\mathrm{parallel}}\ge \max_{p\in\mathcal P}\sum_{i\in p} t_i.
+$$
+
+\begin{itemize}
+    \item $\mathcal P$：从起点到终点的所有依赖路径；
+    \item $t_i$：步骤 $i$ 的执行时间；
+    \item 最长依赖路径决定无法被并行消除的时间。
+\end{itemize}
+
+\subsection{Synthetic Data Creation}
+
+SPRINT 从强 reasoning model 的长轨迹出发，用另一个 LLM 把轨迹拆成步骤，识别依赖关系，并重写为“先计划、后并行执行、再汇总”的训练样本。
+
+\videofigure{figures/sprint-data.jpg}{从串行 reasoning trajectory 构造显式计划与依赖关系。}{00:27:18--00:30:20}
+
+这种数据不只教最终答案，还教模型输出可调度的结构：哪些任务独立、哪些必须等待、汇总时需要哪些中间结果。
+
+\subsection{Planning 与 Parallel Execution}
+
+\videofigure{figures/sprint-plan-execute.jpg}{SPRINT 先生成计划，再并行执行独立分支。}{00:30:20--00:33:56}
+
+可将计划表示为任务集合 $\{u_i\}$ 与依赖边 $E$。调度器在所有前置任务完成后启动 $u_i$：
+
+$$
+\mathrm{ready}(u_i)\iff \forall (u_j,u_i)\in E,\;u_j\text{ completed}.
+$$
+
+\videofigure{figures/overlap-execution.jpg}{重叠独立执行步骤可减少关键路径上的顺序解码。}{00:33:56--00:36:06}
+
+\subsection{准确率、速度与协调成本}
+
+并行并非免费：
+
+\begin{itemize}
+    \item 计划本身需要额外 token；
+    \item 分支可能重复工作或产生冲突中间结果；
+    \item 汇总器需要判断哪个结果可信；
+    \item 工具资源可能成为并发瓶颈；
+    \item 过早并行会失去后一步对前一步反馈的适应。
+\end{itemize}
+
+\begin{importantbox}{只有独立步骤才可安全并行}
+并行化的关键不是把文本切成若干块，而是识别真实依赖。如果一个步骤需要读取另一个步骤的新证据，强行并发会产生过时状态或不一致结论。
+\end{importantbox}
+
+\subsection{跨领域泛化与难度自适应}
+
+\videofigure{figures/sprint-generalization.jpg}{SPRINT 在 MATH500、Countdown 与 GPQA-Diamond 上测试跨领域泛化。}{00:36:06--00:41:28}
+
+\videofigure{figures/parallel-patterns.jpg}{难题需要更多轮 planning--execution，而非一次性完全并行。}{00:41:28--00:45:02}
+
+简单题可以一次计划后并行执行；困难题更适合交错循环：先执行一批分支，根据结果再规划下一批。这在速度与反馈适应性之间取得平衡。
+
+\videofigure{figures/long-sequence-saving.jpg}{序列越长，可并行步骤带来的相对时间节省越大。}{00:45:02--00:47:06}
+
+\subsection{本章小结}
+
+SPRINT 把 reasoning trajectory 重新表示为任务依赖图，以监督微调教会模型规划并行执行。它优化的是 wall-clock critical path，而不仅是 token 数；真正收益取决于依赖识别、执行资源和汇总质量。
+
+\section{SWiRL：Synthetic Data 与 Multi-Step RL}
+
+\subsection{设计目标}
+
+多步工具任务要求模型学会：何时推理、何时调用工具、如何消费 observation、错误后如何恢复、何时停止并给出最终答案。
+
+\videofigure{figures/swirl-motivation.jpg}{现实任务通常需要多步推理与工具使用。}{00:50:30--00:53:02}
+
+\videofigure{figures/swirl-goals.jpg}{SWiRL 希望学习工具选择、反馈消费、错误恢复和停止。}{00:53:02--00:54:34}
+
+SWiRL 的关键约束是：训练 RL 时尽量不在线调用真实工具，因为工具慢、易失败且难并行。它先离线生成带 observation 的完整轨迹，再在这些固定数据上进行 step-wise RL。
+
+\subsection{Stage 1：离线合成多步轨迹}
+
+对每个 prompt，teacher model 一次只生成一个 action：可以是 reasoning、tool call 或 final answer。若调用工具，离线环境执行并把 observation 写回上下文，然后继续下一步。LLM judge 对每一步给 process score。
+
+\videofigure{figures/swirl-data-generation.jpg}{SWiRL 离线生成并过滤多步 reasoning--tool trajectories。}{00:54:34--00:58:32}
+
+两种主要过滤方式：
+
+\begin{itemize}
+    \item \textbf{Process filtered}：保留每一步都被 judge 认为合理的轨迹；
+    \item \textbf{Outcome filtered}：只保留最终答案正确的轨迹，不管中间步骤评分；
+    \item 也可要求 process 与 outcome 同时通过。
+\end{itemize}
+
+\subsection{Stage 2：Step-Wise Reinforcement Learning}
+
+训练时不再调用工具，而是重放离线数据中的 tool response。模型在每个状态选择 action，使用步骤 reward 更新 policy。
+
+\videofigure{figures/swirl-step-rl.jpg}{SWiRL 在离线轨迹上执行步骤级强化学习。}{00:58:32--01:03:54}
+
+\videofigure{figures/swirl-objective.jpg}{SWiRL 的多步 RL 目标对每个状态--动作对累积 reward。}{01:03:54--01:05:16}
+
+可抽象为：
+
+$$
+J(\theta)=\mathbb E_{(s_t,a_t)\sim\mathcal D}
+\left[w_t\log\pi_\theta(a_t\mid s_t)\right],
+$$
+
+其中 $w_t$ 由步骤 reward 或 advantage 决定。高质量 action 被提高概率，低质量 action 被抑制。
+
+\begin{knowledgebox}{离线工具轨迹的工程优势}
+工具执行与 judge 标注可以预先并行完成，RL 训练只读取固定上下文，吞吐量更高、环境更稳定、实验更可复现。但模型无法探索数据集中没有的新动作，其表现受离线覆盖限制。
+\end{knowledgebox}
+
+\subsection{Stage 3：真实多步推理}
+
+部署时模型重新连接真实工具，按训练得到的策略迭代 reasoning、tool use 与 final answer。
+
+\videofigure{figures/swirl-inference.jpg}{推理阶段重新启用真实工具，执行多步闭环。}{01:05:16--01:06:16}
+
+\subsection{为什么 Process Filtering 反而更好}
+
+实验中，只按 process 质量过滤的数据优于只保留最终正确、或同时要求过程和结果正确的数据。
+
+\videofigure{figures/swirl-filtering.jpg}{Process-filtered synthetic trajectories 带来最强训练收益。}{01:06:16--01:08:18}
+
+原因是 outcome filtering 只保留 teacher 已经会解的问题，容易形成“成功轨迹的窄分布”；process filtering 还能保留局部步骤正确但最终失败的难题，为模型提供新的推理组件和错误恢复信号。
+
+\begin{importantbox}{局部正确可以比终局成功提供更多学习覆盖}
+一条最终失败的轨迹仍可能包含好的问题分解、正确工具调用或有效中间证据。若只按终局 reward 丢弃整条轨迹，这些可复用技能也被删除。Process filtering 把数据选择从“整题成败”改为“步骤价值”。
+\end{importantbox}
+
+\subsection{跨任务、跨工具泛化}
+
+用 GSM8K + calculator 训练后，模型在 HotpotQA + search 上也提升；反向亦然。这表明模型不仅记住特定 API，而是在学习多步状态管理和“何时借助工具”的通用策略。
+
+\videofigure{figures/swirl-generalization.jpg}{SWiRL 在数学与多跳问答之间表现出跨工具泛化。}{01:08:18--01:10:02}
+
+\videofigure{figures/swirl-data-scaling.jpg}{增加合成训练数据规模继续提高分布内与分布外任务表现。}{01:10:02--01:11:34}
+
+\videofigure{figures/process-correctness.jpg}{分布外 process reward 提升说明收益来自更好的多步过程。}{01:11:34--01:12:20}
+
+\subsection{局限}
+
+\begin{itemize}
+    \item LLM judge 的偏差会进入 process reward；
+    \item 离线 observation 使 policy 无法体验新工具错误；
+    \item 轨迹生成成本高，且可能覆盖不足；
+    \item 新工具 schema 与训练工具差异过大时，泛化仍会失败。
+\end{itemize}
+
+\subsection{本章小结}
+
+SWiRL 将在线工具交互转化为离线 synthetic trajectory，再以 step-wise RL 学习多步策略。最重要的结果是过程质量过滤比单纯终局正确更有利于泛化，说明训练数据应保留可复用的局部能力。
+
+\section{三种方法的统一比较}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.2cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{4.2cm}}
+\toprule
+\textbf{方法} & \textbf{主要阶段} & \textbf{核心表示} & \textbf{主要收益 / 代价} \\
+\midrule
+LATS & 推理时搜索 & 状态--动作树 & 可回溯、探索多计划；调用成本高 \\
+SPRINT & 训练后并行推理 & 任务依赖 DAG & 降低关键路径；依赖识别和汇总复杂 \\
+SWiRL & 离线数据 + RL & 多步工具轨迹 & 学到通用过程；受 teacher、judge 与离线覆盖限制 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{组合方式}
+
+三者并不互斥。一个完整系统可以用 SPRINT 生成并行任务图，在每个困难子任务内运行 LATS 搜索，再用 SWiRL 训练得到的 policy 选择工具与处理 observation。
+
+\subsection{工程选择}
+
+\begin{itemize}
+    \item 任务价值高、可模拟、需回溯：优先树搜索；
+    \item 子任务独立、工具延迟高：优先并行执行；
+    \item 有大量可验证环境、希望长期改进：构造 synthetic trajectories 做 RL；
+    \item 动作不可逆或环境昂贵：限制在线探索，增加离线预演和人工审批。
+\end{itemize}
+
+\subsection{本章小结}
+
+规划问题可以从搜索、调度和学习三个层次解决。树搜索提高决策质量，并行调度降低时间，过程级训练把经验沉淀进 policy。三者共同目标是减少长轨迹中的错误累积与无效计算。
+
+\section{拓展阅读}
+
+\begin{itemize}
+    \item \href{https://arxiv.org/abs/2310.04406}{Zhou et al., \emph{Language Agent Tree Search Unifies Reasoning Acting and Planning in Language Models}}
+    \item \href{https://arxiv.org/abs/2506.05745}{\emph{SPRINT: Enabling Interleaved Planning and Parallelized Execution in Reasoning Models}}
+    \item \href{https://arxiv.org/abs/2504.04736}{\emph{SWiRL: Synthetic Data Generation \& Multi-Step RL for Reasoning \& Tool Use}}
+    \item \href{https://arxiv.org/abs/2311.05772}{Prasad et al., \emph{ADaPT: As-Needed Decomposition and Planning with Language Models}}
+    \item \href{https://arxiv.org/abs/2503.04412}{\emph{Wider or Deeper? Scaling LLM Inference-Time Compute with Adaptive Branching Tree Search}}
+\end{itemize}
+
+\section{总结与延伸}
+
+本讲从三个层面解释 multi-step reasoning。LATS 用 MCTS 把单一 Agent 轨迹扩展成可选择、回溯和反思的搜索树；SPRINT 把串行 chain-of-thought 重写成带依赖的任务图，并重叠独立步骤以降低 wall-clock；SWiRL 离线生成带工具 observation 和步骤 reward 的 synthetic trajectories，再以 step-wise RL 学习跨任务、跨工具的多步策略。
+
+最值得保留的三条原则是：
+
+\begin{enumerate}
+    \item \textbf{搜索解决“不知道选哪条路”}，但需要可靠价值函数；
+    \item \textbf{并行解决“独立工作互相等待”}，但前提是依赖图正确；
+    \item \textbf{训练解决“每次都重新摸索”}，但训练数据应保留局部正确过程，而非只保留最终成功。
+\end{enumerate}
+
+下一讲进入 train-time scaling 与 scaling RL：STaR 如何自举 reasoning 数据，DeepSeekMath 如何用 GRPO 降低 PPO 成本，DAPO 如何处理长 CoT RL 中的熵坍塌、无效样本和训练不稳定。
+
+\end{document}

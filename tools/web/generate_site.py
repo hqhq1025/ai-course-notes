@@ -253,6 +253,55 @@ def replace_braced_command(
     return "".join(pieces), replacements
 
 
+def expand_videofigure_commands(text: str) -> str:
+    pattern = re.compile(r"\\videofigure\b")
+    pos = 0
+    pieces: list[str] = []
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            pieces.append(text[pos:])
+            break
+        index = match.end()
+        while index < len(text) and text[index].isspace():
+            index += 1
+        width = "0.95"
+        if index < len(text) and text[index] == "[":
+            try:
+                width, index = read_bracketed(text, index)
+            except ValueError:
+                pieces.append(text[pos : match.end()])
+                pos = match.end()
+                continue
+        args: list[str] = []
+        for _ in range(3):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text) or text[index] != "{":
+                break
+            try:
+                value, index = read_braced(text, index)
+            except ValueError:
+                break
+            args.append(value)
+        if len(args) != 3:
+            pieces.append(text[pos : match.end()])
+            pos = match.end()
+            continue
+        image_ref, caption, interval = args
+        pieces.append(text[pos : match.start()])
+        pieces.append(
+            "\n\\begin{figure}[H]\n"
+            "\\centering\n"
+            f"\\includegraphics[width={width}\\textwidth]{{{image_ref}}}\n"
+            f"\\caption{{{caption}}}\n"
+            "\\end{figure}\n"
+            f"\\footnotetext{{视频讲解区间：{interval}。}}\n"
+        )
+        pos = index
+    return "".join(pieces)
+
+
 def replace_one_arg_commands(text: str, replacements: dict[str, str]) -> str:
     changed = True
     while changed:
@@ -1068,6 +1117,7 @@ def strip_document_shell(tex: str) -> str:
     if end:
         tex = tex[: end.start()]
     tex = re.sub(r"\\begin\{titlepage\}.*?\\end\{titlepage\}", "", tex, flags=re.S)
+    tex = re.sub(r"\\(?:makelecturetitle|maketitle)\b", "", tex)
     tex = re.sub(r"\\tableofcontents\b", "", tex)
     tex = re.sub(r"\\(newpage|clearpage)\b", "", tex)
     return tex
@@ -1147,6 +1197,7 @@ def normalize_markdown(text: str) -> str:
 def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = replace_latex_symbol_commands(fragment)
     text = unwrap_latex_layout_commands(text)
+    text = expand_videofigure_commands(text)
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
@@ -1207,6 +1258,7 @@ def humanize_path(path: Path) -> str:
         "cs224r": "CS224R",
         "cs231n": "CS231N",
         "cs25": "CS25",
+        "cs329a": "CS329A",
         "cs336": "CS336",
         "cs336-2026": "CS336 2026",
         "interviews": "访谈笔记",

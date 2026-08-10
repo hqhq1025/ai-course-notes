@@ -1,0 +1,1081 @@
+[00:00:05--00:00:09] So today, we are going to talk about inference scaling.
+[00:00:09--00:00:13] We briefly hinted on this in the first lecture,
+[00:00:13--00:00:17] so there are three stages for LLM kind of development.
+[00:00:17--00:00:19] The first one is pre-training.
+[00:00:19--00:00:22] This stage is historically takes a lot more time.
+[00:00:22--00:00:24] It could take several months.
+[00:00:24--00:00:30] A whole lot of GPUs that are used for training these.
+[00:00:30--00:00:32] And then there's the fine tuning step.
+[00:00:32--00:00:36] Usually, this is a less, or historically has been
+[00:00:36--00:00:39] a less compute-intense process.
+[00:00:39--00:00:41] If you are talking about trillions
+[00:00:41--00:00:45] of data, tokens in the pre-training side,
+[00:00:45--00:00:48] on the fine tuning side, this is orders of magnitude less data
+[00:00:48--00:00:50] that we use for fine tuning.
+[00:00:50--00:00:52] And then there is the inference part,
+[00:00:52--00:00:54] where we get to use the model.
+[00:00:54--00:00:58] And we are going to see different ways
+[00:00:58--00:01:00] that at inference time, we can make
+[00:01:00--00:01:05] the model be better and become more useful without changing
+[00:01:05--00:01:10] the parameters of the model and without any fine tuning
+[00:01:10--00:01:11] of the models.
+[00:01:11--00:01:16] So let's first start with the Large Language Monkeys paper.
+[00:01:16--00:01:20] Again, you are familiar with the infinite monkey theorem by now
+[00:01:20--00:01:24] because we discussed it on Monday.
+[00:01:24--00:01:29] But to recap, the idea of this paper is that we have an LLM
+[00:01:29--00:01:31] and we have a problem as input.
+[00:01:31--00:01:35] Instead of generating the response for this problem
+[00:01:35--00:01:39] only once, we are going to repeatedly ask the same input
+[00:01:39--00:01:41] problem again and again.
+[00:01:41--00:01:43] This could be a number of times, it
+[00:01:43--00:01:45] could be 10 times, 100 times, and so on,
+[00:01:45--00:01:48] and we will see how that affects the performance.
+[00:01:48--00:01:51] And then we are going to have a verifier that can tell us
+[00:01:51--00:01:55] which one of these responses were the correct response,
+[00:01:55--00:02:01] and then that is going to be the output of this system.
+[00:02:01--00:02:06] The reason we like that is that by doing this repeated sampling,
+[00:02:06--00:02:08] we can make models that are inferior.
+[00:02:08--00:02:16] For example, a Llama 3-8b or 70b that is not as capable as GPT-4o
+[00:02:16--00:02:17] with single attempt.
+[00:02:17--00:02:20] But by doing this repeated sampling
+[00:02:20--00:02:25] and selecting the correct one among the generated candidates,
+[00:02:25--00:02:29] we can significantly improve the performance
+[00:02:29--00:02:31] of these inferior models and make them better
+[00:02:31--00:02:35] than these larger and proprietary ones.
+[00:02:35--00:02:38] And these are-- here you can see examples
+[00:02:38--00:02:44] across a really hard math coding and different styles of math
+[00:02:44--00:02:49] problem question answering problems.
+[00:02:49--00:02:52] Is this clear to everyone?
+[00:02:52--00:02:56] It just seems like the models and smaller models already
+[00:02:56--00:02:58] know the answers to these hard problems,
+[00:02:58--00:03:01] and just by doing this repeated sampling,
+[00:03:01--00:03:06] we are eliciting and surfacing those answers.
+[00:03:06--00:03:13] It's just they just don't tell us that in the first trial.
+[00:03:13--00:03:19] Now, this paradigm of repeated sampling,
+[00:03:19--00:03:21] works well across pretty much any domain
+[00:03:21--00:03:26] that we have tried in so far, including agentic benchmarks
+[00:03:26--00:03:30] such as SWE-bench, which mimics how a software engineer goes
+[00:03:30--00:03:36] about editing code and creating new patches.
+[00:03:36--00:03:38] So here, we are seeing the coverage,
+[00:03:38--00:03:43] meaning the fraction of problems that
+[00:03:43--00:03:46] are solved by, at least, one of the samples.
+[00:03:46--00:03:49] And here on the x-axis, we have the number of samples going from
+[00:03:49--00:03:51] 1 to 1,000.
+[00:03:51--00:03:57] And what we are seeing here is that a models such as DeepSeek
+[00:03:57--00:04:00] can--
+[00:04:00--00:04:05] I believe this was the DeepSeek-V3 model can outperform
+[00:04:05--00:04:12] models such as Claude 3.5 or o1 preview after 1,000 samples.
+[00:04:12--00:04:14] It can solve more coding and software engineering
+[00:04:14--00:04:16] problems than those.
+[00:04:16--00:04:17] And the reason this is interesting
+[00:04:17--00:04:20] is that, we are doing--
+[00:04:20--00:04:23] in this case for coding problems,
+[00:04:23--00:04:26] if we have unit tests that we can
+[00:04:26--00:04:29] use to select which one of these samples is correct, then
+[00:04:29--00:04:32] we have an end-to-end automated way
+[00:04:32--00:04:37] to create a more capable model, in this case,
+[00:04:37--00:04:39] out of DeepSeek and open-source model.
+[00:04:44--00:04:49] Now, again, we saw pre-training scaling laws in the last class,
+[00:04:49--00:04:56] and that was, we can predictably reduce the test laws given
+[00:04:56--00:04:58] these equations in this paper.
+[00:04:58--00:05:01] And these equations might change given the setup,
+[00:05:01--00:05:06] but there is a predictable path to increase data, amount
+[00:05:06--00:05:08] of compute use, and the number of parameters
+[00:05:08--00:05:14] in the model and use that to predict, or reduce the test
+[00:05:14--00:05:15] laws.
+[00:05:15--00:05:18] So this is for pre-training, but it turns out,
+[00:05:18--00:05:22] we can define a similar scaling laws, but this time
+[00:05:22--00:05:25] for inference, or test time compute,
+[00:05:25--00:05:27] and that is something that we showed in this paper.
+[00:05:27--00:05:30] Basically, we're showing that the relationship
+[00:05:30--00:05:34] between coverage and the number of samples
+[00:05:34--00:05:37] that are being drawn in parallel from the model
+[00:05:37--00:05:39] follow an exponential power law.
+[00:05:39--00:05:42] So assume this says, coverage, meaning
+[00:05:42--00:05:46] how many problems are solved by, at least, one of the samples,
+[00:05:46--00:05:48] and then k is the number of samples.
+[00:05:48--00:05:51] And a and b are these kind of coefficients
+[00:05:51--00:05:55] that we can find through the curve-fitting parameters
+[00:05:55--00:06:03] that we can find through this scaling behavior of the model.
+[00:06:03--00:06:09] So concretely, as we scaled the number of samples across a range
+[00:06:09--00:06:13] of models from Llama 3 8B, 7, 8B,
+[00:06:13--00:06:16] and models like Gemma or Pythia.
+[00:06:16--00:06:20] And this is for various range of parameter sizes,
+[00:06:20--00:06:23] going from 70 million parameters all the way
+[00:06:23--00:06:25] to 70 billion parameters.
+[00:06:25--00:06:29] We can see that we can predict this power law
+[00:06:29--00:06:35] and have a predicted curve that for the most part,
+[00:06:35--00:06:41] very closely follows the actual practical coverage that we
+[00:06:41--00:06:44] are seeing as we increase the number of samples.
+[00:06:44--00:06:46] So basically, the way to think about it
+[00:06:46--00:06:53] is that we can predict to achieve a certain coverage,
+[00:06:53--00:06:56] how many samples we are going to need
+[00:06:56--00:07:00] and how much resources we should allocate to achieve that.
+[00:07:06--00:07:10] And again, these curves show that this behavior
+[00:07:10--00:07:15] is true for a range of models and a range of parameter sizes.
+[00:07:15--00:07:19] Again, one of the very interesting properties
+[00:07:19--00:07:21] that we saw here is that for a very small model,
+[00:07:21--00:07:26] like a 70 million parameter, we also see this scaling behavior.
+[00:07:26--00:07:29] And, of course, this is true for much larger models as well,
+[00:07:29--00:07:33] and it is true across domains.
+[00:07:33--00:07:41] Now, we looked a bit more into why we see this power law
+[00:07:41--00:07:47] behavior in repeated sampling because it
+[00:07:47--00:07:50] might be at first a little non-intuitive,
+[00:07:50--00:07:58] because if the probability of the pass at one being correct,
+[00:07:58--00:08:02] the probability of a correct response to a question
+[00:08:02--00:08:07] is, for example, p, then we can calculate
+[00:08:07--00:08:09] the probability of, at least, one
+[00:08:09--00:08:13] of the answers being correct at k for an individual problems.
+[00:08:13--00:08:19] So for a problem i, if we have the pass at one for problem i,
+[00:08:19--00:08:24] we can calculate directly what is pass at k for problem i
+[00:08:24--00:08:28] with this exponential equation.
+[00:08:28--00:08:30] I hope this is clear for everybody,
+[00:08:30--00:08:35] but basically, this 1 minus p is the probability of the first k
+[00:08:35--00:08:37] answers not being correct, and then
+[00:08:37--00:08:40] 1 minus that is the probability of, at least, one of these k
+[00:08:40--00:08:45] answers being correct, so this is for an individual problem.
+[00:08:45--00:08:49] But what we are seeing that across a suite of problems,
+[00:08:49--00:08:57] we are seeing the power law, scaling law, meaning
+[00:08:57--00:09:00] across these problems, we are seeing
+[00:09:00--00:09:02] the equations are changing.
+[00:09:02--00:09:04] So the question that we wanted to answer
+[00:09:04--00:09:11] is what behavior should we see across the problem examples
+[00:09:11--00:09:20] in a data set that justifies our power law scaling laws?
+[00:09:20--00:09:26] And by looking into that further, what was observed
+[00:09:26--00:09:32] is that in order to have the scaling laws that we observed,
+[00:09:32--00:09:35] the sufficient and necessary condition for it
+[00:09:35--00:09:39] is that we have a long tail of hard problems.
+[00:09:42--00:09:45] Basically, from a mathematical perspective,
+[00:09:45--00:09:48] we are going to need that because this is the power law
+[00:09:48--00:09:53] scaling, this is the per problem exponential scaling laws,
+[00:09:53--00:09:55] and this is like this sort.
+[00:09:55--00:10:00] We need to have this curve for the past at one of problems
+[00:10:00--00:10:05] in order to justify this power law scaling.
+[00:10:05--00:10:09] And empirically, when we looked into the problems,
+[00:10:09--00:10:12] we saw that this condition holds.
+[00:10:12--00:10:14] And again, what this condition is
+[00:10:14--00:10:21] is that we have a long tail of really hard problems on the most
+[00:10:21--00:10:23] complex side of things.
+[00:10:23--00:10:30] For example, let's take a look at this model and the count
+[00:10:30--00:10:33] of problems that are solved at pass at one
+[00:10:33--00:10:36] and add more and more samples.
+[00:10:36--00:10:38] It seems like across all these problems,
+[00:10:38--00:10:41] a large portion of problems are simpler
+[00:10:41--00:10:43] and they're solved in pass at one.
+[00:10:43--00:10:45] And as we increase the complexity
+[00:10:45--00:10:48] of the problems, where the pass at one probability
+[00:10:48--00:10:50] is going to become lower and lower,
+[00:10:50--00:10:56] we have a long tail of problems that have that property.
+[00:10:56--00:10:58] So these curves that you see here
+[00:10:58--00:11:03] from high at simpler problems and low at harder and harder
+[00:11:03--00:11:05] problems, meaning lower and lower paths at one
+[00:11:05--00:11:08] is the type of problems, is the type of behavior
+[00:11:08--00:11:11] that we are seeing across these tasks,
+[00:11:11--00:11:15] and that is why we can see the scaling
+[00:11:15--00:11:20] laws that we have observed.
+[00:11:20--00:11:30] Now, what this means for the science and the engineering
+[00:11:30--00:11:34] around LLMs is that while previously companies
+[00:11:34--00:11:37] would spend hundreds of millions of dollars,
+[00:11:37--00:11:42] or billions of dollars on pre-training alone,
+[00:11:42--00:11:44] and then a lot less on fine tuning
+[00:11:44--00:11:48] and then almost like nothing at each inference
+[00:11:48--00:11:50] call because it used to be like a one time
+[00:11:50--00:11:53] back and forth between the user and the query and the model.
+[00:11:53--00:11:56] Now we have a new paradigm, where
+[00:11:56--00:12:00] we can spend a whole lot more compute on inference,
+[00:12:00--00:12:03] and use that to increase the capability of model.
+[00:12:03--00:12:06] And this compute the inference compute can be done offline.
+[00:12:06--00:12:10] We can release our agents to go solve a problem
+[00:12:10--00:12:13] and just keep generating tokens and keep
+[00:12:13--00:12:17] improving the quality of the answers that they generate.
+[00:12:20--00:12:24] Now, when we talk about this repeated sampling,
+[00:12:24--00:12:29] something that's important to have in mind
+[00:12:29--00:12:32] is the need for automated verification
+[00:12:32--00:12:35] because if you have a bunch of samples,
+[00:12:35--00:12:38] we still need to know which one of them are the correct ones
+[00:12:38--00:12:40] and how to go about selecting that.
+[00:12:43--00:12:48] In certain domains, verification is easier than the others.
+[00:12:48--00:12:52] For example, for certain types of math problems,
+[00:12:52--00:12:55] you can use formal proofs.
+[00:12:55--00:12:59] So given a proof, the strategy, we
+[00:12:59--00:13:03] can run them by these formal proof software tools
+[00:13:03--00:13:06] to verify whether each step is correct or not.
+[00:13:06--00:13:09] We can write unit tests for coding.
+[00:13:09--00:13:15] And in some cases, writing a unit test arguably, arguably,
+[00:13:15--00:13:18] is a much simpler task than writing the entire program that
+[00:13:18--00:13:21] solves a problem, so the unit test
+[00:13:21--00:13:24] can be written, for example, by humans,
+[00:13:24--00:13:29] and we can use that as our verifier.
+[00:13:29--00:13:33] There are other cases like AI as a compiler,
+[00:13:33--00:13:37] and this is one of the projects in the lab and the direction
+[00:13:37--00:13:39] that I'm very excited about, and that
+[00:13:39--00:13:42] is when we can generate compiler lower level
+[00:13:42--00:13:48] code, like CUDA for a source code like PyTorch with LLM.
+[00:13:48--00:13:50] And the reason this is verifiable
+[00:13:50--00:13:56] is that, for example here, we can always
+[00:13:56--00:14:01] compare the output of CUDA with the source PyTorch
+[00:14:01--00:14:04] and see if they're the same for any given input.
+[00:14:04--00:14:08] So we don't need if we want to say whether the model has
+[00:14:08--00:14:13] generated the correct CUDA code for our source PyTorch code,
+[00:14:13--00:14:19] we can just see whether their outputs match for any inputs.
+[00:14:21--00:14:24] For those of you who are not familiar CUDA,
+[00:14:24--00:14:28] I hope you all are, but it's a lower level language
+[00:14:28--00:14:31] for writing more hardware aware and optimized
+[00:14:31--00:14:35] for hardware code on GPUs.
+[00:14:38--00:14:43] For example, here, we have a data set,
+[00:14:43--00:14:47] or benchmark on CUDA generation called KernelBench.
+[00:14:47--00:14:52] And here, again, we are seeing the same linear improving
+[00:14:52--00:14:56] coverage in this case for CUDA code generation
+[00:14:56--00:14:58] as we increase the number of samples
+[00:14:58--00:15:00] that we take from the model.
+[00:15:00--00:15:02] And in this case, we have this, again,
+[00:15:02--00:15:05] by default, perfect verifier that we
+[00:15:05--00:15:10] can use for measuring the correctness of our CUDA
+[00:15:10--00:15:13] generated code.
+[00:15:13--00:15:15] And there are other examples of this.
+[00:15:18--00:15:20] Basically, any kind of translation
+[00:15:20--00:15:21] between two languages.
+[00:15:21--00:15:27] If you want to port from Python, or C++ to Java, or vice versa,
+[00:15:27--00:15:28] again, this is true.
+[00:15:28--00:15:34] You can measure the equivalency much easier.
+[00:15:34--00:15:38] Now there are domains that we don't have verifier for.
+[00:15:38--00:15:40] And in those domains, what we observe
+[00:15:40--00:15:43] is that there is a large gap between best
+[00:15:43--00:15:46] of n methods such as majority vote
+[00:15:46--00:15:52] voting and model-based rankers and what is
+[00:15:52--00:15:54] the true coverage of the model.
+[00:15:54--00:15:58] Let's take a look at one example here.
+[00:15:58--00:16:01] So here, we compared a few different methods.
+[00:16:01--00:16:03] We are going to learn about reward models
+[00:16:03--00:16:06] or verifiers on Monday more, but let's take
+[00:16:06--00:16:08] a look at these examples.
+[00:16:08--00:16:11] So we have a number of samples, and then we
+[00:16:11--00:16:13] are measuring the success rate here,
+[00:16:13--00:16:17] like basically what would be the output of this system?
+[00:16:17--00:16:20] Majority voting, or the green one
+[00:16:20--00:16:24] is we just see which answer among the generated answers
+[00:16:24--00:16:28] has appeared the most, so based on that,
+[00:16:28--00:16:31] we just select that answer or that response
+[00:16:31--00:16:33] as the output of our system.
+[00:16:33--00:16:34] Does that make sense?
+[00:16:34--00:16:36] It's just majority voting.
+[00:16:36--00:16:39] And the blue line here is coverage.
+[00:16:39--00:16:43] This is assuming we had a perfect selector, or verifier
+[00:16:43--00:16:44] in this case.
+[00:16:44--00:16:47] And as you can see here, there is a large difference
+[00:16:47--00:16:53] between majority voting, which plateaus after 10 or 50 samples,
+[00:16:53--00:16:55] and what we could possibly get if we
+[00:16:55--00:17:01] had a perfect verifier, so this is a very, very large gap.
+[00:17:01--00:17:05] Especially, and this gap is even more pronounced
+[00:17:05--00:17:06] if you have harder problems.
+[00:17:06--00:17:09] So for example, the capital MATH here, data set
+[00:17:09--00:17:13] is a harder, more complex data set than GSM8K
+[00:17:13--00:17:16] And here, we compared other methods
+[00:17:16--00:17:25] like using a reward model that measures, gives
+[00:17:25--00:17:30] a reward per answer, and we take the best of those, or ways
+[00:17:30--00:17:31] to combine these tools.
+[00:17:31--00:17:34] We will learn more about these reward models.
+[00:17:34--00:17:37] Basically, they're LLM-based LLMs
+[00:17:37--00:17:44] that are trained to score the response quality.
+[00:17:44--00:17:47] And even with those, there is a large gap.
+[00:17:47--00:17:52] And this is what we call the generation verification gap.
+[00:17:52--00:17:54] So the generation, it turns out, we
+[00:17:54--00:17:57] can generate a lot of good responses,
+[00:17:57--00:18:01] but the verification is basically this gap.
+[00:18:01--00:18:02] This tells us how much we can actually
+[00:18:02--00:18:09] capture those responses or those correct answers.
+[00:18:09--00:18:13] The reason methods such as majority voting doesn't work is
+[00:18:13--00:18:17] that, as we look into the quality of answers,
+[00:18:17--00:18:21] it turns out that for some problems that are hardest
+[00:18:21--00:18:27] to solve, sometimes we see that they're solved maybe even once,
+[00:18:27--00:18:32] or two times, or three times across the 1,000 or 10,000
+[00:18:32--00:18:34] samples that we take from the model.
+[00:18:34--00:18:40] So these correct problems are actually very rarely solved
+[00:18:40--00:18:43] by the model with the samples that we are taking from it,
+[00:18:43--00:18:48] so it makes sense that a majority voting mechanism cannot
+[00:18:48--00:18:51] capture those because they're rare.
+[00:18:51--00:18:53] But for many of the problems in this case,
+[00:18:53--00:18:56] especially for the GSM8K, which is simpler
+[00:18:56--00:19:00] because the answers, or responses are simpler
+[00:19:00--00:19:04] to generate, majority voting works for many of the problems,
+[00:19:04--00:19:07] but even in this case, for some of the hardest
+[00:19:07--00:19:12] problems, the frequency of correct answers actually
+[00:19:12--00:19:14] pretty low.
+[00:19:14--00:19:16] So that makes it harder from a verification perspective
+[00:19:16--00:19:18] how do you find them?
+[00:19:18--00:19:22] How do you find that which ones are correct?
+[00:19:22--00:19:24] Now, I want you to--
+[00:19:24--00:19:28] here are some discussion questions
+[00:19:28--00:19:32] that I want to put it here for something like two minutes
+[00:19:32--00:19:35] or so, and I want you to think about it.
+[00:19:35--00:19:41] And hopefully, we'll have some volunteers
+[00:19:41--00:19:46] and volunteer some of you to answer some of them.
+[00:19:46--00:19:48] So two minutes for this.
+[00:19:48--00:19:52] Maybe we talk after.
+[00:19:52--00:19:54] [SIDE CONVERSATION]
+[00:19:54--00:19:57] OK, let's get back.
+[00:19:57--00:20:01] Who wants to answer question 1?
+[00:20:01--00:20:03] I'm very interested in how you would
+[00:20:03--00:20:08] build on this, if you were to do some research here,
+[00:20:08--00:20:13] or what takeaways you got from these papers.
+[00:20:17--00:20:17] Anyone?
+[00:20:21--00:20:22] Yes.
+[00:20:22--00:20:31] One takeaway is that sampling any answers and issues.
+[00:20:31--00:20:34] If you have a good verifier, it's greatly
+[00:20:34--00:20:36] helps with your accuracy.
+[00:20:36--00:20:40] And the second takeaway is that the quality of the verifier
+[00:20:40--00:20:44] is very important in this approach.
+[00:20:44--00:20:44] That's right.
+[00:20:49--00:20:51] Anything else?
+[00:20:51--00:20:52] Yes.
+[00:20:52--00:20:56] [INAUDIBLE] it is possible to write a model to [INAUDIBLE]
+[00:20:56--00:20:59] that way make examples.
+[00:20:59--00:21:04] For example, like the model [INAUDIBLE] descriptions
+[00:21:04--00:21:12] and the model for the solution that is a [INAUDIBLE]
+[00:21:12--00:21:16] even if you're not sure the solution is right.
+[00:21:16--00:21:19] Are you talking about revising a solution--
+[00:21:19--00:21:20] Yeah.
+[00:21:20--00:21:22] --by next round?
+[00:21:22--00:21:25] We're going to hear about it in a minute.
+[00:21:25--00:21:26] Sounds good.
+[00:21:26--00:21:27] Yes.
+[00:21:27--00:21:29] I'm looking at it two directions.
+[00:21:29--00:21:32] One is the [INAUDIBLE] and accuracy.
+[00:21:32--00:21:35] And for that, I would look at a hybrid approach, where
+[00:21:35--00:21:38] I would develop a knowledge graph along
+[00:21:38--00:21:42] with advanced documentation.
+[00:21:42--00:21:45] And then any returns to the rank method.
+[00:21:45--00:21:49] When [INAUDIBLE] comes time the score is lesser on the accuracy
+[00:21:49--00:21:53] and more or less rely on the knowledge
+[00:21:53--00:21:55] to give me more accurate answers, that way you
+[00:21:55--00:22:01] can increase the speed in the answer while [INAUDIBLE].
+[00:22:01--00:22:08] So you're suggesting use RAC to boost or compare?
+[00:22:08--00:22:13] With the knowledge first, and then only when they
+[00:22:13--00:22:15] feel that the accuracy is not coming up to the mark,
+[00:22:15--00:22:16] we go through the right documentation
+[00:22:16--00:22:21] because that also lowers the time, and there is--
+[00:22:21--00:22:25] So you're asking that can help with efficiency in the time
+[00:22:25--00:22:25] domain?
+[00:22:25--00:22:29] Is trying to reduce the dependency and damage
+[00:22:29--00:22:33] to increase the accuracy and precision.
+[00:22:33--00:22:34] One more.
+[00:22:34--00:22:36] Maybe you were waiting.
+[00:22:36--00:22:41] Yeah, so something that I've thought about also is just--
+[00:22:41--00:22:47] and even if it's easy to medium level of difficulty with respect
+[00:22:47--00:22:51] to verification or verifiable domains,
+[00:22:51--00:22:57] it would be cool to see how pass at k changes with respect
+[00:22:57--00:23:01] to k, when we employ initial search techniques, almost
+[00:23:01--00:23:02] like a self-study approach.
+[00:23:02--00:23:04] If there's some way to maybe consolidate,
+[00:23:04--00:23:07] let's let the model explore this domain,
+[00:23:07--00:23:10] gather insights as if we're not asking
+[00:23:10--00:23:12] it to sample any solutions yet.
+[00:23:12--00:23:15] And maybe that can give way to some output context,
+[00:23:15--00:23:17] and we could then funnel into parallel sampling.
+[00:23:17--00:23:20] We might see maybe better trends with respect--
+[00:23:20--00:23:21] Absolutely.
+[00:23:21--00:23:22] And we're going to learn about some of them.
+[00:23:22--00:23:25] There are ways to improve test time scaling
+[00:23:25--00:23:29] beyond just repeated sampling, including self-study, search,
+[00:23:29--00:23:31] and tool use.
+[00:23:31--00:23:34] Maybe one more.
+[00:23:34--00:23:36] Yes.
+[00:23:36--00:23:37] Well, one interesting extension might
+[00:23:37--00:23:41] be to [INAUDIBLE] verifiers.
+[00:23:41--00:23:45] Without a good verifier, then the best you can do
+[00:23:45--00:23:47] is [INAUDIBLE] what you showed in the previous slide, which
+[00:23:47--00:23:50] usually doesn't work very well for hard problems.
+[00:23:50--00:23:52] But maybe there are some problems,
+[00:23:52--00:23:56] where it's hard to verify the answer is correct because it's
+[00:23:56--00:24:00] too expensive, or it's just too hard naturally,
+[00:24:00--00:24:03] but it's easy to find an answer wrong,
+[00:24:03--00:24:06] so you can project like bad answers.
+[00:24:06--00:24:08] Maybe that would be more obvious in terms of testing.
+[00:24:08--00:24:11] And then you can just keep [INAUDIBLE] something
+[00:24:11--00:24:13] [INAUDIBLE].
+[00:24:13--00:24:15] So one interesting direction would
+[00:24:15--00:24:18] be trying to look at different domains, where
+[00:24:18--00:24:21] there is much difficulty.
+[00:24:21--00:24:23] And also maybe verification is not fully accurate,
+[00:24:23--00:24:25] or maybe it's a bit lost, but verify
+[00:24:25--00:24:28] it's its own model because it's a simulation.
+[00:24:28--00:24:31] It's like a physics, or a molecular dynamics simulation,
+[00:24:31--00:24:34] or something, and then how you would deal with that.
+[00:24:34--00:24:37] Basically, there are other ways to filter out
+[00:24:37--00:24:39] the incorrect answers.
+[00:24:39--00:24:45] Maybe use a simulation, or some other tool use,
+[00:24:45--00:24:49] or another model to do that, depending on the domain.
+[00:24:49--00:24:53] So all of the data set here, the 10,000 different samples per
+[00:24:53--00:24:57] problem is available on Hugging Face.
+[00:24:57--00:24:59] If anybody is interested to go around
+[00:24:59--00:25:05] how to shrink that generation verification gap,
+[00:25:05--00:25:10] that could be potentially a good research project for the course.
+[00:25:10--00:25:12] Yes, last question.
+[00:25:12--00:25:13] Yeah.
+[00:25:13--00:25:17] Can one try to generate multiple verifiers like maybe generate
+[00:25:17--00:25:22] 10,000 verifiers and then do majority voting on the result
+[00:25:22--00:25:24] of the bad verifiers?
+[00:25:24--00:25:25] Yes.
+[00:25:25--00:25:28] That's also a very interesting research question.
+[00:25:28--00:25:31] So on Monday, we're going to learn about this weaver, which
+[00:25:31--00:25:34] is a work that we've done on ensembling,
+[00:25:34--00:25:37] but a week supervised ensembling of verifiers.
+[00:25:37--00:25:41] We don't have 1,000 of them, but we can have 10 or 20 of them,
+[00:25:41--00:25:44] but that direction is definitely also interesting.
+[00:25:44--00:25:47] It's very costly, though, from a compute perspective.
+[00:25:47--00:25:52] Maybe we should move on to the-- any other about the other two
+[00:25:52--00:25:54] questions, anything?
+[00:25:54--00:25:56] We discussed some of it in our discussion,
+[00:25:56--00:26:00] but anything that you want to share last minute?
+[00:26:00--00:26:01] Yes.
+[00:26:01--00:26:04] What is up with the investigated whether the coverage
+[00:26:04--00:26:08] number is real, like software engineering tasks, for example?
+[00:26:08--00:26:09] Or could you pass the test cases,
+[00:26:09--00:26:12] but it's actually about [INAUDIBLE]?
+[00:26:12--00:26:14] For example, for the math problems,
+[00:26:14--00:26:17] we manually looked into the answered questions,
+[00:26:17--00:26:22] and it was something above like a 90s, 7%,
+[00:26:22--00:26:27] 8% by manually checking that, but that's also always a case
+[00:26:27--00:26:31] for failure mode, if your unit tests don't have true coverage
+[00:26:31--00:26:37] of the code, so the quality of the verifier matters.
+[00:26:37--00:26:38] Yes.
+[00:26:38--00:26:43] Maybe it's moved up to be able to generate [INAUDIBLE],
+[00:26:43--00:26:45] so you're verifying each node?
+[00:26:45--00:26:49] Yeah, let's talk about that and what's coming next
+[00:26:49--00:26:55] and how we can make different ways of test time scaling.
+[00:26:55--00:26:58] So with the monkeys framework, we
+[00:26:58--00:27:01] saw that repeated sampling is effective,
+[00:27:01--00:27:04] but there are other ways to scale sampling.
+[00:27:04--00:27:06] And let's take a look at this paper.
+[00:27:06--00:27:09] Scaling LLM test time compute optimally
+[00:27:09--00:27:12] can be more effective than scaling model parameters.
+[00:27:12--00:27:15] We going to touch on certain aspects of it that
+[00:27:15--00:27:20] is most relevant to test time scaling, so there are two ways.
+[00:27:20--00:27:22] Parallel sampling is one way for us
+[00:27:22--00:27:27] to generate multiple answers per input question.
+[00:27:27--00:27:31] But there is another way to generate, or generate answers,
+[00:27:31--00:27:34] or use test time scaling to improve the quality,
+[00:27:34--00:27:38] and that is when we do sequential revisions.
+[00:27:38--00:27:42] For example, the model comes up with one initial steps
+[00:27:42--00:27:44] of the problem, or one initial approach
+[00:27:44--00:27:48] for solving the problem, and it keeps revising that,
+[00:27:48--00:27:52] or it keeps improving and adding to that.
+[00:27:52--00:27:55] And that is the sequential approach, so instead
+[00:27:55--00:27:57] of asking the model multiple times,
+[00:27:57--00:28:01] we let the model know that it can keep revising its answers,
+[00:28:01--00:28:03] look into that from a different angles,
+[00:28:03--00:28:08] and continue doing so until it's confident
+[00:28:08--00:28:10] that it's ready to generate an answer
+[00:28:10--00:28:12] and then finally output that.
+[00:28:12--00:28:12] Yes.
+[00:28:12--00:28:17] So is this by our own prompting or is it the models?
+[00:28:17--00:28:20] In this case, let's assume by our own prompting,
+[00:28:20--00:28:23] but when you look at the reasoning models,
+[00:28:23--00:28:24] they are now trained.
+[00:28:24--00:28:27] Internally, we see this kind of behavior in them,
+[00:28:27--00:28:35] so they do this revisions sometimes in their own answers.
+[00:28:35--00:28:39] Now, there is another way to scale test time compute,
+[00:28:39--00:28:43] and that is how we select the answers.
+[00:28:43--00:28:47] So for the parallel sampling, we looked into the outcome
+[00:28:47--00:28:50] like there are n different responses.
+[00:28:50--00:28:53] We look into the outcome and see if they're correct or not.
+[00:28:53--00:28:56] We mentioned unit tests and so on,
+[00:28:56--00:28:59] but there's also this other way of learning based,
+[00:28:59--00:29:03] or outcome reward models, where they look into the outcome
+[00:29:03--00:29:06] and say whether they're correct or not.
+[00:29:06--00:29:08] Of course, their accuracy, or quality
+[00:29:08--00:29:12] can be limited, especially if we go to new domains.
+[00:29:12--00:29:16] But outcome-based reward model is another way
+[00:29:16--00:29:17] that they look into the final answer
+[00:29:17--00:29:19] and they generate a score.
+[00:29:19--00:29:23] Basically, these models are trained to give a reward based
+[00:29:23--00:29:25] on an output.
+[00:29:25--00:29:28] Then there is also the process reward models.
+[00:29:28--00:29:31] So the difference between process and outcome
+[00:29:31--00:29:33] is that process reward models are
+[00:29:33--00:29:38] designed to give a score per step of the generated solution.
+[00:29:38--00:29:40] For example, we have a math problems,
+[00:29:40--00:29:43] there are five steps that the model takes
+[00:29:43--00:29:48] before generating a solution.
+[00:29:48--00:29:51] Process reward models, again, we learn about this more on Monday,
+[00:29:51--00:29:56] I believe, are trained to give a score for the steps
+[00:29:56--00:29:58] of the generation.
+[00:29:58--00:30:02] So that's the difference between the two.
+[00:30:02--00:30:05] Now, for best of n sampling with a verifier,
+[00:30:05--00:30:06] again, the problem is easy.
+[00:30:06--00:30:09] We generate parallel samples, and then we
+[00:30:09--00:30:12] can use an outcome-based reward model
+[00:30:12--00:30:15] to see which one has the highest score
+[00:30:15--00:30:20] and then take that as our answer.
+[00:30:20--00:30:26] Then there are other ways that we can bring these reward models
+[00:30:26--00:30:30] into the processing, into our test time scaling framework.
+[00:30:30--00:30:35] For example, here, let's assume at each level of answering
+[00:30:35--00:30:40] this question, we have a budget of four samples.
+[00:30:40--00:30:43] We take these four samples, and then here,
+[00:30:43--00:30:49] use a Process Reward Model or PRM to in this case, we
+[00:30:49--00:30:53] select the top two with the highest score from our PRM.
+[00:30:53--00:31:00] Then again, we sample from them and we continue.
+[00:31:00--00:31:08] And we can have a threshold for selecting the top two
+[00:31:08--00:31:11] kind of responses in this case and expanding
+[00:31:11--00:31:12] the tree from there.
+[00:31:12--00:31:16] So here, we are doing a beam search approach
+[00:31:16--00:31:19] that uses the process reward model to guide
+[00:31:19--00:31:21] how we are sampling our model.
+[00:31:21--00:31:24] Is that clear?
+[00:31:24--00:31:25] Yes.
+[00:31:25--00:31:27] How do you choose the options?
+[00:31:27--00:31:28] Based on the PRM score.
+[00:31:28--00:31:33] So the process reward model is trained to generate
+[00:31:33--00:31:36] a score imagine between 0 and 1 based
+[00:31:36--00:31:41] on the step given the question, and/or just the step alone.
+[00:31:44--00:31:47] Is the PRM fine tuned for that?
+[00:31:47--00:31:51] Yes, PRMs are generally also fine tuned from language model.
+[00:31:51--00:31:53] As you can imagine, they would work better
+[00:31:53--00:32:01] for in-domain types of tasks, so if you have a certain benchmark
+[00:32:01--00:32:04] that you want to optimize for, of course, training
+[00:32:04--00:32:07] a PRM on a subset of that task helps you
+[00:32:07--00:32:09] with test time scaling on that task
+[00:32:09--00:32:12] better than across new task.
+[00:32:12--00:32:14] But because they're language model based,
+[00:32:14--00:32:17] they do exhibit some generalization across tasks
+[00:32:17--00:32:19] as well.
+[00:32:19--00:32:21] Yes.
+[00:32:21--00:32:24] For the process reward, is this a reward
+[00:32:24--00:32:27] that's being computed in practice?
+[00:32:27--00:32:31] I don't know what the research is per token that is being done,
+[00:32:31--00:32:34] or maybe blocks of tokens and then it's being computed.
+[00:32:34--00:32:35] Yes.
+[00:32:35--00:32:36] It's not per token.
+[00:32:36--00:32:39] It's per step.
+[00:32:39--00:32:41] And this is something we're going to learn about
+[00:32:41--00:32:42] in future lectures.
+[00:32:42--00:32:44] Imagine, these are like a math problem,
+[00:32:44--00:32:48] and then there are steps to answer that.
+[00:32:48--00:32:50] One way to do it is to have humans annotate
+[00:32:50--00:32:54] the quality of each step like yes or no, this is good or bad,
+[00:32:54--00:32:57] and then training the model based on each step, which
+[00:32:57--00:33:02] could be like you can assume it's like one intellectually
+[00:33:02--00:33:05] meaningful chunk of the result, or it could be you
+[00:33:05--00:33:08] can define it as a sentence and so on.
+[00:33:13--00:33:19] And, of course, as it's very intuitive,
+[00:33:19--00:33:23] if you combine the two of outcome based reward model
+[00:33:23--00:33:26] and parallel based upon sequential revisions,
+[00:33:26--00:33:27] you get better results.
+[00:33:27--00:33:29] This field is still there's a lot
+[00:33:29--00:33:36] of unknown questions around this, but combining the two.
+[00:33:36--00:33:39] For example, one simple way to combine that
+[00:33:39--00:33:46] is instead of one sample and revisions, you do two
+[00:33:46--00:33:49] and you get to two final answers,
+[00:33:49--00:33:55] and then you use the best one, either using your PRM or ORM
+[00:33:55--00:33:57] to select how the two are.
+[00:33:57--00:34:00] But you're augmenting each parallel sample
+[00:34:00--00:34:02] with these sequential revisions, and you
+[00:34:02--00:34:05] can use a PRM to guide that search
+[00:34:05--00:34:08] for each sequential revision.
+[00:34:08--00:34:12] Something that's interesting is that the PRM, there
+[00:34:12--00:34:16] are many off the shelf PRM's that you can use for your tasks.
+[00:34:16--00:34:18] So you can go and say, take a pre-trained PRM
+[00:34:18--00:34:22] and use that to guide the search for your own task.
+[00:34:22--00:34:24] And you can potentially find a PRM that
+[00:34:24--00:34:28] is most relevant to the type of task that you're doing,
+[00:34:28--00:34:30] and you want to do test time scaling on,
+[00:34:30--00:34:34] or you can train your own PRM and ORM
+[00:34:34--00:34:36] based on your own data as well.
+[00:34:40--00:34:45] So this paper looked into the math data set and something like
+[00:34:45--00:34:51] 12k train set 500 test questions, used the palm model.
+[00:34:51--00:34:54] And what was interesting here is that they defined
+[00:34:54--00:35:00] a notion of difficulty for measuring
+[00:35:00--00:35:02] these different scaling behaviors,
+[00:35:02--00:35:04] and for that, they looked into the pass
+[00:35:04--00:35:08] at one performance of the model on each problem.
+[00:35:08--00:35:11] And by just measuring that, they define OK, these
+[00:35:11--00:35:13] are the problems that are hard, these
+[00:35:13--00:35:17] are the problems based on how many of the generated
+[00:35:17--00:35:20] answers are correct across a body of a number of samples.
+[00:35:20--00:35:26] They had five different bins for the complexity of the problem,
+[00:35:26--00:35:30] and they did that, as we see to get some conclusion about what
+[00:35:30--00:35:36] test time scaling works better for harder or easier task.
+[00:35:36--00:35:39] They also train their own process reward model,
+[00:35:39--00:35:43] and even they fine tune a model for creating these revisions.
+[00:35:43--00:35:48] But right now, every model that we use pretty much it's capable.
+[00:35:48--00:35:50] It's just as long as it's instruction-tuned,
+[00:35:50--00:35:57] is capable of doing revisions, if you ask the model to do so.
+[00:35:57--00:36:00] And there are some interesting observations here.
+[00:36:00--00:36:04] For example, here is the majority voting
+[00:36:04--00:36:05] for these problems.
+[00:36:05--00:36:08] The accuracy as the generation budget
+[00:36:08--00:36:14] increases, and then the purple one is the ORM one.
+[00:36:14--00:36:21] And the green one is the PRM one, and then the blue one,
+[00:36:21--00:36:25] if you really try to optimize different ways of mixing
+[00:36:25--00:36:27] and matching things.
+[00:36:27--00:36:31] And this area is the one that still is an open research
+[00:36:31--00:36:33] like how do we do that?
+[00:36:33--00:36:36] How do we go about mixing and matching revisions
+[00:36:36--00:36:41] and parallel scaling to optimize the test time
+[00:36:41--00:36:42] scaling because at the end of the day,
+[00:36:42--00:36:46] we want for each accuracy, we want the minimum generation
+[00:36:46--00:36:49] budget to hit that accuracy?
+[00:36:49--00:36:53] And in a few slides ahead, we talk about one method
+[00:36:53--00:37:00] to optimize this scaling and budget performance per budget.
+[00:37:00--00:37:03] They also looked into these different bins of difficulty,
+[00:37:03--00:37:06] so number 5 is the most difficult questions
+[00:37:06--00:37:09] because the accuracy is the lowest and number 1.
+[00:37:09--00:37:11] And then here on the right, there's
+[00:37:11--00:37:16] these colors is the sequential to parallel ratio.
+[00:37:16--00:37:20] And while they're saying that OK for the easier problems,
+[00:37:20--00:37:26] it seems like this darkest the darkest purple color achieves
+[00:37:26--00:37:29] highest accuracy, and that's where
+[00:37:29--00:37:34] we have a lot more sequential tokens compared to parallel.
+[00:37:34--00:37:37] When the problems are more difficult, and to some extent,
+[00:37:37--00:37:40] those are some of the more interesting problems,
+[00:37:40--00:37:42] this optimality is harder to say.
+[00:37:42--00:37:47] It's harder to say whether it's sequential or the ratio changes
+[00:37:47--00:37:51] even from bucket four to bucket five on how
+[00:37:51--00:37:53] you should allocate that.
+[00:37:57--00:38:02] Another observation from this paper was that--
+[00:38:02--00:38:04] and this is still a work in progress,
+[00:38:04--00:38:08] and I believe still the true observation as of today
+[00:38:08--00:38:11] is that for easy and medium questions,
+[00:38:11--00:38:14] it seems like additional test time
+[00:38:14--00:38:18] compute can be more favorable than scaling
+[00:38:18--00:38:21] pre-training of the model.
+[00:38:21--00:38:24] So here, we have these two.
+[00:38:24--00:38:27] The easy are the green, medium is blue,
+[00:38:27--00:38:31] and orange is the hard questions.
+[00:38:31--00:38:34] It seems if we look into the ratio of inference tokens
+[00:38:34--00:38:46] to pre-training tokens, it is positive for the easy and medium
+[00:38:46--00:38:48] problem, but for the hardest problem,
+[00:38:48--00:38:52] it seems larger models like a more pre-training,
+[00:38:52--00:38:56] or larger models still do better if you
+[00:38:56--00:39:01] are from a tokens optimized perspective.
+[00:39:01--00:39:03] And this is something that we have
+[00:39:03--00:39:07] seen in many of our research in the lab or around the lab
+[00:39:07--00:39:09] as well.
+[00:39:09--00:39:14] It seems like models, simpler open source models, or smaller
+[00:39:14--00:39:17] models are becoming more and more useful
+[00:39:17--00:39:20] as we take more test time compute, apply more test
+[00:39:20--00:39:22] time compute on them.
+[00:39:22--00:39:24] But still, for the very, very hard problems,
+[00:39:24--00:39:27] still the frontier models, which presumably
+[00:39:27--00:39:30] use more pre-training and they are larger,
+[00:39:30--00:39:35] they do better even if we had a whole lot like infinite budget
+[00:39:35--00:39:36] for test time scaling.
+[00:39:36--00:39:38] Of course, we don't have infinite budget,
+[00:39:38--00:39:41] but any reasonably large test time scale.
+[00:39:41--00:39:42] Yes.
+[00:39:42--00:39:46] In this case, how do you inference for this pre-training?
+[00:39:46--00:39:48] Because it seems like for inference,
+[00:39:48--00:39:50] you use it much like [INAUDIBLE],
+[00:39:50--00:39:53] whereas for pre-training tokens, it's you use it once
+[00:39:53--00:39:54] and you can use it twice.
+[00:39:54--00:39:56] Yes, that is true.
+[00:39:56--00:40:00] But in general, from a-- but this is still--
+[00:40:00--00:40:04] so basically, yes, pre-training is done once,
+[00:40:04--00:40:08] but scaling is every time we run the model.
+[00:40:17--00:40:20] But still, this is an interesting observation
+[00:40:20--00:40:24] from the perspective of, are we done doing pre-training
+[00:40:24--00:40:27] because we can just keep sampling from the models we
+[00:40:27--00:40:31] have, or no, pre-training is still helpful
+[00:40:31--00:40:34] and we should do more and more?
+[00:40:34--00:40:38] Not everyone can pre-train a large model.
+[00:40:38--00:40:44] So even if pre-training was better
+[00:40:44--00:40:46] than test time scaling in any scale,
+[00:40:46--00:40:49] not everyone can do that because it's a very expensive process.
+[00:40:49--00:40:52] So this is very interesting that for many problems,
+[00:40:52--00:40:54] we can do test time scaling, even
+[00:40:54--00:40:58] if we do it every time for a new problem, because that's
+[00:40:58--00:40:59] feasible.
+[00:40:59--00:41:02] But also, on the other hand, for the hardest problems,
+[00:41:02--00:41:04] we still need to do pre-training,
+[00:41:04--00:41:07] and better models still do better.
+[00:41:07--00:41:07] That makes sense.
+[00:41:07--00:41:10] I was just curious precisely in the graph
+[00:41:10--00:41:15] when it says like the ratio is 1 for retraining of, for instance,
+[00:41:15--00:41:15] retraining.
+[00:41:15--00:41:19] Does that mean that it's [INAUDIBLE] training,
+[00:41:19--00:41:23] there was also one training used for a single task?
+[00:41:23--00:41:23] No.
+[00:41:23--00:41:25] No, it's not exactly that.
+[00:41:25--00:41:27] It's more like some ratio of pre-training
+[00:41:27--00:41:29] to inference compute.
+[00:41:29--00:41:34] It's not a one-to-one because it doesn't make sense in that case.
+[00:41:34--00:41:37] My question is, why is it that those larger models still
+[00:41:37--00:41:40] count better?
+[00:41:40--00:41:43] Can we take a smaller model and yet make it an expert
+[00:41:43--00:41:45] on hot questions?
+[00:41:45--00:41:50] You can always fine tune a model to become better
+[00:41:50--00:41:53] on a certain set of questions, but we
+[00:41:53--00:41:57] are talking about a more general perspective of let's have
+[00:41:57--00:41:59] a whole lot of data that's general, not
+[00:41:59--00:42:08] specific to a specific task and just compare the common recipes
+[00:42:08--00:42:10] that we use for training models.
+[00:42:10--00:42:13] Let's just follow that and then see how much
+[00:42:13--00:42:14] they do better at test time.
+[00:42:22--00:42:25] Any other questions?
+[00:42:25--00:42:30] So maybe we discussed some of these already, but here
+[00:42:30--00:42:35] are some more questions that I give you another two
+[00:42:35--00:42:36] minutes, let me check the time.
+[00:42:36--00:42:41] Yes, we do have time, to think about this.
+[00:42:41--00:42:45] This helps you absorb some of the topics
+[00:42:45--00:42:50] that we learned, or heard about in the previous slides,
+[00:42:50--00:42:53] and then we discuss them in two minutes.
+[00:42:56--00:42:59] OK, should we start?
+[00:42:59--00:43:01] Anyone wants to add any comments here,
+[00:43:01--00:43:06] or any questions you might have?
+[00:43:06--00:43:07] Yes.
+[00:43:07--00:43:12] So do you try sequential and try too-- what about tree search?
+[00:43:12--00:43:16] And in that case, you're doing the--
+[00:43:16--00:43:17] You're mixing the both.
+[00:43:17--00:43:19] Yeah, you're kind of mixing, right?
+[00:43:19--00:43:19] Yeah.
+[00:43:19--00:43:22] There is no universal answer that can be there.
+[00:43:22--00:43:26] But the general sentiment was that does better,
+[00:43:26--00:43:29] like some sort of combining the two than doing--
+[00:43:29--00:43:33] [INAUDIBLE] you do, so reduce a lot of the compute that
+[00:43:33--00:43:35] you're doing or reuse [INAUDIBLE] that you're doing
+[00:43:35--00:43:37] because it's a tree--
+[00:43:37--00:43:39] Yes, yes.
+[00:43:39--00:43:43] That is when we discussed the beam search stuff and the PRM,
+[00:43:43--00:43:49] like bringing a PRM to cut the tree at each level
+[00:43:49--00:43:53] and explore only the more promising branches.
+[00:43:57--00:43:58] Anything else?
+[00:43:58--00:43:59] Yes.
+[00:43:59--00:44:06] [INAUDIBLE] as the thinking that that's the easier problem,
+[00:44:06--00:44:08] the more perhaps you have towards the success
+[00:44:08--00:44:09] of solving it.
+[00:44:09--00:44:13] Therefore, it could be more sequential [INAUDIBLE]
+[00:44:13--00:44:16] problem because you would-- there are few students solving,
+[00:44:16--00:44:18] so you would need many parallel process
+[00:44:18--00:44:22] to find at least one viable solution.
+[00:44:22--00:44:24] And we started thinking a little bit also
+[00:44:24--00:44:26] like to do this in a chain of thoughts kind of way,
+[00:44:26--00:44:28] where you are doing a chain of thought,
+[00:44:28--00:44:31] but verifying through all the steps into our chain of thoughts
+[00:44:31--00:44:34] instead, and then pruning from these branches
+[00:44:34--00:44:37] that are violating anything.
+[00:44:37--00:44:38] Yeah.
+[00:44:38--00:44:41] So in terms of sequential, you're saying that for easier
+[00:44:41--00:44:45] ones, easier problems-- for harder problems,
+[00:44:45--00:44:48] you mean you need more exploration potentially
+[00:44:48--00:44:49] for easier--
+[00:44:49--00:44:51] To the correct answer.
+[00:44:51--00:44:57] Or for easier problems, because like any kind of path
+[00:44:57--00:44:59] might lead us to the correct answer,
+[00:44:59--00:45:03] we might not need to explore different parallel solutions.
+[00:45:03--00:45:07] Yeah, that is an intuitive kind of way of thinking about this.
+[00:45:10--00:45:12] Any other thoughts?
+[00:45:19--00:45:22] In general, this is a very interesting kind
+[00:45:22--00:45:23] of problem to think about.
+[00:45:23--00:45:27] How do you-- let's assume that these tokens that you generate
+[00:45:27--00:45:30] is like a knob that you have to increase problem,
+[00:45:30--00:45:34] the quality of the responses, how do you allocate this knob?
+[00:45:34--00:45:38] And how do you elicit these generations from the model?
+[00:45:38--00:45:40] So let's think about in the following,
+[00:45:40--00:45:43] I'm going to talk about one way to optimize
+[00:45:43--00:45:47] these kind of test time scaling to generate optimized answers.
+[00:45:47--00:45:51] And that is the Archon paper, an architecture search framework
+[00:45:51--00:45:55] for inference time scaling.
+[00:45:55--00:45:57] So the problem state-- and your TA
+[00:45:57--00:46:00] is one of the co-authors of this work.
+[00:46:00--00:46:03] So the problem in this paper is that, again, we
+[00:46:03--00:46:07] are interested to see how we can mix and match
+[00:46:07--00:46:10] different inference time scaling methods to build
+[00:46:10--00:46:14] the optimize the frontier of capability or correctness
+[00:46:14--00:46:18] versus cost.
+[00:46:18--00:46:20] And the other thing that--
+[00:46:23--00:46:26] again, all of these questions basically saying the same thing
+[00:46:26--00:46:29] that how we can optimize assigning inference
+[00:46:29--00:46:32] compute two different tasks.
+[00:46:32--00:46:37] And basically, design mechanisms that gets us to the high quality
+[00:46:37--00:46:43] answers while not wasting too many tokens and generations.
+[00:46:43--00:46:46] So here is the arc-- like in this case,
+[00:46:46--00:46:49] we thought of inference scaling in this project
+[00:46:49--00:46:56] as an inference architecture design problem.
+[00:46:56--00:47:00] So here is how the Archon framework works.
+[00:47:00--00:47:03] On the input side, we had a set of target benchmarks
+[00:47:03--00:47:06] that we wanted to get good results on these benchmarks.
+[00:47:06--00:47:09] So these are the benchmarks we are optimizing for.
+[00:47:09--00:47:11] There is an inference called budget.
+[00:47:11--00:47:14] And then there's also a set of available LLMs,
+[00:47:14--00:47:18] because we can always mix and match different models also
+[00:47:18--00:47:23] to get to a correct answer for a input question.
+[00:47:23--00:47:25] And then we have a set of inference time techniques, which
+[00:47:25--00:47:29] I'm going to describe in the following slides.
+[00:47:29--00:47:33] And then we designed this optimizer.
+[00:47:33--00:47:35] It's called itest.
+[00:47:35--00:47:40] It's inference time architecture search that basically tells us
+[00:47:40--00:47:43] how to put together these different models
+[00:47:43--00:47:45] and different inference time techniques together,
+[00:47:45--00:47:49] whether it's parallel sampling, sequential, and all that,
+[00:47:49--00:47:53] in order to get high-quality results given
+[00:47:53--00:47:56] the budget, the inference called budget that we have-- how
+[00:47:56--00:48:00] to optimize the quality of results based on that.
+[00:48:00--00:48:02] And then the output is this architecture
+[00:48:02--00:48:04] that mixes and matches these different techniques
+[00:48:04--00:48:08] and models together.
+[00:48:08--00:48:11] So let's take a look at different inference time
+[00:48:11--00:48:12] operations.
+[00:48:12--00:48:16] So first, we have the general-- we call it the generation,
+[00:48:16--00:48:24] but this is basically just sampling from the model.
+[00:48:24--00:48:28] And this can be part of the repeated sampling approach.
+[00:48:28--00:48:31] So if we generate n--
+[00:48:31--00:48:33] we use n generations at a time, that
+[00:48:33--00:48:37] means we have generated n different responses to our input
+[00:48:37--00:48:38] question.
+[00:48:38--00:48:41] So that's one type of inference time scaling.
+[00:48:41--00:48:45] Another one is fusion, which was surprisingly a very effective
+[00:48:45--00:48:46] method.
+[00:48:46--00:48:53] So fusion is, let's say, we have K different responses,
+[00:48:53--00:48:56] and we want to generate one output response out
+[00:48:56--00:49:02] of these K. Fusion takes an LLM and asks
+[00:49:02--00:49:06] an LLM the same exact question that I just said.
+[00:49:06--00:49:09] Basically, it says, here's the input question.
+[00:49:09--00:49:13] Here are K different responses to this input question.
+[00:49:13--00:49:20] Given all of this, generate or synthesize one output response
+[00:49:20--00:49:21] for the input question.
+[00:49:21--00:49:25] Basically, we are showing all of the K generations to the model,
+[00:49:25--00:49:30] such that the LLM can generate an output answer while being
+[00:49:30--00:49:38] aware of all the possible ways that this question is answered.
+[00:49:38--00:49:44] And this is-- it goes under the category of sequential update.
+[00:49:44--00:49:46] We have this parallel samples, but then we
+[00:49:46--00:49:49] are kind of fusing them into one answer.
+[00:49:49--00:49:56] Then there is the critic, which basically,
+[00:49:56--00:49:59] for any given response, we can ask a model
+[00:49:59--00:50:04] to generate or describe the weaknesses
+[00:50:04--00:50:06] or strengths of these response.
+[00:50:06--00:50:12] And that could be one kind of inference scaling action.
+[00:50:12--00:50:14] And then we have the ranker.
+[00:50:14--00:50:16] This is-- again, these are all prompting based
+[00:50:16--00:50:18] optimization for the model.
+[00:50:18--00:50:21] We haven't trained the model to do this specific test time
+[00:50:21--00:50:22] scaling task.
+[00:50:22--00:50:27] We just ask the model in the instruction prompt that,
+[00:50:27--00:50:29] can you rank these generated responses
+[00:50:29--00:50:34] from the previous step based on their quality?
+[00:50:38--00:50:41] And then the verifiers generates the-- returns
+[00:50:41--00:50:45] the response while also talk about the reasoning of why
+[00:50:45--00:50:52] it came to this kind of way to score a certain answer.
+[00:50:52--00:50:55] I'll get to the next two unit tests
+[00:50:55--00:50:57] generation and evaluation in a bit.
+[00:50:57--00:51:00] But just to show you how effective these different
+[00:51:00--00:51:03] inference time scaling techniques are,
+[00:51:03--00:51:13] let's take a look at this win rate for what tasks--
+[00:51:13--00:51:15] we don't have the task here.
+[00:51:15--00:51:19] But it's one of the task of one of these benchmarks
+[00:51:19--00:51:23] that I don't know if you remember the task.
+[00:51:23--00:51:23] Yeah.
+[00:51:26--00:51:31] Some question answering reasoning benchmark.
+[00:51:31--00:51:34] So here, let's take a look at how these things work.
+[00:51:34--00:51:36] So first, we have--
+[00:51:36--00:51:41] let's say, we have a number of repeated samples from the model.
+[00:51:41--00:51:44] It goes from 1 to 10 on the left side.
+[00:51:44--00:51:46] Let's focus on the graph on the left side.
+[00:51:46--00:51:51] And then the orange one is the kind of worst possible way
+[00:51:51--00:51:52] of approaching it.
+[00:51:52--00:51:55] We just randomly select one and look
+[00:51:55--00:51:59] at the quality and the correctness of this response.
+[00:51:59--00:52:04] The green one is when we use the model to rank them,
+[00:52:04--00:52:07] to rank the responses, and we select the top one ranked
+[00:52:07--00:52:13] by the model and report that.
+[00:52:13--00:52:16] That already does better than the orange one.
+[00:52:16--00:52:20] The blue one is Oracle selection,
+[00:52:20--00:52:23] meaning let's assume we are not mixing
+[00:52:23--00:52:26] these responses in any way.
+[00:52:26--00:52:30] We just select the best one generated.
+[00:52:30--00:52:31] Let's say, we have an Oracle verifier
+[00:52:31--00:52:34] that can tell us which one of these is correct.
+[00:52:34--00:52:37] And that obviously does better than just
+[00:52:37--00:52:41] asking the model to rank them because it's an Oracle verifier.
+[00:52:41--00:52:44] And then we get to the red one, which is
+[00:52:44--00:52:46] where when we use the fusion.
+[00:52:46--00:52:52] So basically, for each point here, let's say, we are at 5,
+[00:52:52--00:52:55] the red data point is basically we have given these five
+[00:52:55--00:52:59] responses to the model and ask the model to synthesize
+[00:52:59--00:53:03] one answer, one final answer, given all this information.
+[00:53:03--00:53:06] And it's so interesting, and this paradigm is so powerful
+[00:53:06--00:53:11] that that can on its own improve the quality of responses
+[00:53:11--00:53:15] over Oracle selection.
+[00:53:15--00:53:20] And then finally, the purple one is where we--
+[00:53:20--00:53:27] instead of fusing all the responses,
+[00:53:27--00:53:33] we first selected the top five, and then we
+[00:53:33--00:53:34] went about fusing them.
+[00:53:34--00:53:37] So it seems like some sort of a filtering of the two
+[00:53:37--00:53:41] does better.
+[00:53:41--00:53:44] Now on the right side, we are doing a different experiment,
+[00:53:44--00:53:47] and that is we are--
+[00:53:47--00:53:48] on the left side.
+[00:53:48--00:53:50] We had only one model generating everything.
+[00:53:50--00:53:52] On the left side, we had-- we were
+[00:53:52--00:53:54] using-- we were adding models.
+[00:53:54--00:53:57] So first one is just one model generating one answer,
+[00:53:57--00:54:00] two the baseline is two different models generating
+[00:54:00--00:54:03] one answer, and 10 is 10 different models,
+[00:54:03--00:54:05] each generating one answer.
+[00:54:05--00:54:09] And we see that, of course, the random result
+[00:54:09--00:54:12] becomes worse because the model we looked on the left
+[00:54:12--00:54:17] was I think it was among the better models in this ensemble.
+[00:54:17--00:54:22] But we still see the same trend, even if these responses
+[00:54:22--00:54:25] are coming from different models, basically the same trend
+[00:54:25--00:54:29] of how these all follow each other.
+[00:54:29--00:54:30] Yes.
+[00:54:30--00:54:32] Which model is fusing?
+[00:54:32--00:54:34] If you're using 10 different models,
+[00:54:34--00:54:38] you're asking somebody else to rank or fuse your--
+[00:54:38--00:54:39] I think it's the model number one
+[00:54:39--00:54:41] in this case, the same [INAUDIBLE] that
+[00:54:41--00:54:43] was in all of those.
+[00:54:43--00:54:47] And this was the way we created the ensemble was first
+[00:54:47--00:54:49] with the best model and then added the second best model
+[00:54:49--00:54:50] and so on.
+[00:54:56--00:54:58] Now let's take a look at a couple
+[00:54:58--00:55:01] other inference time techniques.
+[00:55:01--00:55:04] And that is unit test generation and evaluation.
+[00:55:04--00:55:09] I think one of you was mentioning something like this
+[00:55:09--00:55:11] earlier as well, that where we can ask the model
+[00:55:11--00:55:14] to generate these unit tests, say
+[00:55:14--00:55:18] when it gets to coding task or math, math problem-solving
+[00:55:18--00:55:22] or other reasoning tasks.
+[00:55:22--00:55:24] And the unit test evaluation is even crazier.
+[00:55:24--00:55:27] Like instead of running the unit test,
+[00:55:27--00:55:32] you're asking the model to evaluate a generated answer
+[00:55:32--00:55:36] against a unit test.
+[00:55:36--00:55:40] For example, here is a prompt check
+[00:55:40--00:55:43] for-- so the coding problem in this case
+[00:55:43--00:55:47] is check for balanceness of round brackets in an input
+[00:55:47--00:55:47] string.
+[00:55:47--00:55:49] That's a coding question.
+[00:55:49--00:55:51] And then here is an example input.
+[00:55:51--00:55:56] Here is the type of unit test that the model could generate.
+[00:55:56--00:56:00] For example, given a string with an odd number of brackets,
+[00:56:00--00:56:03] the solution should output no, which is like a good unit
+[00:56:03--00:56:04] test in this case.
+[00:56:04--00:56:08] Another one is when a closing bracket is encountered,
+[00:56:08--00:56:11] it must match the most recently open brackets
+[00:56:11--00:56:12] that hasn't been matched yet.
+[00:56:12--00:56:15] That's another kind of reasonable unit test.
+[00:56:15--00:56:17] And then you can ask the model to actually generate
+[00:56:17--00:56:20] the code to test this as well.
+[00:56:20--00:56:22] Now let's take a look at the types.
+[00:56:22--00:56:25] I don't know if you guys see this well but the type.
+[00:56:25--00:56:26] But this is so big, there's no way
+[00:56:26--00:56:30] for me to put it here with large font.
+[00:56:30--00:56:34] But this is the type of architectures that Archon found.
+[00:56:34--00:56:37] So basically now think about it this way.
+[00:56:37--00:56:40] We have different ways of mixing and matching
+[00:56:40--00:56:42] models and inference time techniques,
+[00:56:42--00:56:45] and we can define these layers of optimization.
+[00:56:45--00:56:48] For example, the first layer in this case is generation.
+[00:56:48--00:56:51] And then these generations are from different models
+[00:56:51--00:56:52] in this case.
+[00:56:52--00:56:56] And then we have a critic and a ranker.
+[00:56:56--00:57:00] So basically, the critic will criticize these generations
+[00:57:00--00:57:04] and then we rank them and then be the optimizer found
+[00:57:04--00:57:07] that we could have a bunch of users at this point,
+[00:57:07--00:57:13] like each fuses these responses into one output.
+[00:57:13--00:57:19] And then we can go from there, continue this critique ranker.
+[00:57:19--00:57:21] And this was like a rather complicated architecture.
+[00:57:21--00:57:24] And the way that we optimize this architecture
+[00:57:24--00:57:28] is that we did some kind of pre-processing
+[00:57:28--00:57:32] to reduce the space of optimization.
+[00:57:32--00:57:33] For example, the fact that we found
+[00:57:33--00:57:38] this sequence of generation critic ranker and user
+[00:57:38--00:57:39] do really well.
+[00:57:39--00:57:43] We did that offline, so we limited the search space
+[00:57:43--00:57:46] just because doing this search is very expensive.
+[00:57:46--00:57:48] We need to run a lot of inference calls.
+[00:57:48--00:57:52] But then the way we optimize it that we had a held out data set
+[00:57:52--00:57:56] that-- we had a training data set that we could optimize
+[00:57:56--00:57:59] against that and create this accuracy versus
+[00:57:59--00:58:03] the number of calls that we are making to these models, kind
+[00:58:03--00:58:07] of as a metric that we are optimizing against.
+[00:58:07--00:58:09] We want to maximize accuracy.
+[00:58:09--00:58:16] And for any given budget, inference budget that we have.
+[00:58:16--00:58:19] And this is for some of the coding problems.
+[00:58:19--00:58:21] This was an optimized architecture.
+[00:58:21--00:58:24] Basically, we generate a ton of samples.
+[00:58:24--00:58:28] We generate unit tests and then we evaluate them.
+[00:58:28--00:58:33] Now, an interesting property here
+[00:58:33--00:58:38] is that we found that stacking more and more layers
+[00:58:38--00:58:40] of these inference time techniques,
+[00:58:40--00:58:42] or making it deep in a way, actually
+[00:58:42--00:58:49] does help with our accuracy.
+[00:58:49--00:58:53] In this case, for example, the right most pink graph
+[00:58:53--00:58:57] is where we have an ensemble, meaning we have
+[00:58:57--00:58:59] different models in our loop.
+[00:58:59--00:59:02] And we have three layers of critiques and fusers
+[00:59:02--00:59:06] and a final fuser layer.
+[00:59:06--00:59:08] And this is significantly better across many
+[00:59:08--00:59:12] of these tasks over both just using
+[00:59:12--00:59:16] a simple the best model only once,
+[00:59:16--00:59:19] or the best model eight times with one layer of fusion.
+[00:59:19--00:59:22] So it seems like these additional layers
+[00:59:22--00:59:23] that we are adding here is actually--
+[00:59:23--00:59:26] just like in deep learning, we are
+[00:59:26--00:59:28] adding layers in pre-training and the model gets better.
+[00:59:28--00:59:31] Seems like these careful kind of additions
+[00:59:31--00:59:33] of these inference layers are helping the model
+[00:59:33--00:59:35] become more and more accurate.
+[00:59:35--00:59:40] Across many of the tasks this is true.
+[00:59:40--00:59:43] And so now the optimizer itself, we
+[00:59:43--00:59:48] used an Bayesian optimizer again to simplify the search space.
+[00:59:48--00:59:50] We did a few things.
+[00:59:50--00:59:53] For example, we limited the optimizer
+[00:59:53--00:59:57] to only use one inference time technique per layer,
+[00:59:57--01:00:00] and the first layer was always just the generator.
+[01:00:00--01:00:06] And then we had this cascade of ranker, critic, verifier.
+[01:00:06--01:00:09] They could go anywhere, but we made
+[01:00:09--01:00:12] certain kind of modifications to the search space.
+[01:00:12--01:00:16] For example, a critic should go before a ranker or a fuser
+[01:00:16--01:00:20] always because we did some testing locally and saw
+[01:00:20--01:00:22] this is a better choice.
+[01:00:22--01:00:24] And then a unit test generator must
+[01:00:24--01:00:27] be followed by an evaluator up.
+[01:00:27--01:00:32] And again, we use a Bayesian optimizer to do this.
+[01:00:32--01:00:39] This is often a very powerful methodology,
+[01:00:39--01:00:41] a ton of good open source software
+[01:00:41--01:00:43] to do Bayesian optimization for you.
+[01:00:43--01:00:45] Basically, you have this search space
+[01:00:45--01:00:50] that you want to configure it with different kind of choices
+[01:00:50--01:00:51] for the architecture.
+[01:00:51--01:00:53] And the output side, you have the accuracy
+[01:00:53--01:00:55] and you want to optimize for that.
+[01:00:55--01:00:59] And this does better than greedy search or random selection.
+[01:00:59--01:01:01] We are much more sample efficient in terms
+[01:01:01--01:01:04] of number of configurations that Archon searches
+[01:01:04--01:01:09] until it reaches a final kind of architecture,
+[01:01:09--01:01:12] and we can define different objectives for it.
+[01:01:12--01:01:16] For example, available models, inference time,
+[01:01:16--01:01:22] inference, core budget is one of them or some of them.
+[01:01:22--01:01:26] The thing that I want you to pay attention to in this graph
+[01:01:26--01:01:29] is that this interesting property that Archon
+[01:01:29--01:01:32] is, at the end, generating one response at the very end.
+[01:01:32--01:01:36] So it's like you're optimizing paths at one at the very end.
+[01:01:36--01:01:42] And what was interesting here is that while using just
+[01:01:42--01:01:48] the open source models, we could match or exceed
+[01:01:48--01:01:51] these closed source models at the time,
+[01:01:51--01:01:53] the frontier closed source model at the time,
+[01:01:53--01:01:58] by a large margin across many of these tasks in terms
+[01:01:58--01:01:59] of paths at one.
+[01:01:59--01:02:02] Here's the average path at one improvement.
+[01:02:02--01:02:04] And not only that, we could train
+[01:02:04--01:02:06] Archon to be task specific.
+[01:02:06--01:02:09] So when we are doing the Bayesian optimization,
+[01:02:09--01:02:14] we only look into a certain task and we test on that,
+[01:02:14--01:02:17] or we could train Archon to be general purpose.
+[01:02:17--01:02:21] So we wanted it to do better good across many--
+[01:02:21--01:02:23] to do well across many tasks.
+[01:02:23--01:02:26] And even that the general purpose one does really,
+[01:02:26--01:02:29] really well and better than the frontier
+[01:02:29--01:02:31] models across these tasks.
+[01:02:31--01:02:35] And that was a very interesting observation
+[01:02:35--01:02:38] that you can design these inference time architectures
+[01:02:38--01:02:42] that do well beyond the task or the limited tasks
+[01:02:42--01:02:44] that they're trained on.
+[01:02:44--01:02:48] So on average, in this case, we were outperforming GPT-4.0
+[01:02:48--01:02:54] or Claude 3.5 Sonnet in passage one by an average of 14.1%
+[01:02:54--01:02:58] across these instruction following reasoning and math
+[01:02:58--01:03:00] encoding problems.
+[01:03:00--01:03:05] Here are some questions, that I want you to think about.
+[01:03:05--01:03:07] But since we're out of time.
+[01:03:07--01:03:11] Hopefully, you think about it yourself.
+[01:03:11--01:03:15] And hope you have a happy weekend.

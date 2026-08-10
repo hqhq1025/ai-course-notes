@@ -19,6 +19,7 @@ COURSE_ROOTS = {
     "agentic-rl",
     "cs25",
     "cs146s",
+    "cs329a",
     "cs224n",
     "cs224r",
     "cs231n",
