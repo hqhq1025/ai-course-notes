@@ -803,6 +803,25 @@ def markdown_pdf_figure(ctx: BuildContext, src: Path, caption: str) -> str:
     )
 
 
+def markdown_image_figure(ctx: BuildContext, src: Path, preview_path: str, caption: str) -> str:
+    original_url = external_asset_url(ctx, src)
+    escaped_preview = html.escape(preview_path, quote=True)
+    escaped_original = html.escape(original_url, quote=True)
+    escaped_caption = html.escape(caption)
+    escaped_alt = html.escape(caption, quote=True)
+    return (
+        '\n<figure class="ai-notes-figure">\n'
+        f'  <a class="ai-notes-figure__preview" href="{escaped_original}" '
+        'target="_blank" rel="noopener noreferrer" aria-label="查看原图">\n'
+        f'    <img src="{escaped_preview}" alt="{escaped_alt}" loading="lazy" decoding="async">\n'
+        '  </a>\n'
+        f'  <figcaption>{escaped_caption} '
+        f'<a class="ai-notes-figure__original" href="{escaped_original}" '
+        'target="_blank" rel="noopener noreferrer">查看原图</a></figcaption>\n'
+        '</figure>\n\n'
+    )
+
+
 def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
     note = ctx.current_note
     if note is None:
@@ -837,7 +856,7 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
             + "\n".join(f"    {line}" for line in block.source.strip().splitlines())
             + "\n    ```\n\n"
         )
-    return f"\n![{caption}]({rel})\n\n"
+    return markdown_image_figure(ctx, src, rel, caption)
 
 
 def markdown_passthrough_from_block(ctx: BuildContext, block: EnvBlock) -> str:
@@ -1741,6 +1760,36 @@ def css_content() -> str:
 
 .md-typeset img {
   border-radius: 0.25rem;
+}
+
+.md-typeset .ai-notes-figure {
+  margin: 1.2rem auto 1.45rem;
+  text-align: center;
+}
+
+.md-typeset .ai-notes-figure__preview {
+  display: inline-block;
+  cursor: zoom-in;
+}
+
+.md-typeset .ai-notes-figure__preview img {
+  display: block;
+  height: auto;
+  margin: 0 auto;
+  max-width: 100%;
+}
+
+.md-typeset .ai-notes-figure figcaption {
+  color: var(--md-default-fg-color--light);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  margin-top: 0.45rem;
+}
+
+.md-typeset .ai-notes-figure__original {
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+  white-space: nowrap;
 }
 
 .md-typeset .ai-notes-table-caption {

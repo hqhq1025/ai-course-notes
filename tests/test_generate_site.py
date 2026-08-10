@@ -294,6 +294,8 @@ def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     assert ".md-typeset .arithmatex" in css
     assert ".md-typeset .admonition" in css
     assert ".md-typeset table:not([class])" in css
+    assert ".md-typeset .ai-notes-figure__preview" in css
+    assert "cursor: zoom-in" in css
 
     sidebar_js = (build / "docs" / "assets" / "javascripts" / "ai-notes.js").read_text(encoding="utf-8")
     assert "ai-notes-sidebar-nav-collapsed" in sidebar_js
@@ -379,16 +381,27 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert r"\begin{bmatrix}" in page
     assert "未转换的 LaTeX 环境：bmatrix" not in page
     assert "未转换的 LaTeX 环境：pmatrix" not in page
-    assert f"![示意图：网页阅读器结构，缩放 $√layers$](diagram.jpg)" in page
+    assert '<figure class="ai-notes-figure">' in page
+    assert 'src="diagram.jpg"' in page
+    assert 'alt="示意图：网页阅读器结构，缩放 $√layers$"' in page
+    assert 'loading="lazy"' in page
+    assert 'decoding="async"' in page
+    assert (
+        'href="https://github.com/hqhq1025/ai-course-notes/raw/main/'
+        'sample-course/lecture01/diagram.jpg"'
+    ) in page
+    assert "查看原图" in page
     assert "测试来源。" in page
-    assert "![视频关键帧宏](video-frame.jpg)" in page
+    assert 'src="video-frame.jpg"' in page
+    assert 'alt="视频关键帧宏"' in page
     assert "视频讲解区间：00:01:00–00:02:00。" in page
     assert r"\videofigure" not in page
     assert "数学 caption 后的 **粗体** 也要继续转换。" in page
     assert r"数学 caption 后的 \textbf" not in page
     assert "图片资源缺失" in page
     assert "未转换的 LaTeX 环境：figure" not in page
-    assert "![子目录图片](images/fallback.png)" in page
+    assert 'src="images/fallback.png"' in page
+    assert 'alt="子目录图片"' in page
     assert "PDF 图示资源" in page
     assert "[打开 PDF 图示](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/slides.pdf)" in page
     assert "[本地质量文档](../../QUALITY.md)" not in page

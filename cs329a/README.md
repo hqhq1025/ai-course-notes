@@ -26,6 +26,18 @@
 | 8 | Agentic Evaluations and Long-Horizon Tasks | 27 | [LaTeX](lecture08/lecture08-notes.tex) | [YouTube](https://www.youtube.com/watch?v=8JAqLnTaZu4) |
 | 9 | Future Research Areas | 30 | [LaTeX](lecture09/lecture09-notes.tex) | [YouTube](https://www.youtube.com/watch?v=AyO6wyu4DEg) |
 
+## 本地编译 PDF
+
+在线阅读站可直接阅读完整讲义；如需离线 PDF，请 clone 仓库或下载完整的 `cs329a/` 目录，确保共享模板与图片同时存在，再使用 XeLaTeX 连续编译两遍：
+
+```bash
+cd cs329a/lecture01
+xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
+xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
+```
+
+其余讲次只需替换目录和文件编号。生成的 `*-notes.pdf` 会保留在本地，但按照仓库策略不会提交到 Git。
+
 ## 内容与图源规范
 
 - 每讲按教学逻辑重构，不是字幕逐句翻译；技术术语保留英文。

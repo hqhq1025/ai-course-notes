@@ -2,14 +2,14 @@
 
 # 📚 AI Course Notes
 
-**353 份 AI / LLM 中文讲义，支持在线阅读、PDF 下载和 LaTeX 源码查看**
+**353 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
 [![Total Notes](https://img.shields.io/badge/讲义总数-353份-blue?style=for-the-badge)](.)
 [![Collections](https://img.shields.io/badge/内容系列-17个-green?style=for-the-badge)](.)
-[![Format](https://img.shields.io/badge/格式-Web%20%7C%20PDF%20%7C%20LaTeX-red?style=for-the-badge)](.)
+[![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
 [🌐 在线阅读](https://hqhq1025.github.io/ai-course-notes/) · [📄 浏览目录](#-课程一览) · [🤝 参与贡献](CONTRIBUTING.md)
 
@@ -19,10 +19,10 @@
 
 ## ✨ 这是什么
 
-- **在线阅读优先**：网页站点支持目录导航、全文搜索、公式渲染、图片展示，并保留 PDF 备用链接。
+- **在线阅读优先**：网页站点支持目录导航、全文搜索和公式渲染；正文默认加载优化后的图片，点击即可查看仓库原图。
 - **中文讲义**：英文课程、访谈和文章统一整理为中文，关键技术术语保留英文。
 - **覆盖面广**：从 Transformer、LLM pretraining、RLHF，到 Agent、Diffusion、Infra、模型架构和 AI 工程实践。
-- **LaTeX 为源文稿**：每份讲义保留 `*-notes.tex` 和 `*-notes.pdf`，网页由 `.tex` 自动转换生成。
+- **LaTeX 为源文稿**：仓库保留 `*-notes.tex` 和配套图片，网页由 `.tex` 自动生成；讲义 PDF 可在本地编译，不重复存入 Git。
 - **持续更新**：新课程、演讲、访谈和技术文章会继续补充。
 
 ## 🌐 在线阅读
@@ -54,10 +54,27 @@ git sparse-checkout set cs336
 git checkout main
 ```
 
-> **关于 PDF**：`*-notes.pdf`（由本仓库 `.tex` 编译生成的讲义 PDF）不再随仓库分发。
-> - 在线站点本身已经渲染了讲义全文，无需 PDF
-> - 需要 PDF 的用户可在本地用 `xelatex` 编译 `*-notes.tex` 自行生成
-> - 课程方的官方 `*-slides.pdf` 仍保留在仓库内
+## 📄 PDF 与 LaTeX
+
+- **直接阅读**：推荐使用[在线阅读站](https://hqhq1025.github.io/ai-course-notes/)，无需下载 PDF；网页图片使用优化副本，点击图片可打开原图。
+- **LaTeX 源码**：每篇在线讲义顶部都有“LaTeX 源码”入口，也可以 clone 仓库后直接查看对应的 `*-notes.tex`。
+- **自行生成 PDF**：仓库不再提交可由源码重复生成的 `*-notes.pdf`。下载对应课程目录后，使用 XeLaTeX 连续编译两遍即可生成目录和交叉引用完整的 PDF。
+- **官方课件**：课程方发布的 `*-slides.pdf` 无法由讲义源码重建，因此仍会保留。
+
+```bash
+git clone --depth=1 https://github.com/hqhq1025/ai-course-notes.git
+cd ai-course-notes/<course>/<lecture>
+xelatex -interaction=nonstopmode -halt-on-error <lecture>-notes.tex
+xelatex -interaction=nonstopmode -halt-on-error <lecture>-notes.tex
+```
+
+例如编译 CS329A 第一讲：
+
+```bash
+cd ai-course-notes/cs329a/lecture01
+xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
+xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
+```
 
 ## 📊 内容规模
 
