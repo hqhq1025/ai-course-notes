@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 TIMESTAMP_RE = re.compile(
-    r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
+    r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2}[,.]\d{3})"
 )
 
 
@@ -23,7 +23,7 @@ class Caption:
 
 def timestamp_to_ms(value: str) -> int:
     hours, minutes, rest = value.split(":")
-    seconds, millis = rest.split(",")
+    seconds, millis = re.split(r"[,.]", rest)
     return (
         int(hours) * 3_600_000
         + int(minutes) * 60_000

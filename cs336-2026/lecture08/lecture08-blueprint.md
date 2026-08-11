@@ -4,7 +4,7 @@ Status: implemented under the new source-first workflow on 2026-05-12.
 
 ## Goal
 
-Regenerate Lecture 08 as a slide-complete note on Parallelism Basics. The note should explain why large-scale LLM training needs datacenter-level networking, how ZeRO/FSDP and model-parallel primitives work, and how recent large models combine DP/TP/SP/EP/PP/CP.
+Regenerate Lecture 08 as a concept-complete note on Parallelism Basics. Keep representative final slide states and explain why large-scale LLM training needs datacenter-level networking, how ZeRO/FSDP and model-parallel primitives work, and how recent large models combine DP/TP/SP/EP/PP/CP.
 
 ## Section Plan
 

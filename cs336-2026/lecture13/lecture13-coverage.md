@@ -1,16 +1,16 @@
 # Lecture 13 Coverage Matrix
 
-Status: complete after source-first rewrite and verification on 2026-05-12.
+Status: complete after second-round source-first rewrite and verification on 2026-08-11.
 
 Source: `lecture13-slides.py`, official executable lecture source. The rewritten note follows source clusters and localizes all image assets.
 
 Verification evidence:
 
-- `xelatex -interaction=nonstopmode -halt-on-error lecture13-notes.tex` run twice successfully.
-- `tools/scripts/check_quality.sh cs336-2026/lecture13/lecture13-notes.tex` reports `20p  ⭐⭐⭐`.
-- `python3 tools/scripts/check_note_coverage.py cs336-2026/lecture13/lecture13-notes.tex --manifest cs336-2026/lecture13/lecture13-manifest.md` reports `figs=19 readfig=13 boxes=46 term_digest=6 formulas=0 code=0 summaries=3` with no hard errors or warnings.
-- LaTeX log scan reports no `LaTeX Error`, `Undefined control sequence`, rerun warning, `Overfull`, or `Missing character`.
-- Visual PDF QA was rendered and checked in `qa/lecture13-notes/`.
+- `tools/scripts/check_quality.sh cs336-2026/lecture13/lecture13-notes.tex` reports `22p 15s 55b 19f 601c/f ⭐⭐⭐`.
+- Strict coverage reports `figs=19 readfig=13 boxes=55 term_digest=6 teacher_voice=10 summaries=3 prose_chars=11433` with no errors or warnings.
+- `lecture13-teacher-voice-ledger.md` records nine executable-source narration clusters and distinguishes source-backed `课堂提示` from note-authored `讲义提醒`.
+- Double-pass XeLaTeX succeeds; the second-pass log has no layout overflow, missing-character, undefined-control-sequence, or rerun warnings.
+- Visual PDF QA was rendered and manually checked in `qa/lecture13-notes/`, including the contact sheet and enlarged pages 6, 7, 21, and 22.
 
 | Source node | Type | Required? | Note section | Treatment | Status |
 |---|---|---|---|---|---|

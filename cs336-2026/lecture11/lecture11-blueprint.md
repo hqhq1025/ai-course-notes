@@ -4,7 +4,7 @@ Status: implemented under the new source-first workflow on 2026-05-12.
 
 ## Goal
 
-Generate Lecture 11 as a slide-complete case-study note on scaling laws in practice, with MiniCPM, DeepSeek, recent public scaling recipes, optimizer scaling, Muon, and muP details.
+Generate Lecture 11 as a concept-complete case-study note on scaling laws in practice, using representative final slide states for MiniCPM, DeepSeek, recent public scaling recipes, optimizer scaling, Muon, and muP details.
 
 ## Section Plan
 

@@ -83,6 +83,24 @@ def nodes_from_python(py: Path) -> list[SourceNode]:
 
 
 def nodes_from_pdf(pdf: Path) -> list[SourceNode]:
+    slides_dir = pdf.parent / "slides-images"
+    if slides_dir.exists():
+        slide_images = sorted(
+            path
+            for path in slides_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTS and path.stem.startswith("slide-")
+        )
+        if slide_images:
+            return [
+                SourceNode(
+                    image.stem,
+                    "slide",
+                    str(image.relative_to(pdf.parent)),
+                    pdf.name,
+                )
+                for image in slide_images
+            ]
+
     pages = pdf_pages(pdf)
     return [
         SourceNode(f"slide-{i:03d}", "slide", f"Slide {i}", pdf.name)
@@ -92,18 +110,36 @@ def nodes_from_pdf(pdf: Path) -> list[SourceNode]:
 
 def local_images(lecture_dir: Path) -> list[Path]:
     images: list[Path] = []
-    for dirname in ["slides-images", "images", "figures", "frames"]:
+    for dirname in ["slides-images", "images", "official-images", "figures", "frames"]:
         d = lecture_dir / dirname
         if d.exists():
             images.extend(sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS))
     return images
 
 
+def python_slide_sources(lecture_dir: Path) -> list[Path]:
+    canonical = sorted(lecture_dir.glob("*slides*.py"))
+    if canonical:
+        return canonical
+    return sorted(lecture_dir.glob("lecture_*.py"))
+
+
+def supplementary_sources(lecture_dir: Path) -> list[Path]:
+    sources: list[Path] = []
+    for dirname in ["source-materials", "sources"]:
+        directory = lecture_dir / dirname
+        if directory.exists():
+            sources.extend(
+                sorted(path for path in directory.rglob("*") if path.is_file() and not path.name.startswith("."))
+            )
+    return sources
+
+
 def write_manifest(lecture_dir: Path, output: Path) -> None:
     nodes: list[SourceNode] = []
     for pdf in sorted(lecture_dir.glob("*slides*.pdf")):
         nodes.extend(nodes_from_pdf(pdf))
-    for py in sorted(lecture_dir.glob("*slides*.py")):
+    for py in python_slide_sources(lecture_dir):
         nodes.extend(nodes_from_python(py))
 
     images = local_images(lecture_dir)
@@ -117,6 +153,18 @@ def write_manifest(lecture_dir: Path, output: Path) -> None:
     for p in sorted(lecture_dir.iterdir()):
         if p.is_file() and p.suffix.lower() not in {".aux", ".log", ".out", ".toc"}:
             lines.append(f"- `{p.name}`")
+    lines += [
+        "",
+        "## Supplementary Source Materials",
+        "",
+    ]
+    sources = supplementary_sources(lecture_dir)
+    if sources:
+        for source in sources:
+            lines.append(f"- `{source.relative_to(lecture_dir)}`")
+    else:
+        lines.append("- none found")
+
     lines += [
         "",
         "## Local Visual Assets",
@@ -147,7 +195,10 @@ def write_manifest(lecture_dir: Path, output: Path) -> None:
         "",
         "## Generation Contract",
         "",
-        "- Every required slide/figure node must be placed in the note or explicitly omitted with a reason.",
+        "- Review every slide and figure node; teaching-bearing nodes are required by default.",
+        "- Every required slide/figure/section node must be placed in the note or explicitly marked optional with a concrete omission reason in the coverage matrix.",
+        "- Administrative, blank, duplicated, or genuinely redundant build-up slides may be marked optional only after review.",
+        "- For progressive reveals, include the final complete state at minimum and retain intermediate states when they teach a distinct step.",
         "- Every important figure needs a nearby `读图` explanation.",
         "- Dense terminology clusters need a table or concept box.",
         "- Foundational concepts need diagram/table/formula scaffolding.",

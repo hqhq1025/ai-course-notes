@@ -54,7 +54,18 @@ check_one() {
     secs=$(grep -c '\\section{' "$f" 2>/dev/null || true)
     subs=$(grep -c '\\subsection{' "$f" 2>/dev/null || true)
     boxes=$(grep -Ec '\\begin\{importantbox\}|\\begin\{knowledgebox\}|\\begin\{warningbox\}' "$f" 2>/dev/null || true)
-    figs=$(grep -E -c '\\includegraphics|\\videofigure' "$f" 2>/dev/null || true)
+    figs=$(python3 - "$f" <<'PY'
+from pathlib import Path
+import re, sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+counts = [
+    len(re.findall(r"\\includegraphics", text)),
+    len(re.findall(r"\\begin\{figure\}", text)),
+    len(re.findall(r"\\(?:videofigure|lecturefigure)\{", text)),
+]
+print(max(counts))
+PY
+)
     summary=$(grep -c '本章小结\|总结与延伸' "$f" 2>/dev/null || true)
     readfig=$(grep -c '读图' "$f" 2>/dev/null || true)
     prose_chars=$(python3 - "$f" <<'PY'
@@ -66,7 +77,7 @@ for raw in text.splitlines():
     line = raw.strip()
     if not line or line.startswith("%"):
         continue
-    if "\\includegraphics" in line or "\\videofigure" in line or "\\caption" in line or "\\figsource" in line:
+    if re.search(r"\\(?:includegraphics|videofigure|lecturefigure)\b", line) or "\\caption" in line or "\\figsource" in line:
         continue
     if any(cmd in line for cmd in ["\\toprule", "\\midrule", "\\bottomrule", "\\endhead"]):
         continue

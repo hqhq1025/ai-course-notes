@@ -4,7 +4,7 @@ Status: implemented under the new source-first workflow on 2026-05-12.
 
 ## Goal
 
-Regenerate Lecture 09 as a slide-complete note on Scaling Laws Basics. The note should teach scaling laws as engineering prediction tools for data, model design, hyperparameters, compute allocation, and deployment-aware training.
+Regenerate Lecture 09 as a concept-complete note on Scaling Laws Basics. Use representative final slide states and teach scaling laws as engineering prediction tools for data, model design, hyperparameters, compute allocation, and deployment-aware training.
 
 ## Section Plan
 

@@ -110,6 +110,8 @@
 
 \section{Lecture 10: inference 的总图}
 
+本讲从一个端到端服务视角组织推理优化：先理解 prefill 与 generation 的算术强度和 KV cache，再区分有损 shortcut、带校验的无损 shortcut，以及处理动态请求的 continuous batching 与 PagedAttention。所有方法最终都要回到 latency、throughput、memory footprint 与质量四项账本。
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.92\textwidth]{inference-schema.png}
@@ -125,26 +127,19 @@
 推理优化首先是\textbf{内存流量优化}，其次才是 FLOPs 优化。这里的 HBM 是 High Bandwidth Memory，即 GPU 上的高带宽显存；generation 阶段一次生成一个 token，不断从 HBM 读取模型权重和请求自己的 KV cache，常常 memory-bound。和 ZeRO/FSDP 训练状态分片不同，推理侧通常不维护 optimizer state；若要 shard 模型或 KV cache，目标是降低单卡 HBM 压力或提升吞吐，而不是同步训练梯度。
 \end{importantbox}
 
-% Source coverage markers for executable lecture sections and localized remote figures:
-% Summary
-% MLP layers (only looking at the matrix multiplications)
-% Attention layers (focusing on the matrix multiplications with FlashAttention)
-% Grouped-query attention (GQA)
-% Multi-head latent attention (MLA)
-% Cross-layer attention (CLA)
-% Local (sliding window) attention
-% Activation-aware quantization (AWQ)
-% https://jax-ml.github.io/scaling-book/assets/img/naive-inference-1400.webp
-% https://jax-ml.github.io/scaling-book/assets/img/cached-inference-1400.webp
-% https://www.datocms-assets.com/104802/1709770809-twitter-post-20.png
-% https://images.ctfassets.net/xjan103pcp94/1LJioEsEdQQpDCxYNWirU6/82b9fbfc5b78b10
-% cb_02_diagram-static-batching.png
+\begin{knowledgebox}{讲义提醒：不要只报告单请求 latency}
+推理系统的“快”必须绑定 workload。单请求、固定 batch、离线吞吐和在线到达流会得到不同最优策略；如果不报告 prompt/output 长度、并发度、硬件、精度与服务级目标，任何 tokens/s 数字都很难复现或比较。
+\end{knowledgebox}
 
 \section{Understanding the inference workload}
 
 \subsection{推理为什么重要，以及什么叫快}
 
 Inference 出现在实际产品、模型评测、agent 内部轨迹、批量数据处理和 RL 采样中。训练是阶段性成本，推理是每次使用都要付的成本。聊天机器人里，人类等待 time-to-first-token；agent 工作流里，内部 trace 可能生成大量不可见 token；RL 中则要采样许多 completions 再打分。换句话说，tokens generated = compute spent。
+
+\begin{knowledgebox}{课堂提示：训练付一次，推理会重复付费}
+老师用数量级对比强调 inference efficiency：训练是一次性阶段成本，推理却会在产品、评测和 RL 采样中反复发生；agent 的内部 trace 还可能让生成 token 数无界增长。于是“tokens generated = compute spent”不只是口号，而是要求每个产品和平台都把推理成本当作长期系统预算。
+\end{knowledgebox}
 
 \begin{knowledgebox}{术语消化：推理服务指标}
 \begin{tabular}{L{0.22\textwidth}L{0.34\textwidth}L{0.34\textwidth}}
@@ -160,6 +155,8 @@ Memory-bound & 速度受 HBM 读写限制，而不是算力限制。 & 减少 KV
 \end{knowledgebox}
 
 \subsection{Transformer notation 与算术强度}
+
+为了让后面的优化能做数量级比较，本节先统一 $B,T,D,H,N,K,G,S,F$ 等维度，并把主要算子写成 FLOPs 与 bytes。核心问题是同一层在 prefill 时更像大矩阵乘，generation 时更像矩阵向量乘；shape 改变会让算术强度和瓶颈从 compute 转向 HBM bandwidth。
 
 \begin{figure}[H]
 \centering
@@ -182,7 +179,33 @@ I = \frac{\text{FLOPs}}{\text{HBM bytes read/write}}.
 训练时 \(B\times T\) 通常很大，同一个权重矩阵服务许多 tokens；generation 时每个请求每步只生成一个新 token，\(T=1\)，并发 \(B\) 又由在线流量决定。因此 generation 很难稳定形成大矩阵乘，往往被参数和 KV cache 的 HBM 读取限制。
 \end{importantbox}
 
+\subsection{MLP layers (only looking at the matrix multiplications)}
+
+把 gated MLP 只按三个矩阵乘计数：up projection、gate projection 和 down projection。若输入为 \(X\in\mathbb{R}^{B\times T\times D}\)，中间宽度 \(F\approx4D\)，则主要计算量与算术强度近似为
+
+\[
+\mathrm{FLOPs}_{\mathrm{MLP}}\approx 6BTDF,
+\qquad
+I_{\mathrm{MLP}}\approx BT.
+\]
+
+第二个近似假设权重读取 \(O(DF)\) 主导 bytes。Prefill 可用长序列和 batch 把 \(BT\) 做大；generation 的 \(T=1\)，只剩在线并发 \(B\) 能提高权重复用，因此更容易落入 memory-bound 区域。
+
+\begin{knowledgebox}{课堂提示：prefill 与 generation 的 MLP 只差 shape，不差权重}
+老师把同一组 MLP 权重放进两个阶段比较：prefill 的 \(BT\) 往往足够大，权重一次读入服务许多 tokens；generation 每次只处理一个新 token，并发请求数又不可预测。这个差异解释了为什么训练优化经验不能原样搬到在线 decode，也解释了 batching 为什么对 generation 如此关键。
+\end{knowledgebox}
+
+\subsection{Attention layers (focusing on the matrix multiplications with FlashAttention)}
+
+FlashAttention 消除了显式 \(T\times S\) attention matrix 的 HBM 往返，但 QKV projection、attention matmul 与 output projection 仍要读取权重和 KV cache。Prefill 中 \(T=S\)，attention 的复用随上下文增大；generation 中 \(T=1\)，每个新 query 都要读取该请求已有的 \(S\) 个 keys/values，因此 attention intensity 仍接近常数且通常低于 1。
+
+\begin{importantbox}{Attention generation 为什么 batching 帮助有限}
+不同请求拥有不同 KV cache。增大 batch 可以共同执行 projection，却不能让一个请求的历史 KV 被另一个请求复用；所以 MLP 的权重读取可由 batch 摊薄，attention generation 的 KV 读取则随每条序列单独增长。
+\end{importantbox}
+
 \subsection{naive inference、KV cache、prefill 与 generation}
+
+前面的 shape 账本解释了为什么逐 token 重算 prefix 非常浪费，本节比较 naive autoregressive inference 与 KV-cached inference。KV cache 把历史 key/value 从重复计算改成持续读取，显著减少 FLOPs，却让 cache 容量、HBM 带宽和请求生命周期成为新的主瓶颈。
 
 \begin{figure}[H]
 \centering
@@ -219,6 +242,8 @@ Prefill：给定 prompt，一次性编码 \(S\) 个 tokens，能像训练一样�
 
 \subsection{latency-throughput tradeoff}
 
+KV cache 建立后，服务系统仍要决定一次处理多少请求以及是否切分模型。本节的核心 tradeoff 是：更大 batch 和更多并发通常提高 hardware utilization 与总 throughput，却增加排队时间、每请求 cache 占用和 tail latency；因此复制模型、tensor parallel 与 pipeline parallel 要按 SLO 和 workload 选择。
+
 Batch size 增大时，模型权重读取可被更多请求摊薄，throughput 上升；但 KV cache 随 \(B\) 增大，单请求等待和每步读取也变重，latency 变差。一个简单策略是 prefill 用较小 batch 改善 TTFT，generation 用较大 batch 提高吞吐。
 
 \begin{warningbox}{复制模型和切分模型的差别}
@@ -231,7 +256,11 @@ Batch size 增大时，模型权重读取可被更多请求摊薄，throughput �
 
 \section{Taking shortcuts (lossy)：减少 KV cache 和模型字节}
 
-\subsection{GQA：按 head 共享 KV}
+前面的 workload 分析指出 generation 常被权重与 KV cache 读取限制，因此本部分允许改变模型表示来减少 bytes。GQA/MQA、MLA/CLA、local attention、quantization 与 pruning 都可能换来更高吞吐，但它们会改变可表达函数或数值精度，必须用任务质量和长上下文评测重新确认边界。
+
+\subsection{Grouped-query attention (GQA)：按 head 共享 KV}
+
+本节先从最直接的 KV head 共享开始。MHA 为每个 query head 保存独立 K/V，MQA 让所有 query heads 共享一组 K/V，GQA 则在两者之间按 group 共享；$N/K$ 越大，cache 越小、读取越少，但不同 heads 可使用的独立记忆子空间也越少。
 
 \begin{figure}[H]
 \centering
@@ -266,7 +295,17 @@ MHA 为每个 query head 保存独立 KV；MQA 所有 query heads 共享一个 K
 GQA 改变 attention 结构，通常会影响模型质量。速度图只说明系统收益，accuracy 图才说明是否值得用。课程主线是：有损 shortcut 必须以质量检查收尾。
 \end{warningbox}
 
-\subsection{MLA 和 CLA：压缩或跨层共享 KV}
+\begin{knowledgebox}{课堂提示：GQA 的速度来自 \(N/K\) 倍 KV 缩减}
+老师先重申 inference 的瓶颈是 memory，再给出 GQA 的直接机制：\(N\) 个 query heads 只配 \(K\) 个 KV heads，cache 约缩小 \(N/K\) 倍，因此 latency/throughput 改善来自更少 HBM bytes。源码随后立即要求检查 accuracy，说明“更快且 fit”仍不等于可以无条件替换 MHA。
+\end{knowledgebox}
+
+\begin{knowledgebox}{讲义提醒：速度图和准确率图必须成对出现}
+GQA 的价值不能只看 tokens/s。更少 KV heads 可能让更大 batch fit 进显存，所以性能收益包含容量效应；同时质量下降可能只在长上下文、知识密集或特定下游任务暴露。部署决策必须在目标 workload 上同时画出 latency/throughput 与 accuracy frontier。
+\end{knowledgebox}
+
+\subsection{Multi-head latent attention (MLA)：压缩 KV}
+
+GQA 沿 head 维共享 K/V，MLA 则进一步改变 cache 的表示：保存低维 latent，并在使用时投影成 K/V。它减少长期存储和读取，却引入重建计算与潜在表达瓶颈，需要在相同 cache budget 下比较质量。
 
 \begin{figure}[H]
 \centering
@@ -293,9 +332,15 @@ GQA 改变 attention 结构，通常会影响模型质量。速度图只说明�
 \figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
+两张 accuracy 表需要作为同一组证据读取：先比较 MHA 与 GQA 的基线差异，再观察 MLA 在相同或更小 cache budget 下是否保持质量。若不同实验的模型大小、训练 token 或 cache 尺寸不一致，就不能把表中绝对分数直接解释成 MLA 机制本身的收益。
+
 \begin{knowledgebox}{读图：MLA accuracy 两张表一起看}
 第一张表确认不同 attention 结构的质量基线；第二张表展示 MLA 的质量和成本折中。读表时不能只看平均分，还要看任务类别和模型规模，因为 KV 压缩可能对长上下文、检索或数学任务影响不同。
 \end{knowledgebox}
+
+\subsection{Cross-layer attention (CLA)：跨层共享 KV}
+
+MLA 压缩每一层保存的表示，CLA 则改变“哪些层必须各自拥有 cache”：相邻或分组 layers 共享 K/V，使层维度上的冗余像 GQA 在 head 维度上的冗余一样被压缩。代价是不同层无法自由保存各自的历史表示，因此应看 accuracy--cache Pareto frontier。
 
 \begin{figure}[H]
 \centering
@@ -315,7 +360,9 @@ GQA 改变 attention 结构，通常会影响模型质量。速度图只说明�
 CLA 不是只追求最小 KV cache，而是在相同 cache budget 下尽量提高 accuracy，或在相同 accuracy 下减少 cache。Pareto frontier 向左下移动才说明结构改动有系统价值。
 \end{knowledgebox}
 
-\subsection{Local、hybrid 和 DeepSeek v4 attention}
+\subsection{Local (sliding window) attention 与 hybrid/DeepSeek attention}
+
+前面的压缩方法仍让每个新 token 访问全部历史 cache，本节转向选择“访问哪些位置”。局部注意力与 sliding-window attention 限制每层感受野，hybrid 模型周期性插入 full 或 global 层恢复远程信息，更新的压缩与选择机制则试图在超长上下文中只读取少量高价值状态。
 
 \begin{figure}[H]
 \centering
@@ -335,6 +382,8 @@ CLA 不是只追求最小 KV cache，而是在相同 cache budget 下尽量提�
 \figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
+这张结构图应沿数据流阅读：先看历史状态如何被压缩成候选表示，再看 selector 如何减少需要精确 attention 的位置，最后检查被选状态如何进入当前 token 计算。它表达的是“先便宜筛选、再昂贵计算”的分层机制，而不是免费获得无限上下文；selector 误差和额外索引开销仍需计入。
+
 \begin{knowledgebox}{术语消化：DeepSeek v4 attention 三个缩写}
 \begin{tabular}{L{0.18\textwidth}L{0.34\textwidth}L{0.38\textwidth}}
 \toprule
@@ -347,7 +396,9 @@ HCA & Heavily Compressed Attention，更激进压缩。 & 服务超长上下文�
 \end{tabular}
 \end{knowledgebox}
 
-\subsection{quantization 与 AWQ}
+\subsection{quantization 与 Activation-aware quantization (AWQ)}
+
+Attention 结构优化之后，本节处理另一大类 bytes：模型权重与 activation。Quantization 用更少 bit 表示数值，直接降低 HBM 容量和带宽压力，并可能启用更快低精度矩阵单元；代价是 rounding、clipping 和 outlier 误差，因此训练时量化与训练后量化有不同适用边界。
 
 \begin{figure}[H]
 \centering
@@ -355,6 +406,8 @@ HCA & Heavily Compressed Attention，更激进压缩。 & 服务超长上下文�
 \caption{不同数值精度示意：fp32、bf16、fp8、int8、int4 代表不同 bytes 和误差。}
 \figsource{CS336 Lecture 10 官方讲义引用/本地化图。}
 \end{figure}
+
+读这张格式图时要同时看 exponent、mantissa 与总 bytes：FP8 相比 BF16/FP16 降低存储和带宽，但动态范围与精度由具体 E4M3/E5M2 变体决定；INT8/INT4 还需要 scale、zero point 或 group-wise metadata。理论上的 2 倍/4 倍压缩不会自动转化成同等速度，kernel 和 dequantization 也必须匹配。
 
 \begin{knowledgebox}{读图：量化为什么直接影响推理}
 推理 memory-bound 时，参数和 KV cache 的 bytes 直接进入 latency/throughput。bf16 是常见默认；fp8/int8/int4 减少内存流量，但会引入量化误差。位宽越低，越需要校准、补偿或训练时适配。
@@ -380,11 +433,19 @@ AWQ & Activation-aware quantization，保留少量重要权重高精度。 & 关
 \figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
+AWQ 的关键不是把所有权重一视同仁地压到低 bit，而是根据 activation 统计识别对输出更敏感的通道，并通过 scaling 或少量高精度保留降低误差。读图时应区分离线校准、权重变换、量化存储和运行时反量化四个阶段，避免把校准成本误算成每 token 开销。
+
 \begin{knowledgebox}{读图：AWQ schema 说明什么}
 AWQ 的直觉是并非所有权重量化误差同等重要。若某些 activation channels 很大，与其相乘的权重误差会被放大。保留 0.1\%-1\% 重要权重的高精度，可能用很小内存代价换来明显质量改善。
 \end{knowledgebox}
 
+\begin{knowledgebox}{课堂提示：AWQ 让 activation 决定哪些权重值得精度}
+老师把 AWQ 的观察压缩成三步：某些 activation channels 很大；与它们相乘的权重更重要；因此只为约 0.1\%--1\% 的关键权重分配更多精度。课程给出的案例从 fp16 到 int3 可带来约 4 倍更低内存和 3.2 倍 speedup，但这些数字依赖校准数据、kernel 与目标模型，机制比单一 benchmark 更可迁移。
+\end{knowledgebox}
+
 \subsection{pruning 与 distillation}
+
+量化保留稠密结构但降低每个元素的 bit，本节则直接删除权重、通道、层或注意力头。Pruning 会改变模型容量和 kernel shape，若硬件无法利用非结构化稀疏，参数更少也未必更快；distillation 用原模型输出修复裁剪后的行为，因此两者应作为一个闭环而不是两个独立技巧。
 
 \begin{figure}[H]
 \centering
@@ -395,6 +456,10 @@ AWQ 的直觉是并非所有权重量化误差同等重要。若某些 activatio
 
 \begin{knowledgebox}{读图：pruning 为什么必须 distill}
 直接移除 layers、heads 或 hidden dimensions 会破坏模型函数。蒸馏让小模型模仿原模型输出，把结构损伤修复回来。它是有损 shortcut，但通过 teacher signal 降低质量损失。
+\end{knowledgebox}
+
+\begin{knowledgebox}{老师强调：先 rip out，再 fix it up}
+源码用非常直接的语言概括 pruning：先从昂贵模型中移除不重要的 layer、head 或 hidden dimension，再用原模型蒸馏修复。它同时对应两种 recipe：from scratch 是定义并训练更快架构；distillation 则从原模型初始化不同结构，再通过 teacher signal repair。少参数只是开始，修复后的质量才决定 shortcut 是否成立。
 \end{knowledgebox}
 
 \begin{figure}[H]
@@ -411,6 +476,10 @@ GQA、MLA、CLA、local attention、quantization、pruning 都可能改变输出
 \section{Use shortcuts but double check (lossless)：speculative sampling}
 
 Speculative sampling 利用一个便宜 draft model \(p\) 一次猜多个 token，再让 target model \(q\) 并行检查。直觉是：generation 慢，但 checking 多个候选 token 比逐个生成便宜。关键性质是它仍然精确采样自 \(q\)，因此属于 lossless shortcut。
+
+\begin{knowledgebox}{课堂提示：checking 比 generation 更容易并行}
+老师先回顾 prefill 可并行且 compute-bound、generation 逐 token 且 memory-bound，再得出不对称性：checking 一串候选比逐个生成更快。Draft model 只负责便宜地提案，target model 仍决定分布；修改过的 rejection sampling 保证最终是 target 的 exact sample，因此这里的 speedup 不靠牺牲输出分布。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -441,6 +510,8 @@ q(A).
 \figsource{CS336 Lecture 10 官方讲义引用图。}
 \end{figure}
 
+结果图中的 speedup 需要拆成三项：draft 生成候选的成本、target 并行验证候选的成本，以及一次能接受多少 token。若 draft 太弱，接受率低；若 draft 太大，提案本身昂贵；若 batch 或序列太短，target verification 的并行优势也无法摊薄。
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{speculative-sampling-stats.png}
@@ -469,7 +540,13 @@ Speculative sampling 的美感在于：它利用系统不对称性，checking �
 
 \section{Handling dynamic workloads：continuous batching}
 
+前面的 shortcut 都假设已经有一个 batch，但在线服务中的请求会持续到达、长度不同、结束时间也不同。本部分把优化对象从单条序列提升到调度器：系统必须在每个 decoding step 重新选择活跃请求，让已完成序列立即退出、新请求及时加入，并控制 cache 与公平性。
+
 真实推理流量不是训练中的矩形 batch。请求到达时间不同、prompt 长度不同、生成长度不同，还可能共享 system prompt 或要求多样本生成。静态 batching 会让早到请求等待，也会因 padding 浪费大量计算。
+
+\begin{knowledgebox}{课堂提示：动态流量先变成 ragged array，再拆算子 batching}
+老师把训练与推理的形状差异概括为 dense block 对 ragged array。Iteration-level scheduling 每个 decode step 加入新请求、移除完成请求；selective batching 再区分算子：attention 按各自长度分别处理，non-attention 部分把 \([3,H],[9,H],[5,H]\) 拼成 \([17,H]\) 做大矩阵计算。动态 batching 不是把所有张量硬 pad 成同一长度。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -486,9 +563,21 @@ Speculative sampling 的美感在于：它利用系统不对称性，checking �
 Attention 需要按 sequence 单独处理，因为每个请求历史长度不同；non-attention MLP 等操作可以把所有 active tokens concatenate 成 \([3+9+5,H]\) 这样的矩阵统一计算。服务系统要在“保持语义正确”和“形成大矩阵乘”之间拆算子。
 \end{importantbox}
 
+\begin{knowledgebox}{讲义提醒：动态 batching 的难点是 tail，不是平均值}
+平均 token 长度会掩盖少量超长请求对显存和排队的影响。调度器需要关注 p95/p99 latency、请求取消、优先级、prefill/generation 混排和 cache eviction；只在固定长度 synthetic benchmark 上测吞吐，很容易高估线上收益。
+\end{knowledgebox}
+
 \section{PagedAttention：用操作系统思想管理 KV cache}
 
+前面的 Continuous batching 让请求集合动态变化，传统为每条序列预留连续最大 cache 的方法会产生严重碎片。本部分借用虚拟内存思想，把逻辑 KV 序列映射到固定大小的物理 blocks，使系统能够按需分配、非连续存储、共享 prefix，并在写入时执行 copy-on-write。
+
+\begin{knowledgebox}{课堂提示：PagedAttention 直接借用操作系统 paging}
+老师先把旧方案类比为硬盘碎片：按最大长度预留会产生 internal fragmentation，请求释放后还会留下 external fragmentation。解决方案是把每条序列的 KV cache 切成非连续 blocks，用逻辑映射隐藏物理位置；共享 prefix 时复用 blocks，分叉写入时 copy-on-write。这里的模型服务创新来自操作系统思想，而不是新的 attention 数学。
+\end{knowledgebox}
+
 \subsection{fragmentation 与 blocks}
+
+本节先区分 internal fragmentation 与 external fragmentation。前者来自为短请求预留未使用空间，后者来自空闲区域不连续而无法容纳新请求；固定大小 blocks 将分配单位标准化，再通过 block table 把逻辑 token 位置映射到任意物理页。
 
 \begin{figure}[H]
 \centering
@@ -513,6 +602,8 @@ Attention 需要按 sequence 单独处理，因为每个请求历史长度不同
 \end{knowledgebox}
 
 \subsection{sharing、copy-on-write 与并行读取}
+
+有了逻辑到物理 block 映射后，系统可以进一步共享相同 system prompt 或多样本生成的 prefix。多个请求先引用同一只读 blocks，只有某个分支写入新 token 时才复制对应页；attention kernel 则根据 block table 并行读取非连续 cache，避免先搬成连续大缓冲区。
 
 \begin{figure}[H]
 \centering
@@ -553,6 +644,8 @@ Continuous batching 解决时间维度的动态性，PagedAttention 解决空间
 
 \section{总结与延伸}
 
+\subsection{Summary：从三类 shortcut 到动态 serving}
+
 Lecture 10 的主线是：推理不同于训练，因为它反复发生、在线动态、generation sequential 且 memory-bound。优化方向可以分三类：改变模型或精度以减少内存流量，利用概率校验保持 exact sampling，借鉴系统思想管理动态请求和 KV cache。
 
 \begin{importantbox}{最终 takeaways}
@@ -576,5 +669,25 @@ Lecture 10 的主线是：推理不同于训练，因为它反复发生、在线
     \item Orca continuous batching serving system.
 \end{itemize}
 \end{knowledgebox}
+
+\subsection{部署验收：五本账必须同时过线}
+
+任何 inference 优化都应在目标流量上同时提交以下证据；只优化其中一列，往往会把成本转移到另一列：
+
+\begin{longtable}{p{0.22\textwidth}p{0.31\textwidth}p{0.37\textwidth}}
+\toprule
+\textbf{账本} & \textbf{必须报告} & \textbf{常见误判} \\
+\midrule
+Workload & prompt/output 长度分布、arrival rate、并发、prefix sharing & 用固定长度 synthetic batch 代替真实 ragged traffic。 \\
+Latency & TTFT、inter-token latency、p50/p95/p99、排队时间 & 只报平均 latency，忽略长请求与 prefill 干扰。 \\
+Throughput & tokens/s、requests/s、active sequences、GPU utilization & 用更大 batch 提吞吐，却违反交互式 SLO。 \\
+Memory & weights、KV cache、fragmentation、临时 workspace、峰值 & 只按参数 bytes 估算，忽略 cache 生命周期和碎片。 \\
+Quality / exactness & 下游准确率、长上下文、校准，或 exact-distribution 证明 & 把 lossy shortcut 当作无损加速，或只在平均 benchmark 上验收。 \\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{最后的判断不是“哪个技巧最新”}
+正确问题是：在给定硬件、流量和质量约束下，哪组 architecture、precision、scheduler 与 KV-memory 策略位于 Pareto frontier。若没有统一 workload 和四类指标，GQA、AWQ、speculative sampling、continuous batching 与 PagedAttention 之间无法公平比较。
+\end{warningbox}
 
 \end{document}

@@ -1,0 +1,739 @@
+\documentclass[a4paper]{article}
+
+\newcommand{\notetitle}{Lecture 15：Mid/Post-Training——SFT、RLHF、PPO 与 DPO}
+\newcommand{\noteauthors}{基于 Tatsunori Hashimoto 授课、官方 Slides 与公开视频字幕整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford Online / Tatsunori Hashimoto}
+\newcommand{\videopublishdate}{2026-05-27}
+\newcommand{\videoduration}{1:19:54}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=2oH6PWPrYFo}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\input{../cs336-preamble.tex}
+\graphicspath{{./}{slides-images/}}
+
+\newcommand{\slidepair}[4]{%
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\includegraphics[width=\linewidth]{#1}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\includegraphics[width=\linewidth]{#2}
+\end{minipage}
+\caption{#3}
+\figsource{CS336 Spring 2026 Lecture 15，Slides #4。}
+\end{figure}
+}
+
+\newcommand{\singleslide}[3]{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{#1}
+\caption{#2}
+\figsource{CS336 Spring 2026 Lecture 15，Slide #3。}
+\end{figure}
+}
+
+\begin{document}
+\makecscover
+
+\section{从 GPT-3 到 InstructGPT：预训练之后还缺什么}
+
+前面的课程已经解释了怎样把算力、数据和 Transformer 组合成 base model；本讲的问题则是：一个会续写互联网文本的模型，为什么还不能直接充当 assistant？预训练最大化的是下一个 token 的似然，而产品需要的是按用户意图回答、控制风格、调用工具并在危险请求上拒绝。两种目标相关，却并不等价。
+
+\slidepair{slide-02.jpg}{slide-03.jpg}{从课程中的 GPT-3 起点，到 instruction following 所展示的强行为控制。}{2--3}
+
+Slides 2--3 先把“能力”和“控制”拆开。左页的 GPT-3 已经具有广泛知识与生成能力，右页的例子却显示 instruction-tuned model 能按自然语言要求改变角色、格式和推理路径。读图时应先比较的不是答案是否更长，而是同一组参数能否被 prompt 稳定地路由到目标行为；这正是 post-training 要放大的能力。
+
+\begin{knowledgebox}{读图：instruction following 为什么是一种 remarkable control}
+Base model 只需复现训练分布中常见的文本延续；assistant 则要把 prompt 当作控制信号，在大量潜在续写中选择符合任务、语气和边界的一小部分。Post-training 往往没有凭空创造这些行为，而是把预训练中已经存在但难以调用的行为变得可寻址、可重复。
+\end{knowledgebox}
+
+\slidepair{slide-04.jpg}{slide-05.jpg}{本讲的三个核心问题，以及理解现代 post-training 时必须保留的证据边界。}{4--5}
+
+Slide 4 把课程问题压缩成数据、优化与规模三个维度：收集什么行为样本，怎样利用这些样本，以及这种控制是否也需要大规模训练。Slide 5 随即加入方法论警告：现代 frontier recipe 的公开披露远少于预训练，早期 InstructGPT、Stiennon summarization 与 Anthropic HH 反而留下了更完整的标注规范。因而本讲给出的不是一份“唯一正确配方”，而是由公开证据支持的机制框架。
+
+\begin{warningbox}{老师强调：post-training 仍然很 artisanal}
+课堂在开头把 post-training 称为带有手工作坊性质的过程：数据清洗、rubric、候选采样、训练阶段拼接和回归门槛都会改变结果。看到某个模型报告只写“做了 SFT 和 RLHF”时，不能据此认为两家的训练过程可比；未披露的数据与工程选择往往才是主要变量。
+\end{warningbox}
+
+\subsection{SFT 与 RLHF 在流水线中的位置}
+
+有了证据边界，下一步才是建立课程地图。标准流程先用 supervised fine-tuning（SFT，监督微调）模仿 demonstrations，再用 reinforcement learning from human feedback（RLHF，人类反馈强化学习）或直接偏好优化，让模型在多个可行回答中更偏向人类选择。二者都使用行为数据，但监督对象不同。
+
+\slidepair{slide-06.jpg}{slide-07.jpg}{标准的 SFT→RLHF 路线，以及 SFT 必须同时回答的数据与方法问题。}{6--7}
+
+Slide 6 的 InstructGPT 流程图是本讲的主轴：预训练模型先变成能遵循指令的 SFT policy，再进入偏好优化。Slide 7 把注意力放回 SFT 的两个 ingredients。训练方法通常只是 token-level maximum likelihood；真正困难的是 demonstration 覆盖什么任务、怎样写答案、是否包含工具轨迹、安全拒绝与长尾领域，以及这些分布会把模型推向何种风格。
+
+\begin{importantbox}{核心分解：模仿与选择}
+给定 prompt $x$，SFT 使用目标回答 $y$，最大化 $\log p_\theta(y\mid x)$，回答“应该模仿什么”；preference optimization 使用同一 prompt 下的 $y^+$ 与 $y^-$，回答“两个可行回答中更偏好哪一个”。SFT 建立可用行为的支持集，RLHF/DPO 在支持集中重新分配概率。
+\end{importantbox}
+
+\subsection{先看数据里面到底有什么}
+
+仅说“instruction data”会掩盖最重要的差异。Slide 8 要求读者先打开数据集本身：早期 benchmark conversion、Self-Instruct、真实聊天、专家编写、synthetic traces 与 agent tool calls 看起来都像 prompt-response pair，却分别训练模型复述 benchmark、模仿聊天、展示知识或遵循交互协议。后文因此从真实样本而不是数据集名称出发。
+
+\singleslide{slide-08.jpg}{进入 SFT data 前的检查清单：内容构成与高性能数据的关键变量。}{8}
+
+这页没有给出结论，而是规定了分析顺序：先抽样查看具体记录，再讨论规模、style、knowledge、safety 与 tool use。若跳过内容审计，只按“多少条 instruction”比较数据集，就会把一条简单分类样本和一条经过验证的多轮工具轨迹当作同等训练信号。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.17\textwidth}L{0.27\textwidth}L{0.46\textwidth}}
+\toprule
+对象 & 典型输入信号 & 在控制链中的作用 \\
+\midrule
+SFT & demonstrations $(x,y)$ & 建立回答格式、工具协议、安全边界与任务覆盖 \\
+Preference data & comparisons $(x,y^+,y^-)$ & 测量同一 prompt 下的相对偏好 \\
+Reward model / judge & preference labels & 把候选回答映射为可优化的分数或排序 \\
+Reference policy & 通常为 SFT checkpoint & 约束 policy 不要为追逐 reward 而过度漂移 \\
+PPO & 在线 rollouts、reward、value & 主动采样并直接提高估计 reward \\
+DPO & 静态 preference pairs & 离线提高 preferred response 的相对概率 \\
+Mid-training & 大规模 mixture & 在短 SFT 前重塑模型的能力与数据分布 \\
+\bottomrule
+\end{tabular}
+\caption{本讲后续各阶段的数据接口与责任边界。}
+\end{table}
+
+\subsection{本章小结}
+
+Post-training 不是单个 loss，而是一条从 demonstrations、comparisons 到 policy update 的控制链。预训练提供能力，SFT 使行为可调用，偏好优化重新排序候选行为；任何一环的数据定义含糊，都会让最终模型的变化难以归因。
+
+\section{SFT Data：少量数据如何改变模型行为}
+
+本节的核心问题是：SFT 数据究竟提供了什么新信息？从 FLAN、Alpaca、OpenAssistant 到 Nemotron，数据逐渐从短 benchmark answers 演化为长对话、工具调用、代码修改和 agent traces。变化的不只是任务数量，更是 response style 与 interaction protocol。
+
+\subsection{从 FLAN 到 agent traces：数据形态的演进}
+
+本节先沿时间观察 supervision 变得更丰富的过程。早期数据主要告诉模型“任务输入怎样映射到短答案”；后来的对话和 agent traces 还编码角色、工具协议、错误恢复和多轮状态。数据形态扩大后，模型学习的不只是知识映射，而是完整的交互状态机。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{slide-09.jpg}
+\caption{开放世界 SFT 数据的演进：任务模板、自生成指令、对话、工具使用与 agent data。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 9。}
+\end{figure}
+
+\begin{knowledgebox}{读图：每一代数据改变了什么}
+FLAN 强调任务覆盖；Self-Instruct/Alpaca 扩大指令数量；ShareGPT/Vicuna 引入真实对话风格；OpenAssistant 增加多轮与详细回答；Tulu/Nemotron 把 tool calls、code context 和更复杂 role schema 纳入训练。模型学习的不只是答案，也学习“怎样参与一个交互协议”。
+\end{knowledgebox}
+
+演进图只给出数据集名称，Slides 10--13 则要求直接阅读样本。这样做很重要：同样是一条 prompt-response pair，FLAN 可能是把分类 benchmark 改写成自然语言，Alpaca 是短而规整的 synthetic instruction，OpenAssistant 追求长篇解释与引用，而 Nemotron 已把 system context、工具调用和 agent 操作写进 supervision。模型最终表现出的“人格”与交互方式，就来自这些局部写作选择的累积。
+
+\singleslide{slide-10.jpg}{FLAN 样本：从已有 NLP 数据集改写出的短任务与参考答案。}{10}
+
+读 FLAN 样本时先看任务来源：邮件主题、新闻分类、文章摘要等目标通常可验证、覆盖面广，但回答很像 benchmark gold label。它有效地教会模型识别任务并输出正确字段，却较少展示多轮澄清、面向用户的解释或工具协议。因此 FLAN 解决的是 task diversity，不等同于现代聊天助手的完整行为分布。
+
+\singleslide{slide-11.jpg}{Alpaca 样本：Self-Instruct 路线生成的简短、统一的 instruction-response pairs。}{11}
+
+Alpaca 把 instruction tuning 的规模扩张变得便宜，但图中健康建议、术语解释和短代码也暴露出 synthetic data 的共同特征：结构整齐、难度偏低、答案常像模板。大量此类样本可以快速建立“收到指令就回答”的接口，却可能让模型学到固定开场、列表化表达和缺少验证的自信语气。
+
+\singleslide{slide-12.jpg}{OpenAssistant 样本：更长、更像真实对话，也更容易携带未经核验的引用。}{12}
+
+OpenAssistant 的 monopsony 回答比 Alpaca 丰富得多，包含背景、劳动市场例子与文献。它展示了 detail 带来的价值，也埋下后文的知识风险：训练 loss 不会区分真实引用与流畅编造，只会奖励模型复现 demonstration。因而“答案更详细”既可能表示更强的帮助性，也可能把不可验证的事实写进模型的回答习惯。
+
+\singleslide{slide-13.jpg}{Nemotron 代码样本：instruction data 已扩展为带上下文、工具调用和状态的 agent trace。}{13}
+
+这页最值得看的不是 JavaScript 问题本身，而是 assistant response 中的 tool call、AGENTS.md 约束和任务状态。此时一条样本不再只是 $(x,y)$ 的问答，而是“观察环境→选择工具→读取结果→继续行动”的轨迹。若训练数据中的工具名、JSON schema、stop rule 或 role boundary 与部署环境不一致，模型即使懂任务，也会在协议层失败。
+
+\slidepair{slide-14.jpg}{slide-15.jpg}{跨数据集变化的可见属性，以及真正需要追踪的 style、knowledge、scale 与 safety 维度。}{14--15}
+
+Slides 14--15 把样本观察上升为审计维度。可见变化包括 chattiness、答案细节和 tool use；较不显眼但同样关键的是规模与 safety coverage。读这组图时要把“数据集更现代”拆成具体假设：它是否只是回答更长，是否真的提高 correctness，是否覆盖更多交互协议，是否通过 verifier，以及是否平衡了安全拒绝与正常帮助。
+
+令一条 SFT 样本为 $(x,y)$，其中 $x$ 包含 system/user context，$y$ 是目标 assistant response。最常见目标是 token-level negative log-likelihood：
+
+$$
+\mathcal{L}_{\mathrm{SFT}}(\theta)
+=-\sum_{t=1}^{|y|}\log \pi_\theta(y_t\mid x,y_{<t}).
+$$
+
+$\pi_\theta$ 是待微调策略；$y_t$ 是第 $t$ 个目标 token；通常只在 assistant tokens 上计算 loss，不对 user prompt 反向传播监督。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.18\textwidth}L{0.35\textwidth}L{0.37\textwidth}}
+\toprule
+样本字段 & 需要记录 & 常见失败 \\
+\midrule
+Source & human、synthetic、log、benchmark、repo & 来源泄漏、许可不清、重复放大 \\
+Correctness & verifier、tests、citation、人工复核 & 流畅错误被当作高质量 demonstration \\
+Protocol & system prompt、roles、tool schema、stop rule & 训练/推理模板不一致 \\
+Style & length、verbosity、format、hedging & 偏好评测把表面风格当能力 \\
+Difficulty & base-model success、task family、长尾 slice & 大量过易样本稀释学习信号 \\
+Provenance & generator/version、sampling、filter & 无法定位某类行为由哪批数据引入 \\
+\bottomrule
+\end{tabular}
+\caption{一条可审计 SFT 样本的最小账本。}
+\end{table}
+
+\begin{warningbox}{格式也是监督}
+Chat template、role token、tool-call JSON、thinking tag 和 stop token 都进入条件分布。训练与推理模板不一致会造成明显退化；把格式错误当成“小预处理问题”是常见事故。
+\end{warningbox}
+
+\subsection{Style：偏好评测很容易把“更长”误当成“更好”}
+
+上一小节说明 SFT 学到 interaction protocol，现在进一步看 response style。数据集在 chattiness、bullet density、hedging、citation style 和 response length 上差异巨大，而偏好评测对这些表面属性非常敏感。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-16.jpg}
+\caption{不同 instruction-tuned models 的回答长度差异。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 16。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-17.jpg}
+\caption{Human/LM preference evaluations 中显著的 length effects。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 17。}
+\end{figure}
+
+\begin{knowledgebox}{读图：长度既是能力信号，也是 confounder}
+长回答更可能覆盖细节，因此在偏好比较中常获胜；但这不代表每个额外 token 都有价值。若 evaluator 把 length 当作 quality proxy，训练会鼓励冗长、重复和过度解释。正确分析应在长度分层内比较 correctness、helpfulness 和 calibration。
+\end{knowledgebox}
+
+Slides 16--17 的组合揭示了一条容易被隐藏的因果链：SFT corpus 先改变平均 response length，human 或 LLM judge 再把长度当成“更充分”的替代指标，偏好训练最终继续放大这一风格。要验证模型是否真的更强，应在相近长度下重做 pairwise comparison，并分别报告任务正确率、覆盖率、冗余率和用户明确要求的简洁度。
+
+\singleslide{slide-18.jpg}{传统 benchmark 对回答风格通常不敏感，因此无法替代交互式偏好评测。}{18}
+
+Slide 18 是必要的反例：很多 benchmark 只检查最终选项、短答案或 exact match，模型写一行还是十行都可能得到同一分数。因此“benchmark 不变、聊天偏好大幅上升”并不矛盾，它可能表示模型只学会了更讨喜的表达；反过来，偏好分数上升也不能自动证明底层知识或推理能力提高。
+
+\begin{warningbox}{评测提醒：先控制 style，再谈 capability gain}
+当候选模型长度分布差异明显时，至少同时做 length-controlled win rate、task-grounded correctness 与用户指令符合度评测。否则 SFT 和 RLHF 都会沿着 judge 最容易识别的表面特征优化，而不是沿着真正困难的正确性维度优化。
+\end{warningbox}
+
+\subsection{Knowledge extraction：微调不是可靠的知识写入器}
+
+本节从 style 转向 factuality。一个流行误解是：把模型不知道的长尾事实放进 SFT，模型就会稳定记住。实际结果常更复杂：新事实可能与 pretrained prior 冲突，少量样本不足以形成可泛化表示，模型反而学会在不确定时输出更具体的幻觉。
+
+\singleslide{slide-19.jpg}{OpenAssistant 的引用型回答：一条 demonstration 同时监督内容、引用习惯与确定语气。}{19}
+
+这页追问“模型究竟从样本中学到了什么”。它可能记住 monopsony 的定义，可能记住某篇论文，也可能只学会在学术问题后附上格式逼真的参考文献。Token-level likelihood 对三种解释一视同仁；如果 citation 没有经过检索或人工验证，SFT 会把“生成一个像引用的字符串”当成正确行为。数据审计因此必须把 factual claim 与 presentation style 分离。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-20.jpg}
+\caption{Knowledge extraction 与 alignment：微调未知事实可能增加 hallucination。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 20。}
+\end{figure}
+
+\begin{warningbox}{不要混淆“激活已有知识”和“写入新知识”}
+SFT 很擅长教模型以某种格式调用 pretraining 中已有的能力；它不一定擅长用少量梯度可靠存储 tail knowledge。对知识密集任务，retrieval、tool use、continued pretraining 或 verifier 往往更稳健。
+\end{warningbox}
+
+老师在这里给出更具体的实践警告：对 base model 不熟悉的 tail knowledge 做少量 fine-tuning，不只可能“学不会”，还可能诱导模型编造参考文献或以更高确定性输出错误事实。原因不是模型获得了可靠数据库，而是训练把“被问到时给出具体答案”强化成了行为模式。
+
+\singleslide{slide-21.jpg}{Knowledge extraction 的三点结论：谨慎写入长尾事实、使用 correctness feedback、承认知识机制的复杂性。}{21}
+
+Slide 21 不应被读成“永远不要用 SFT 教知识”。更准确的结论是：当目标是激活预训练中已有的广泛知识，少量高质量 demonstration 很有效；当目标是注入罕见、可变或需要精确出处的事实，应优先考虑 retrieval、工具调用、continued pretraining，或至少引入可验证的 correctness reward。数据形态必须与知识更新目标匹配。
+
+\subsection{Safety：少量精心设计的行为样本可以很有效}
+
+从知识问题继续到 safety，目标发生了变化：不是让模型记住更多事实，而是让它在高风险场景中遵循 policy。课程展示的早期研究表明，几百条针对性强的 safety demonstrations 就能明显改变拒绝与重定向行为。
+
+\slidepair{slide-22.jpg}{slide-23.jpg}{部署模型面对的误导、诈骗等风险，以及公开模型报告中有限的 safety SFT 规模信息。}{22--23}
+
+Slide 22 用 misinformation 与 scams 说明 safety 不是抽象的“文明表达”，而是模型在真实分发渠道中可能放大的具体外部性。Slide 23 随即指出公开 recipe 的局限：即使 Llama 2 等报告给出“几千条安全样本”这样的量级，也很少完整披露场景 taxonomy、采样策略、拒绝标准和多轮升级方式。样本数因此不能单独代表 safety coverage。
+
+\slidepair{slide-24.jpg}{slide-25.jpg}{公开信息较完整的 safety pipeline，以及从真实用户场景中抽取训练案例的主线。}{24--25}
+
+这两页把 safety data 从静态红队题库还原为生产循环：先从用户请求与失败日志中发现风险场景，再聚类、改写、生成候选回答并由 policy 专家审核，最后把通过的 demonstrations 混入训练。读图时应关注闭环而不是单个数据集；部署后出现的新攻击、语言和工具权限会持续改变分布，因此 safety SFT 必须有版本与 provenance。
+
+\begin{knowledgebox}{实践经验：scenario extraction 比随机堆拒绝样本更重要}
+有效的 safety corpus 需要覆盖“正常帮助”和“危险协助”的决策边界。若只收集明显恶意请求，模型容易学成关键词拒绝器；若从真实用户轨迹抽取 borderline cases，并记录风险类型、允许的信息范围和理想重定向，模型才有机会学习细粒度 policy。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-26.jpg}
+\caption{少量 safety-tuning samples 对有害行为指标的影响。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 26。}
+\end{figure}
+
+\begin{knowledgebox}{读图：为什么少量数据也能改变行为}
+Safety SFT 主要在已有表示上建立决策边界和 response pattern，因此样本效率可能很高。但 long tail 很大：不同语言、隐喻、multi-turn escalation、tool access 和 domain context 都会产生新 failure mode，不能把平均安全分数当成完结。
+\end{knowledgebox}
+
+老师特别强调，实验中大约 500 条精心选择的 safety examples 就能带来广泛下降的 unsafe following。这个结果支持“提取已有行为”的观点：base model 已在预训练中见过拒绝、风险解释和安全替代方案，SFT 主要教它何时调用这些模式。但这并不说明 500 条足以覆盖部署长尾；它只说明早期平均行为可以被少量高信号样本显著移动。
+
+\singleslide{slide-27.jpg}{SFT data 的综合结论：提取已有行为、谨慎注入事实、用少量高信号样本控制接口。}{27}
+
+Slide 27 将前面三条线合并：SFT 在激活预训练行为时最有效；即使训练事实正确，少量 tail knowledge 也可能伤害 factuality；style、instruction following 和 safety 等行为则常能被少量数据快速改变。工程上应先用 base-model probes 判断目标行为是否已存在，再决定使用 SFT、continued pretraining、retrieval 还是可验证反馈。
+
+\begin{importantbox}{SFT 数据的四个维度}
+评估一个 SFT corpus 时至少看：\textbf{coverage}（任务覆盖）、\textbf{quality}（正确性和推理质量）、\textbf{style}（长度与表达偏好）、\textbf{protocol}（roles、tools、formats）。只统计样本数无法解释模型差异。
+\end{importantbox}
+
+\subsection{Mid-training：为什么把 instruction data 混回大规模训练}
+
+前面讨论的是短轮 SFT；当 instruction data 数量和计算预算增加时，越来越多 recipe 把高质量 instruction-like data 混入 continued pretraining，再做一个较短 SFT round。这个阶段常被称为 mid-training 或 two-phase training。
+
+\slidepair{slide-28.jpg}{slide-29.jpg}{从“直接做几轮 gradient descent”到把 instruction data 作为大规模训练 mixture 的转变。}{28--29}
+
+Slide 28 先给出学术实验中常见的简单答案：在 demonstrations 上直接做 gradient descent 即可。但当团队拥有大量 instruction、code、math 和工具数据时，短轮 SFT 会受到 token budget、catastrophic forgetting 与 stage sensitivity 限制。Slide 29 因而提出三阶段 recipe：先预训练，再把 instruction-like data 混入较长的 continued-pretraining 阶段，最后做短而集中的 SFT。
+
+\begin{importantbox}{Mid-training 与最终 SFT 的职责不同}
+Mid-training 用较大 token budget 改变模型所处的数据分布，使 code、math、long-context 和 instruction format 成为稳定能力；最终 SFT 更像接口校准，集中统一 chat template、回答风格、tool protocol 与安全行为。二者虽然都可能使用 instruction data，但学习率、mixture 和验收指标不同。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-30.jpg}
+\caption{Mid-training/two-phase training：在 pretraining 与最终 SFT 之间加入高质量行为数据阶段。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 30。}
+\end{figure}
+
+Mid-training 的优势是能用更大 token budget 学习 code、math、long context 和 instruction format，同时避免最后 SFT 用过高 learning rate 扭曲 base capabilities。代价是 recipe 缺少公开细节，data mixture 和 stage boundary 往往决定成败。
+
+\begin{knowledgebox}{课堂提示}
+讲者将 mid-training 描述为“很多公司都在用、但公开文档不足”的 common knowledge。工程上应把它视为 continued pretraining 的一个 domain shift，而不是神秘的新算法。
+\end{knowledgebox}
+
+课堂还给出一个容易忽略的工程原因：mid-training 通常远短于完整 pretraining，因此重新搜索 data mixture、比较 checkpoint 和做消融的成本更可控。也就是说，它不仅是能力阶段，也是把前面课程讲过的 mixture optimization 与 scaling-law 工具应用到 post-training 数据的一次机会。
+
+\subsection{本章小结}
+
+SFT 最擅长控制行为接口，而不是可靠注入长尾知识。高质量数据的关键维度包括 style、protocol、safety 和 task coverage；当规模扩大时，mid-training 把 instruction-like data 变成新的预训练分布。
+
+\section{Preference Data：人类偏好本身就是一个噪声测量系统}
+
+SFT 只能模仿 demonstrations，但人们未必能写出自己最偏好的回答。这就是 generation-value gap：容易评价一个候选是否更好，却不一定容易从零生成最佳答案。Preference learning 把监督改成 $(x,y^+,y^-)$，其中 $y^+$ 优于 $y^-$。
+
+\singleslide{slide-31.jpg}{InstructGPT 流水线进入第二阶段：从 SFT imitation 转向基于反馈的 policy optimization。}{31}
+
+Slide 31 在视觉上重复课程主轴，但教学作用不同：前半讲已经完成 demonstrations，现在开始追问“如果人类写不出最佳答案，能否只比较候选”。这一步把模型从条件语言模型重新解释为 policy；训练目标不再只是复现一份参考文本，而是提高被评价系统判为更好的回答概率。
+
+\slidepair{slide-32.jpg}{slide-33.jpg}{Imitation 与 reward optimization 的目标差异，以及人们会评价却未必会生成的 generation-value gap。}{32--33}
+
+Slide 32 用两个概率目标完成概念切换：SFT 逼近一个可采样的 reference distribution，RLHF 则在 policy 自己的输出分布下最大化 reward。Slide 33 的新闻摘要例子说明为什么需要这种切换：标注者可能很难从空白页写出优秀摘要，却能稳定指出两个候选中哪一个更准确、简洁。比较监督降低了生产标签的认知负担，但也把质量定义交给了 pair 与 rubric。
+
+\begin{importantbox}{Generation-value gap 的含义}
+“能评价”不等于“评价无噪声”，只表示比较两个候选通常比生成理想答案容易。Preference pipeline 的价值来自把开放式生成任务改写成局部排序问题；它的风险则是候选集之外的优秀行为不会被看见，而标注者可能用长度、语气等捷径完成比较。
+\end{importantbox}
+
+\slidepair{slide-34.jpg}{slide-35.jpg}{RLHF 的课程路线图，以及 preference data 章节要解决的标签类型与质量问题。}{34--35}
+
+Slides 34--35 把后半讲分成三层：先研究 feedback 如何收集，再比较 PPO 与 DPO 如何消费反馈，最后检查过度优化的副作用。这里的顺序不能反过来，因为算法只会放大已有测量；如果 pairwise labels 主要反映 annotator style 或 compensation pressure，换一个更强 optimizer 只会更快地学到这些偏差。
+
+\subsection{Pairwise feedback 的标准形式}
+
+本节先定义 measurement process。给定 prompt $x$，从策略采样多个 responses，annotator 选择更优者。可用 Bradley--Terry model 表示偏好概率：
+
+$$
+p(y^+\succ y^-\mid x)
+=\sigma\!\left(r_\phi(x,y^+)-r_\phi(x,y^-)\right).
+$$
+
+$r_\phi$ 是 reward model，$\sigma$ 是 sigmoid。训练 reward model 时最大化观察到的 pairwise preferences。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-36.jpg}
+\caption{标准 pairwise feedback setup：对同一 prompt 比较候选回答。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 36。}
+\end{figure}
+
+\begin{knowledgebox}{读图：偏好标签不是客观真值}
+标签由 guideline、annotator expertise、time budget、compensation 和 interface 共同生成。不同 annotator 可能优化 factuality、politeness、helpfulness 或安全性中的不同组合，因此 preference data 应被视为带噪测量，而不是绝对 reward。
+\end{knowledgebox}
+
+\slidepair{slide-37.jpg}{slide-38.jpg}{InstructGPT 与 Bard 的历史标注指南：pairwise label 背后其实是一套复杂 rubric。}{37--38}
+
+这两页提醒我们，$y^+\succ y^-$ 不是点击按钮时自然产生的真值。InstructGPT guideline 要求同时权衡 helpfulness、truthfulness 与 harmlessness，Bard 的旧标注文档也把问题拆成事实、相关性、风格和安全等维度。不同维度可能冲突：更完整的回答可能更长，更谨慎的回答可能显得不够直接，安全拒绝也可能损害表面 helpfulness。
+
+\begin{warningbox}{Rubric 冲突必须显式处理}
+若界面只允许选一个赢家，标注者会在多个维度间做隐式加权，reward model 随后把这种个人权重当作统一目标。更稳健的流程会保存维度级标签、无法判断选项与 adjudication 记录，并对事实正确性使用工具或专家复核，而不是强迫 generalist 猜测。
+\end{warningbox}
+
+\slidepair{slide-39.jpg}{slide-40.jpg}{现代数据工人的平台分布，以及 generalist 与 expert annotation 之间巨大的报酬差异。}{39--40}
+
+Slides 39--40 把“human feedback”还原成劳动系统。平台工、承包商和领域专家面对不同任务、培训、计价与保密限制；同一条医学、法律或代码回答，对 generalist 来说可能只能按流畅度判断，对专家来说才可能核验实质正确性。报酬差异并非旁枝，它会决定谁愿意花时间查证、标注者流失率以及数据能否覆盖高难度领域。
+
+\slidepair{slide-41.jpg}{slide-42.jpg}{Crowdsourcing 的质量控制难题，以及大规模数据收集不可忽略的伦理成本。}{41--42}
+
+Slide 41 列出三个直接质量风险：难以验证 annotator 能力、难以确保其真正检查 correctness，以及无法排除其使用 AI 代做。Slide 42 进一步要求把伦理纳入系统边界，包括低报酬、心理伤害、隐私暴露和全球劳动关系。高质量 preference data 不能只靠事后过滤；任务设计、支持机制、申诉与公平报酬本身会影响标签可靠性。
+
+\begin{knowledgebox}{课堂提示：annotation quality 是系统变量}
+把 crowd worker 当作可互换的 API 会丢失最重要的 provenance。实际工程中应记录招募渠道、资格测试、领域、地区、培训版本、单题耗时、报酬、agreement 与复核结果；这些 metadata 既用于伦理审计，也用于解释模型为什么在某些用户群体或专业任务上系统偏移。
+\end{knowledgebox}
+
+\subsection{Demographics 与 annotator style 会进入模型}
+
+为了进一步说明 measurement bias，课程展示了 annotator population 对模型行为的影响。即使收集很多标签，如果人群结构单一，模型也会把这一群体的价值判断平均化为默认行为。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-43.jpg}
+\caption{Annotator demographics 会系统性改变 RLHF 后的行为分布。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 43。}
+\end{figure}
+
+Slide 43 的关键不是证明某个人群“更正确”，而是展示聚合标签会把 annotator distribution 写入模型。若训练人群在政治态度、文化背景、专业能力或风险容忍上不代表部署用户，RLHF 后的默认行为就会系统偏向该群体；增加标签数量只能降低采样方差，不能消除 population bias。
+
+\singleslide{slide-44.jpg}{即使标注者数量增加，不同 annotator 的 style preference 仍会显著改变模型排序。}{44}
+
+Slide 44 把 demographics 推进到更细的 style 层。并非所有标注者都偏好相同的长度、礼貌程度、引用方式或解释结构；某些标注者的稳定偏好会在聚合后占主导。因而“many annotators”不自动等于“neutral reward”，应报告分组 agreement、少数偏好和无法达成一致的任务，而不是只保留多数票。
+
+\begin{warningbox}{多数偏好不等于普适偏好}
+聚合 preference 时要保存 annotator metadata、agreement、uncertainty 和 slice metrics。单一 reward model 往往压平合法差异；对于价值冲突问题，personalization 或 explicit policy 可能比“平均人类偏好”更诚实。
+\end{warningbox}
+
+\subsection{AI Feedback：便宜、稳定，但可能同源偏置}
+
+本节接着看 LM-generated preferences。强模型在 system-level ranking 上可以接近 human agreement，因此被广泛用于 UltraFeedback、Tulu 等 pipeline。它显著降低成本，也能统一 rubric；但 judge 与 policy 可能共享训练偏差，产生 verbosity bias、self-preference 和 style matching。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-45.jpg}
+\caption{GPT-4 等模型作为 pairwise judge 时与人类排名的相关性。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 45。}
+\end{figure}
+
+Slide 45 给出了使用 AI judge 的现实依据：在 system-level ranking 上，强模型与人类排序可有很高相关性，单题 agreement 也接近 human inter-annotator level。但 system-level correlation 会掩盖特定 prompt 的共同错误；judge 与人类都可能偏好流畅、长且格式漂亮的答案，因此必须保留可验证任务和人工审计集作为独立锚点。
+
+\slidepair{slide-46.jpg}{slide-47.jpg}{UltraFeedback、Tulu 等 AI-feedback pipeline，以及 Constitutional AI 的 self-training 循环。}{46--47}
+
+Slide 46 表明 AI feedback 已不是边缘实验，而是许多开源模型获取大规模 pairwise labels 的基础设施。Slide 47 则展示 self-training 的另一种形式：先用 constitution 或原则生成 critique 与 revision，再把改进后的回答用于训练。两者共同把昂贵的人类判断转成可扩展的模型调用，但也可能在 generator、judge 与 policy 之间形成同源偏置闭环。
+
+\begin{knowledgebox}{老师强调：即使资源充足，也常会使用 AI feedback}
+课堂在约 1:02:01 明确指出，现实中的 preference-data 项目即使拥有较强资源，也常因成本、速度与专业覆盖而依赖 AI feedback。正确问题不是“human 还是 AI 二选一”，而是哪些维度由 verifier 检查、哪些由专家审计、哪些可由 judge 扩展，以及三者发生冲突时谁拥有最终裁决权。
+\end{knowledgebox}
+
+\singleslide{slide-48.jpg}{RLHF 中显著的长度效应：优化偏好会把已有的 verbosity bias 进一步放大。}{48}
+
+这页把 SFT 章节的 length confounder 带回 RLHF。若 pairwise data 中较长回答更常胜出，reward model 会把长度当作便宜特征，policy optimization 随后继续增加 token 数。验收时应画 win rate 对长度差的条件曲线，并检查“删去冗余后是否仍胜出”；否则 reward 上升可能只是模型更熟练地迎合 judge。
+
+\begin{importantbox}{Preference data 的审计字段}
+至少记录 prompt source、candidate policy/version、sampling parameters、annotator/judge、rubric、pair order、response length、agreement 和 adjudication。缺少这些字段时，很难解释 reward model 学到了内容还是格式。
+\end{importantbox}
+
+\begin{knowledgebox}{课堂提示}
+课程并不把 human feedback 浪漫化：crowdsourcing 很难验证 factual correctness，expert annotation 成本高，AI use 还会污染“人类标签”。RLHF 的数据问题与 pretraining data 一样，是系统工程和治理问题。
+\end{knowledgebox}
+
+\singleslide{slide-49.jpg}{从高质量 pairwise pipeline 进入算法问题：PPO 与 DPO 如何把比较信号写回 policy。}{49}
+
+Slide 49 是数据与优化之间的交接点。到这里我们拥有的仍不是“真实效用函数”，而是一批受候选分布、rubric、人口结构和 judge bias 影响的 pairs。PPO 会把它们拟合成 reward 并在线采样，DPO 会直接在静态 pairs 上更新；两条路线的共同上限仍由数据测量过程决定。
+
+\subsection{本章小结}
+
+Preference data 把“生成答案”转成“比较答案”，但比较仍受 rubric、人群、成本和 judge bias 影响。算法只能优化收到的信号，无法自动修正错误的 measurement process。
+
+\section{PPO：在 reward 下做受约束的 on-policy optimization}
+
+现在已经有 reward model，下一问题是怎样更新语言模型。经典 RLHF 使用 PPO：从当前 policy 采样 responses，用 reward model 打分，再在不偏离 reference policy 太远的约束下更新参数。
+
+\singleslide{slide-51.jpg}{InstructGPT 中的 PPO 阶段：policy、reward model、reference 与 prompt distribution 共同构成训练环。}{51}
+
+Slide 51 的图看起来只有“采样→打分→更新”三步，但每个箭头都对应一个系统组件。Prompt 从训练分布进入当前 policy，完整 response 由 rollout engine 生成；reward model 给序列分数，reference policy 提供 KL 锚点，value model 估计 return，随后 optimizer 才能更新 policy。任何模型版本、tokenizer、chat template 或 mask 不一致都可能破坏训练。
+
+\singleslide{slide-52.jpg}{Stiennon summarization 系统给出的更完整 PPO 背景：先学习偏好，再用 learned reward 更新生成策略。}{52}
+
+Slide 52 说明 InstructGPT 并非凭空出现：早期 summarization-from-feedback 工作已经把 preference collection、reward modeling 与 policy optimization 串成闭环。读图时应区分离线与在线部分：人类 pairs 可重复使用来训练 reward model，但 PPO 的 responses 必须来自不断变化的当前 policy；旧 rollout 太多会让 importance ratio 与 advantage 失真。
+
+\subsection{KL-regularized objective}
+
+本节先写出 PPO 真正优化的两股力量：reward 把 policy 推向高分回答，KL regularization 把它拉回 reference distribution。若只看 reward 项，最优解可能集中到 reward model 的漏洞；若 KL 太强，policy 又几乎不能离开 SFT 行为。
+
+常见目标写作：
+
+$$
+\max_\pi\;
+\mathbb{E}_{x\sim\mathcal{D},\,y\sim\pi(\cdot\mid x)}[r(x,y)]
+-\beta\,\mathbb{E}_{x}\left[D_{\mathrm{KL}}\!\left(\pi(\cdot\mid x)\|\pi_{\mathrm{ref}}(\cdot\mid x)\right)\right].
+$$
+
+$r(x,y)$ 是 learned reward；$\pi_{\mathrm{ref}}$ 通常是 SFT model；$\beta$ 控制 reward improvement 与 distribution drift 的权衡。没有 KL 约束时，policy 容易利用 reward model 的漏洞。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-53.jpg}
+\caption{PPO 的概念演化：policy gradient、TRPO 到 clipped surrogate objective。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 53。}
+\end{figure}
+
+\begin{knowledgebox}{读图：PPO 为什么“看起来简单、实现很重”}
+公式核心是限制 policy ratio，但完整系统还要维护 rollout engine、reward model、value model、reference model、advantage estimation、minibatch epochs 和 KL controller。语言模型序列长、显存大，使这些组件的同步与稳定性变得昂贵。
+\end{knowledgebox}
+
+PPO clipped objective 常写成：
+
+$$
+\mathcal{L}_{\mathrm{PPO}}
+=\mathbb{E}_t\left[
+\min\left(
+\rho_t A_t,
+\operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t
+\right)\right],
+$$
+
+其中 $\rho_t=\pi_\theta(a_t\mid s_t)/\pi_{\mathrm{old}}(a_t\mid s_t)$ 是 probability ratio；$A_t$ 是 advantage；$\epsilon$ 是 clip range。Clipping 不是保证单调改进，只是限制一次更新不要过大。
+
+\begin{warningbox}{PPO 的稳定性来自一组共同工作的护栏}
+Reward normalization、value loss、ratio clipping、KL penalty、gradient clipping、batch construction 和 rollout freshness 都会影响结果。只复制一个 loss 公式而忽略训练系统，很难复现论文曲线。
+\end{warningbox}
+
+\subsection{Worked example：ratio clipping 到底截断了什么}
+
+为了建立数值直觉，设某 token 在旧 policy 下概率为 $0.10$，新 policy 提高到 $0.14$，则 $\rho=1.4$。若 $\epsilon=0.2$ 且 $A_t>0$，unclipped term 想获得 $1.4A_t$ 的收益，但 clipped surrogate 只按 $1.2A_t$ 计算，继续增大该 token 概率不会在当前 minibatch 中获得更多一阶奖励。
+
+反过来，若 $A_t<0$，clipping 防止 policy 通过一次更新把坏 action 的概率降得过猛。它限制的是当前 batch 上的 probability ratio，不是全局 KL，也不保证所有 token、所有 prompt 都处在 trust region 内。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.23\textwidth}L{0.28\textwidth}L{0.39\textwidth}}
+\toprule
+观测 & 可能含义 & 应同时检查 \\
+\midrule
+Clip fraction 很高 & update 太激进或 advantage 尺度过大 & learning rate、reward normalization、batch freshness \\
+KL 持续上升 & policy 离开 reference support & held-out quality、reward hacking、adaptive $\beta$ \\
+Reward 上升但 human eval 下降 & reward model 被 exploit & 新鲜 pairwise eval、length/style slices \\
+Value loss 爆炸 & return prediction 或 mask 有问题 & truncation、GAE、padding、reward scale \\
+\bottomrule
+\end{tabular}
+\caption{PPO 指标不能脱离其他护栏单独解读。}
+\end{table}
+
+\singleslide{slide-54.jpg}{摆脱 PPO 的几种直接尝试：控制 token、只训练赢家、rejection sampling 与 best-of-$N$。}{54}
+
+Slide 54 的问题不是“PPO 是否过时”，而是哪些收益必须依赖 on-policy RL。控制 token 与 winner-only SFT 实现简单，却弱化了 rejected response 的信息；reward model 加 rejection sampling 可以从许多候选中保留高分轨迹，但模型只模仿搜索结果，无法直接沿 reward 梯度探索。Best-of-$N$ 在 inference 或数据生成时有效，成本则随 $N$ 线性增长。
+
+\begin{knowledgebox}{路线选择：搜索、模仿与在线优化}
+Rejection sampling 把计算放在候选搜索，再用 SFT 蒸馏赢家；PPO 把计算放在在线 rollout 与 policy update；DPO 则把比较信号压进离线 pairwise loss。三者不是只有 loss 不同，而是对 generator、verifier、数据新鲜度和训练基础设施提出了不同要求。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+PPO 直接优化 reward，表达能力强，但依赖 on-policy rollouts 和多个模型组件。它的复杂度推动了一个问题：能否直接从静态 preference pairs 学到相同的受约束最优 policy？
+
+\section{DPO：把 RLHF 转成离线 pairwise classification}
+
+本节承接 PPO 的工程负担。DPO 从 KL-regularized RL objective 出发，在非参数最优解下把 reward 写成 policy 与 reference policy 的 log-ratio，再代回 Bradley--Terry likelihood，从而消除显式 reward model 和 on-policy rollout loop。
+
+\subsection{从 implied reward 到 DPO loss}
+
+接下来把同一个受约束目标改写成离线分类。关键不是假设 reward 已知，而是利用最优 policy 与 reference 的 log-ratio 反推出一个 implied reward；在同一 prompt 的 preferred/rejected 差值中，无法观测的 partition function 会抵消。
+
+KL-regularized objective 的最优 policy 满足：
+
+$$
+\pi^*(y\mid x)
+=\frac{1}{Z(x)}\pi_{\mathrm{ref}}(y\mid x)\exp\!\left(\frac{1}{\beta}r(x,y)\right).
+$$
+
+因此 reward 可写成：
+
+$$
+r(x,y)=\beta\log\frac{\pi^*(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)}+\beta\log Z(x).
+$$
+
+在同一 prompt 的 pairwise difference 中，$\log Z(x)$ 抵消。DPO 最小化：
+
+$$
+\mathcal{L}_{\mathrm{DPO}}(\theta)
+=-\mathbb{E}_{(x,y^+,y^-)}
+\log\sigma\!\left[
+\beta\left(
+\log\frac{\pi_\theta(y^+\mid x)}{\pi_{\mathrm{ref}}(y^+\mid x)}
+-\log\frac{\pi_\theta(y^-\mid x)}{\pi_{\mathrm{ref}}(y^-\mid x)}
+\right)
+\right].
+$$
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-55.jpg}
+\caption{DPO 的目标：去掉显式 reward model 与 on-policy rollout。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 55。}
+\end{figure}
+
+Slide 55 给出 DPO 的工程承诺：不再维护显式 reward model、value model 与 on-policy rollout outer loop，而是直接对 preferred response 做正向更新、对 rejected response 做负向更新。但“适当加权”是关键，简单地分别最大化和最小化 likelihood 会导致不受约束的漂移；DPO 的推导负责给出 reference-relative 的权重与饱和机制。
+
+\singleslide{slide-56.jpg}{从 KL-regularized RLHF 目标求出最优 policy，并反解 policy 所隐含的 reward。}{56}
+
+Slide 56 的第一步是假设优化空间包含所有条件分布，即 nonparametric assumption。在此理想化条件下，最优 policy 是 reference policy 乘以 reward 的指数权重，再由 $Z(x)$ 归一化。反解后，reward 等于 policy/reference log-ratio 加上只依赖 prompt 的常数；这个闭式关系是 DPO 消除显式 reward model 的桥梁，也意味着推导依赖理想化假设。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-57.jpg}
+\caption{DPO derivation：把 implied reward 代入 pairwise likelihood。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 57。}
+\end{figure}
+
+Slide 57 把 implied reward 代回 Bradley--Terry preference likelihood。因为 $y^+$ 与 $y^-$ 共享 prompt，$\log Z(x)$ 在 reward difference 中消失，最终只剩 policy 和 reference 对两条回答的 log-probability。DPO 因此看起来像监督学习，但监督目标不是复现赢家文本，而是拟合一组由 RL 最优条件诱导出的 pairwise reward differences。
+
+\singleslide{slide-58.jpg}{DPO 梯度分解：提高赢家、压低输家，并按当前 implied-reward prediction error 调节强度。}{58}
+
+老师在这里强调，理解 DPO 最直观的方法是看梯度。若模型仍把 rejected response 判得更高，sigmoid 权重较大，更新会同时提高 $\log\pi_\theta(y^+\mid x)$ 并降低 $\log\pi_\theta(y^-\mid x)$；当 pair 已被正确分开，权重逐渐变小。Reference 项虽然不更新，却决定“当前 policy 相对起点改变了多少”。
+
+\begin{knowledgebox}{读图：DPO 更新在做什么}
+当 policy 对 preferred response 的相对 log-ratio 不够高时，loss 增大；梯度提高 $y^+$ 的相对概率并压低 $y^-$。Reference policy 提供锚点，$\beta$ 控制偏离幅度。它不是“只在好答案上做 SFT”，因为 rejected response 也进入相对目标。
+\end{knowledgebox}
+
+\subsection{Worked example：DPO margin 的三个区域}
+
+为了看清一条 pair 何时仍有梯度，本节把 DPO 的长公式压缩成一个标量。定义相对 margin 为“preferred 相对 reference 的提升”减去“rejected 相对 reference 的提升”；它直接衡量当前 policy 是否比 reference 更偏向标注中的赢家：
+
+$$
+m_\theta=
+\left[\log\pi_\theta(y^+\mid x)-\log\pi_{\mathrm{ref}}(y^+\mid x)\right]
+-\left[\log\pi_\theta(y^-\mid x)-\log\pi_{\mathrm{ref}}(y^-\mid x)\right].
+$$
+
+DPO loss 就是 $-\log\sigma(\beta m_\theta)$。当 $m_\theta<0$ 时，当前 policy 相对 reference 更偏向 rejected answer，梯度最强；当 $m_\theta=0$ 时，pair 尚未被区分；当 $m_\theta\gg0$ 时，loss 饱和，继续拉大 margin 的收益变小。
+
+\begin{importantbox}{DPO 的学习信号来自“相对 reference 的差中之差”}
+若 preferred 和 rejected 都同时被 policy 提高相同幅度，$m_\theta$ 不变；若 pair 本身只差长度或格式，模型就会把这些属性当成最便宜的分类特征。因此 pair construction 决定了 DPO 最终学到什么。
+\end{importantbox}
+
+\subsection{Variants 与 empirical contingency}
+
+进一步，SimPO 去掉 explicit reference，length-normalized DPO 试图减少长度偏差，其他变体修改 margin、label smoothing、sampling 或 weighting。课程的重点不是记住所有缩写，而是理解：很多 empirical result 高度依赖 base model、pair generation、length distribution 和 evaluation setup。
+
+\slidepair{slide-59.jpg}{slide-60.jpg}{开源模型中的 DPO + expert iteration，以及 SimPO、length-normalized DPO 等变体。}{59--60}
+
+Slide 59 表明实际 recipe 很少是“一次静态 DPO”：模型先生成新候选，由 judge 或 verifier 选出更好轨迹，再把新 pairs 回灌训练，形成 expert iteration。Slide 60 的 SimPO 去掉显式 reference，length-normalized DPO 则修正序列 log-prob 随长度累积的问题。每个变体都在改变锚点、margin 或长度归一化，不能只用缩写比较结果。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-61.jpg}
+\caption{PPO 与 DPO 的比较并不存在脱离 recipe 的统一赢家。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 61。}
+\end{figure}
+
+\begin{warningbox}{Offline preference optimization 的支持集问题}
+DPO 只学习数据中出现的 pairs。若 candidate policy 从未生成某类高质量行为，DPO 无法凭空发现；若 rejected responses 太弱，模型只学会容易的区别。Preference collection 与 optimization 必须共同设计。
+\end{warningbox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.18\textwidth}L{0.31\textwidth}L{0.41\textwidth}}
+\toprule
+选择 & 更适合 & 主要代价 \\
+\midrule
+PPO / online RL & verifier/reward 可在线调用，需要探索新行为 & 多模型系统、rollout 成本、稳定性复杂 \\
+DPO / offline pairs & 已有高质量 pairs，希望快速稳定训练 & 受 support 限制，无法主动发现新策略 \\
+Iterative DPO & 可周期性重新采样 candidates & 仍需维护数据新鲜度与 judge 可靠性 \\
+SFT + rejection sampling & verifier 强、只需保留优质轨迹 & 不直接学习 rejected signal，探索依赖 generator \\
+\bottomrule
+\end{tabular}
+\caption{Preference optimization 路线选择。}
+\end{table}
+
+\subsection{本章小结}
+
+DPO 用 closed-form implied reward 把 RLHF 变成离线 pairwise objective，显著简化训练。但它仍受 preference data 覆盖、reference policy、长度偏差和超参数影响，并不消除 reward specification 问题。
+
+\section{失败模式：优化 reward 不等于优化真实价值}
+
+回到整个 post-training pipeline 的边界，无论 PPO 还是 DPO，都在优化一个代理信号。随着优化增强，模型可能越来越善于利用 reward model，而不是越来越符合真实目标；因此验收必须使用训练信号之外的独立测量。
+
+\singleslide{slide-62.jpg}{RLHF 的两类总风险：reward overoptimization，以及输出分布的 mode collapse / entropy loss。}{62}
+
+Slide 62 把后果分成“目标错位”和“分布退化”。前者关注模型是否利用 reward 的漏洞，后者关注即使平均 reward 上升，policy 是否失去多样性、校准与少数合理答案。两类问题可以同时发生，因此只看 reward curve 或单次 greedy 输出都不足以验收 post-training。
+
+\subsection{Reward overoptimization}
+
+本节先看最直接的 Goodhart 曲线：训练 reward 持续上升，并不保证 held-out human preference 同步上升。早期 update 修复明显缺陷，后期 policy 则可能进入 reward model 未覆盖的分布，利用长度、格式、特定短语或评测器盲点获得高分。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-63.jpg}
+\caption{继续优化 proxy reward 后，真实偏好性能可能先升后降。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 63。}
+\end{figure}
+
+\begin{knowledgebox}{读图：最优点为什么出现在中间}
+早期优化提高有用行为；继续训练后，policy 进入 reward model 的 distribution shift 区域，学会 verbosity、格式或其他 shortcut。曲线转折意味着 validation reward、held-out human eval 和 policy KL 必须同时监控。
+\end{knowledgebox}
+
+\subsection{Mode collapse 与 calibration loss}
+
+进一步看分布形状，即使平均 preference score 提高，policy 也可能把多个合理答案压成单一模板。概率质量集中后，模型的 entropy、minority viewpoint 和不确定性表达都会下降；这类退化无法从 top-1 win rate 单独发现。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-64.jpg}
+\caption{RLHF 可能压缩输出分布，降低多样性与概率校准。}
+\figsource{CS336 Spring 2026 Lecture 15，Slide 64。}
+\end{figure}
+
+Base LM 是 probabilistic model，能够表达多个合理续写；强偏好优化可能把分布压向单一高 reward style，使 entropy 降低、minority answers 消失、uncertainty 不再反映真实正确率。对 brainstorming、creative writing 和 ambiguous questions，这种 collapse 尤其明显。
+
+老师在课程结束前特别补充，entropy loss 与 mode collapse 虽然只剩很短时间讨论，却不应被当成次要问题。它们改变的不是某个 benchmark 分数，而是模型作为概率分布的性质：采样多次仍只得到同一种话术，置信表达也不再与事实正确率对应。
+
+\begin{importantbox}{Post-training 的正确验收方式}
+不要只看一个 aggregate preference score。至少同时检查 task correctness、safety slices、length、calibration、diversity、KL drift、rare domains、tool reliability 和 adversarial prompts。
+\end{importantbox}
+
+\begin{longtable}{L{0.2\textwidth}L{0.32\textwidth}L{0.38\textwidth}}
+\toprule
+监控信号 & 发现什么 & 需要的独立对照 \\
+\midrule
+Train/reward-model score & 优化器是否在提高代理目标 & 新版本 judge 与 human blind eval \\
+Policy KL & 离 reference 多远 & 分 domain、长度和语言切片 \\
+Response length/style & 是否靠 verbosity 获胜 & length-matched pairwise eval \\
+Entropy/diversity & 是否出现 mode collapse & 多次采样、distinct strategy/answer count \\
+Calibration & 置信度是否仍对应正确率 & 可验证问题上的 reliability diagram \\
+Tool success & 格式正确是否等于任务完成 & 执行结果、side effect 与恢复能力 \\
+Safety slices & 平均安全是否掩盖长尾 & 多语言、多轮、工具权限和 adversarial set \\
+\bottomrule
+\caption{Post-training 失败模式监控表。}
+\end{longtable}
+
+\begin{knowledgebox}{课堂提示}
+讲者最后强调，RLHF 文献中的胜负常高度依赖实验配置。算法名称不是结果的充分解释；数据、base model、reward quality、sampling 和 evaluation 同样重要。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Reward optimization 的根本风险是 Goodhart's law：代理指标一旦成为目标，就更容易被利用。稳定 post-training 需要限制分布漂移、持续 fresh evaluation，并保留对模型多样性和校准的观察。
+
+\singleslide{slide-65.jpg}{全讲回顾：RLHF 的瓶颈同时存在于数据收集、优化系统和代理目标过度优化。}{65}
+
+最终 recap 把课程压缩成三条，但应按因果顺序理解：先有困难且带偏差的 feedback collection，随后 PPO/DPO 把这些信号写回 policy，最后更强的优化又可能放大 reward misspecification。没有独立 human/verifier evaluation、分布切片和停止规则，任何单一训练分数都不能证明模型真正变好。
+
+\section{总结与延伸}
+
+本讲从 base model 的 control gap 出发，构建了完整的 mid/post-training 视角。SFT 用 demonstrations 教会模型 interaction protocol；mid-training 用更大规模高质量行为数据重塑能力；preference data 把 generation 转为 comparison；PPO 通过 on-policy RL 优化 reward；DPO 则把受约束 RLHF 转成离线 pairwise loss。
+
+六个关键结论是：
+
+\begin{enumerate}
+\item SFT 最擅长提取和组织已有能力，不是可靠的长尾知识写入器。
+\item Style、length 和 formatting 会显著影响 preference eval，必须作为 confounders 审计。
+\item Preference labels 取决于 annotator/judge 分布，不是客观 reward。
+\item PPO 强大但系统复杂；DPO 简洁但受 offline support 限制。
+\item 所有方法都可能 overoptimize proxy reward，导致 mode collapse 和 calibration 退化。
+\item Data recipe、sampling、base model 和 evaluation 常与算法本身同等重要。
+\end{enumerate}
+
+下一讲将 reward 从“人类觉得哪个好”换成“答案能否被自动验证”，讨论 PPO、GRPO、DeepSeek R1、Kimi K1.5、Qwen3 以及 RLVR 的系统问题。
+
+\subsection{拓展阅读}
+
+下面的阅读路线按“公开 pipeline→偏好算法→数据与失败模式”排序。阅读时不要只抄最终 loss；应同时记录数据由谁生成、candidate 来自哪个 policy、judge 怎样定义赢家、优化是否在线，以及论文用什么独立指标证明 reward 上升没有变成 Goodhart failure。
+
+\begin{longtable}{L{0.23\textwidth}L{0.31\textwidth}L{0.36\textwidth}}
+\toprule
+材料 & 为什么值得读 & 带着什么问题读 \\
+\midrule
+Stiennon et al., \emph{Learning to Summarize from Human Feedback} & 早期公开材料中对 preference collection、reward model 与 PPO 流程披露较完整 & 标注指南怎样把“好摘要”拆成可比较维度？ \\
+Ouyang et al., \emph{Training Language Models to Follow Instructions with Human Feedback} & InstructGPT 的 SFT→RM→PPO 三阶段主线，也是本讲多数系统图的来源 & 1.3B/6B/175B 模型的 data、KL 与 human eval 如何共同作用？ \\
+Bai et al., \emph{Constitutional AI} & 展示 critique/revision、自训练与 AI feedback 如何替代部分人工标签 & Constitution 把哪些价值判断显式化，又留下哪些 judge bias？ \\
+Rafailov et al., \emph{Direct Preference Optimization} & 从 KL-regularized RLHF 的最优 policy 推导离线 pairwise objective & Nonparametric assumption、reference policy 与 $\beta$ 分别承担什么角色？ \\
+Tulu 3 技术报告 & 提供较现代的开源 post-training mixture、偏好数据与 DPO 变体实践 & 哪些收益来自算法，哪些来自 candidate generation、过滤与 verifier？ \\
+Santurkar et al. 与 Hosking et al. 的 annotator 研究 & 直接展示 demographics、expertise 与 style preference 如何改变聚合标签 & “更多标注者”何时只降低方差，却无法修复 population bias？ \\
+Reward overoptimization 与 length-bias 研究 & 揭示 proxy reward 先升后降、verbosity shortcut 与 noiseless/noisy feedback 的区别 & 转折点如何被 fresh human eval、KL、length 与 entropy 指标提前发现？ \\
+\bottomrule
+\caption{Lecture 15 的注释式拓展阅读路线。}
+\end{longtable}
+
+\begin{knowledgebox}{建议的复现实验}
+从一个小型 instruction model 出发，构造长度平衡的 pairwise dataset，分别训练 winner-only SFT 与 DPO；在 held-out pairs 上同时报告普通 win rate、length-controlled win rate、事实正确率、平均长度和输出 entropy。这个实验能把本讲的数据偏差、离线支持集和过度优化问题放进同一张结果表。
+\end{knowledgebox}
+
+\end{document}

@@ -39,13 +39,17 @@
 \includegraphics[width=0.82\textwidth,height=0.42\textheight,keepaspectratio]{\videocoverpath}\par
 \vfill\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
 \textbf{课程/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{材料类型}：\videoduration\par\textbf{课程主页}：\href{\videourl}{\nolinkurl{\videourl}}\par\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}\end{titlepage}\tableofcontents\newpage
+\end{tcolorbox}\end{titlepage}\setcounter{tocdepth}{1}\tableofcontents\newpage
 
 \section{本讲主线：正确性靠编程模型，性能靠硬件模型}
 Lecture 6 接在 GPU 课之后，目标是把“知道 GPU 很快”推进到“知道怎么测、怎么定位、怎么写 kernel”。核心循环是：benchmark 看到端到端时间，profile 看到时间花在哪里，然后用更贴近硬件的数据组织和 kernel 写法修正瓶颈。
 \begin{importantbox}{本讲的闭环}
 编程模型给正确性，硬件模型给性能，benchmark/profiling 给证据，Triton 给可控的 block-level 实现。没有测量就改 kernel，基本是在猜。
 \end{importantbox}
+
+\begin{knowledgebox}{课堂提示：正确性与性能需要两套模型}
+老师在总结中把职责分得很清楚：PyTorch、Triton 与 PTX 等 programming model 让程序语义可表达、可验证；SM、warp、occupancy、bank conflict 与 memory hierarchy 决定实现能否高效。Benchmark 用于观察 scaling，profiler 用于看真实执行了什么、花了多久；Triton 则把思考单位提升到 thread block，形成“从 HBM 读入、片上处理或 fusion、再写回”的统一路径。
+\end{knowledgebox}
 
 \begin{knowledgebox}{术语消化：GPU kernel 基础词汇}
 \begin{itemize}
@@ -68,6 +72,9 @@ Lecture 6 接在 GPU 课之后，目标是把“知道 GPU 很快”推进到“
 
 Source coverage: \texttt{review\_of\_gpus}. 本节覆盖的核心概念包括：SM/warp/block/shared memory/bank conflict/coalescing/occupancy。
 
+\subsection{Hardware：容量、带宽与可见层级}
+
+GPU 不是一块均匀的“快内存”。本节先对照 SM 数量、register、shared memory/L1、L2 与 HBM 的容量和带宽，建立 kernel 能实际使用的硬件账本；离计算单元越近的存储通常越快但越小，优化的本质是让高复用数据尽量停留在片上。
 
 \begin{figure}[H]
 \centering
@@ -79,6 +86,10 @@ Source coverage: \texttt{review\_of\_gpus}. 本节覆盖的核心概念包括：
 这张图用于把抽象的 kernel 代码连接到硬件执行。读图时先看数据位于 HBM、shared memory 还是 registers，再看线程/blocks 如何映射到 SM。性能优化的关键是让数据在更靠近计算单元的位置被复用，减少慢速 HBM 往返。
 \end{knowledgebox}
 
+\subsection{Programming model：grid、CTA 与 thread}
+
+硬件层级需要一个可编程抽象。CUDA/PTX 把一次 kernel launch 组织为 grid，grid 由多个 thread blocks（也叫 CTA）组成，每个 block 再包含 threads；block 内线程共享同一块 shared memory，并作为整体被调度到一个 SM。
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.86\textwidth]{cuda-grid.png}
@@ -89,6 +100,14 @@ Source coverage: \texttt{review\_of\_gpus}. 本节覆盖的核心概念包括：
 这张图用于把抽象的 kernel 代码连接到硬件执行。读图时先看数据位于 HBM、shared memory 还是 registers，再看线程/blocks 如何映射到 SM。性能优化的关键是让数据在更靠近计算单元的位置被复用，减少慢速 HBM 往返。
 \end{knowledgebox}
 
+\begin{knowledgebox}{老师强调：为什么非逐元素算子需要 thread block}
+课程先用 GeLU 说明 elementwise 工作可自然地“一线程处理一个元素”，随后转向 softmax 与 matmul：这些算子中的 threads 必须交换局部结果，而 HBM 读写太慢。Thread block 的意义正是让一组 threads 共享同一块片上 shared memory；因此一个 block 会被调度到单个 SM，Triton 也选择把 block/program 作为原生思考单位。
+\end{knowledgebox}
+
+\subsection{Interaction between programming model and hardware}
+
+Programming model 足以描述正确结果，却不会自动保证高性能。同一份正确 kernel 会因为 warp divergence、register pressure、shared-memory bank conflict、HBM coalescing 与 block wave 切分而出现数量级差异；因此接下来要把抽象对象逐一映射回硬件限制。
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.86\textwidth]{block-occupancy.png}
@@ -98,12 +117,20 @@ Source coverage: \texttt{review\_of\_gpus}. 本节覆盖的核心概念包括：
 \begin{knowledgebox}{读图：block occupancy.png}
 这张图用于把抽象的 kernel 代码连接到硬件执行。读图时先看数据位于 HBM、shared memory 还是 registers，再看线程/blocks 如何映射到 SM。性能优化的关键是让数据在更靠近计算单元的位置被复用，减少慢速 HBM 往返。
 \end{knowledgebox}
+
+\begin{knowledgebox}{课堂提示：occupancy 不是越高越好，tail 也要单独看}
+老师一方面提醒 register 用得越多，可同时驻留的 threads/warps 越少，但 low occupancy 不一定坏：thread coarsening 可能让每个 thread 做更多有效工作。另一方面，block occupancy 还受 wave quantization 影响；例如 148 个 SM 执行 160 个 blocks 时，第二波只有 12 个 blocks，大量 SM 空闲。性能判断必须同时看单 block 资源与跨 SM 的 waves，不能只追一个 occupancy 百分比。
+\end{knowledgebox}
 \subsection{本章小结}
 本节说明了一个 kernel optimization 的共同模式：先确认语义正确，再测时间，再看 profiler，最后用 block、shared memory、tiling、fusion 或 layout 调整降低数据移动。
 
 \section{Benchmarking 与 Profiling：先量再改}
 
 Source coverage: \texttt{benchmarking/profiling}. 本节覆盖的核心概念包括：benchmarking, profiling, CUDA synchronize, CUDA events, torch profiler。
+
+\begin{knowledgebox}{老师强调：成功 recipe 是测量闭环}
+源码把流程写成三步：先 benchmark 与 profile，做出修改，再重新 benchmark 与 profile。Benchmark 只回答端到端 wall-clock 与 scaling，profiling 才回答时间花在哪里、底层实际调用了什么；没有第二轮测量，就无法证明改动解决了原先的瓶颈，也无法排除只是缓存、编译或输入 shape 改变造成的假提升。
+\end{knowledgebox}
 
 
 \begin{longtable}{p{0.22\textwidth}p{0.34\textwidth}p{0.34\textwidth}}
@@ -127,6 +154,24 @@ time_ms = start_event.elapsed_time(end_event)
 \begin{warningbox}{benchmark 必须同步}
 CUDA kernel launch 是异步的。如果不调用 \texttt{torch.cuda.synchronize()} 或 CUDA events，测到的可能只是 CPU 发起 kernel 的时间，而不是 GPU 真正执行时间。
 \end{warningbox}
+
+\subsection{Profiler case matrix：三种 shape}
+
+课程把同一 profiler 放到三个 case 上，不是为了背 kernel 名，而是训练“高层算子 + shape 会选择不同底层实现”的直觉。逐元素加法主要暴露 launch 与 memory traffic；大矩阵乘法进入高吞吐 GEMM；小矩阵乘法的工作量不足以摊薄 launch、调度与 tile 边界开销。
+
+\begin{longtable}{p{0.27\textwidth}p{0.28\textwidth}p{0.35\textwidth}}
+\toprule
+\textbf{Profiler case} & \textbf{先看什么} & \textbf{应形成的判断} \\
+\midrule
+\texttt{add(dim=2048)} & kernel 数、CUDA 时间、HBM 读写 & Pointwise 算子 FLOPs 少，常受 memory bandwidth 与 launch overhead 主导。 \\
+\texttt{matmul(dim=2048)} & GEMM kernel、tile、dtype、总 CUDA 时间 & 尺寸足够大时，矩阵乘法可形成高 arithmetic intensity，接近 compute-bound。 \\
+\texttt{matmul(dim=128)} & 是否换 kernel、每次 launch 时间占比 & 小 shape 即使算法仍是 \(O(n^3)\)，实际延迟也可能由固定开销主导。 \\
+\bottomrule
+\end{longtable}
+
+\begin{knowledgebox}{课堂提示：先看 scaling，再读 kernel 名}
+老师指出，小 dimension 时 timing 大致恒定，尺寸足够大后才显现 cubic scaling。Profiler 进一步显示 tensor dimensions 不同会调用不同 CUDA kernels；像 \texttt{cutlass3x\_sm100\_...\_64x64x16} 这样的名字会暴露库、架构、dtype 与 tile shape。读 kernel 名的目的，是把测到的曲线连接到实际实现，而不是把长字符串当作噪声忽略。
+\end{knowledgebox}
 \subsection{本章小结}
 本节说明了一个 kernel optimization 的共同模式：先确认语义正确，再测时间，再看 profiler，最后用 block、shared memory、tiling、fusion 或 layout 调整降低数据移动。
 
@@ -139,15 +184,39 @@ Source coverage: \texttt{naive\_vs\_builtin\_vs\_compiled\_gelu}. 本节覆盖�
 def naive_gelu(x):
     return 0.5 * x * (1 + torch.tanh(0.79788456 * (x + 0.044715 * x * x * x)))
 \end{lstlisting}
+
+\subsection{Variant comparison：naive\_gelu、builtin\_gelu 与 compiled\_gelu}
+
+三个版本计算同一个近似 GeLU，区别不在数学公式，而在最终生成多少 kernels、产生多少中间 tensors，以及每个中间结果是否必须往返 HBM。比较时必须固定输入 shape、dtype、device 与 steady-state 测量方法，再用 profiler 验证 kernel 数。
+
+Executable source 中对应的两个基线标签是 \verb|builtin_gelu| 与 \verb|compiled_gelu|；保留这些原名，便于从 profiler 结果回查源码函数与 profile 节点。
+
+\begin{longtable}{p{0.25\textwidth}p{0.30\textwidth}p{0.35\textwidth}}
+\toprule
+\textbf{Variant} & \textbf{典型执行形态} & \textbf{性能含义} \\
+\midrule
+\texttt{naive\_gelu} & 多个 primitive pointwise kernels & 中间值多次写回和读回 HBM，没有 fusion。 \\
+\texttt{builtin\_gelu} & 框架提供的专用实现 & 通常合并为更少 kernels，减少 memory traffic。 \\
+\texttt{compiled\_gelu} & \texttt{torch.compile} 生成 Triton kernel & 常把整段表达式 fusion 成一个 kernel，一次读、一次写。 \\
+\bottomrule
+\end{longtable}
 \begin{importantbox}{为什么 builtin/compiled GeLU 更快}
 Naive PyTorch 写法会拆成多个 primitive kernels，中间结果反复写回 HBM。Builtin GeLU 或 \texttt{torch.compile} 后的 Triton kernel 能把多个 pointwise 操作融合成一次读、一次写，减少 HBM traffic。
 \end{importantbox}
+
+\begin{knowledgebox}{老师强调：快的是执行图，不是 Python 写法更短}
+课上先观测 builtin 与 compiled 显著更快，再回到 profiler 解释原因：naive 版本产生多个 kernels 和多次 HBM 读写，而 builtin/compiled 版本只有一个 fused kernel；compiled 版本具体生成 Triton kernel。这个顺序很重要——先有 timing 证据，再用执行图归因，不能看到 \texttt{torch.compile} 就预设它一定更快。
+\end{knowledgebox}
 \subsection{本章小结}
 本节说明了一个 kernel optimization 的共同模式：先确认语义正确，再测时间，再看 profiler，最后用 block、shared memory、tiling、fusion 或 layout 调整降低数据移动。
 
 \section{Triton mental model}
 
 Source coverage: \texttt{triton\_introduction / triton\_gelu\_example}. 本节覆盖的核心概念包括：Triton program, block, mask, pointer offsets, PTX。
+
+\begin{knowledgebox}{课堂提示：Triton 把思考单位从 thread 提升到 block}
+老师对比 CUDA 与 Triton：CUDA 让程序员细粒度指定每个 thread 做什么，控制强但也要手动管理更多 shared-memory 与调度细节；Triton 让程序员描述一个 thread block/program 如何加载一块数据、在片上操作、再写回 global memory。对深度学习 kernel，这个抽象通常已经足够强，同时更接近 tensor 运算的数学结构。
+\end{knowledgebox}
 
 
 \begin{figure}[H]
@@ -199,7 +268,15 @@ Naive softmax 需要 max、subtract、exp、sum、divide 多个 pass。若一整
 
 \section{Triton row sum：row larger than block}
 
-Source coverage: \texttt{triton\_row\_sum\_example}. 本节覆盖的核心概念包括：tiling over columns, accumulators, final reduction。
+前面的 fused softmax 假设一整行能放进一个 program，本节故意放宽这个条件。Source coverage: \texttt{triton\_row\_sum\_example}；当 row larger than block 时，需要沿 columns 做 tiling，把多个 tile 的局部和累积到 registers，最后再执行一次 reduction，同时处理尾块 mask 与数值类型。
+
+\begin{knowledgebox}{课堂提示：先问一行能否放进一个 block}
+课程从 fused softmax 的前提反推限制：若整行能放进一个 block，Triton 可直接完成 block 内 reduction；若 4096 列而 block size 只有 1024，就必须把 row 拆成 4 个 tiles，让 threads 迭代 tiles、累积 partial sums，最后再对各 thread accumulator 做 reduction。这个容量问题决定了算法结构，而不是一个事后调参选项。
+\end{knowledgebox}
+
+\begin{knowledgebox}{讲义提醒：先写正确的分块不变量}
+优化长 row 时先声明 accumulator 表示“已经处理过的所有 tiles 之和”，再移动 pointer。若循环边界、mask 或 dtype 不清楚，增加 warps 和 block size 只会更快地产生错误结果；Triton 调优必须从语义不变量开始。
+\end{knowledgebox}
 
 
 \begin{figure}[H]
@@ -220,7 +297,11 @@ Source coverage: \texttt{triton\_row\_sum\_example}. 本节覆盖的核心概念
 
 \section{Triton matmul + ReLU：tiling and fusion}
 
-本节覆盖源码函数 \texttt{triton\_matmul\_relu\_example}。核心概念包括 tiled matmul、\texttt{tl.dot}、shared memory reuse 和 fused activation。
+Row reduction 只沿一个轴累加，本节进一步处理二维矩阵乘。源码中的 matmul + ReLU 示例用 $M\times N$ 输出 tile、沿 $K$ 轴循环的 A/B tiles、\texttt{tl.dot} accumulator 和 fused ReLU 展示 shared-memory reuse；核心目标是每次从 HBM 取入的数据参与尽可能多的乘加。
+
+\begin{knowledgebox}{讲义提醒：tile shape 同时受语义和硬件约束}
+\texttt{BLOCK\_M/N/K} 不是越大越好。更大 tile 提高复用，却消耗更多 registers/shared memory，可能降低 occupancy；维度还要对齐 tensor-core 支持的 shape。正确流程是先过 correctness，再 sweep 配置并用 profiler 解释结果。
+\end{knowledgebox}
 
 
 \begin{figure}[H]
@@ -245,6 +326,10 @@ acc = tl.maximum(acc, 0.0)  # fused ReLU
 \begin{importantbox}{Matmul + ReLU fusion}
 如果下一步马上做 ReLU，就没有必要先把 matmul 输出写回 HBM，再读出来做 ReLU。把 ReLU 放在 matmul kernel 尾部，就是典型 fusion。
 \end{importantbox}
+
+\begin{knowledgebox}{课堂提示：fusion 的收益要用省掉的 HBM traffic 解释}
+老师强调，融合 ReLU 的价值不是少写一行 PyTorch，而是避免把 matmul 输出完整写回 HBM、再由第二个 kernel 读回。若中间结果本来就在 registers，逐元素 activation 几乎是顺手完成；这也是判断哪些算子值得 fusion 的通用方法。
+\end{knowledgebox}
 \subsection{本章小结}
 本节说明了一个 kernel optimization 的共同模式：先确认语义正确，再测时间，再看 profiler，最后用 block、shared memory、tiling、fusion 或 layout 调整降低数据移动。
 
@@ -589,23 +674,66 @@ Attribution & 时间花在哪些 kernels 和 memory 操作上？ & PyTorch profi
 性能优化不是玄学。每一次优化都应该能回答：减少了哪次 HBM 读写？增加了多少复用？提高了 occupancy 还是降低了 bank conflict？benchmark 和 profiler 是否支持这个判断？
 \end{importantbox}
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Triton fused softmax tutorial.
-    \item NVIDIA CUDA programming guide: warps, shared memory, coalescing.
-    \item CUTLASS documentation for GEMM tiling and tensor core kernels.
-    \item PyTorch profiler and Nsight Systems/Compute guides.
-\end{itemize}
 
-% Source coverage markers for executable lecture source:
-% Hardware
-% Programming model
-% https://docs.nvidia.com/cuda/parallel-thread-execution/_images/grid-with-CTAs.png
-% Interaction between programming model and hardware
-% https://developer-blogs.nvidia.com/wp-content/uploads/2019/06/pasted-image-0.png
-% add(dim=2048)
-% matmul(dim=2048)
-% matmul(dim=128)
-% builtin_gelu
-% compiled_gelu
+下面的材料分别补足 Triton 算法、CUDA 硬件语义、GEMM 实现与测量工具。阅读时不要只抄 API，而要为每份材料记录“它解释了哪一次数据移动、哪一级并行和哪一个 profiler 指标”。
+
+\begin{longtable}{p{0.28\textwidth}p{0.30\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{材料} & \textbf{重点问题} & \textbf{读完应能做什么} \\
+\midrule
+Triton fused softmax tutorial & 一行如何映射到一个 program；mask、reduction 与 num warps & 独立写出 row-fit-in-block 的 softmax，并数 HBM reads/writes。 \\
+NVIDIA CUDA programming guide & warp、shared memory、coalescing、occupancy & 用硬件术语解释一个正确 kernel 为什么仍然慢。 \\
+CUTLASS GEMM documentation & tile hierarchy、tensor core shape、pipeline & 从 kernel 名与 tile 配置反推数据复用和 resource pressure。 \\
+PyTorch profiler + Nsight guides & end-to-end、kernel timeline、memory/warp stalls & 把 timing 异常定位到 launch、kernel、memory 或 occupancy。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{复现实验：从 shape sweep 到 profiler attribution}
+
+选择 GeLU、row sum 或 matmul 中任意一个算子，固定 dtype 与 device，执行一次小型 hold-out 实验：
+
+\begin{enumerate}
+    \item 预先写下随 shape 增长的延迟趋势，以及何时可能从固定开销区进入 bandwidth/compute 主导区。
+    \item 对每个 shape 做 warmup 和多次 CUDA-event 计时，保留均值与方差。
+    \item 只对转折点前后两个 shape 做 profiler，记录 kernel 数、kernel 名、CUDA time 与关键 memory/occupancy 指标。
+    \item 修改一个变量，例如 fusion、block size 或 tile shape，再重复同一协议；若预测失败，优先修正心智模型而不是挑选对自己有利的样本。
+\end{enumerate}
+
+\subsection{Kernel 优化交付清单}
+
+最后把实验结果整理成一份可复核交付，而不是散落的截图和最快数字。每一项都应能指向代码、命令或 profiler 证据：
+
+\begin{longtable}{p{0.25\textwidth}p{0.29\textwidth}p{0.36\textwidth}}
+\toprule
+\textbf{验收项} & \textbf{必须记录} & \textbf{不合格信号} \\
+\midrule
+Correctness & reference、容差、边界 shape、mask 与 dtype & 只测一个整齐 shape，或用速度掩盖数值错误。 \\
+Measurement & warmup、trials、CUDA events、均值与方差 & 混入编译/CPU launch，只报告最快一次。 \\
+Scaling & 多个 shape、转折点、预先预测 & 只在单点比 baseline，无法判断适用范围。 \\
+Attribution & kernel 数/名、CUDA time、memory/occupancy 指标 & 只有 wall-clock，没有解释时间为何变化。 \\
+Mechanism & 减少的 HBM bytes、增加的 reuse、改变的 tile/fusion & 用“编译器更聪明”代替可检验机制。 \\
+Portability & 至少一个 hold-out shape 或 dtype & 配置只对调参样本有效，换输入立即退化。 \\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{实验验收不是“最快一次”}
+合格证据必须包含 reference correctness、完整 shape sweep、steady-state timing、profile attribution 与失败 case。只报告单个最佳数字，无法证明优化机制，也无法迁移到新 shape。
+\end{warningbox}
+
+\subsection{失败诊断：看到什么先查什么}
+
+当结果不符合预测时，先用最便宜的证据缩小范围，再打开更重的 Nsight 指标：
+
+\begin{longtable}{p{0.31\textwidth}p{0.27\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{症状} & \textbf{第一证据} & \textbf{优先排查} \\
+\midrule
+小 shape 几乎一样慢 & CUDA-event 延迟与 kernel 数 & launch/dispatch 固定开销，工作量不足以占满设备。 \\
+大 shape scaling 突然变差 & kernel 名、tile、memory throughput & kernel selection 改变、tile 边界、bandwidth 或 workspace。 \\
+Fusion 后没有加速 & profiler 的中间 kernel 与 HBM traffic & 编译器未 fusion、额外 layout copy，或原算子并非 memory-bound。 \\
+增大 block/tile 反而变慢 & registers、shared memory、active warps & resource pressure 降低 occupancy，或 tail/wave quantization 恶化。 \\
+结果只在边界 shape 错 & reference diff、mask、stride、accumulator dtype & 越界 load/store、非连续 layout、reduction 精度或尾 tile。 \\
+\bottomrule
+\end{longtable}
 
 \end{document}

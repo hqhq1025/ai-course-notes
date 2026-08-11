@@ -1,0 +1,583 @@
+\documentclass[a4paper]{article}
+
+\newcommand{\notetitle}{Lecture 17：Alignment 与 Multimodality——从 CLIP 到 Omni Models}
+\newcommand{\noteauthors}{基于 Percy Liang 授课、官方可执行讲义与公开视频字幕整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford Online / Percy Liang}
+\newcommand{\videopublishdate}{2026-05-27}
+\newcommand{\videoduration}{1:17:40}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=26FtD08ZpOU}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\input{../cs336-preamble.tex}
+\graphicspath{{./}{images/}{official-images/}}
+
+\begin{document}
+\makecscover
+
+\section{从 text-to-text 到 omni model：所有模态都要先变成 token}
+
+前面的课程始终围绕语言 token。现在问题变成：图像、视频、音频和其他连续信号怎样进入 Transformer？当前主流路线没有放弃 Transformer，而是先把非文本模态转换为离散或连续 tokens，再与语言 tokens 一起建模。
+
+官方可执行讲义把本讲标为 \texttt{Lecture 17: multimodal models}。这里沿用同一主线，但把模型名称重组为四个可比较问题：representation 怎样得到、alignment 怎样学习、fusion 在哪里发生、generation 由谁完成。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{multimodality.png}
+\caption{现实世界是多模态的：理解与生成都需要跨越 text-only interface。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/multimodality.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：多模态系统有两个不同问题}
+\textbf{Understanding} 要把 image/video/audio 编码成模型可消费的表示；\textbf{generation} 要把模型内部表示解码回 pixels、frames 或 waveforms。很多 VLM 只解决前者：能看图回答，但不能原生生成高质量图像。
+\end{knowledgebox}
+
+\begin{importantbox}{统一抽象}
+多模态模型仍可写成 ``encoder $\rightarrow$ tokens $\rightarrow$ Transformer $\rightarrow$ decoder''。真正的差异在于 token 是连续还是离散、数量有多少、如何保留空间/时间结构，以及训练 loss 怎样平衡不同模态。
+\end{importantbox}
+
+\begin{knowledgebox}{课堂提示}
+Percy 把目标称为 omni model：输入和输出都能接受任意模态组合。当前系统大多只实现其中一部分，因此理解模型宣传时要问清楚“支持输入”还是“支持生成”。
+\end{knowledgebox}
+
+\subsection{术语表：representation、alignment、fusion 与 generation}
+
+为了让后续模型比较不被品牌名称淹没，本节先固定四个术语。它们分别回答“非文本信号如何表示”“图文为何能对应”“视觉信息如何进入 LM”“模型怎样回到像素或波形”；同一个系统可以在其中三项很强，却仍不具备第四项。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.19\textwidth}L{0.31\textwidth}L{0.4\textwidth}}
+\toprule
+术语 & 核心问题 & 典型实现 \\
+\midrule
+Representation & 图像/视频怎样变成有限数量 tokens & ViT patches、CLIP features、VQ codebook indices \\
+Alignment & 哪些视觉表示与哪些文本语义对应 & CLIP contrastive loss、SigLIP pairwise sigmoid \\
+Fusion & 视觉 tokens 在哪里影响语言计算 & input concatenation、cross-attention、DeepStack \\
+Generation & 内部状态怎样还原成可见输出 & diffusion decoder、VQ decoder、native image-token LM \\
+\bottomrule
+\end{tabular}
+\caption{多模态模型的四个基本对象。}
+\end{table}
+
+\subsection{Token budget 是第一性约束}
+
+本节从容量约束建立直觉。文本一个 token 往往承载一个 subword 的语义，而图像 patch 和视频 frame 的信息密度不同。高分辨率图像会迅速消耗 context window；视频还多一个时间轴。多模态 architecture 的很多设计——patch merging、dynamic resolution、frame sampling——本质上都在控制 token budget。
+
+若 patch size 为 $P$，空间 merge factor 为 $m$，保留 $F$ 帧视频，则视觉 token 数可以粗略写成
+
+$$
+N_{\mathrm{image}}\approx
+\left\lceil\frac{H}{P}\right\rceil
+\left\lceil\frac{W}{P}\right\rceil\frac{1}{m^2},
+\qquad
+N_{\mathrm{video}}\approx F\,N_{\mathrm{frame}}.
+$$
+
+其中 $H,W$ 表示分辨率，$m=2$ 对应 $2\times2$ patch merge。公式的意义不是精确复现某个模型，而是显示两个事实：分辨率翻倍会让二维 token 数近似增至四倍；视频长度又把每帧成本乘上 $F$。因此，视觉细节、帧率和可用于文本推理的剩余 context 之间必然竞争。
+
+\begin{warningbox}{Token budget 也是信息分配}
+压缩视觉 tokens 不只是省显存。过度压缩会先损失 OCR、小目标和细粒度空间关系；保留过多视觉 tokens 又会挤占问题、工具轨迹和答案的上下文。评测必须按任务类型观察，而不能只看平均准确率。
+\end{warningbox}
+
+\subsection{本章小结}
+
+本节建立了统一视角：先编码，再让 Transformer 处理 tokens。接下来先看 CLIP/SigLIP 怎样学习可对齐的视觉表示。
+
+\section{CLIP 与 SigLIP：先学会“图像和文字是否匹配”}
+
+本节的问题是：没有密集人工类别标签，怎样利用互联网规模的 image-caption pairs？CLIP 用双 encoder 将图像和文本映射到共享 embedding space，并通过 batch 内 contrastive learning 拉近匹配 pair、推远不匹配 pair。
+
+\subsection{ViT：把图像切成 patch tokens}
+
+为了复用 Transformer，ViT 先把二维图像改写成序列。图像 $I\in\mathbb{R}^{H\times W\times C}$ 被切成 $P\times P$ patches。Patch 数量为
+
+$$
+N=\frac{H}{P}\cdot\frac{W}{P}.
+$$
+
+每个 patch 展平后经过线性 projection，加入位置编码，再送入 Transformer encoder。较小 $P$ 保留更多细节，却让 attention cost 随 $N^2$ 增长。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{vit.png}
+\caption{Vision Transformer：patchify、linear projection、position embedding 与 Transformer encoder。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/vit.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：ViT 把视觉问题变成序列问题}
+Patch embedding 扮演 word embedding 的角色，position embedding 保留空间位置，CLS 或 pooled representation 汇总全图。它让视觉可以复用 Transformer，但也把 resolution 直接转化为 sequence length。
+\end{knowledgebox}
+
+\subsection{CLIP objective}
+
+接下来需要让视觉序列与语言语义对齐。给定 batch 中 $B$ 个 image-text pairs，图像向量 $u_i$、文本向量 $v_j$ 归一化后计算相似度 $s_{ij}=u_i^\top v_j/\tau$。CLIP 同时优化 image-to-text 与 text-to-image cross entropy：
+
+$$
+\mathcal{L}_{\mathrm{CLIP}}
+=\frac{1}{2B}\sum_{i=1}^{B}
+\left[-\log\frac{e^{s_{ii}}}{\sum_j e^{s_{ij}}}
+-\log\frac{e^{s_{ii}}}{\sum_j e^{s_{ji}}}\right].
+$$
+
+$\tau$ 是 temperature；batch 中其他 pairs 充当 negatives。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{clip-code.png}
+\caption{CLIP objective 的伪代码：归一化双 encoder embeddings，构造全 batch logits，并对两个方向做 cross entropy。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/clip-code.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：代码中的矩阵 shape 就是 contrastive objective}
+图像与文本 encoder 分别输出 $[B,d]$，归一化后矩阵乘法得到 $[B,B]$ logits；对角线是 aligned pairs，其余位置都是 batch negatives。随后分别沿 image-to-text 与 text-to-image 方向做 cross entropy。这里最该注意的是 negatives 来自当前 global batch，所以代码看似短，真正的系统成本却在大 batch、跨设备 embedding 收集和 $B^2$ score matrix。
+\end{knowledgebox}
+
+\begin{knowledgebox}{课堂提示：CLIP 的 batch size 是 objective 的一部分}
+老师指出，CLIP 典型 batch 可到数万；batch 太小不仅降低吞吐，还会让 negatives 数量不足，直接改变学习问题。更麻烦的是 softmax 分母跨越整个 batch，使设备之间无法像普通 LM sequences 那样完全独立计算。SigLIP 的动机正是解除这种 global normalization 耦合，而不是单纯换一个公式名字。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{clip.png}
+\caption{CLIP：双 encoder 与 batch-wise contrastive matching。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/clip.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：大 batch 为什么重要}
+每个 batch 提供 $B^2$ 个 pair scores，其中只有 $B$ 个正例。更大 batch 给出更多 negatives，通常提高 representation quality；但也需要跨设备 all-gather embeddings，并使 global softmax 成为通信与数值稳定性问题。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{clip-efficiency.png}
+\caption{CLIP 训练效率与 batch/negative scaling 的关系。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/clip-efficiency.png}。}
+\end{figure}
+
+\subsection{SigLIP：把 global softmax 换成 pairwise sigmoid}
+
+进一步，SigLIP 取消 batch-wide softmax，把每个 image-text pair 变成 binary classification：匹配 pair 标签为 $+1$，不匹配为 $-1$。Loss 可写成
+
+$$
+\mathcal{L}_{\mathrm{SigLIP}}
+=\frac{1}{B^2}\sum_{i,j}\log\left(1+\exp\left[-z_{ij}(u_i^\top v_j/\tau+b)\right]\right).
+$$
+
+$z_{ij}\in\{+1,-1\}$ 表示是否匹配，$b$ 是 bias。它避免 global softmax normalization，更容易在多设备上做 local pair computation。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{siglip-code.png}
+\caption{SigLIP sigmoid loss 伪实现：每个 pair 独立做二分类，正例在对角线。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/siglip-code.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：SigLIP 改的是归一化耦合方式}
+代码同样先得到图像/文本 embeddings，但 labels 是对角线为 $+1$、非对角线为 $-1$ 的矩阵，每个 logit 独立进入 sigmoid loss。与 CLIP 的 batch-wide softmax 相比，它不要求所有设备共享一个分类分母，因此更容易分片；但负例数量、正负不平衡和 logit bias 仍会影响优化，不能把“无 global softmax”误读成“无需大规模数据或负例设计”。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{siglip-parallelism.png}
+\caption{SigLIP 的 pairwise objective 更适合分片与大规模并行。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/siglip-parallelism.png}。}
+\end{figure}
+
+\begin{warningbox}{对齐 embedding 不等于细粒度理解}
+CLIP/SigLIP 很适合检索和 global semantics，但 spatial relations、OCR、counting 和 fine-grained grounding 需要更高分辨率 tokens、任务数据和跨层融合。把一个高 CLIP score 当成完整视觉理解会高估模型。
+\end{warningbox}
+
+\subsection{本章小结}
+
+CLIP/SigLIP 学到可迁移视觉 encoder，解决了“图像怎样进入语言空间”的第一步。下一步是把这些视觉 features 真正注入 autoregressive LM。
+
+\section{LLaVA：Vision Encoder + Projector + Language Model}
+
+本节从 representation learning 进入生成式问答。LLaVA 冻结或初始化预训练 vision encoder 与 LLM，用一个 projector 把视觉 patch embeddings 映射到 LM hidden dimension，再把它们作为一段 visual tokens 拼入 prompt。
+
+\subsection{Architecture 与 shape flow}
+
+设 vision encoder 输出 $V\in\mathbb{R}^{N_v\times d_v}$，projector $W\in\mathbb{R}^{d_v\times d_{\mathrm{lm}}}$，则 visual tokens 为
+
+$$
+H_v=VW\in\mathbb{R}^{N_v\times d_{\mathrm{lm}}}.
+$$
+
+随后与 text embeddings $H_t$ 在 sequence axis 拼接：$H=[H_v;H_t]$。这里没有把图像“翻译成文字”，而是让 LM attention 直接读取连续视觉 tokens。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{llava-architecture.png}
+\caption{LLaVA architecture：CLIP vision encoder、projection layer 与 autoregressive LM。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-architecture.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：projector 的职责}
+Projector 只负责 dimension/interface alignment，不自动保证语义对齐。训练第一阶段通常冻结两端，先让 projector 学会把视觉 features 放到 LM 可读取的空间；第二阶段再用 instruction data 调整 LM 或全模型。
+\end{knowledgebox}
+
+\subsection{Training stages 与 synthetic instruction data}
+
+这里从接口转向数据。LLaVA 的关键突破很大程度来自用强 LM 根据 image captions 和 metadata 生成 conversation、detailed description 与 reasoning questions，再用这些视觉 instruction samples 微调模型；同一套 architecture 能否 OCR、grounding 或做图表推理，往往由任务覆盖决定。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-example.png}
+\caption{LLaVA instruction example：图像输入与多轮视觉问答。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-example.png}。}
+\end{figure}
+
+\begin{knowledgebox}{课堂提示}
+课程在 LLaVA-OneVision 小结中明确强调，多模态模型的大量工作来自 data curation，而非激进 architecture。Synthetic task-specific data 决定模型是否会 OCR、chart QA、grounding、multi-image reasoning 和 GUI interaction。
+\end{knowledgebox}
+
+\subsection{为什么 LLaVA 不能原生生成图像}
+
+回到开头的 understanding/generation 区分，LLaVA 只把图像编码成连续 features 输入 LM，输出仍是 text tokens。若要生成 pixels，通常需要外接 diffusion decoder 或 image generation tool；因此“能看图”不能推出“能在同一 token space 原生画图”。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-gen.png}
+\caption{理解与生成的边界：视觉 encoder 能输入图像，但输出图像需要额外 decoder。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-gen.png}。}
+\end{figure}
+
+\begin{warningbox}{不要把 tool-mediated generation 当作 native generation}
+模型调用 diffusion tool 生成图片，与一个统一 autoregressive model 直接输出 image tokens 是不同系统。前者模块化、质量高；后者统一但训练和离散化更难。
+\end{warningbox}
+
+\subsection{本章小结}
+
+LLaVA 建立了现代 VLM 的标准模板：预训练视觉 encoder、轻量 projector、LLM 与视觉 instruction data。它擅长 understanding，但 generation 仍需要外部模型。
+
+\section{LLaVA-OneVision：any-resolution、视频与跨模态迁移}
+
+本节进一步处理真实输入的异质性。固定分辨率会压缩高分辨率文档或浪费小图 token；多图和视频又要求在 token budget 内保留空间/时间关系。LLaVA-OneVision 使用 any-resolution tiling 和更系统的数据 curriculum。
+
+\subsection{Any-resolution tokenization}
+
+本节先处理固定分辨率的结构性损失：把长文档或高分辨率图表缩成一个方形输入，会让文字与小目标消失；直接用原始分辨率又会产生不可控的 token 数。AnyRes 用全局缩略图保留布局，再用局部 tiles 保留细节，把失真问题转换成可预算的 token 分配问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{llava-onevision-anyres.png}
+\caption{AnyRes：把高分辨率图像切成多个 tiles，同时保留全局缩略图。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-onevision-anyres.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：全局与局部为什么都需要}
+Global thumbnail 提供整体布局，local tiles 保留 OCR 和细节。Tile 数随分辨率增长，因此系统必须限制最大 visual tokens；视频通常降低每帧分辨率并做 temporal sampling，以免 context 被视觉占满。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{llava-onevision-modalities.png}
+\caption{OneVision 对单图、多图和视频采用不同分辨率/采样策略，使三种输入落入相近的 visual-token budget。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-onevision-modalities.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：统一的不是像素数，而是 LM 看到的序列预算}
+单图可以用更多 crops 保存 OCR 细节；多图要把预算分给 $N$ 张图；视频则把预算分给更多 frames，因此每帧分辨率更低。右侧 max-tokens 列体现的是系统约束：不同 modalities 的输入物理规模不同，但进入 LM 后必须控制到可比较的 sequence length。图不能证明三种模态信息量等价，只说明训练与 serving 需要显式 token allocation policy。
+\end{knowledgebox}
+
+\subsection{Data curriculum：quality over quantity, easy to hard}
+
+接下来处理训练顺序。视觉对齐、单图问答、多图关系和视频推理对模型的要求逐级增加；若从一开始就把长视频和复杂 agent trace 混入，长样本会主导 token-level loss，基础 alignment 反而学不稳。Curriculum 的作用是先建立共享能力，再扩大任务组合。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-onevision-data-1.png}
+\caption{OneVision 数据来源之一：覆盖单图、多图、视频与文档任务。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{llava-onevision-data-2.png}
+\caption{OneVision 数据清洗与任务配比：大规模原始 image-text 数据经筛选后，只保留部分高质量样本，并加入 task-specific supervision。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-onevision-data-2.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：quality over quantity 不是一句口号}
+左侧表先比较 Original、Cleaned 与 Remaining\%：LAION-en 等超大来源只保留一小部分，而更干净的小数据集保留率更高。下方 task table 再显示 captioning、VQA、grounding、OCR 与 pure-text autoregression 的样本规模。两部分合起来说明 curriculum 同时在做 source filtering 与 capability allocation；保留率低不等于原来源无价值，也不能单凭样本数推断最终任务权重。
+\end{knowledgebox}
+
+\begin{knowledgebox}{课堂提示：quality over quantity，easier to harder}
+OneVision 把两个数据原则并列呈现：先对来源做大幅清洗，宁可保留更少但更可靠的样本；再按 alignment、单图、多图、视频与复杂任务逐步增加难度。老师借此提醒，统一 architecture 并不意味着所有 modality data 应从第一步等权混合，训练顺序本身就是能力形成机制。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-onevision-training.png}
+\caption{OneVision training curriculum：从对齐、单图任务逐步扩展到复杂多模态。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-onevision-training.png}。}
+\end{figure}
+
+两张图共同说明 architecture 之外的主线：先让 projector/LM 学会基本 image-text alignment，再增加高质量 task data、multi-image 和 video。直接混合所有任务会导致 gradient conflict，简单任务还可能被长视频 token 淹没。
+
+\subsection{Cross-modal transfer}
+
+进一步的问题是，单图数据学到的能力能否迁移到更昂贵的模态。答案取决于训练任务是否暴露共享 latent skills：OCR、diagram parsing、spatial relation 和 grounding 并不专属于单图，它们也构成多图比较、视频理解和 GUI agent 的基本操作。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-onevision-transfer-s1.png}
+\caption{从单图 diagram/chart data 泛化到多图 reasoning。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{llava-onevision-transfer-s2.png}
+\caption{OCR 与 relational reasoning 数据向 GUI/agent tasks 迁移。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.64\textwidth]{llava-onevision-transfer-s8.png}
+\caption{单图中的 visual prompting（例如圈选目标）迁移到视频理解与时序定位。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/llava-onevision-transfer-s8.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：迁移来自共享技能而非共享数据格式}
+Diagram parsing、OCR、spatial relation 和 visual grounding 可在不同 modalities 间复用。训练设计应识别这些 latent skills，并用较便宜的单图数据先学习，再迁移到昂贵的多图、视频或 agent environment。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+OneVision 的 lesson 是：多模态扩展首先是 token budgeting 与 curriculum 问题。AnyRes 保留细节，分阶段高质量数据让 shared skills 跨模态迁移。
+
+\section{Qwen-VL 系列：dynamic resolution、MRoPE 与深层视觉注入}
+
+本节用三代 Qwen-VL 观察 VLM architecture 的渐进演化。主框架没有被推翻，但 visual tokens、position encoding、context length 和 cross-layer fusion 持续改进。
+
+\subsection{Qwen-VL：固定视觉压缩与三阶段训练}
+
+本节先看第一代固定接口。Qwen-VL 使用 OpenCLIP ViT-bigG，cross-attention adaptor 将视觉 features 压缩到固定 256 tokens，并引入 \texttt{<img>}、\texttt{<box>}、\texttt{<ref>} 等 special tokens 支持 grounding。固定长度便于控制成本，但不同分辨率都被压到同一预算，细节保真度受限。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{qwen-vl-stages.png}
+\caption{Qwen-VL 三阶段训练：视觉对齐、高质量任务学习、instruction tuning。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen-vl-stages.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{qwen-vl-stage1.png}
+\caption{Qwen-VL Stage 1：大规模 image-text 数据对齐，冻结 LM，训练 vision encoder 与 adaptor。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen-vl-stage1.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{qwen-vl-stage2.png}
+\caption{Qwen-VL Stage 2：更高质量、任务化的数据与更高分辨率输入，全参数联合训练。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen-vl-stage2.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：freeze schedule 决定谁适应谁}
+阶段 1 冻结 LM，让 vision encoder/adaptor 适应语言空间；阶段 2 全参数训练高质量任务；阶段 3 冻结视觉 encoder，主要调整 adaptor 与 LM 的 instruction behavior。Freeze schedule 是稳定性与 compute 的折中。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{qwen-vl-examples.png}
+\caption{Qwen-VL capability examples：多语对话、代码/OCR、grounding、细粒度描述与视觉推理。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen-vl-examples.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：能力拼图更像 data coverage map}
+示例覆盖人脸/物体问答、网页与代码阅读、grounding、密集图像描述和多语交互。它们说明 special tokens 与 task-specific data 能把同一 backbone 引导到不同输出格式；但 showcase 只证明存在成功案例，不给出失败率、分布外鲁棒性或 OCR 最小字号。评估时仍需按 capability slice 建独立测试集。
+\end{knowledgebox}
+
+\subsection{Qwen2-VL：dynamic resolution 与 MRoPE}
+
+进一步，Qwen2-VL 不再把所有图压成固定 token 数。图像按原分辨率切 patch，再做 $2\times2$ merge；视频按时间采样。Dynamic resolution 让文档和细节图获得更多 tokens，简单图则更省，也把 token budget 从常数变成与输入复杂度相关的调度问题。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{qwen2-vl-architecture.png}
+\caption{Qwen2-VL architecture：更大 ViT、dynamic resolution 与 visual token merge。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{qwen2-vl-mrope.png}
+\caption{MRoPE：把 temporal、height、width 三个坐标编码进 rotary position。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen2-vl-mrope.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：MRoPE 为什么不是普通 1D position}
+文本只需 sequence order；图像有 $(h,w)$，视频有 $(t,h,w)$。MRoPE 将 rotary dimensions 分配给多个轴，使 attention score 同时感知时间和空间相对位置，而不是把二维/三维结构完全压成任意扫描顺序。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{qwen2-vl-capabilities.png}
+\caption{Qwen2-VL 能力版图：general chat、video、grounding、OCR、long document、math/code 与 UI interaction。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen2-vl-capabilities.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：dynamic resolution 的收益最终要落到任务上}
+图中能力从低分辨率自然图像扩展到视频帧、长文档、公式、表格和 GUI。它们共同需要按输入复杂度分配 visual tokens，但瓶颈并不相同：OCR 受细节保真影响，视频受 temporal sampling 影响，UI interaction 还依赖 grounding 与动作格式。能力图只能作为覆盖清单，不能替代逐项 benchmark 与 latency/token-cost 报告。
+\end{knowledgebox}
+
+\subsection{Qwen3-VL：long context、interleaved MRoPE 与 DeepStack}
+
+接下来，Qwen3-VL 把容量和融合深度继续扩大：它使用 Qwen3 dense/MoE LMs、SigLIP-2 vision encoder、最长 256K context，并把 temporal/width/height 频率交错分配。DeepStack 还将视觉信息注入多个 LM layers，而不只是在输入层拼接一次。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{qwen3-vl.png}
+\caption{Qwen3-VL：大规模 LM、视觉 encoder、adapter 与长上下文。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen3-vl.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{qwen3-vl-pretraining.png}
+\caption{Qwen3-VL 多阶段 pretraining：逐步增加参数解冻与 context length。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+\begin{knowledgebox}{读图：四阶段不是简单“多训几轮”}
+先看 S0 只训练 merger/adaptor，让视觉接口进入 LM 表示空间；S1 在 8K context 上做全参数 multimodal pretraining；S2 继续保持约 1T token，但把 context 扩到 32K；S3 才用较少 token 适配 256K 超长上下文。这个顺序把接口对齐、通用能力和长上下文稳定性拆开，避免一开始就为极长序列支付全部 compute。图仍不能说明各阶段数据配比与质量，因此不能只凭 token budget 复现结果。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{qwen3-vl-results.png}
+\caption{Qwen3-VL benchmark results：不同规模模型与闭源/开源基线在多类视觉任务上的比较。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/qwen3-vl-results.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：先按任务族读结果，再谈“全面领先”}
+表格把 general VQA、OCR/document、spatial reasoning、video、agent/UI 等任务混在一起。应先在同一任务族内比较相近规模与相同输入条件，再检查是否使用 test-time CoT、工具或更长 context。结果支持 Qwen3-VL 是强模型，却不能单独归因于 DeepStack、MRoPE 或 scaling，因为训练数据细节、分辨率预算和 post-training recipe 同时变化。
+\end{knowledgebox}
+
+\begin{warningbox}{多模态 loss balance}
+视频样本 token 很长，若简单按 token 平均，会在 batch loss 中占据过大权重。Qwen3-VL 使用 per-token loss normalization 等技巧平衡 text/image/video；任何 mixture 都必须同时看样本级和 token-level 权重。
+\end{warningbox}
+
+\begin{knowledgebox}{课堂提示}
+课程对 Qwen3-VL 的判断很克制：性能很强，但公开材料仍显示“大量数据工作、少量关键 architecture improvements、继续 scaling”。不要只从模型图中寻找全部答案。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Qwen-VL 系列展示了现代 VLM 的演进方向：从固定视觉压缩到 dynamic tokens，从 1D order 到时空 position encoding，从单层拼接到跨层融合，并持续扩大数据和 context。
+
+\section{Chameleon：把图像也离散成 autoregressive tokens}
+
+前面的 VLM 都使用连续视觉 embeddings 输入 LM，生成图像仍需 diffusion decoder。Chameleon 选择另一条路线：用 VQ-VAE 把图像离散化为 codebook indices，与 text tokens 一起 autoregressive modeling。
+
+\subsection{VQ-VAE：从连续 latent 到离散 codebook}
+
+Encoder 产生 latent $z_e(x)$，再选择最近 codebook vector：
+
+$$
+k^*=\arg\min_k\|z_e(x)-e_k\|_2^2,
+\qquad z_q(x)=e_{k^*}.
+$$
+
+Decoder 从 $z_q$ 重建图像。Codebook index $k^*$ 就是 image token。512\,$\times$\,512 图像可被编码为约 1024 tokens，codebook size 约 8192。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{vq-vae.png}
+\caption{VQ-VAE：encoder、nearest codebook lookup 与 decoder reconstruction。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/vq-vae.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：离散化换来了统一接口，也带来信息瓶颈}
+离散 tokens 可以被普通 autoregressive LM 生成，因此理解与生成统一；但 codebook quantization 会丢失细节，OCR 和精细纹理尤其敏感。Codebook collapse、dead codes 和 reconstruction quality 都会限制上层模型。
+\end{knowledgebox}
+
+\subsection{Unified sequence 与 training stability}
+
+本节把“统一 token 接口”与“统一优化难度”分开。Text tokens 与 image codebook tokens 可以放进同一 autoregressive sequence，但二者的 entropy、局部相关性和最优 logit scale 不同；如果没有额外稳定化，模型可能在某一模态上 norm 增长、logit 漂移或遗忘另一模态。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{chameleon.png}
+\caption{Chameleon：text tokens 与 image tokens 在同一个 autoregressive sequence 中建模。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义，\texttt{images/chameleon.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{chameleon-example.png}
+\caption{Chameleon 的 interleaved text-image generation 示例。}
+\figsource{Stanford CS336 2026 Lecture 17 官方可执行讲义。}
+\end{figure}
+
+Text token entropy 与 image token entropy 差异很大，混合训练会引起 norm growth 和 logit drift。Chameleon 使用 QK norm、z-loss 等稳定化手段，并在大规模 unsupervised mixture 后加入高质量 stage。
+
+\begin{importantbox}{Comprehension 与 generation 的 representation 需求不同}
+理解更关心高层 semantics，连续 CLIP-like embeddings 很有效；生成需要保留局部细节与高频信息，离散 tokenizer 或 diffusion latent 更合适。一个 representation 很难同时做到极强理解、无损重建和低 token count。
+\end{importantbox}
+
+\begin{warningbox}{“统一模型”不等于“统一难度”}
+把所有模态写成 tokens 只统一了 API。不同模态的 entropy、token density、loss scale、decoder 和 evaluation 仍然不同，训练稳定性问题不会因 sequence format 统一而消失。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Chameleon 展示了 native multimodal generation 的优雅路线：所有内容都变成离散 tokens。但 quantization loss 和跨模态训练稳定性使它暂时不如 modular VLM + diffusion 方案成熟。
+
+\section{设计账本：构建多模态模型时真正要决定什么}
+
+回到整讲，architecture 名称很多，但工程决策可以压缩成一张账本：
+
+\begin{longtable}{L{0.18\textwidth}L{0.34\textwidth}L{0.38\textwidth}}
+\toprule
+决策 & 典型选项 & 主要权衡 \\
+\midrule
+Visual representation & continuous CLIP/SigLIP features；discrete VQ tokens & semantics vs reconstruction，理解 vs 生成 \\
+Token count & fixed compression；dynamic resolution；tiling；frame sampling & 细节、context、attention compute \\
+Position & 1D order；2D/3D MRoPE；explicit timestamps & 空间/时间结构与实现复杂度 \\
+Fusion & input concat；cross-attention；cross-layer fusion & 接口简单、深层交互、显存 \\
+Training & freeze/unfreeze stages；easy-to-hard curriculum & 稳定性、compute、catastrophic forgetting \\
+Loss balance & token average；sample average；modality normalization & 长视频是否压过文本/图像 \\
+Generation & external diffusion；native image tokens & 模块质量 vs 统一建模 \\
+\bottomrule
+\end{longtable}
+
+\begin{knowledgebox}{课堂提示}
+多模态模型最常被低估的是 data pipeline：resolution buckets、OCR quality、caption contamination、video sampling、synthetic instruction、task balance 和 safety filtering。Architecture 图只展示系统的一小部分。
+\end{knowledgebox}
+
+\section{总结与延伸}
+
+本讲从“Transformer 只处理 tokens”出发，梳理了多模态模型的主要路线。CLIP/SigLIP 学习 image-text alignment；LLaVA 用 projector 把连续视觉 features 注入 LM；OneVision 和 Qwen-VL 系列改进 resolution、position、curriculum 与 cross-layer fusion；Chameleon 则把图像离散化，实现统一 autoregressive generation。
+
+七个关键结论是：
+
+\begin{enumerate}
+\item 多模态 architecture 的第一约束是 token budget，而不是模型图的复杂程度。
+\item CLIP-like representation 擅长 semantics，但不等于细粒度视觉理解。
+\item Vision encoder + projector + LM 已成为 VLM 的稳定模板，主要创新常来自数据。
+\item Dynamic resolution 与 MRoPE 用更多 compute 换取细节和时空结构。
+\item Multi-image/video 的核心难点是 curriculum、loss balance 与 context allocation。
+\item 连续 visual tokens 适合理解；离散 tokens 更容易统一生成，但会损失信息。
+\item 真正的 omni model 必须同时解决 input understanding、native generation、training stability 和跨模态 evaluation。
+\end{enumerate}
+
+课程主线到这里形成闭环：从 tokenization 开始，我们最终又回到 tokenization，只是这次对象从文本扩展到了图像和视频。
+
+\subsection{拓展阅读}
+
+建议依次阅读 ViT、CLIP、SigLIP、LLaVA、LLaVA-OneVision、Qwen-VL/Qwen2-VL/Qwen3-VL、VQ-VAE 与 Chameleon，并重点比较它们的 token count、position encoding、data stages 和 generation interface。
+
+\begin{knowledgebox}{复现实验：做一次 visual-token budget 验收}
+准备四个固定 slice：自然图像问答、高分辨率文档 OCR、多图关系推理、短视频事件定位。对同一模型分别设置低/中/高 visual-token budget，逐项记录输入分辨率、tile/frame 数、最终 visual tokens、首 token latency、峰值显存和任务准确率。读结果时不要只找平均最优点：OCR 应检查最小可读字号，视频应检查采样遗漏，多图应检查图间指代，自然图像则检查是否为高预算支付了无收益的 attention cost。最后再改变 data mixture 或 freeze schedule 重跑一个 slice，验证性能变化来自 representation、训练数据还是 serving budget，而不是把所有收益都归因于模型版本名。
+\end{knowledgebox}
+
+\begin{importantbox}{最小交付门槛}
+一次可信的多模态实验至少同时交付：每个 slice 的准确率与失败样本、visual/text token 数、prefill latency 与显存、resolution/frame policy、训练或评测数据版本，以及 generation 是否由原生 decoder 还是外部工具完成。若缺少其中任一项，就无法区分模型能力、数据覆盖和系统预算三种来源。
+\end{importantbox}
+
+\end{document}

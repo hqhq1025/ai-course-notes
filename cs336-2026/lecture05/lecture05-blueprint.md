@@ -1,7 +1,7 @@
 # Lecture 05 Blueprint
 
 ## Goal
-Regenerate Lecture 05 as a slide-complete GPU performance note. The note should teach how GPU architecture, memory hierarchy, arithmetic intensity, low precision, fusion, recomputation, coalescing, tiling, and FlashAttention connect.
+Regenerate Lecture 05 as a slide-complete GPU performance note. Retain every source slide in lecture order and teach how GPU architecture, memory hierarchy, arithmetic intensity, low precision, fusion, recomputation, coalescing, tiling, and FlashAttention connect.
 
 ## Section Plan
 
@@ -19,4 +19,5 @@ SM, SP/CUDA core, warp, thread block, register, shared memory/SRAM, global memor
 - Every slide image 001-055 appears in the note.
 - Important diagrams and plots have `读图` explanations.
 - LaTeX log has no missing-character warnings.
-- Visual PDF QA contact sheet generated and reviewed.
+- No teacher-voice source is available in the lecture directory; classroom voice must not be fabricated.
+- Strict coverage, double-pass XeLaTeX and visual PDF QA all pass.

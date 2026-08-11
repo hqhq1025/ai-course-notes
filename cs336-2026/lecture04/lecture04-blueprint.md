@@ -1,7 +1,7 @@
 # Lecture 04 Blueprint
 
 ## Goal
-Regenerate Lecture 04 as a slide-complete, source-first note on attention alternatives and mixture-of-experts. The note should explain mechanisms, tradeoffs, evidence, and systems implications rather than just naming model families.
+Regenerate Lecture 04 as a slide-complete, source-first note on attention alternatives and mixture-of-experts. Retain every teaching-bearing source page in lecture order and explain mechanisms, tradeoffs, evidence, and systems implications; only the pure title page is omitted because the note cover duplicates it.
 
 ## Section Plan
 
@@ -46,7 +46,8 @@ Regenerate Lecture 04 as a slide-complete, source-first note on attention altern
 - Synthesize attention alternatives and MoE as two forms of selective computation.
 
 ## QA Requirements
-- Every slide image 000-059 appears in the note.
+- Slide images 001--059 all appear in the note; slide 000 is intentionally omitted as a pure title page duplicated by the note cover.
 - Important mechanism/evidence slides have read-the-figure boxes.
 - First-use glossary for DSA, MoE, top-k routing, expert parallelism, all-to-all, z-loss, upcycling, MLA, MTP.
-- Visual PDF QA contact sheet generated and reviewed.
+- No teacher-voice source is available in the lecture directory; classroom voice must not be fabricated.
+- Strict coverage, double-pass XeLaTeX and visual PDF QA must all pass.

@@ -1,0 +1,709 @@
+\documentclass[a4paper]{article}
+
+\newcommand{\notetitle}{Lecture 16：RLVR——从 PPO、GRPO 到 R1、Kimi 与 Qwen3}
+\newcommand{\noteauthors}{基于 Tatsunori Hashimoto 授课、官方 Slides 与公开视频字幕整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford Online / Tatsunori Hashimoto}
+\newcommand{\videopublishdate}{2026-05-27}
+\newcommand{\videoduration}{1:15:50}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=dIFAi87Ws4E}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\input{../cs336-preamble.tex}
+\graphicspath{{./}{slides-images/}}
+\setcounter{tocdepth}{1}
+
+\newcommand{\slidepair}[4]{%
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\includegraphics[width=\linewidth]{#1}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\includegraphics[width=\linewidth]{#2}
+\end{minipage}
+\caption{#3}
+\figsource{CS336 Spring 2026 Lecture 16，Slides #4。}
+\end{figure}
+}
+
+\newcommand{\singleslide}[3]{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{#1}
+\caption{#2}
+\figsource{CS336 Spring 2026 Lecture 16，Slide #3。}
+\end{figure}
+}
+
+\begin{document}
+\makecscover
+
+\section{从 RLHF 到 RLVR：把模糊偏好换成可验证结果}
+
+上一讲的 RLHF 使用 human/AI preference 作为 reward proxy，但继续优化会产生 overoptimization。RLVR（reinforcement learning from verifiable rewards）选择数学、代码、形式证明、可执行 agent tasks 等领域，利用 exact answer、unit tests 或 environment success 直接验证结果。
+
+\singleslide{slide-02.jpg}{课程从 pretraining + RLHF 的 GPT-3.5 级别控制，推进到 o1/R1 式可验证推理。}{2}
+
+Slide 2 把本讲定位成能力边界的扩张：pretraining 与 preference alignment 已能得到通用聊天助手，但复杂数学、代码与长链推理仍需要大量在线试错。关键变化不是简单“再做一次 RLHF”，而是选择 verifier 能精确判定成功的任务，使 policy 可以生成海量 trajectories 并自动获得 outcome feedback。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-03.jpg}
+\caption{RLVR 的目标：在 reward 能精确验证的 domain 中扩大 RL 的范围和强度。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 3。}
+\end{figure}
+
+\begin{knowledgebox}{读图：为什么 verifiable reward 改变了可扩展性}
+Human preference 的标签成本高且 reward model 会被 exploit；可验证任务可以自动生成大量 rollouts，并对最终答案或执行结果给出稳定反馈。它并不消除 specification problem，但把“什么算成功”变得更明确。
+\end{knowledgebox}
+
+\singleslide{slide-04.jpg}{本讲路线：先审计 PPO→GRPO 与变体，再比较 R1、Kimi K1.5、Qwen3 的完整 recipes。}{4}
+
+Slide 4 规定了阅读层级。算法部分回答 advantage、baseline、normalization 与 length weighting 怎样改变梯度；案例部分回答数据如何筛选、SFT 如何启动、RL 如何在线生产轨迹、distillation 如何迁移能力，以及 rollout infrastructure 如何决定有效吞吐。只看“用了 GRPO”无法解释三家模型为何得到不同结果。
+
+\begin{importantbox}{RLVR 的基本闭环}
+从问题 $x$ 采样一组 trajectories $y_1,\ldots,y_G$，用 verifier 得到 rewards $r_i$，再提高成功轨迹的概率、降低失败轨迹的概率。数据生成与 policy 更新交替进行，因此 rollout engine、verifier 和 trainer 构成同一个系统。
+\end{importantbox}
+
+\begin{knowledgebox}{课堂提示}
+Tatsu 将本讲分成两层：先审计 PPO/GRPO objective，再看 R1、Kimi、Qwen3 的完整 recipes。算法公式只是其中一部分，data curation、curriculum、distillation 和 infra 同样决定结果。
+\end{knowledgebox}
+
+\subsection{符号表：一次 PPO/GRPO update 在算什么}
+
+为了避免后文在 trajectory、token 和 policy 之间反复切换，本节先建立符号账本。核心区分是：$x$ 和 $y$ 描述一条样本，$t$ 描述样本内部的 token step，$i$ 描述同一 prompt 下的第几条 rollout；baseline 与 normalization 若依赖错了索引，就会改变梯度含义。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.14\textwidth}L{0.34\textwidth}L{0.42\textwidth}}
+\toprule
+符号 & 表示 & 审计问题 \\
+\midrule
+$x$ & prompt / environment initial state & 同一组 rollouts 是否真的共享同一个条件 \\
+$y_i$ & 第 $i$ 条完整 trajectory & 长度、语言和工具调用是否可比 \\
+$y_{i,t}$ & trajectory 内第 $t$ 个 token/action & mask、padding 与 stop token 是否正确 \\
+$\pi_\theta$ & 正在更新的 policy & rollout 与训练时使用的版本是否一致 \\
+$\pi_{\mathrm{old}}$ & 生成当前数据的旧 policy & importance ratio 是否过旧 \\
+$\pi_{\mathrm{ref}}$ & KL anchor/reference policy & reference 是否固定、是否与 tokenizer 一致 \\
+$r_i$ & verifier 对完整 trajectory 的 reward & reward 是否可复现、是否有 false positive \\
+$b$ / $\bar r$ & baseline 或组均值 & 是否与当前 action 条件独立 \\
+$\hat A_i$ & 用于更新的 advantage estimate & normalization 是否重写 prompt 权重 \\
+$G$ & 每个 prompt 的 rollout 数 & group 太小时 bias/variance 是否过大 \\
+\bottomrule
+\end{tabular}
+\caption{PPO/GRPO 的符号与实现检查点。}
+\end{table}
+
+\subsection{本章小结}
+
+本节把 RLVR 定位为“可验证 domain 上的 on-policy improvement”。接下来回顾 PPO，理解 GRPO 究竟删掉了什么、又引入了什么偏差。
+
+\section{PPO in Language Models：完整系统比一条 loss 更重要}
+
+本节从上一讲的 PPO 公式继续。语言模型把 prompt 和已生成 token 视为 state，把下一个 token 视为 action；大部分 task reward 在序列结尾才出现，因此 credit assignment、sequence length 和 KL shaping 成为核心问题。
+
+\subsection{Policy gradient 与 ratio clipping}
+
+本节先从最小 policy-gradient 对象开始，再解释 PPO clipping。最基础的 REINFORCE gradient 是：
+
+$$
+\nabla_\theta J(\theta)
+=\mathbb{E}_{y\sim\pi_\theta}\left[(R(y)-b)\nabla_\theta\log\pi_\theta(y\mid x)\right].
+$$
+
+其中 $R(y)$ 表示 trajectory reward，$b$ 是不依赖当前 action 的 baseline，$\theta$ 是 policy 参数。Baseline 不改变期望梯度，但可以显著降低 variance；PPO 随后用新旧 policy probability ratio 限制一次 update 的幅度。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-05.jpg}
+\caption{PPO 理论回顾：policy gradient、TRPO 与 clipped objective。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 5。}
+\end{figure}
+
+\begin{knowledgebox}{读图：PPO 的三次妥协}
+Policy gradient 无约束更新方差大；TRPO 用 trust region 限制新旧 policy 距离，但二阶优化复杂；PPO 用 ratio clipping 近似 trust region。它是经验上有效的工程折中，而不是对全局最优的保证。
+\end{knowledgebox}
+
+\slidepair{slide-06.jpg}{slide-07.jpg}{PPO 从传统控制任务中的成功案例，到概念层面简洁的 clipped surrogate objective。}{6--7}
+
+Slide 6 用机器人控制与 OpenAI Five 强调 PPO 原本面向会与环境持续交互的 policy；Slide 7 则显示其概念核心确实可以写在一页公式里：采样旧 policy 数据，计算 advantage，再限制新旧 action probability ratio。问题在于语言模型的 action space 是词表、trajectory 很长、policy 本身巨大，公式之外的状态管理与吞吐成本被急剧放大。
+
+\singleslide{slide-08.jpg}{PPO 的实践复杂度：真正的实现往往需要大量稳定化选择与系统性调试。}{8}
+
+这页故意用难读的博客截图制造反差：概念目标很短，实际 recipe 却包含 reward scaling、advantage whitening、KL controller、clip ranges、value warmup、mask、microbatch 和 rollout freshness。老师提醒，PPO 的 value model 可能与 policy 一样大，且稳定化技巧常依赖具体环境；因此“复现 loss”远不等于“复现训练”。
+
+\begin{warningbox}{老师强调：PPO recipe 不是一个可移植常数表}
+课堂在 00:08 与 00:11 两次指出，value model 带来接近另一份大模型的显存与调参成本，实际实现还常需要环境特定的 stabilization hacks。超参数应与 reward scale、序列长度、batch freshness 和 model size 联合审计，不能机械复制。
+\end{warningbox}
+
+\subsection{LM formulation：terminal reward 如何变成 token advantages}
+
+接下来把 trajectory objective 展开到 token。LM 中的概率分解为 $\pi(y\mid x)=\prod_t\pi(y_t\mid x,y_{<t})$。若 verifier 只给 final reward，可以把同一个 outcome signal 分配到各 token，再加入 per-token KL penalty：
+
+$$
+r_t^{\mathrm{shaped}}
+=-\beta\log\frac{\pi_\theta(y_t\mid s_t)}{\pi_{\mathrm{ref}}(y_t\mid s_t)}
++\mathbb{1}[t=T]R(y).
+$$
+
+其中 $\beta$ 表示 KL penalty 强度，$T$ 是最后一个 token，$s_t=(x,y_{<t})$ 表示当前语言模型状态。Value model 估计 expected return，GAE 将 temporal-difference errors 组合为低方差 advantage。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-09.jpg}
+\caption{PPO 在语言模型中的理想化表示：token actions 与序列终点 reward。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 9。}
+\end{figure}
+
+Slide 9 的 idealization 把整段回答视为 trajectory：每个 token 是 action，大部分 task reward 只在结尾出现。它看起来仍像标准 RL，但实际状态数等于生成长度，任何 truncation、stop condition 或 chat-template 差异都会改变 trajectory。下一组代码页因此从“公式像什么”转向“训练器到底做什么”。
+
+\singleslide{slide-10.jpg}{AlpacaFarm PPO：课程选取的可运行语言模型实现入口。}{10}
+
+Slide 10 选择 AlpacaFarm，不是因为它代表唯一现代 recipe，而是因为它曾被多个项目复用、代码足够完整，能把论文名词映射到实际模块。阅读实现时应先画调用图：谁负责 rollout、谁缓存 old log-prob 与 values、何时调用 reward model、一个 rollout batch 被重复优化多少 epoch，以及 policy 更新后哪些缓存必须失效。
+
+\slidepair{slide-11.jpg}{slide-12.jpg}{PPO outer loop 与 loss computation：rollout 批次、ratio clipping、value loss 和多轮 minibatch update。}{11--12}
+
+Slide 11 的 outer loop 先生成一批 on-policy trajectories，再进入 inner optimization loop；Slide 12 展开 policy/value losses 与 cliprange。核心审计点是数据版本：$\pi_{\mathrm{old}}$ 必须对应生成该 batch 的 policy，若 inner epochs 太多或 rollout 队列过旧，ratio 会偏离 1，clip fraction 上升，算法从近端更新退化成对陈旧数据的强行拟合。
+
+\singleslide{slide-13.jpg}{PPO rollout 代码路径：变长生成、旧策略统计量与 reward/value 输入的组装。}{13}
+
+Rollout 页把最容易出错的张量对齐暴露出来：prompt tokens 不应被当作 policy actions，padding 位置必须 mask，生成停止后不能继续累计 KL，old log-probs、reference log-probs、values 与 rewards 还要对齐到同一 token index。很多看似“训练不稳定”的问题，根因其实是这类 sequence bookkeeping 错误。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-14.jpg}
+\caption{Reward shaping：per-token KL penalty 加 final task reward。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 14。}
+\end{figure}
+
+Slide 14 显示常见 shaping：每个生成 token 承担相对 reference 的 KL 代价，最终 token 再接收完整 task reward。课件还提到对某些 KL 方向做 clipping 的实现细节，用于阻止 divergence；这类 heuristic 会改变优化目标，却常不会出现在简化公式中，因此训练报告应明确记录。
+
+\singleslide{slide-15.jpg}{Generalized Advantage Estimation：把 terminal reward、value predictions 与 token-level returns 连接起来。}{15}
+
+在一次性回答任务中，环境没有中途外部状态转移，因而常取 $\gamma=\lambda=1$；但 value model 仍需为每个 prefix 估计最终 return。GAE 将相邻 temporal-difference errors 累积为 advantage，降低纯 Monte Carlo return 的方差。若 value mask、terminal index 或 reward placement 错一位，所有 token 都会获得错误 credit。
+
+\begin{warningbox}{Bandit-like 不等于实现简单}
+Outcome reward 看起来像 contextual bandit，但序列仍有成千上万 token，value/advantage 计算、padding、mask、truncation 和 variable-length batching 都会影响梯度。把 $\gamma=\lambda=1$ 当作“没有 credit assignment 问题”是不准确的。
+\end{warningbox}
+
+\subsection{为什么 PPO 很难做快}
+
+本节进一步从公式转向系统。PPO 需要 rollout policy、reference policy、reward model、value model 和 trainer；生成是 autoregressive inference，训练是大 batch forward/backward，两者最佳并行布局不同。Policy 更新后，旧 rollouts 又会迅速 stale。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-16.jpg}
+\caption{PPO 训练中 reward、KL 与 value-related curves 的典型形态。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 16。}
+\end{figure}
+
+\begin{knowledgebox}{术语消化：PPO 系统里的四个模型}
+\textbf{Policy} 生成并被更新；\textbf{reference} 提供 KL anchor；\textbf{reward model/verifier} 评价完整输出；\textbf{value model} 预测 return 以降低方差。RLVR 可以用 deterministic verifier 替换 reward model，但其余系统负担仍然存在。
+\end{knowledgebox}
+
+Slide 16 的训练曲线提供了最基本的 sanity check：task/reward-model 分数应提高，KL reward 通常为负且随 policy 漂移变化，value-related 指标不应爆炸。但“曲线平滑”只证明实现内部自洽，不能证明 verifier 没有漏洞；还要在独立题集上执行答案、运行 tests，并检查生成长度与格式是否成为 shortcut。
+
+\singleslide{slide-17.jpg}{为什么需要 GRPO：PPO 的 value-model 与实现负担，以及 pairwise/offline DPO 与 RLVR 数据形态的不匹配。}{17}
+
+Slide 17 明确了算法选择的约束。PPO 能处理 scalar outcome reward，却要维护昂贵的 value model；DPO 实现简单，但原始数据并非天然的 Bradley--Terry pairs，而且静态 pair 会迅速落后于在线提升的 policy。老师同时提醒，“DPO 是 offline”并非绝对：可以不断重新采样并迭代 DPO。真正差别是每一轮怎样构造学习信号，而不是算法名字决定整个数据循环。
+
+\subsection{本章小结}
+
+PPO 的能力来自直接优化 reward，成本来自 on-policy rollout、value estimation 和多模型协同。GRPO 的主要吸引力正是去掉 value model，并用组内相对 reward 构造 advantage。
+
+\section{GRPO：用 group-relative signal 替代 value model}
+
+本节的核心问题是：同一个 prompt 采样多个答案时，能否用这组答案本身估计 baseline？GRPO 对每个 prompt 采样 $G$ 个 trajectories，以组内平均和标准差归一化 reward。
+
+\subsection{Vanilla GRPO objective}
+
+本节先写出最常见的 vanilla 版本，再审计它隐含的权重。组内 advantage 常写成：
+
+$$
+\hat{A}_i=\frac{r_i-\bar r}{s_r+\epsilon},\qquad
+\bar r=\frac{1}{G}\sum_{j=1}^{G}r_j.
+$$
+
+其中 $s_r$ 表示组内 reward 标准差，$\epsilon$ 防止除零，$\bar r$ 是同一 prompt 的 group mean。随后把 $\hat A_i$ 代入 PPO-style clipped ratio objective，并加入 KL regularization。
+
+\subsection{Worked example：四条 rollout 怎样变成优势信号}
+
+为了看清 group-relative normalization 的行为，考虑同一 prompt 采样四条答案，verifier rewards 为 $(1,1,0,0)$。使用 population standard deviation 时，$\bar r=0.5$、$s_r=0.5$，因此 normalized advantages 为 $(1,1,-1,-1)$：两条正确轨迹被提高概率，两条错误轨迹被降低概率。
+
+若改用 leave-one-out baseline，则对第一条正确轨迹有
+
+$$
+b_{-1}=\frac{1+0+0}{3}=\frac{1}{3},
+\qquad r_1-b_{-1}=\frac{2}{3};
+$$
+
+对一条错误轨迹有 $b_{-3}=2/3$、$r_3-b_{-3}=-2/3$。方向相同，但它明确排除了当前 action 自己对 baseline 的影响。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.22\textwidth}L{0.22\textwidth}L{0.46\textwidth}}
+\toprule
+组内结果 & Advantage 行为 & 训练含义 \\
+\midrule
+有对有错 & 产生正负相对信号 & 最适合学习，能区分策略 \\
+全部正确 & variance 接近 0 & 问题已太容易，继续采样浪费 rollout \\
+全部错误 & variance 接近 0 & 问题可能太难、verifier 错或 policy 尚无探索支点 \\
+只有一条异常 & normalization 可能放大 outlier & 需要检查 reward bug 与 sampling luck \\
+\bottomrule
+\end{tabular}
+\caption{Group composition 决定 GRPO 是否有有效学习信号。}
+\end{table}
+
+\begin{importantbox}{课程难度与 group variance 是同一个信号}
+当一组答案全对或全错时，GRPO 几乎没有相对信息。因此 curriculum 不应只按人工难度标签排序，还应观察当前 policy 的 group success distribution，把 rollout 预算放在“有分歧、可改进”的 prompts 上。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-18.jpg}
+\caption{GRPO：保留 PPO ratio/KL，去掉 value function，用组内 z-score advantage。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 18。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{slide-19.jpg}
+\caption{GRPO 的最小实现结构：rollout、reward normalization、policy loss、KL。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 19。}
+\end{figure}
+
+\begin{knowledgebox}{读图：GRPO 简化了哪里}
+它不再训练 value network，也不需要 token-level GAE；对于可验证 outcome reward，这能明显降低显存和调参复杂度。但 rollout、old-policy ratios、reference KL 和长序列训练仍然存在，因此“tiny loss”不等于“tiny system”。
+\end{knowledgebox}
+
+老师把 GRPO 的核心心智模型压缩为一句话：同一 prompt 采样一组回答，用组内 reward 的 z-score 代替 learned value baseline。这个替换删掉了 value-model forward/backward 与 GAE，但没有删掉 on-policy sampling；生成一组长 CoT 仍然是主要成本。
+
+\singleslide{slide-20.jpg}{Vanilla GRPO 的 advantage computation：组内均值、标准差与数值稳定项。}{20}
+
+Slide 20 对应前面的四条 rollout 示例。实现先按 prompt 分组，计算每组 rewards 的 mean 与 standard deviation，再给组内每条 trajectory 一个共享到所有 token 的 normalized advantage。$10^{-4}$ 稳定项避免全对/全错时除零，却不能创造学习信号；此时应调整 curriculum，而不是依赖 epsilon 放大数值噪声。
+
+\singleslide{slide-21.jpg}{原始 GRPO 结果：相对 rejection fine-tuning 的收益，以及 process supervision 的额外增益。}{21}
+
+Slide 21 提供的是“GRPO 可以工作”的经验起点，而不是算法无偏性的证明。原论文中 GRPO 优于只强化正确答案的 RFT，process supervision 还能增加收益；但后续 R1 并未依赖同样的过程奖励。比较这些结果时必须同时核对 base model、数据、verifier 与 rollout budget，不能把所有增益归因于 z-score 公式。
+
+\subsection{Baseline validity：组均值与标准差并不对称}
+
+减去只依赖 state/prompt 的 baseline 不改变 policy gradient 期望。Leave-one-out mean
+
+$$
+b_{-i}=\frac{1}{G-1}\sum_{j\ne i}r_j
+$$
+
+与当前 action $y_i$ 条件独立，因此是更干净的 baseline。直接用包含 $r_i$ 的组均值会引入有限组偏差；再除以 sample standard deviation 则引入额外的 reward-dependent reweighting。
+
+\singleslide{slide-22.jpg}{从 policy-gradient baseline 定理重新检查 GRPO：可以减去什么，不能随意除以什么。}{22}
+
+Slide 22 的 RL detour 给出判断标准：baseline 可以依赖 state，也就是当前 prompt，但不能依赖正在评分的 action。组均值若包含 $r_i$，就受当前 rollout 影响；标准差更是由整组 actions 决定。它们在大组或特定对称条件下可能近似良好，却不能仅凭“做了 normalization”就宣称保持原梯度。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-23.jpg}
+\caption{GRPO baseline 与 unbiased-gradient variants 的比较。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 23。}
+\end{figure}
+
+\begin{warningbox}{标准差归一化改变了问题权重}
+当一组 rewards 几乎全对或全错时，$s_r$ 很小，归一化可能放大噪声；当 reward variance 较大时，梯度反而被缩小。它不仅“稳定尺度”，也在重新加权不同难度的 prompts。
+\end{warningbox}
+
+\subsection{Length bias：token averaging 会奖励什么}
+
+进一步审计序列聚合：若 trajectory loss 对 token 取平均，短答案的每个 token 获得更大权重；若对所有 tokens 求和，长答案可能贡献更大梯度。不同 GRPO variants 会修改 length normalizer，以避免模型通过增加无用 reasoning tokens 或过早结束来操纵 objective。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-24.jpg}
+\caption{GRPO 的标准差与长度归一化会产生 prompt/sequence weighting bias。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 24。}
+\end{figure}
+
+\begin{importantbox}{审计 RL objective 的三个问题}
+一看 baseline 是否与当前 action 独立；二看 normalization 是否改变 prompt 权重；三看 token aggregation 是否偏好特定长度。很多“训练技巧”其实在悄悄重写优化目标。
+\end{importantbox}
+
+\begin{knowledgebox}{课堂提示}
+讲者没有把 GRPO 描述成最终答案，而是把它当成一个足够简单、能扩展 RLVR 的 baseline。理解它的 bias 比背诵公式更重要，因为后续模型 recipe 往往会改 advantage、length control 和 sampling curriculum。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+GRPO 用 group-relative rewards 去掉 value model，降低了 RLVR 的实现门槛；代价是 finite-group bias、standard-deviation weighting 和 length bias。下一步看这些算法如何进入真实模型 recipe。
+
+\singleslide{slide-25.jpg}{三个公开 RLVR 案例的比较入口：DeepSeek R1、Kimi K1.5 与 Qwen3。}{25}
+
+这页不是模型排行榜，而是实验设计对照。R1 展示 GRPO、R1-Zero 与 distillation；这里的 R1-Zero 指“没有 reasoning SFT 冷启动”，与分布式训练中的 ZeRO（Zero Redundancy Optimizer，将 optimizer state、gradient 或 parameter 分片到多张 GPU）无关。Kimi 补充 difficulty curriculum、length control 与 RL infrastructure；Qwen3 则展示低数据 reasoning RL、thinking-mode fusion、general alignment 和 agentic environments。后文每个案例都按“数据→初始化→在线 RL→离线迁移→系统”同一框架阅读。
+
+\section{DeepSeek R1：从 R1-Zero 到完整 post-training pipeline}
+
+本节从算法转向案例。DeepSeek R1 的影响不仅是 benchmark performance，还在于公开了相对简洁的 RLVR recipe，削弱了“必须依赖复杂 MCTS 或 process reward model”的猜测。
+
+\slidepair{slide-26.jpg}{slide-27.jpg}{R1 的公开意义，以及它从 DeepSeekMath GRPO 继承但不使用 process supervision 的算法选择。}{26--27}
+
+Slide 26 强调 R1 的影响来自三件事：达到接近或超过 o1 的公开结果、给出相对简单的训练路线、并展示 reasoning SFT/蒸馏的可迁移性。Slide 27 把算法谱系接回 DeepSeekMath：R1 继续使用 GRPO，却在主要 reasoning RL 中放弃 process reward model。于是“必须逐步标注推理过程”从前提变成可检验选择。
+
+\begin{knowledgebox}{读案例时先分离四类证据}
+Benchmark 证明最终系统有效；公开 objective 说明梯度大致如何计算；数据与系统披露决定可复现性；单条 trajectory 只能提供行为例子。R1 四类证据的公开程度不同，不能用最终分数反推所有未披露 recipe 都不重要。
+\end{knowledgebox}
+
+\subsection{R1-Zero：只用 verifiable reward 会发生什么}
+
+R1-Zero 从 base model 直接做 GRPO，reward 主要包括 answer correctness 与 format compliance。这里的 ``Zero'' 表示没有先做 reasoning SFT，与分布式训练中的 ZeRO（Zero Redundancy Optimizer，把 optimizer state、gradient 或 parameter 分片到多张 GPU）无关。训练中出现更长 chain-of-thought 和所谓 ``aha moment''，但课程提醒不要过度叙事：base model 已有 reasoning patterns，biased objective 也可能推动 length growth。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-28.jpg}
+\caption{R1-Zero 的受控设定：accuracy reward、format reward 与私有训练题。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 28。}
+\end{figure}
+
+Slide 28 中的“受控”是相对完整 R1 而言：base model 直接用 accuracy 与 thinking-tag format reward 做 RL，没有 reasoning SFT 初始化。它仍不是完全透明实验，因为训练题不公开，DeepSeek-V3 base 的先验能力也很强。Format reward 还会把“按标签输出长 CoT”写进目标，因此观察到的行为变化不能只归因于 correctness signal。
+
+\singleslide{slide-29.jpg}{R1-Zero 训练中的两个著名现象：CoT 逐渐变长，以及样例中的自我反思“aha moment”。}{29}
+
+Slide 29 应先当作待解释现象：平均生成长度随训练增长，某条轨迹出现“等等，让我重新检查”的自我修正。可能解释包括 policy 学到更长搜索、长度归一化带来的 objective bias、base model 原有自省模式被提高概率，或采样偶然性。只有分布级统计与 ablation 才能区分这些机制。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-30.jpg}
+\caption{对“aha moment”的后续分析：长度增长未必代表突然涌现新算法。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 30。}
+\end{figure}
+
+老师在这里直接削弱了流行叙事：后续 Dr. GRPO 分析表明，长度增长可能部分来自 biased objective，而类似 self-reflection 在 base model 中已经存在。更谨慎的结论是 RL 改变了这些行为的频率与条件，而不是凭一条示例证明训练中突然发明了全新推理算法。
+
+\begin{warningbox}{不要从单条 trajectory 推断 emergence}
+展示一个突然自我反思的样本很有吸引力，但它不能区分 base-model prior、sampling luck、reward shaping 和真正的 distribution-level change。应查看 length、accuracy、strategy diversity 和 controlled ablations。
+\end{warningbox}
+
+\subsection{R1：SFT initialization、RLVR、再 SFT/RLHF}
+
+完整 R1 pipeline 加入 long-CoT SFT initialization、language-consistency reward、第二阶段非可验证数据和最终 general-purpose alignment。换句话说，RLVR 不是孤立阶段，而是夹在 data bootstrapping、distillation 和 RLHF 之间。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-31.jpg}
+\caption{R1 相对 R1-Zero 的关键变化：SFT 起点、语言一致性和多阶段后训练。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 31。}
+\end{figure}
+
+Slide 31 给出的关键不是“R1 比 R1-Zero 多几个步骤”，而是每一步修复不同缺陷：long-CoT SFT 改善可读初始化，reasoning RL 提升可验证任务，language-consistency reward 抑制混语，后续 SFT/RLHF 再补非可验证任务和通用助手行为。最终模型是 stage composition 的产物，不能把全部能力归给中间 GRPO。
+
+\singleslide{slide-32.jpg}{Reasoning SFT initialization：从长 CoT demonstrations 启动，但数据来源与验证细节披露有限。}{32}
+
+Slide 32 把“cold start data”描述为普通 long CoT，再加可能的 verification。它的直接好处是让 policy 在 RL 前已经会生成可读、分段且符合格式的 reasoning，减少 verifier 只看到格式错误的冷启动阶段。需要保留的 caveat 是数据 provenance 不够清楚，因此不能精确判断增益来自人写、模型蒸馏还是过滤强度。
+
+\singleslide{slide-33.jpg}{少量 reasoning SFT 的启动效应：约 1K 数学/科学问题配合强模型长 CoT 即可显著迁移行为。}{33}
+
+这页补充了样本效率证据：若 base model 已有数学知识，少量高质量长 CoT 可以把潜在能力组织成稳定格式。老师据此强调 RL 与 distillation/SFT 不是互斥路线；一旦强 generator 存在，大量 reasoning 行为可以廉价迁移，on-policy RL 的价值则转向超出 teacher support 的探索。
+
+\singleslide{slide-34.jpg}{R1 reasoning RL：基本 GRPO 路线不变，额外加入语言一致性约束以减少混语。}{34}
+
+Slide 34 展示一个典型 multi-objective 修补：accuracy verifier 只关心答案对错，不在意 CoT 是否突然切换语言，因此 policy 可能利用训练分布产生混语。加入 language-consistency reward 把可读性写入目标，却也可能压制本来有用的跨语言表示。每加一个 reward term 都需要独立检查能力与行为 trade-off。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-35.jpg}
+\caption{RLVR 后继续 SFT/RLHF，使 reasoning model 恢复通用交互能力。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 35。}
+\end{figure}
+
+Slide 35 进一步说明最终 alignment 的数据构成：可验证 reasoning 之外，还用强模型 judge 生成/筛选约 600K 非可验证 reasoning 样本，并混入约 200K 通用 SFT 数据；随后 reasoning 与 general tasks 都继续 RLHF。所谓 R1 recipe 因而同时包含 verifier reward 与 learned preference signal。
+
+\begin{knowledgebox}{读图：为什么最后还要 general-purpose alignment}
+只在数学/代码 verifier 上优化会收窄分布，模型可能变得冗长、语言混杂或对非可验证任务退化。后续 SFT/RLHF 把模型重新拉回通用 assistant distribution，但也可能轻微损伤 math/STEM 指标。
+\end{knowledgebox}
+
+\singleslide{slide-36.jpg}{R1 的最终效果页：公开 benchmark 证明组合 recipe 有效，但不能单独识别各阶段贡献。}{36}
+
+结果页最重要的读法是区分“系统有效”与“因果归因”。R1 在多项 reasoning benchmark 上表现强，证明 pipeline 的总体可行性；但若没有逐阶段 checkpoint、等算力 baseline 和数据消融，就无法仅凭最终表格断言 GRPO、cold-start SFT、语言奖励或 general alignment 各贡献多少。
+
+\subsection{Distillation：把昂贵 policy 的轨迹变成离线数据}
+
+回到模型压缩与迁移，R1 生成大量 reasoning traces，再用 SFT 训练较小 Qwen models。Distillation 省去 student 的 on-policy exploration，能快速迁移 style 和策略；但 student 只看到 teacher support，无法通过自己的失败发现新策略。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-37.jpg}
+\caption{R1 distillation：teacher 生成约 800K traces，student 通过 SFT 学习 reasoning。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 37。}
+\end{figure}
+
+Slide 37 展示了约 800K teacher traces 的迁移规模。Student 训练不再需要自己生成同等数量的昂贵 rollout，只需在离线 CoT 上做 SFT；代价是学习到的策略受 teacher 采样分布和过滤规则限制。课堂据此指出，long-CoT 能力中相当一部分一旦被强模型发现，就可以通过 distillation 传播。
+
+\singleslide{slide-38.jpg}{R1 报告中的失败尝试：process reward models 与 MCTS 并未成为最终必要组件。}{38}
+
+失败尝试页为因果理解提供了少见的负证据。PRM 需要可靠的中间步骤标签，错误 credit 可能奖励看似合理但无助于答案的推理；MCTS 在语言 action space 中又面临 branching、value estimation 与巨大 inference 成本。它们并非原则上无效，而是在 R1 的数据、模型和预算下没有证明比简单 outcome-RL recipe 更划算。
+
+\begin{importantbox}{R1 案例的真正 lesson}
+成功 recipe 是 data + SFT bootstrap + RLVR + distillation + general alignment 的组合。把结果全部归因于 GRPO，会忽略最关键的训练分布设计。
+\end{importantbox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.2\textwidth}L{0.31\textwidth}L{0.39\textwidth}}
+\toprule
+路线 & 优点 & 边界 \\
+\midrule
+Teacher distillation & 稳定、便宜、可复用离线 traces & 受 teacher support 限制，难发现新策略 \\
+Student on-policy RLVR & 能围绕自身失败探索并适应 verifier & rollout 昂贵，训练更不稳定 \\
+先蒸馏再 RLVR & 先获得强初始化，再主动探索 & 需要防止 style imitation 掩盖真实能力 \\
+\bottomrule
+\end{tabular}
+\caption{Distillation 与 on-policy RLVR 的互补关系。}
+\end{table}
+
+\subsection{本章小结}
+
+DeepSeek R1 证明了简单 outcome reward 可以扩展 reasoning，但也显示纯 RLVR 不够：可读性、语言一致性、通用性和小模型迁移都依赖额外阶段。
+
+\section{Kimi K1.5：curriculum、length control 与 RL infrastructure}
+
+接下来比较同一时期的 Kimi K1.5。它同样使用 long-CoT SFT + RL，但更公开地讨论 difficulty filtering、curriculum、length reward 和 systems utilization。
+
+\slidepair{slide-39.jpg}{slide-40.jpg}{Kimi K1.5 的案例价值，以及 dataset construction→long-CoT SFT→RL 的主路线。}{39--40}
+
+Slide 39 说明选择 Kimi 的原因：它与 R1 同期发布，同样声称通过 RL 达到或超过 o1，却公开了互补的 data 与 systems 细节。Slide 40 的三个步骤看似熟悉，但重心不同：先构造“当前模型仍会失败”的数据集，再用 long-CoT SFT 建立起点，最后用自定义 policy-gradient objective 在线改进。
+
+\begin{knowledgebox}{老师强调：RL 的 dataset construction 本身就是算法}
+普通 SFT 常把多个语料按比例混合后训练；RLVR 中，题目是否全对、全错或恰好有分歧会直接决定 advantage 是否有信息。Kimi 因此持续估计 success rate、调整难度与采样概率。Curriculum 不是 loader 的小优化，而是在线控制学习信号分布。
+\end{knowledgebox}
+
+\subsection{Data curriculum：让问题保持“有学习信号”}
+
+Kimi 过滤 multiple-choice/true-false 等容易产生 false positives 的题，选择 base model best-of-8 仍失败的样本，并按 topic 平衡。训练中按 $1-\text{success rate}$ 提高未解决问题的采样概率，避免把 compute 浪费在已经掌握的题上。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-41.jpg}
+\caption{Kimi 的数据构造：topic balance、difficulty filtering 与 long-CoT SFT。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 41。}
+\end{figure}
+
+\begin{knowledgebox}{读图：difficulty 是动态属性}
+“难题”不是固定标签，而是相对于当前 policy。模型变强后，原来的 hard set 会变 easy，因此 curriculum 需要根据 rolling success rate 更新；这也是 RLVR data loader 与普通静态 SFT loader 的重要区别。
+\end{knowledgebox}
+
+\subsection{Kimi 的 reference-based RL objective}
+
+数据保持在有效难度区间后，Kimi 并没有直接复用 vanilla GRPO。它从 reference-regularized optimization 出发，像 DPO 一样利用 nonparametric optimum 反解 reward/policy 关系，再选择 squared loss surrogate，并保留 baselined policy-gradient 项。这个设计再次说明“RLVR model”不等于“GRPO model”。
+
+\singleslide{slide-42.jpg}{Kimi RL objective：reference-based 最优 policy 推导、平方损失 surrogate 与 regularized policy gradient。}{42}
+
+读这页时应把三层分开：reference policy 限制分布漂移；closed-form relation 把 reward 与 log-ratio 联系起来；实际优化再用可计算 surrogate。它与 DPO 共享推导工具，却仍在在线 rollout 上更新。算法类别不能只按公式长相判断，还要看数据是否由当前 policy 生成、reward 是否即时计算。
+
+\subsection{Length control：把更短的正确推理也写进 reward}
+
+Kimi 使用 batch-relative length reward，鼓励同组中更短且正确的 trajectories。这里的目标不是盲目压缩，而是在 correctness 已满足时减少无效 token，降低 inference cost 并避免 reasoning verbosity。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-43.jpg}
+\caption{Kimi 的 length reward：在组内根据相对长度给予正负调整。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 43。}
+\end{figure}
+
+\begin{warningbox}{长度奖励必须以正确性为前提}
+若直接奖励短答案，模型会学会跳步骤或提前结束；若奖励长答案，又会产生 padding-like reasoning。更稳健的方式是在正确 trajectories 内比较 efficiency，并单独监控 proof completeness。
+\end{warningbox}
+
+\singleslide{slide-44.jpg}{Kimi 的额外 recipe：easy-to-hard curriculum、按失败率重采样，以及代码/数学 verifier 构造。}{44}
+
+Slide 44 把 length reward 放回完整数据循环。题目先有 difficulty label，训练从易到难；采样概率与 $1-\text{success rate}$ 成正比，减少重复已解决问题。代码 reward 通过 ground-truth solution 生成额外 tests，数学则用约 800K 样本训练 CoT/answer-equivalence reward model。所谓“verifiable”仍需要投入大量 verifier engineering。
+
+\subsection{RL infra：rollout 才是大头}
+
+本节进一步连接 systems。On-policy RL 大量时间花在 autoregressive generation；long CoTs 让 batch 内 sequence lengths 极不均匀；training engine 与 inference engine 的 tensor/parallel layout 又不同，频繁切换会损失 utilization。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-45.jpg}
+\caption{RL systems bottlenecks：慢 rollout、train/inference 切换与长序列不均衡。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 45。}
+\end{figure}
+
+Slide 45 解释了为什么 RL 的 FLOPs 不能直接换算成训练速度：on-policy 数据必须通过慢速 autoregressive inference 生成，训练与推理常使用不同框架/并行布局，长 CoT 还让同一 batch 中短序列等待长尾序列。系统优化的对象应是整个采样—验证—更新 pipeline，而不是单独提高 trainer MFU。
+
+\singleslide{slide-46.jpg}{Kimi RL 基础设施拓扑：rollout、训练、权重同步与变长序列调度的协同。}{46}
+
+这页把抽象瓶颈落实到资源拓扑。Rollout workers 需要高并发推理与 KV cache，trainers 需要高吞吐反向传播，policy 权重更新后又必须及时广播；若同步过慢，采样数据 stale，若同步过频，通信与重载权重吞掉利用率。长短轨迹分桶、异步队列与版本标签是维持 on-policy 近似的关键。
+
+\begin{importantbox}{RLVR 的系统目标}
+优化的不只是 tokens/sec，而是 \textbf{useful verified trajectories per dollar}。更快生成错误答案没有价值；更强 verifier 若吞掉全部 compute 也不可持续。Rollout、verification 和 update 必须共同做容量规划。
+\end{importantbox}
+
+\subsection{系统账本：每个阶段应监控什么}
+
+为了把算法 loss 与基础设施连接起来，下面把 RLVR 拆成 prompt selection、rollout、verification 和 update 四个队列。任何一个阶段饱和都会让其余 GPU 空等；只看 trainer utilization 会把瓶颈误判成“训练不够快”。
+
+\begin{longtable}{L{0.17\textwidth}L{0.35\textwidth}L{0.38\textwidth}}
+\toprule
+阶段 & 关键指标 & 常见失败 \\
+\midrule
+Prompt selection & success-rate histogram、topic balance、staleness & 全对/全错组过多，curriculum 落后于 policy \\
+Rollout & tokens/s、length p95、batch imbalance、policy version & 长 CoT 拖慢 batch，rollout 数据迅速 stale \\
+Verification & verifier latency、false positive/negative、timeout & reward 漏洞、环境不稳定、执行成本失控 \\
+Update & KL、clip fraction、gradient norm、effective tokens & normalization/length bias，旧数据重复训练 \\
+End-to-end & verified successes/hour、cost/success、queue age & 单阶段局部最优，总体吞吐反而下降 \\
+\bottomrule
+\caption{RLVR 在线数据系统的运行账本。}
+\end{longtable}
+
+\singleslide{slide-47.jpg}{Kimi scaling results：大模型达到强总体表现，小模型实验展示 RL 数据与计算扩展趋势。}{47}
+
+Scaling 页应同时看绝对性能与学习效率。最终 Kimi K1.5 接近或超过 o1 证明整套 pipeline 有效；小模型数学实验则更适合分析随着 rollout 与 update 增加，正确率是否继续提升、是否出现 saturation，以及 sequence length 与成本怎样变化。只有把 reward、准确率和 compute 放在同一坐标系，才能判断扩展是否经济。
+
+\singleslide{slide-48.jpg}{RL 与 expert iteration 的消融：只从正样本学习能否替代对失败轨迹的负向更新。}{48}
+
+Slide 48 提出本讲的重要对照：rejection sampling/expert iteration 生成许多答案，只在 verifier 通过的轨迹上做 SFT；RL 则还会降低失败轨迹概率。若两者生成预算、成功样本数和训练 tokens 不匹配，比较会失真。消融的真正问题是 negative gradient 与在线数据刷新是否提供超出“更多优质 SFT 数据”的收益。
+
+\subsection{本章小结}
+
+Kimi 案例显示，curriculum、length control 和 infra scheduling 与 policy loss 同样关键。RLVR 是在线数据生产系统，而不仅是优化器。
+
+\section{Qwen3 与 Agentic RL：把 reasoning recipe 扩展到真实环境}
+
+前面两个案例仍以数学和代码答案为主，本节把 recipe 扩展到 thinking-mode control 和 agentic tasks。Qwen3 采用多阶段 SFT + reasoning RL，并通过 tags 混合 thinking/non-thinking data，使同一个模型可以控制 test-time compute。
+
+\singleslide{slide-49.jpg}{最终案例 Qwen3：更晚发布的开放 reasoning model，用于观察低数据 RL 与 stage composition。}{49}
+
+Slide 49 不只宣称 Qwen3 排名更高，而是引出两个新的研究问题：reasoning RL 是否必须使用海量题目，以及怎样把窄域推理能力重新并入通用模型。Qwen3 的公开结果提供了一个低数据对照，同时后续 Qwen3-Coder 又把 verifier 扩展到软件工程环境。
+
+\slidepair{slide-50.jpg}{slide-51.jpg}{Qwen3 总体阶段顺序，以及 SFT + reasoning RL 中的 difficulty filtering 与 3,995-example GRPO。}{50--51}
+
+Slide 50 的顺序很关键：reasoning RL 之后还有 general RLHF，最后还能再 distill；它不是单调叠加的单阶段训练。Slide 51 延续 Kimi 的 best-of-$N$ filtering，删除无需 CoT 即可答对的题、清理与验证集相似的问题，并人工检查 CoT 是否真正推导而非猜测。最终 reasoning RL 只用 3,995 个 examples，说明题目质量与在线 rollout 数比静态题目条数更重要。
+
+\begin{importantbox}{“低数据 RL”不等于“低计算 RL”}
+3,995 表示 unique prompts 的数量，不表示只生成 3,995 条轨迹。每个 prompt 会被多次采样、验证并随 policy 更新重复使用；真实成本由 group size、平均 CoT 长度、训练轮数和 verifier 开销决定。报告数据效率时必须同时给 rollout tokens 与 compute。
+\end{importantbox}
+
+\subsection{Thinking mode fusion}
+
+本节先看推理预算控制。通过特殊 tags 混合短答案与长 reasoning，模型学习何时展开 chain-of-thought；early-stop string 又提供生成长度控制。这相当于把 test-time scaling policy 纳入训练数据协议，而不是让所有任务都无条件生成最长思维链。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-52.jpg}
+\caption{Qwen3 thinking-mode fusion：混合 thinking/non-thinking data 并学习提前结束。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 52。}
+\end{figure}
+
+\begin{knowledgebox}{术语消化：train-time 与 test-time scaling}
+Train-time scaling 增加参数、数据或训练 compute；test-time scaling 让模型在单个问题上生成更长 reasoning、采样更多 candidates 或调用 tools。Thinking-mode fusion 的目标是让模型按任务难度分配 test-time compute。
+\end{knowledgebox}
+
+\singleslide{slide-53.jpg}{Test-time scaling：通过更多思考 tokens、更多 samples 或搜索，把推理计算分配给单个问题。}{53}
+
+Slide 53 把 thinking tags 放回更一般的计算视角。对困难题增加 CoT 长度或 candidate 数量，通常能提高 pass@k；但收益会递减，且简单题无条件长思考只增加延迟。理想模型不仅“会长推理”，还应预测什么时候值得继续、什么时候提前停止，并在固定 latency/cost budget 下最大化 verified success。
+
+\subsection{Stage composition 与能力 trade-off}
+
+进一步，课程展示不同 post-training stages 的能力变化：reasoning RL 提升 math/STEM，general RLHF 恢复交互质量，却可能让部分窄域指标回落。Stage order 因而是 multi-objective optimization，不是简单“每加一步都更强”。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-54.jpg}
+\caption{不同训练阶段的能力组成：general-purpose alignment 可能轻微牺牲窄域 reasoning。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 54。}
+\end{figure}
+
+Slide 54 是 stage composition 的直接证据：reasoning stage 抬高 math/STEM，通用 RLHF 改善聊天、指令与安全后，部分窄域指标略有回落。正确验收不应要求所有指标逐阶段单调增加，而应先定义发布模型的 Pareto frontier：可接受多少 reasoning 退化来换取更好的通用性、简洁度与交互可靠性。
+
+\subsection{Agent environments：从 answer verifier 到 trajectory verifier}
+
+最后把 verifier 从答案扩展到环境轨迹。Qwen3-Coder/agentic RL 使用 repository-level data、pull requests、自动构造的 SWE-bench-style environments 和 tool interaction。Reward 不再只是 final string match，而是 tests、browser state、files changed、commands run 和 task completion。
+
+\singleslide{slide-55.jpg}{Agentic RL 的入口：Qwen3-Coder 在 Qwen3-Next 基础上针对工具使用与软件工程能力后训练。}{55}
+
+数学 RLVR 只需判断最终数值，coding agent 则要在带状态的环境中读取文件、运行命令、修改代码并通过 tests。Trajectory 的每一步都可能改变后续观察，reward 也可能同时包含测试通过、补丁范围、工具错误和效率。Agentic RL 因而更接近传统 sequential decision making，也更容易暴露环境漏洞。
+
+\singleslide{slide-56.jpg}{Qwen3-Coder mid-training 数据：600B repository-level tokens、pull requests、text-code、synthetic QA 与 agent trajectories。}{56}
+
+Slide 56 说明 agent 能力并非从 RL 阶段凭空产生。Repository-level file concatenation 教长上下文代码结构，pull request 配合检索到的仓库状态提供真实修改监督，Common Crawl 的 joint text-code 与 synthetic QA 扩充知识，运行 coding agents 得到的 trajectories 则提前暴露工具协议。RL 主要负责在已有行为支持集上改进决策。
+
+\slidepair{slide-57.jpg}{slide-58.jpg}{从通用 Qwen3-Next 到 Coder 的 expert-model distillation，以及 Web/UX/QA experts 的专项数据。}{57--58}
+
+Slide 57 展示多个 experts：web development、UX、single-turn QA 与 SWE model 分别提供擅长轨迹，再 distill 回统一 Coder policy。Slide 58 解释部分数据质量门槛：web code 由 VLM 与 agent actions 验证可用性，UX expert 学习多种工具格式，QA expert 继续扩大单轮 code synthesis。这里的“expert”既是模型角色，也是数据生成与验证流水线。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{slide-59.jpg}
+\caption{自动构造软件工程 agent environments，使训练任务可执行、可验证。}
+\figsource{CS336 Spring 2026 Lecture 16，Slide 59。}
+\end{figure}
+
+Slide 59 的自动构造路线通常从真实仓库与提交中抽取任务，重建修改前状态，生成问题描述并准备 tests，最终形成类似 SWE-bench 的容器环境。规模可扩展到约 800K tasks，但自动化也会复制 flaky tests、依赖损坏、答案泄漏和任务描述歧义；环境生成器本身需要 held-out audit。
+
+\singleslide{slide-60.jpg}{Agent RL：在可执行环境中生成完整工具轨迹，以测试或任务完成状态提供 reward。}{60}
+
+Agent rollout 的成本由模型 tokens、工具执行、容器启动、依赖安装和测试时间共同决定。训练还必须区分“最终补丁通过”与“轨迹合理”：模型可能读取 git history 找到答案、修改 tests、利用缓存或触发 formal tool 的边界行为。老师明确举例，repository history 与形式验证工具都可能成为 reward-hacking 通道。
+
+\begin{warningbox}{Environment correctness 是 reward correctness}
+如果 dependency broken、tests incomplete 或 hidden state 泄漏，agent 会学到错误策略。Agentic RL 的 verifier 需要像 production CI 一样被测试、版本化和监控。
+\end{warningbox}
+
+\begin{importantbox}{Agent verifier 的最小防作弊清单}
+固定并审计初始 repository state；移除答案提交、隐藏测试与敏感 history；禁止修改 evaluator；隔离网络和跨任务缓存；验证 patch 只触及允许文件；用独立重放确认 reward；对异常短轨迹、测试删除和环境探测行为设置检测。可验证只代表结果可执行检查，不代表检查器对 adversarial policy 安全。
+\end{importantbox}
+
+\begin{knowledgebox}{课堂提示}
+课程把 Qwen3-Coder 放在 RLVR 结尾，是为了说明“可验证”正在从数学答案扩展到复杂 environment transitions。越接近真实 agent，reward 越丰富，但环境构造成本和漏洞也越高。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Qwen3 把 reasoning、thinking control、general alignment 和 agent environments 组合在一起。RLVR 的前沿不只是更好数学题，而是构造可执行、可扩展、能代表真实任务的训练世界。
+
+\singleslide{slide-61.jpg}{全讲回顾：用窄域可验证 reward 缓解偏好过度优化，GRPO 简化训练，但 recipe 与系统仍决定成败。}{61}
+
+最后一页给出的真实结论比“GRPO 很简单”更谨慎。RLHF 与 RLVR 的主要差别是 reward 的可攻击性与成本：可验证 reward 通常更接近目标，但同样可能被漏洞利用；GRPO 已成为需要理解的基础算法，却仍有 bias，在线 RL 也依然 noisy、昂贵且难以调试。成功来自 objective、curriculum、verifier、distillation 与 infra 的共同闭环。
+
+\section{总结与延伸}
+
+本讲从 PPO 的完整系统出发，解释 GRPO 如何去掉 value model，再审计其 baseline、standard-deviation 和 length biases。DeepSeek R1、Kimi K1.5 与 Qwen3 说明，成功的 RLVR recipe 需要算法、数据、curriculum、distillation、general alignment 和 systems infrastructure 协同。
+
+七个核心结论是：
+
+\begin{enumerate}
+\item Verifiable reward 降低了标签成本和 reward ambiguity，但不会自动保证任务定义正确。
+\item PPO 的复杂度主要来自 on-policy system，而不只是一条 clipped loss。
+\item GRPO 简化 value estimation，却引入 finite-group、variance 和 length weighting 问题。
+\item R1-Zero 的现象应做 controlled analysis，不能仅凭单条 ``aha'' trajectory 讲 emergence 故事。
+\item Distillation 与 RLVR 互补：前者便宜迁移，后者主动探索。
+\item Curriculum 应随 policy 能力动态变化；静态 hard set 会迅速过时。
+\item RLVR 的关键系统指标是 verified useful trajectories，而不是裸吞吐。
+\end{enumerate}
+
+下一讲转向 multimodality：如果 Transformer 只理解 tokens，图像、视频和音频怎样被编码、注入、生成，并与语言模型共同训练。
+
+\subsection{拓展阅读}
+
+建议按“算法定义→objective 审计→完整模型 recipe→系统与环境”顺序阅读。每篇材料都应记录 policy 初始化、prompt distribution、group size、reward/verifier、长度聚合、rollout tokens、reference/KL、独立评测与失败尝试；否则不同论文中的 ``GRPO'' 或 ``RLVR'' 很可能并不是同一个实验对象。
+
+\begin{longtable}{L{0.22\textwidth}L{0.31\textwidth}L{0.37\textwidth}}
+\toprule
+材料 & 为什么值得读 & 带着什么问题读 \\
+\midrule
+Schulman et al., \emph{Proximal Policy Optimization Algorithms} & PPO clipped surrogate 的原始定义与 trust-region 动机 & Clipping 约束的是 sample ratio 还是全局 policy distance？ \\
+AlpacaFarm PPO implementation & 把 rollout、reward shaping、value/GAE 与 minibatch update 连成可运行代码 & 哪些稳定化选择不在简化公式中，张量 mask 怎样验证？ \\
+DeepSeekMath / GRPO & Group-relative advantage 与早期 reasoning RL 结果的来源 & 组均值、标准差和 token averaging 分别重写了什么权重？ \\
+Liu et al., \emph{Understanding R1-Zero-Like Training}（Dr. GRPO） & 系统分析 GRPO bias、长度增长与 leave-one-out 修正 & ``Aha moment'' 的哪些现象能由 base prior 或 objective bias 解释？ \\
+DeepSeek R1 report & R1-Zero、cold-start SFT、reasoning RL、general alignment 与 distillation 的组合案例 & 最终分数能证明什么，哪些阶段仍缺少可归因消融？ \\
+Kimi K1.5 report & 公开 difficulty filtering、length reward、curriculum 与 RL infrastructure 细节 & 如何用 rolling success rate 维持有效学习信号，并计算 verified success cost？ \\
+Qwen3 / Qwen3-Coder reports & 展示低数据 RL、thinking-mode fusion、stage composition 与 agent environments & Unique prompts、rollout compute、mid-training data 和 environment verifier 如何共同贡献？ \\
+\bottomrule
+\caption{Lecture 16 的注释式拓展阅读路线。}
+\end{longtable}
+
+\begin{knowledgebox}{建议的复现实验}
+在一个小型数学模型上固定 prompt set 与 rollout budget，对比 vanilla GRPO、leave-one-out REINFORCE、去标准差版本和不同 token-length aggregation；同时报告 answer accuracy、group success histogram、平均长度、每题梯度范数与 wall-clock verified successes。随后加入动态 curriculum，观察收益究竟来自 objective 还是题目重新加权。
+\end{knowledgebox}
+
+\end{document}

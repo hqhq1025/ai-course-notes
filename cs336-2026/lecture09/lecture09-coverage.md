@@ -1,22 +1,21 @@
 # Lecture 09 Coverage Matrix
 
-Status: complete after source-first rewrite and verification on 2026-05-12.
+Status: second-round slide-complete rewrite completed on 2026-08-11.
 
-Source deck: `lecture09-slides.pdf`, 57 pages. The rewritten note includes every source slide image `slide-001.jpg` through `slide-057.jpg`, plus the cover reuse, for 58 `\includegraphics` calls total.
+Source deck: `lecture09-slides.pdf`, 57 pages. All 57 pages now appear in lecture order. Historical framing, section roadmaps, conceptual transitions and recap pages are retained because they define the hypotheses and fitting procedures used by the surrounding derivations.
 
 Verification evidence:
 
-- `xelatex -interaction=nonstopmode -halt-on-error lecture09-notes.tex` run twice successfully.
-- `tools/scripts/check_quality.sh cs336-2026/lecture09/lecture09-notes.tex` reports `42p  ⭐⭐⭐`.
-- `python3 tools/scripts/check_note_coverage.py cs336-2026/lecture09/lecture09-notes.tex --manifest cs336-2026/lecture09/lecture09-manifest.md` reports `figs=58 readfig=53 boxes=59 term_digest=3 formulas=5 code=3 summaries=5` with no hard errors.
-- LaTeX log scan reports no `LaTeX Error`, `Undefined control sequence`, rerun warning, `Overfull`, or `Missing character`.
-- Visual PDF QA was rendered and checked in `qa/lecture09-notes/`.
+- Verification evidence is regenerated after the second-round compilation and visual QA.
 
 | Source node | Type | Required? | Note section | Treatment | Status |
 |---|---|---|---|---|---|
-| slides 001-004 | opening and motivation | yes | 本讲问题 | slide-complete figures, scenario interpretation, scaling-law definition | complete |
-| slides 005-011 | history and background | yes | Part 1 | sample complexity, early data scaling, Hestness work | complete |
-| slides 012-027 | data scaling behaviors | yes | Part 2 | power law formulas, mean estimation, intrinsic dimension, composition/repetition | complete |
-| slides 028-042 | model engineering scaling | yes | Scaling laws for model engineering | architecture, optimizer, depth/width, batch, muP, downstream caveats | complete |
-| slides 043-057 | joint scaling and compute allocation | yes | Joint data-model scaling | Kaplan/Chinchilla, IsoFLOPS, joint fits, overtraining, final recap | complete |
-| PDF visual QA | QA | yes | `qa/lecture09-notes/` | rendered pages + contact sheet + checked report | complete |
+| slides 001--004 | opening and motivation | yes | 本讲问题 | Every screenshot included; resource-allocation scenario and prediction workflow explained. | complete |
+| slides 005--011 | history and background | yes | Part 1 | Every screenshot included; theory bounds, early empirical laws and emergence/compute context distinguished. | complete |
+| slides 012--021 | data scaling foundations | yes | Part 2 | Every screenshot included; mean estimation, exponent mystery, nonparametric dimension and experiment map explained. | complete |
+| slides 022--027 | composition, repetition and recap | yes | Part 2 | Every screenshot included; mixture/repetition evidence and data-scaling recap integrated. | complete |
+| slides 028--042 | model engineering scaling | yes | Scaling laws for model engineering | Every screenshot included; architecture, optimizer, aspect ratio, batch, muP and downstream caveats explained. | complete |
+| slides 043--052 | joint scaling and fitting methods | yes | Joint data-model scaling | Every screenshot included; Kaplan/Chinchilla, three fitting methods and parameter-count/protocol discrepancies explained. | complete |
+| slides 053--057 | overtraining, deployment economics and recap | yes | Joint data-model scaling | Every screenshot included; train-optimal vs deployment-optimal and cross-domain use explained. | complete |
+| teacher voice | not available | no | whole note | No subtitles, transcript, executable text nodes or speaker notes are present in the lecture directory. | not applicable |
+| PDF visual QA | QA | yes | `qa/lecture09-notes/` | Regenerated 43-page contact sheet; full sheet plus pages 5/31/38/43 inspected; checklist signed. | complete |

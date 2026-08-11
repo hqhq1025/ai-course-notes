@@ -1,11 +1,11 @@
 # PDF Visual QA: `lecture10-notes.pdf`
 
 - PDF: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture10/lecture10-notes.pdf`
-- Rendered pages: `cs336-2026/lecture10/qa/lecture10-notes`
-- Contact sheet: `cs336-2026/lecture10/qa/lecture10-notes/contact.png`
-- Page count rendered: 21
+- Rendered pages: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture10/qa/lecture10-notes`
+- Contact sheet: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture10/qa/lecture10-notes/contact.png`
+- Page count rendered: 26
 - Renderer: pdftoppm
-- Renderer log: `cs336-2026/lecture10/qa/lecture10-notes/pdftoppm.log`
+- Renderer log: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture10/qa/lecture10-notes/pdftoppm.log`
 - Near-blank rendered pages: none
 
 ## Manual Checklist
@@ -16,7 +16,9 @@
 - [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## Notes
+## Manual Review Notes
 
-- Contact sheet reviewed after the new source-first rewrite. The 21 rendered pages show no near-blank pages, missing figures, visible crop failures, or obvious table/formula overflow.
-- The note treats `lecture10-slides.py` source clusters as the coverage spine and includes every local teaching PNG referenced by the source.
+- Reviewed the complete 26-page contact sheet and full-size final pages 25--26 on 2026-08-11.
+- All 29 figures render; dense GQA/MLA/CLA tables, speculative-sampling plots, continuous-batching diagram, and PagedAttention block maps are readable and uncropped.
+- New MLP/attention arithmetic-intensity subsections and long attention-variant headings do not overflow.
+- The original sparse Summary continuation now contains a workload/latency/throughput/memory/quality deployment acceptance matrix and a Pareto-frontier warning.

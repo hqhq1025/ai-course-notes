@@ -1,0 +1,624 @@
+\documentclass[a4paper]{article}
+
+\newcommand{\notetitle}{Lecture 14：Data II——过滤、去重、混合与合成数据}
+\newcommand{\noteauthors}{基于 Percy Liang 授课、官方可执行讲义与公开视频字幕整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford Online / Percy Liang}
+\newcommand{\videopublishdate}{2026-05-27}
+\newcommand{\videoduration}{1:24:46}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=5sxHosTLPF8}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\input{../cs336-preamble.tex}
+\graphicspath{{./}{images/}{official-images/}}
+
+\begin{document}
+\makecscover
+
+\section{本讲主线：数据不是被“收集”出来的，而是被“加工”出来的}
+
+官方标题是 \textbf{Lecture 14: Data II}。上一讲讨论了数据从哪里来：live services、Common Crawl、GitHub、论文、书籍、许可数据，以及版权、robots.txt、Terms of Service 等边界。本讲把镜头推进到管线内部：即使已经获得 raw data，它离训练样本仍然很远。真实系统需要依次解决格式转换、质量筛选、重复消除、分布混合和合成数据验证。核心问题因此从“有没有数据”转成“这条加工链最终制造了怎样的训练分布”。
+
+把这条管线写成一个最小抽象，可以得到：
+
+$$
+\mathcal{D}_{\mathrm{train}}
+=\operatorname{Mix}\!\left(
+\operatorname{Dedup}\!\left(
+\operatorname{Filter}\!\left(
+\operatorname{Transform}(\mathcal{D}_{\mathrm{raw}})
+\right)\right)\right).
+$$
+
+其中，$\mathcal{D}_{\mathrm{raw}}$ 表示网页、PDF、代码仓库等原始对象；$\operatorname{Transform}$ 把异构格式线性化为模型可消费的文本或序列；$\operatorname{Filter}$ 依据语言、质量、安全等目标打分；$\operatorname{Dedup}$ 消除 exact 或 near duplicate；$\operatorname{Mix}$ 决定各 domain 的采样权重。
+
+\begin{importantbox}{本讲最重要的工程判断}
+数据处理不是一串互相独立的清洗脚本。每一步都会改变后续步骤看到的分布：转换器丢掉表格结构，过滤器会放大 target data 的偏好，去重会改变高频模式，混合比例又会改变梯度来自哪些 domain。设计数据管线时必须把它看成一个联动系统。
+\end{importantbox}
+
+\teachervoice{课堂总结明确提醒，真实数据工作往往很 ``grungy''、高度 domain-specific，并且必须回到 concrete examples 才能做出高质量数据集；自动指标只能帮助定位，不能替代样本检查。}
+
+\subsection{一张数据账本}
+
+为了避免后面被工具名和论文名淹没，本节先建立一张统一账本。每一个阶段都要同时记录输入对象、优化目标、可调参数和失败模式；这样模型指标变化时，团队才能沿 provenance 反向定位，而不是把所有变化都归因于“数据质量”。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.14\textwidth}L{0.25\textwidth}L{0.25\textwidth}L{0.22\textwidth}}
+\toprule
+阶段 & 输入 & 关键决策 & 典型失败 \\
+\midrule
+Transform & HTML、PDF、repo、WARC & 保留哪些结构，如何 linearize & 导航污染、OCR 错误、代码文件顺序丢失 \\
+Filter & 大量候选 document & target、score、threshold、sampling & domain bias、误杀长尾、classifier shortcut \\
+Dedup & 文档或片段集合 & exact/fuzzy 粒度、相似度阈值 & 泄漏未消除、模板文本过度删除 \\
+Mix & 多个 domain corpus & token budget 与 mixture weights & benchmark 提升但真实分布退化 \\
+Synthetic & prompt、teacher、verifier、environment & 生成与验证闭环 & 自我强化错误、格式投机、污染评测 \\
+\bottomrule
+\end{tabular}
+\caption{本讲的数据处理账本：每一步都同时有算法问题和治理问题。}
+\end{table}
+
+\begin{knowledgebox}{术语表：先把五个动作分清楚}
+\begin{tabular}{L{0.18\textwidth}L{0.72\textwidth}}
+\toprule
+术语 & 在本讲中的精确定义 \\
+\midrule
+Transformation & 把网页、PDF、repository 等对象转换成可训练序列，同时记录结构损失和转换版本。 \\
+Filtering & 用明确的 target、score 与 threshold 决定哪些样本进入候选训练集。 \\
+Deduplication & 在指定粒度与相似度定义下，降低同一内容被重复计权或泄漏到评测的概率。 \\
+Data mixing & 在固定 token budget 下，为不同 domain 分配采样权重，从而改变梯度来源。 \\
+Synthetic data & 由 generator 构造任务或答案，并由 verifier 与 environment 提供可审计反馈的数据。 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+这节课的主线不是“有哪些数据集”，而是怎样把 raw objects 变成一个可解释的训练分布。后续所有细节都可以回到四个问题：输入是什么、目标是什么、算法如何近似、错误会怎样传到模型里。
+
+\section{Transformation：先承认格式转换必然有损}
+
+从原始对象进入训练管线的第一道门不是 filter，而是 representation。模型通常消费 token 序列，但原始世界并不是纯文本：网页有导航、脚本、表格和图片；PDF 有二维版面、公式与扫描页；代码仓库有目录结构、依赖关系和 commit 历史。Transformation 的任务不是简单调用 \texttt{strip\_html()}，而是在可扩展成本下决定哪些结构值得保留，并把不可避免的损失变成可观测信号。
+
+\subsection{HTML 到文本：删除 boilerplate 只是第一步}
+
+本节先看最常见的 HTML，因为它最容易制造“已经是文本，所以转换很简单”的错觉。规则型工具如 trafilatura、resiliparse、jusText 会尝试识别正文块并移除广告、导航和页脚；但网页内容抽取具有三个不可避免的困难：第一，DOM 顺序不总是阅读顺序；第二，表格和图片很难线性化；第三，网站模板变化会让规则失效。真正的验收对象不是 parser 是否返回字符串，而是返回的字符串是否仍保留原页面承担教学或事实表达的结构。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{dclm-wet.png}
+\caption{DCLM 对 Common Crawl WET 文本质量的分析示例。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/dclm-wet.png}。}
+\end{figure}
+
+这张图的价值不在于给出一个“最佳 parser”，而在于提醒我们：原始 WET 文本已经经过一次抽取，错误会被静默写进训练集。若正文被截断、菜单被保留、公式被打碎，后面的质量分类器可能把 parser 风格当成内容质量的信号。
+
+\begin{knowledgebox}{读图：不要只看平均抽取成功率}
+先区分图中不同来源或 parser 的比较对象，再看正文保留、boilerplate 残留与失败样本的尾部，而不是只盯住一个总体均值。对训练数据而言，少量系统性错误比随机噪声更危险：如果某类网站总被截断，后续 filter 会把该 domain 的残缺文本当成它的正常风格，最终造成稳定而隐蔽的分布偏差。
+\end{knowledgebox}
+
+\begin{warningbox}{不要把 parser 输出当成 ground truth}
+抽取后的文本应保留 source URL、抓取时间、content type、parser version 和失败标记。否则当模型出现奇怪模板化行为时，无法判断问题来自原网页、转换器还是过滤器。
+\end{warningbox}
+
+\subsection{PDF 与代码仓库：二维结构和目录结构不能被忽略}
+
+进一步看 PDF 与代码仓库，问题会从“删掉噪声”升级为“恢复原对象中的关系”。PDF 处理通常需要 OCR、layout analysis、公式识别和 reading-order reconstruction。FinePDFs 一类流程会重新抓取被截断的 PDF，并结合 VLM/OCR 工具恢复内容；但转换后仍可能丢失图表、脚注和多栏关系。代码仓库则需要决定文件拼接顺序、是否保留测试、issue、PR 和 commit message，以及怎样避免把 vendor 或 generated files 当成高价值代码。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{finepdfs-pdf-structure.png}
+\caption{PDF source code 与视觉版面的对应：文字、字体、坐标、图片和绘制指令共同决定最终页面。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义引用的 FinePDFs 图，本地化为 \texttt{images/finepdfs-pdf-structure.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：PDF 不是“带换行的纯文本”}
+先看左侧对象流：header、字体对象、page content stream 与外部图片资源彼此引用；再看右侧渲染结果，同一段可见文字依赖字体、坐标和绘制顺序才能恢复。图支持的结论是 PDF extraction 必须重建 reading order 与版面关系，而不是按文件字节顺序抄出字符串。它没有保证 OCR/VLM 一定恢复正确，因此多栏、公式、表格和扫描页仍要单独做 slice audit。
+\end{knowledgebox}
+
+\begin{knowledgebox}{结构是一种监督信号}
+对代码而言，目录、import graph、测试与实现的对应关系本身就是语义；对论文而言，标题层级、公式编号、图注和引用关系也是语义。将一切压成无结构文本虽然方便，却可能主动丢掉模型最需要学习的关联。
+\end{knowledgebox}
+
+\teachervoice{课堂提醒：转换阶段看似“只是工程”，但 parser accuracy 会直接影响后续数据选择。处理万亿 token 时，一个很小的系统性错误也会被重复数十亿次。}
+
+\begin{knowledgebox}{讲义提醒：Transformation QA 不能只抽查“看起来正常”的样本}
+讲义建议主动寻找失败面：多栏论文、扫描 PDF、公式密集页面、动态渲染网页、超长代码文件和含大量生成文件的 repository。随机抽样主要估计平均质量；针对高风险 slice 的抽样才有机会暴露会被规模放大的系统性缺陷。
+\end{knowledgebox}
+
+\subsection{Transformation QA：把损失写成可测量指标}
+
+为了让转换器可迭代，需要把“文本看起来还行”改成分层验收。下面的表不是要求每种对象都达到同一分数，而是要求团队提前声明保真目标，并为无法保留的结构输出 failure flag。这样后续 filter 才能区分内容低质与解析失败。
+
+\begin{longtable}{L{0.17\textwidth}L{0.24\textwidth}L{0.24\textwidth}L{0.21\textwidth}}
+\toprule
+对象 & 自动指标 & 人工抽查 & 失败后的处理 \\
+\midrule
+HTML & 正文长度比、链接密度、重复导航率 & 标题层级、表格、图片上下文是否保留 & 回退 parser 或标记低置信度 \\
+PDF & OCR 字错率、reading-order 一致率、公式/图注检出率 & 多栏、脚注、跨页表格、扫描页 & 保留页面图并单独走 VLM/OCR \\
+代码仓库 & 可解析文件率、generated/vendor 占比、测试关联率 & 文件顺序、依赖、issue--patch--test 对齐 & 排除噪声目录或按 repository 打包 \\
+所有对象 & parser 失败码、版本、吞吐与成本 & 按 source/domain/长度做 slice audit & 将 provenance 传给下游，不静默丢弃 \\
+\bottomrule
+\end{longtable}
+
+\subsection{本章小结}
+
+Transformation 的目标不是无损复原——多数情况下做不到——而是让损失可度量、可追踪、可迭代。一个好的转换器既输出文本，也输出 provenance 和 uncertainty。
+
+\section{Filtering：把“好数据”写成一个可计算的目标}
+
+Transformation 只回答“能否读出来”，接下来 Filtering 才回答“是否值得进入训练分布”。过滤问题可以抽象为：给定少量 target data $T$ 和海量 raw data $R$，找到 $R$ 的子集 $T'$，使它在某种意义上与 $T$ 相似，同时仍保持足够多样性。这个抽象统一了语言识别、质量过滤、toxicity filtering、数学/代码 domain selection 等任务，也揭示了一个关键事实：所谓质量从来不是数据自身携带的天然标签，而是由目标样本和评测方式共同定义的。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{raw-target-schema.png}
+\caption{Target-vs-raw filtering：从目标样本学习打分函数，再筛选海量候选。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/raw-target-schema.png}。}
+\end{figure}
+
+图中的关键不是“训练一个 classifier”这么简单，而是 target data 决定了模型认为的“好”。若 $T$ 只包含 Wikipedia 风格，分类器就可能把百科语气当成质量；若 $T$ 来自某个 benchmark，它可能学到 benchmark 模板而非真正能力。
+
+\begin{knowledgebox}{读图：三条箭头分别代表三种责任}
+先看 raw pool 到 score 的箭头，它对应模型能否在海量数据上稳定、低成本推理；再看 target data 到 scorer 的箭头，它对应标签定义与价值偏差；最后看 score 到 selected subset 的箭头，它对应 threshold、sampling 和 token budget。图中没有自动保证“被选中就更真实”，它只保证样本更符合已编码进 scorer 的目标。
+\end{knowledgebox}
+
+\subsection{两类常见 score}
+
+为了理解过滤器究竟在优化什么，本节把常见 score 分成生成式与判别式两类。二者都不是直接测量真理：生成式 score 测量文本对目标域模型是否自然，判别式 score 测量文本是否容易被区分为 target-like；选择哪一类，决定了过滤器更容易学习语言分布还是标签边界。
+
+第一类是生成式 score：训练目标域语言模型 $p_T$，用
+
+$$
+s_{\mathrm{gen}}(x)=\frac{1}{|x|}\log p_T(x)
+$$
+
+衡量文档 $x$ 在目标域下的平均对数似然。$|x|$ 是 token 数，长度归一化避免长文档天然获得更低总概率。KenLM perplexity filtering 属于这一类。Perplexity（PPL，困惑度）通常写成 $\exp(H)$，其中 $H$ 是平均交叉熵；直觉上，它表示模型在每个 token 位置面对的“有效选项数”。PPL 越低只说明文本更符合该模型学到的分布，不等于事实更正确、内容更安全或推理更有价值。
+
+第二类是判别式 score：把 target sample 标为正类、raw sample 标为负类，训练
+
+$$
+s_{\mathrm{disc}}(x)=p(y=1\mid x).
+$$
+
+fastText、线性 classifier、embedding + random forest 都可以实现。实际保留策略既可以是硬阈值 $s(x)\ge \tau$，也可以按 $s(x)$ 做随机采样，从而保留一部分边界样本。
+
+\begin{importantbox}{阈值不是纯技术参数}
+$\tau$ 越高，平均质量通常越高，但数据量、多样性和长尾覆盖会下降。阈值选择应绑定最终模型指标、domain coverage 和风险预算，而不是只看 classifier AUROC。
+\end{importantbox}
+
+\subsection{语言、质量与 toxicity 是三种不同目标}
+
+前面的统一公式容易让人误以为所有过滤都只是换一个 classifier；本节必须把目标拆开。语言识别的正负类相对明确，但 code-switching、公式和短文本仍会让模型不确定。质量过滤没有统一定义：GPT-3 用 Wikipedia、WebText2、Books 作为正例；LLaMA/RedPajama 使用被 Wikipedia 引用的网页；phi-1 则用 pretrained code model embedding 训练 random forest，寻找“像教材”的代码数据。Toxicity filtering 又涉及价值判断：过滤攻击性内容可能提高部署安全，却也可能删除研究仇恨言论、少数群体 reclaimed language 或安全评测所需样本。因此三个 score 应独立记录，不能压成一个无法解释的“总质量分”。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{data-filtering-scale.png}
+\caption{过滤器从规则、轻量模型到大模型打分时的规模与成本权衡。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/data-filtering-scale.png}。}
+\end{figure}
+
+读这张图时要同时看两条轴：更强模型可能给出更细致的判断，但 raw corpus 的规模要求 scoring 极快。一个每文档多花 100 ms 的 filter，在十亿文档上就是数年的单机时间。因此工程上常用 cascade：便宜规则先删明显垃圾，轻量 classifier 处理中间区域，昂贵模型只复核少量边界样本。
+
+\begin{knowledgebox}{读图：成本轴决定模型应该放在哪一层}
+先比较横向的处理规模，再比较纵向的判断能力。最昂贵的 judge 不应直接覆盖全部 raw corpus，而应只处理前级规则与轻量模型无法确定的灰区。图支持的是“分层 cascade”而不是“永远用最便宜模型”；如果边界样本恰好决定稀有语言或专业 domain 是否被保留，复核预算必须向这些 slice 倾斜。
+\end{knowledgebox}
+
+\begin{knowledgebox}{Worked example：为什么“小而好”可能胜过“大而杂”}
+课程用 phi-1 风格案例说明：1.3B 模型在 The Stack Python 子集上训练 96K steps，HumanEval 约 12.19；在更小但经过质量过滤的数据上训练 36K steps，结果约 17.68。这个案例不能证明“数据越少越好”，但证明 token count 不是唯一的有效规模；梯度携带的信息密度同样关键。
+\end{knowledgebox}
+
+\subsection{过滤器的三类 shortcut}
+
+当 scorer 在离线指标上很好、训练结果却退化时，首先要怀疑它学到了 shortcut。下面三类 shortcut 都能在随机验证集上取得高分，却在 corpus 分布、网站模板或语言比例变化后失效；因此审计必须查看被删除样本，而不能只看被保留样本。
+
+\begin{enumerate}
+\item \textbf{Style shortcut}：把长度、标点、模板或网站 CSS 痕迹当作质量。
+\item \textbf{Source shortcut}：把某些 domain 全部判成低质，导致知识覆盖收缩。
+\item \textbf{Label shortcut}：target data 的偏差被模型放大，例如把 benchmark-like wording 当作正确性。
+\end{enumerate}
+
+\begin{warningbox}{过滤器也需要 evaluation set}
+必须为 filter 建立独立人工审计集，按语言、domain、长度、来源和风险类型分层抽样。只看整体 precision/recall 会掩盖某些群体或 domain 被系统性删除。
+\end{warningbox}
+
+\subsection{Worked example：阈值如何同时改变 precision、recall 与预算}
+
+为了把阈值从抽象超参数变成可审计决策，假设人工标注的 1,000 篇文档中有 300 篇真正满足目标。阈值 $\tau=0.6$ 时，模型保留 260 篇，其中 210 篇为真阳性；提高到 $\tau=0.8$ 后，只保留 150 篇，其中 135 篇为真阳性。对应账本如下：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.15\textwidth}L{0.14\textwidth}L{0.14\textwidth}L{0.13\textwidth}L{0.24\textwidth}}
+\toprule
+阈值 & Precision & Recall & 保留量 & 工程含义 \\
+\midrule
+$0.6$ & $210/260=80.8\%$ & $210/300=70.0\%$ & 260 & 覆盖更广，但每 260 篇约有 50 篇误保留 \\
+$0.8$ & $135/150=90.0\%$ & $135/300=45.0\%$ & 150 & 平均更纯，但丢掉超过一半真正有价值文档 \\
+\bottomrule
+\end{tabular}
+\caption{同一个 scorer 在不同阈值下产生不同训练分布。}
+\end{table}
+
+因此不能脱离 token budget 讨论 precision/recall。若原始池极大且训练预算固定，提高 precision 可能值得；若目标是保住低资源语言或稀有专业知识，recall 与 slice coverage 更重要。实践中还可以对高分样本全保留、对中分样本按概率采样、对低分样本只保留少量审计样本，从而避免硬阈值把边界一次性切断。
+
+\subsection{本章小结}
+
+Filtering 的本质是把模糊的“质量”外化为 target、score、threshold 和 audit。更强的 filter 不一定产生更强的模型；关键是它保留了什么、删除了什么，以及这些取舍是否与训练目标一致。
+
+\section{Deduplication：从 exact hash 到 fuzzy set similarity}
+
+Filtering 选择“像目标”的样本，却不会自动修正同一内容出现太多次的问题，因此下一步需要 Deduplication。重复数据会浪费 compute、放大 memorization、增加 benchmark contamination，并让某些模板在梯度中被过度加权。问题在于“重复”有很多层次：完全相同的 bytes、去掉空白后相同、局部片段重叠、镜像站点、同一文章的轻微改写。算法选择必须先回答业务定义：我们想删除完全相同的对象、共享大段文字的对象，还是任何语义相近的对象？
+
+\subsection{Exact dedup：便宜但只能抓到完全重复}
+
+本节先处理最确定的一类重复：规范化后完全相同的文档。它适合作为管线第一层，因为计算便宜、判断可复现、误删边界清楚；但它只能发现 byte-level 或 normalization-level 的一致，无法识别镜像文章、插入广告后的复制页和局部重叠。具体做法是对规范化文本计算 cryptographic hash：
+
+$$
+h(x)=\operatorname{SHA256}(\operatorname{normalize}(x)).
+$$
+
+若两个文档 hash 相同，就只保留一个。实现上可以排序 hash，或用 distributed key-value store 聚合。规范化通常包含 Unicode normalization、空白压缩和 boilerplate removal；但规范化越激进，误合并风险越高。
+
+\begin{lstlisting}[caption={Exact dedup 的最小流程}]
+def exact_dedup(documents):
+    seen = set()
+    for document in documents:
+        normalized = normalize(document.text)
+        digest = sha256(normalized.encode("utf-8")).digest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        yield document
+\end{lstlisting}
+
+Exact hash 之所以不够，可以直接从课程给出的近重复样本看出来：公共 license、网页模板和同一新闻句子的轻微排版差异都可能只占文档的一部分，整篇 hash 自然不同，但重复片段仍会被反复训练。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{near-duplicate-examples.png}
+\caption{三个语料中的 near-duplicate：主体内容相同，只在实体、标点或局部短语上变化。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义引用图，本地化为 \texttt{images/near-duplicate-examples.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：黄色区域应该先比较什么}
+逐行比较 Example 与 Near-Duplicate Example：Wiki-40B 只替换了作品与作者等实体，LM1B 主要是标点/版式差异，C4 则用模板替换国家和旅游词。它们说明“重复”不是二元 byte equality，而是共享大部分 shingles。图不能告诉我们应该删除哪一个版本；是否保留实体替换或模板变体仍取决于训练目标和阈值。
+\end{knowledgebox}
+
+\subsection{Jaccard similarity：把文档看成 shingle 集合}
+
+Exact hash 的召回不足后，问题就变成如何比较“部分相同”。本节把每个文档转换成连续 $n$-gram 构成的 shingle 集合，再用集合交并比描述重叠；这种表示忽略了长距离语序，却能对插入少量广告、改动标题或移动段落保持一定鲁棒性。
+
+将文档切成 $k$-gram 或 token shingles，得到集合 $A$、$B$。Jaccard similarity 定义为：
+
+$$
+J(A,B)=\frac{|A\cap B|}{|A\cup B|}.
+$$
+
+其中 $|A\cap B|$ 是共同 shingle 数，$|A\cup B|$ 是总的不同 shingle 数。若两个网页只是替换标题、日期或少量句子，Jaccard 仍可能很高。
+
+\begin{knowledgebox}{Worked example}
+设 $A=\{a,b,c,d\}$，$B=\{b,c,d,e,f\}$，则交集大小为 3，并集大小为 6，所以 $J(A,B)=0.5$。真实文档会有成千上万 shingles，直接两两比较的复杂度约为 $O(N^2)$，无法用于 web-scale corpus。
+\end{knowledgebox}
+
+\subsection{MinHash 与 LSH：用概率近似避免全量两两比较}
+
+Jaccard 定义了相似度，却仍需要 $O(N^2)$ 的全量两两比较；本节的核心是用 MinHash 压缩集合，再用 LSH 只生成可能相似的候选对。MinHash 为每个集合构造短 signature，并满足：
+
+$$
+\Pr[h_{\min}(A)=h_{\min}(B)] = J(A,B).
+$$
+
+用多个独立 hash 估计相似度，再把 signature 分成 bands。只有落入同一 bucket 的文档才进入精确比较，这就是 locality-sensitive hashing（LSH）的候选生成思想。
+
+若两个文档的真实 Jaccard similarity 为 $s$，每个 band 有 $r$ 行、共 $b$ 个 bands，那么它们至少在一个 band 完全相同、从而成为候选的概率为
+
+$$
+P_{\mathrm{candidate}}(s)=1-(1-s^r)^b.
+$$
+
+其中，$s^r$ 是一个 band 内 $r$ 行全部碰撞的概率，$1-s^r$ 是该 band 未碰撞的概率，$(1-s^r)^b$ 是所有 bands 都未碰撞的概率。这个 S 形候选曲线说明 LSH 不是精确阈值：阈值附近既会有漏检，也会有误报，最终仍需精确相似度或人工标注校准。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{lsh-collision-probability.png}
+\caption{LSH 候选概率的 S 形曲线：相似度越高，进入候选集的概率越接近 1。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义引用图，本地化为 \texttt{images/lsh-collision-probability.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{lsh-band-thresholds.png}
+\caption{固定 signature 长度时，不同 band 数 $b$ 会改变候选曲线的位置与陡峭程度。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义引用图，本地化为 \texttt{images/lsh-band-thresholds.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：LSH 调的是候选预算，不是“真相阈值”}
+第一张图先读横轴 Jaccard similarity $s$ 与右轴候选概率 $P$：蓝点是实际 duplicate 标签，红线是 LSH 候选机制。第二张图保持总 hash 数近似不变，比较 $b=50,25,20,5$；更多 bands 会把曲线左移，更容易召回中等相似文档，也会产生更多 false positives。两图共同说明 $b,r$ 应由候选预算、人工标签和后续精排成本校准，不能把 S 曲线的拐点当成客观重复定义。
+\end{knowledgebox}
+
+\begin{knowledgebox}{Worked example：同一 signature budget 怎样改变候选概率}
+设 $m=100$ 个 MinHash 值。方案 A 取 $b=20,r=5$；对 $s=0.8$ 的文档对，候选概率约为 $1-(1-0.8^5)^{20}\approx99.96\%$。方案 B 取 $b=10,r=10$；同样的 $s=0.8$ 只有 $1-(1-0.8^{10})^{10}\approx67.8\%$。两者存储相同，但方案 A 更偏召回，方案 B 更偏 precision。这就是参数不能只凭经验复制的原因。
+\end{knowledgebox}
+
+\begin{importantbox}{形状账本}
+若每个文档有 $m$ 个 MinHash 值，并分成 $b$ 个 bands、每 band $r$ 行，则 $m=br$。增大 $b$ 会提高召回、产生更多候选；增大 $r$ 会提高 precision、错过更多中等相似文档。这里没有免费午餐，参数必须由人工标注的 duplicate pairs 校准。
+\end{importantbox}
+
+\begin{warningbox}{去重会改变数据分布}
+高频内容不一定是垃圾：法律条款、API 文档、基础教材、代码 boilerplate 可能因实用而重复。Document-level dedup、paragraph-level dedup 和 substring dedup 会产生不同模型；过度 substring dedup 还可能破坏自然语言中的常见表达。
+\end{warningbox}
+
+\teachervoice{课堂强调：hashing 的意义不是“神奇地找到重复”，而是把昂贵的相似度比较缩小到少量候选。大规模数据工程常见的核心模式就是先做便宜、高召回筛选，再做昂贵、高精度判断。}
+
+\subsection{污染控制与训练去重不是同一件事}
+
+前面的方法主要控制训练集内部重复，但评测污染需要更严格的威胁模型。训练集内部 dedup 关注样本权重和 memorization；benchmark decontamination 关注训练样本与 eval item 的重叠。后者通常需要更保守的 substring 或 semantic matching，并且要处理答案、题干、翻译、改写和 solution traces。仅做 document hash 不能证明 benchmark 没有泄漏；反过来，为了“零污染”而删除所有相似主题，也可能把合法的背景知识一起删掉。
+
+\subsection{本章小结}
+
+Exact hash 解决完全重复，Jaccard 描述集合重叠，MinHash 近似 Jaccard，LSH 负责候选检索。真正难点是定义“应当删除的相似”，而不是实现 hash 函数。
+
+\section{Data Mixing：比例决定模型把容量花在哪里}
+
+经过 transformation、filtering、deduplication 后，候选数据已经相对干净，但“干净”不等于“比例正确”。现在仍然要决定 web、code、math、books、multilingual、scientific text 各采多少。混合不是把所有 corpus concatenate；它是在固定 token budget 下分配训练机会，因此会直接决定模型把有限参数和更新步数花在哪些能力上。
+
+课程先展示两个真实 mixture 视图，因为抽象权重之前必须看清每个 source 的原始规模、类别和平均文档长度。Marin 的 token viewer 强调现代训练池可包含 web、多语、数学、代码与 specialized data；The Pile 表则同时列出 raw size、weight、epochs 与 effective size，直接暴露“小而高权重”的 source 会被重复多少次。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth]{marin-token-viewer.png}
+\caption{Marin 数据池按 dataset 展示 token 数与 web、multilingual、math、code、specialized 类别。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/marin-token-viewer.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.74\textwidth]{the-pile.png}
+\caption{The Pile mixture：raw size、weight、epochs 与 effective size 共同定义实际训练暴露。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义引用的 CS324 图，本地化为 \texttt{images/the-pile.png}。}
+\end{figure}
+
+\begin{knowledgebox}{读图：不要只读 weight 一列}
+Marin 图先比较横向 token 规模和颜色类别，观察 web sources 通常占据最大绝对体量，但多语、代码和数学仍需要显式预算。The Pile 表则应把 Weight 与 Epochs 联读：一个 raw size 很小的 component 即使权重不高，也可能因重复多轮获得很大的 effective size。混合表因此至少要同时报告唯一 token、采样权重、预期 epoch 数和有效训练 token；只给百分比会隐藏过拟合与算力浪费。
+\end{knowledgebox}
+
+\begin{knowledgebox}{课堂提示：把 mixture weight 换算成实际 epochs}
+老师在问答中反复追问“每个 source 最终重复了多少次”：若高质量池只有 10B unique tokens，却要贡献 500B 训练 token，就会在不知不觉中做 50 epochs。最好的情况只是浪费 compute，最坏的情况是过拟合。因此 mixture 不能只看分布百分比，必须把权重、source size 与总 token budget 联立计算。
+\end{knowledgebox}
+
+设有 $K$ 个 domain，权重 $w_k\ge 0$ 且 $\sum_k w_k=1$。训练时先采样 domain $k\sim w$，再从 $\mathcal{D}_k$ 采样样本。于是优化目标近似为：
+
+$$
+\mathcal{L}(\theta;w)=\sum_{k=1}^{K} w_k\,\mathbb{E}_{x\sim\mathcal{D}_k}\left[\ell(x;\theta)\right].
+$$
+
+$w_k$ 不只是数据 loader 参数，而是显式定义了哪些梯度更常出现。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{data-mixing-methods.png}
+\caption{数据混合方法：规则比例、temperature sampling、small-scale search 与 learned mixing。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/data-mixing-methods.png}。}
+\end{figure}
+
+这组方法可以按“需要多少实验”排序。Rule-based mixture 依赖经验；temperature sampling 根据 corpus size 平滑长尾；small-scale search 在多个候选比例上训练 proxy model；learned mixing 则试图从 loss/gradient 信号估计最优权重。实验越复杂，不代表外推越可靠，因为小模型和大模型可能对 domain 的边际收益不同。
+
+\begin{knowledgebox}{读图：先分清“如何产生权重”与“如何验证权重”}
+图中每种方法都输出 mixture weights，但证据来源不同：规则法依赖先验，temperature sampling 依赖 corpus size，proxy search 依赖小模型实验，learned mixing 依赖拟合出的 loss 或 gradient 信号。比较时先问权重从哪里来，再问它是否在目标规模、目标评测和目标 token budget 上被复验；不能因为方法名更复杂就默认更可信。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{regmix.png}
+\caption{RegMix：先在小规模 mixture experiments 上拟合回归模型，再预测更优配比。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/regmix.png}。}
+\end{figure}
+
+RegMix 的直觉是把昂贵的 full-scale training 转成 design-of-experiments：采样多个 $w$，训练小模型，记录各 eval domain 的 loss，再拟合 $\hat{f}(w)$ 预测候选 mixture。它节省 compute，但依赖两个假设：proxy scale 能保留 mixture ordering；评测集合能代表最终用途。
+
+\begin{knowledgebox}{读图：RegMix 的回归模型不是最终语言模型}
+先看多个散点或实验组合，它们代表不同 mixture 上训练出的 proxy run；再看拟合器如何从这些 run 预测未尝试配比的评测表现。关键比较不是某个点的绝对 loss，而是候选配比的相对排序是否能从小规模迁移到大规模。图不能证明这种排序永远稳定，所以最终候选仍需在更大 scale 做确认实验。
+\end{knowledgebox}
+
+\begin{warningbox}{Proxy mismatch}
+如果 small model 还没有学会 code reasoning，增加 code data 的收益可能被低估；如果 eval benchmark 与真实部署不同，优化 mixture 会变成 benchmark overfitting。混合实验必须同时看 per-domain loss、cross-domain transfer 和真实 workload。
+\end{warningbox}
+
+\subsection{Worked example：100B token 预算不是百分比表，而是能力账本}
+
+为了把 $w_k$ 变成实际训练决策，假设总预算为 100B tokens，并采用下表中的候选 mixture。百分比一旦乘上总预算，就能暴露很多在配比表里看不见的问题：某个小 domain 是否会被重复采样几十个 epoch、某种语言是否连稳定梯度都不足、代码占比是否会挤压自然语言基础能力。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.19\textwidth}L{0.13\textwidth}L{0.17\textwidth}L{0.35\textwidth}}
+\toprule
+Domain & 权重 & 实际 token & 必须核对的工程问题 \\
+\midrule
+通用 Web & $45\%$ & 45B & 质量与多样性是否随规模下降，是否被少数站点支配 \\
+代码 & $20\%$ & 20B & repository 去重后唯一 token 是否足够，测试与文档是否保留 \\
+数学/科学 & $12\%$ & 12B & PDF 转换错误是否被放大，公式与解答是否污染评测 \\
+书籍/长文本 & $10\%$ & 10B & license、长上下文切分和同书重复版本 \\
+多语言 & $10\%$ & 10B & 语言内部再分配是否让低资源语言只得到极少 token \\
+高质量 synthetic & $3\%$ & 3B & verifier 通过率、任务多样性和 generator 自我模仿 \\
+\bottomrule
+\end{tabular}
+\caption{100B-token mixture 的数值账本。}
+\end{table}
+
+若多语言 10B 中英语以外有 20 种语言，均分仅有每种 0.5B；真实策略通常还要按资源与目标能力再加权。若 synthetic 候选池只有 0.5B 唯一 token，却在训练中采样 3B，就相当于平均重复六次，必须重新检查 memorization 与 verifier shortcut。由此可见，mixture audit 至少同时记录权重、唯一 token 数、预计重复次数与每个 domain 的 held-out loss。
+
+\subsection{本章小结}
+
+Data mixing 是训练目标设计。权重 $w$ 把有限 token budget 分配给不同能力，因此需要 small-scale experiment、外推假设和持续 eval，而不能只按 corpus 大小归一化。
+
+\section{Synthetic Data：把任务、验证器和环境变成数据工厂}
+
+前面的管线都在处理已有语料，而本节进一步讨论主动制造训练经验。在 mid-training 与 post-training 阶段，数据越来越像 evaluation：有明确 prompt、期望输出、工具环境、测试用例或 verifier。Synthetic data 的价值不是“让模型自己写更多文字”，而是将稀缺任务结构扩展为可验证的大规模 curriculum；它的上限由生成能力决定，下限则由验证可靠性决定。
+
+\subsection{OpenThoughts：来源、生成、过滤三层分离}
+
+为了看清合成数据不是单一模型调用，本节用 OpenThoughts 把 pipeline 拆成 source、generator 与 verifier 三层。source 决定任务覆盖和难度分布，generator 决定候选解法及表达风格，verifier 决定哪些轨迹获得监督权重；只有三者分开记录，错误才可追踪。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{openthoughts-sources.png}
+\caption{OpenThoughts 的题目来源覆盖数学、代码、科学与推理数据。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/openthoughts-sources.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{openthoughts-pipeline.png}
+\caption{OpenThoughts pipeline：采集问题、teacher 生成 reasoning、verifier/filters 保留高质量轨迹。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/openthoughts-pipeline.png}。}
+\end{figure}
+
+两张图一起看才完整：source diversity 决定问题覆盖，teacher 决定候选轨迹，verifier 决定哪些轨迹成为监督。只扩大 generation count 会同时扩大正确解和高置信错误；没有 verifier 的 synthetic data 很容易变成自我蒸馏噪声。
+
+\begin{knowledgebox}{课堂提示：更强的模型不一定是更好的 teacher}
+OpenThoughts 的课堂分析给出一个反直觉结果：当时更强的 DeepSeek-R1 并没有自动成为更好的 teacher，QwQ-32B 反而产生了更有效的训练数据；同时，多次采样答案比盲目扩大 source 数更有帮助，简单 answer filtering 也没有稳定收益。teacher selection 因而应看学生模型的学习效果，而不是只看 teacher 自身 benchmark 排名。
+\end{knowledgebox}
+
+\begin{knowledgebox}{读图：左边解决覆盖，右边解决可信度}
+先从 source 图检查数学、代码、科学与通用推理是否被少数数据集支配，再沿 pipeline 图追踪一个问题如何经过 teacher sampling、格式检查、答案验证与去重。两图共同支持的结论是：题目多样性和答案正确性是独立维度；更多 source 不能弥补 verifier 薄弱，更严格 verifier 也不能弥补任务分布单一。
+\end{knowledgebox}
+
+\begin{importantbox}{Synthetic data 的四元组}
+一条可审计的合成样本应记录 $(q, y, g, v)$：任务 $q$、生成结果 $y$、generator $g$、验证过程 $v$。如果缺少 generator version、sampling parameters、tests 或 judge trace，就无法复现实验，也无法追踪某种错误来自哪里。
+\end{importantbox}
+
+\subsection{从代码仓库构造 agent tasks}
+
+接下来把同一思想放到软件工程环境里：任务不再只有 prompt 与答案，而是包含 repository state、依赖、可执行测试和 patch。这里的核心问题不是能否生成一段自然语言 issue，而是生成的任务是否对应真实代码状态、是否存在可复现的成功条件，以及 verifier 是否能区分真正修复与测试投机。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{swe-smith.png}
+\caption{SWE-smith：从真实 repository 生成可执行的软件工程任务与环境。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/swe-smith.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{swe-rebench.png}
+\caption{SWE-rebench：持续更新任务以降低 benchmark saturation 与训练污染。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/swe-rebench.png}。}
+\end{figure}
+
+软件工程任务的关键是环境可执行。问题描述、base commit、tests、dependency lock、patch 和 judge 必须一致；否则“成功”可能只是测试缺失或环境错误。SWE-rebench 进一步强调时间滚动：静态 benchmark 一旦被广泛训练，就很难继续测量泛化。
+
+\begin{knowledgebox}{讲义提醒：环境本身也是训练标签的一部分}
+代码任务中的“答案”不只是 patch 文本，而是 patch 在指定 base commit、依赖和测试上的行为。若 environment 无法重放，pass/fail 标签就不可靠；若 benchmark 长期不更新，训练集与评测集的时间边界也会逐渐失效。这是由课程展示的 dependency nightmare、execution feedback 与 rolling tasks 进一步得到的审计结论。
+\end{knowledgebox}
+
+\subsection{SWE-zero：减少人工 issue 依赖}
+
+前面的 SWE-smith 与 SWE-rebench 仍依赖真实 issue 或持续收集任务；SWE-zero 进一步尝试从 repository 状态自动构造可执行问题，从而扩大任务供给。名称中的 ``zero'' 指减少对人工 issue 的依赖；它与训练系统中的 Zero Redundancy Optimizer（ZeRO）无关，后者是把 Adam 优化器状态、梯度或参数在多张 GPU 上分片的显存优化技术。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{swezero-prompt.png}
+\caption{SWE-zero 的任务提示构造：从仓库状态生成可执行问题。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/swezero-prompt.png}。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{swezero-noexec.png}
+\caption{不执行环境时，任务质量和验证可靠性会显著下降。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/swezero-noexec.png}。}
+\end{figure}
+
+\begin{knowledgebox}{课堂提示：没有 execution feedback 仍能解题意味着什么}
+老师指出，强代码模型在禁用仓库执行时仍能解决相当一部分真实 PR 任务，这暗示模型内部已经形成了某种 code-semantics ``world model''。但无执行轨迹不等于结果可验证：SWE-zero 仍需过滤那些偷偷调用执行工具的轨迹，并用少量需要 execution feedback 的 SWE-Hero 数据继续训练。这里应区分“能生成候选解”与“能证明候选解正确”。
+\end{knowledgebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{swezero-results.png}
+\caption{SWE-zero 结果：环境构造、筛选与可执行验证共同决定训练价值。}
+\figsource{Stanford CS336 2026 Lecture 14 官方可执行讲义，\texttt{images/swezero-results.png}。}
+\end{figure}
+
+这三张图形成一条证据链：任务可以由模型生成，但是否有学习价值取决于 execution；不执行就无法区分正确 patch、测试投机和不可复现环境。Synthetic data 的“synthetic”只描述任务来源，不意味着验证也可以是虚的。
+
+\begin{knowledgebox}{读图：三张 SWE-zero 图要按“构造—消融—结果”阅读}
+第一张先确认任务 prompt 从哪些 repository 信号生成；第二张比较移除 execution 后哪些质量控制失效；第三张再看最终训练或评测结果。不要倒过来只读最后一张柱状图，因为结果提升无法单独说明来自更多任务、任务更难，还是可执行 verifier 更可靠。真正可迁移的机制是闭环，而不是某个绝对分数。
+\end{knowledgebox}
+
+\begin{warningbox}{Verifier hacking}
+当 reward 只检查少量 tests，模型可能学会绕过测试而非解决问题；当 judge 是另一个 LM，generator 可能学会迎合 judge style。必须使用 hidden tests、多样 verifier、人工抽查和 adversarial cases 检查 reward channel。
+\end{warningbox}
+
+\subsection{Verifier audit：验证器也要被当作模型评测}
+
+为了防止“有 verifier”被误当成“标签可靠”，应把验证器本身放进审计表。一个好的 verifier 不只在已知答案上准确，还要对对抗性解法、环境错误和分布变化保持敏感，并给出足够 provenance 供人工复核。
+
+\begin{longtable}{L{0.19\textwidth}L{0.24\textwidth}L{0.24\textwidth}L{0.20\textwidth}}
+\toprule
+Verifier 类型 & 能证明什么 & 不能证明什么 & 最小审计 \\
+\midrule
+Exact answer & 输出与标准答案一致 & 推理过程正确、等价答案被接受 & 多格式/等价答案测试 \\
+Unit tests & patch 通过已知行为检查 & 未覆盖路径正确、没有 hard-code & hidden tests、mutation tests \\
+Execution sandbox & 程序可运行并满足资源限制 & 结果在真实部署稳定、安全 & 环境重放、依赖锁定 \\
+LM judge & 输出符合 rubric 或偏好 & 事实绝对正确、没有 style bias & 多 judge、一致性与人工抽查 \\
+Formal checker & 满足形式约束或可验证证明 & 规格本身完整、现实假设成立 & 规格审查与反例生成 \\
+\bottomrule
+\end{longtable}
+
+\begin{knowledgebox}{讲义提醒：generator 和 verifier 不能共享同一盲点}
+如果同一家族模型既生成答案又充当 judge，它们可能共享风格偏好、事实错误和安全盲区。讲义建议尽量引入异质证据：执行结果、符号检查器、独立模型、人工样本和时间更新的数据共同组成验证链，而不是让一个高分 judge 成为单点真相。
+\end{knowledgebox}
+
+\teachervoice{课堂总结把 post-training data 归纳成 prompts、真实或合成 environments、capable teacher responses，以及大量 filtering details；这意味着数据集规格必须同时描述任务来源、响应生成和环境约束，不能只发布最终对话文本。}
+
+\subsection{本章小结}
+
+Synthetic data 有效的前提是“生成容易，验证可靠”。高质量 pipeline 把 source、generator、verifier、filter 和 environment 分开记录，并通过执行或可复核证据筛选样本。
+
+\section{端到端实践：怎样审计一条数据管线}
+
+把本讲落到工程流程，可以使用以下检查表：
+
+\begin{longtable}{L{0.17\textwidth}L{0.35\textwidth}L{0.38\textwidth}}
+\toprule
+层次 & 必须记录 & 需要抽查的问题 \\
+\midrule
+Source & URL、license、crawl time、content type & 是否允许使用，是否存在地域/语言偏差 \\
+Transform & parser/OCR/version、失败码、结构字段 & 表格、公式、代码顺序是否被破坏 \\
+Filter & target data、features、score、threshold & 哪些 domain 被误杀，是否学到 style shortcut \\
+Dedup & normalization、粒度、hash/signature、threshold & 是否仍有 contamination，是否删除有用模板 \\
+Mix & domain weights、token counts、sampling temperature & proxy ordering 是否能外推到目标规模 \\
+Synthetic & generator、prompt、sampling、verifier、tests & 是否存在 judge hacking、自我强化错误 \\
+Evaluation & held-out data、freshness、slice metrics & 是否只优化公开 benchmark \\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{最终结论}
+强模型的数据优势往往不来自某个神秘数据集，而来自一条可持续迭代的管线：能看到真实样本，能定位错误来源，能通过小实验调整策略，能把 provenance 和 evaluation 接回训练决策。
+\end{importantbox}
+
+\section{总结与延伸}
+
+本讲从 raw objects 出发，建立了完整的数据加工视角：Transformation 决定保留什么结构；Filtering 把质量写成 target 和 score；Deduplication 用 hashing 与集合近似控制重复；Mixing 把 token budget 分配给不同能力；Synthetic data 则把任务、环境和 verifier 变成新的数据来源。
+
+五个可带走的判断是：
+
+\begin{enumerate}
+\item 数据管线每一步都会改变分布，必须做端到端评估。
+\item Filter 的 target data 隐含价值观和 domain bias，阈值不是中性参数。
+\item Dedup 的难点是定义“重复”，不是计算 hash。
+\item Mixing 是训练目标的一部分，小规模最优比例未必能外推。
+\item Synthetic data 的核心竞争力是 verifier 和 environment，而不是生成量。
+\end{enumerate}
+
+下一讲进入 mid/post-training：当数据已经变成 instruction、preference 和 safety behavior，SFT、PPO、DPO 怎样把它们转化为可控模型行为。
+
+\subsection{拓展阅读}
+
+建议结合官方 Lecture 14 source、DCLM、Dolma、RegMix、OpenThoughts、SWE-smith 与 SWE-rebench 的原始论文或项目页面阅读，重点比较它们如何定义 target、验证质量和记录 provenance。
+
+\begin{knowledgebox}{复现实验：做一条 1B-token mini data pipeline}
+选择两个 domain（例如 web 与 code）各准备一批 raw documents。固定 parser 后，依次记录过滤前后 token 数、exact/near dedup 删除率、每个 source 的 unique tokens、候选 mixture 权重与预计 epochs。至少保留一个未参与调参的 held-out slice，比较两套 threshold 或 mixture 在 per-domain loss、污染命中率和人工错误样本上的差异。最终交付不仅是一个训练文件，还应包含 manifest、parser/filter/dedup 版本、随机种子、失败样本和一页 data card；这样下一次模型行为变化才能沿 provenance 复盘。
+\end{knowledgebox}
+
+\end{document}

@@ -1,16 +1,15 @@
 # Lecture 12 Coverage Matrix
 
-Status: complete after prose-led / teacher-voice rewrite and verification on 2026-05-13.
+Status: second-round executable-source and teacher-voice verification completed on 2026-08-11.
 
-Source: `lecture12-slides.py`, official executable lecture source. The rewritten note follows source clusters and localizes all image assets.
+Source: `lecture12-slides.py`, official executable lecture source. The note follows source clusters, localizes all image assets, and maps directly supported narration in `lecture12-teacher-voice-ledger.md`. Additional benchmark-audit synthesis is labeled `讲义提醒`.
 
 Verification evidence:
 
-- `xelatex -interaction=nonstopmode -halt-on-error lecture12-notes.tex` run twice successfully.
-- `tools/scripts/check_quality.sh cs336-2026/lecture12/lecture12-notes.tex` reports `32p 11s 45b 44f 260c/f  ⭐⭐⭐`.
-- `python3 tools/scripts/check_note_coverage.py cs336-2026/lecture12/lecture12-notes.tex --manifest cs336-2026/lecture12/lecture12-manifest.md` reports `figs=44 readfig=27 boxes=45 term_digest=4 teacher_voice=13 formulas=2 code=0 summaries=7 prose_chars=11474` with no hard errors or warnings.
-- LaTeX log scan reports no `LaTeX Error`, `Undefined control sequence`, rerun warning, `Overfull`, or `Missing character`.
-- Visual PDF QA was rendered and checked in `qa/lecture12-notes/`.
+- Strict coverage reports `figs=44 readfig=27 boxes=46 term_digest=4 teacher_voice=14 formulas=2 code=0 summaries=7 prose_chars=11784`, with no warnings or hard errors.
+- Quality check reports 32 pages, 11 sections, 46 teaching boxes, 44 source figures, `⭐⭐⭐`.
+- Double-pass XeLaTeX succeeds; final logs have no overfull boxes, LaTeX errors, undefined control sequences, missing characters, emergency stops, or fatal errors.
+- Visual QA inspected the complete 32-page contact sheet and full-size pages 30--32; all dense leaderboards, benchmark examples, validity figures, and the new purpose/object subsections are readable and uncropped.
 
 | Source node | Type | Required? | Note section | Treatment | Status |
 |---|---|---|---|---|---|

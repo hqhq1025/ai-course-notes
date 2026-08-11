@@ -1,0 +1,660 @@
+\documentclass[a4paper]{article}
+
+\newcommand{\notetitle}{Lecture 18：从推理引擎到循环语言模型}
+\newcommand{\noteauthors}{基于 Dan Fu 嘉宾课、公开视频字幕与公开研究资料整理}
+\newcommand{\notedate}{2026 年春季}
+\newcommand{\videochannel}{Stanford Online / Dan Fu}
+\newcommand{\videopublishdate}{2026-06-05}
+\newcommand{\videoduration}{1:11:40}
+\newcommand{\videourl}{https://www.youtube.com/watch?v=9EEm4iMAF5s}
+\newcommand{\videocoverpath}{cover.jpg}
+
+\input{../cs336-preamble.tex}
+\graphicspath{{./}{frames/}}
+
+\begin{document}
+\makecscover
+
+\section{本讲主线：模型训练结束，系统问题才刚开始}
+
+CS336 的大部分课程从数据、优化、并行训练和 post-training 解释“模型是怎样得到的”。Dan Fu 的嘉宾课把视角翻到另一面：当权重文件已经存在，怎样把它变成一个能承受真实流量、满足延迟目标、持续输出 token 的服务？更重要的是，推理系统暴露出的瓶颈会不会反过来改变 kernel、并行策略，甚至模型架构本身？
+
+这堂课可以压缩成一条因果链：\term{workload shape} 决定 SLA，SLA 决定 scheduler 和 cache 策略，scheduler 决定 GPU 上出现怎样的空洞，kernel 级空洞又决定哪些架构值得设计。优化对象不再是一个孤立的 forward pass，而是端到端的“请求到 token”系统。
+
+\begin{importantbox}{全栈推理的统一目标}
+不要单独最大化某一项 FLOPs、带宽利用率或 batch size。真正的目标是在给定 workload 分布和 tail-latency 约束下，最大化可持续吞吐，同时保留模型质量、故障恢复能力和工程可维护性。
+\end{importantbox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{00-08-40-inference-engine.jpg}
+\caption{推理引擎的高层地图：请求进入后依次经过调度、缓存、执行、并行与输出。}
+\figsource{课堂视频 00:08:10--00:09:38；该页由讲者用生成式工具制作，只取高层结构，不采信细小文字。}
+\end{figure}
+
+\subsection{怎样阅读本讲的图}
+
+讲者在 00:07:57 明确说明，前半部分若干幻灯片由 Nano Banana Pro 生成，“高层正确，但细看文字可能错误”。因此，本讲义只把这些图当作架构示意：组件名称、指标定义、公式和数字均以课堂口述、Parcae 论文、Together AI 的 CPD 说明和 HazyResearch 的 megakernel 资料交叉核验。
+
+\begin{warningbox}{图像不是事实来源}
+生成式幻灯片尤其容易在坐标轴、单位、缩写和小标签上产生幻觉。读图时应先从讲者口述建立机制，再用图确认组件关系；不能从模糊小字反向推导结论。
+\end{warningbox}
+
+\subsection{术语表：本讲反复出现的对象}
+
+为了避免系统术语在后文反复跳转，本节先把最容易混淆的对象放在同一张表里。读者应特别区分“延迟指标”和“执行阶段”，也要区分保存历史状态的 KV cache 与真正执行矩阵运算的 kernel；后文每次优化都可以回到这些对象判断它改变了什么。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.19\textwidth}L{0.29\textwidth}L{0.42\textwidth}}
+\toprule
+术语 & 简明定义 & 在本讲中的作用 \\
+\midrule
+Prefill & 并行处理输入上下文并建立 KV state & 主要影响 TTFT，长 prompt 成本高 \\
+Decode & 自回归地产生后续 token & 主要影响 TBT，常受权重与 KV 搬运限制 \\
+KV cache & 历史 token 的 attention key/value 状态 & 支撑 prefix reuse、多轮对话与长上下文 \\
+Scheduler & 决定请求何时、在哪个 worker、与谁组成 batch & 平衡吞吐、显存、cache locality 与 tail SLA \\
+Kernel & GPU 上执行某段算子的程序 & launch、同步、load 和 tail effect 决定底层效率 \\
+Recurrence & 让 activation 重复经过同一参数 block & 增加计算而不同比例增加权重参数 \\
+\bottomrule
+\end{tabular}
+\caption{本讲核心术语表。}
+\end{table}
+
+\subsection{本章小结}
+
+本讲不是一份“推理技巧清单”，而是一个跨层设计案例：从流量到服务指标，从服务指标到缓存与调度，从 GPU 时间线到 megakernel，再从系统约束回到 Parcae 这类新架构。
+
+\section{Workload 与 SLA：先定义到底在优化什么}
+
+本节先强调，推理系统不能只用“每秒多少 token”来描述。真实请求有不同输入长度、输出长度、会话轮数、cache hit rate 和到达间隔；同一个平均吞吐数字，可能对应完全不同的用户体验。正确起点是先写出 workload 分布，再定义服务级目标。
+
+\subsection{三个常用指标回答三个不同问题}
+
+这里从三个角色理解指标：用户点击发送后，首先关心多久看到第一个 token；生成开始后，又关心文字是否流畅；平台运营者则关心每张 GPU 能承载多少流量。三者分别对应：
+
+\begin{itemize}
+  \item \term{TTFT（time to first token）}：请求到第一个输出 token 的时间，主要受排队、prefill、cache miss 和状态搬运影响；
+  \item \term{TBT/TPOT（time between tokens / time per output token）}：相邻输出 token 的间隔，主要受 decode step、batch composition 和 memory bandwidth 影响；
+  \item \term{throughput}：单位时间完成的请求或输出 token 数，常写成 QPS、tokens/s 或 QPS/GPU。
+\end{itemize}
+
+一个便于排障的 TTFT 分解是：
+
+\[
+T_{\mathrm{TTFT}}
+=T_{\mathrm{queue}}+T_{\mathrm{tokenize}}+T_{\mathrm{schedule}}
++T_{\mathrm{prefill}}+T_{\mathrm{KV\ transfer}}+T_{\mathrm{first\ decode}}.
+\]
+
+这个分解不是为了追求精确代数，而是为了防止把所有慢请求都归因于“模型太大”。如果瓶颈在 queue、KV transfer 或 cache lookup，换一个更快的矩阵乘 kernel 也未必改善 tail latency。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-11-40-workload-sla.jpg}
+\caption{不同 workload shape 对应不同 SLA：TTFT、TBT 与吞吐必须共同观察。}
+\figsource{课堂视频 00:10:15--00:13:10；图中示例阈值只表示一类服务目标，不是通用标准。}
+\end{figure}
+
+\subsection{Coding agent 与 batch job 为什么不是同一种服务}
+
+本节用两个极端 workload 建立直觉。Coding agent 往往携带长代码上下文，并在多轮交互中反复复用相同 prefix；它对 cache hit、TTFT 和会话连续性高度敏感。离线翻译或批量标注则可能一次性读入文档、一次性输出结果，更在乎总体成本和吞吐，而不一定在乎每轮对话的热缓存。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.18\textwidth}L{0.22\textwidth}L{0.24\textwidth}L{0.22\textwidth}}
+\toprule
+Workload & 典型形状 & 首要指标 & 架构压力 \\
+\midrule
+Coding agent & 长输入、多轮、工具调用 & TTFT、cache hit、恢复速度 & 大 KV cache、prefix reuse、稳定路由 \\
+Chat assistant & 中等输入、持续 decode & TBT、tail latency & continuous batching、decode capacity \\
+Batch processing & 大批一次性样本 & 总吞吐、成本 & 大 batch、计算利用率、弱会话状态 \\
+RAG/长文问答 & 超长 prefill、短输出 & TTFT & prefill 隔离、context parallelism \\
+\bottomrule
+\end{tabular}
+\caption{不同 workload 的最优系统设计并不相同。}
+\end{table}
+
+\teachervoice{课堂提示：先画 workload histogram，再谈“最佳配置”。输入/输出长度均值会掩盖长尾；平均 cache hit rate 会掩盖 cold request 与 warm request 的完全不同成本。}
+
+\subsection{Prefill 与 decode 的资源属性相反}
+
+进一步看执行阶段，Prefill 一次处理大量输入 token，矩阵乘更大，更容易获得高并行度，通常偏 compute-bound。Decode 每一步只产生少量 token，却需要反复读取大量权重与 KV 状态，往往偏 memory-bandwidth-bound。把二者混在同一 GPU pool 中，会让长 prefill 阻塞对延迟敏感的 decode。
+
+\begin{importantbox}{同一个 Transformer，有两种系统行为}
+训练和 prefill 更像“大块矩阵计算”；decode 更像“为了生成一个 token，把模型状态再搬一遍”。因此，训练阶段有效的优化直觉不能直接照搬到在线 decode。
+\end{importantbox}
+
+\subsection{本章小结}
+
+SLA 必须绑定 workload。TTFT、TBT 与吞吐不是可互换的单一分数；prefill 和 decode 的硬件行为也不同。只有先明确请求分布和服务约束，后续的 batching、cache、disaggregation 与 kernel 优化才有正确目标。
+
+\section{一次请求怎样变成连续输出的 token}
+
+前面已经定义了 SLA，本节把它落到执行路径。推理引擎本质上是一个长期运行的控制循环，而不是“收到请求就调用一次模型”。它要不断接收新请求、决定谁进入 batch、管理 KV cache、执行 prefill/decode、采样 token、检查停止条件，再把未完成请求送回下一轮。
+
+\subsection{Request-to-token 数据流}
+
+下面沿着单个请求追踪数据流。请求先被 tokenizer 转成 token IDs，scheduler 根据资源和优先级选择执行位置。Prefill 计算输入上下文并生成 KV state；decode 读取权重和缓存，每轮产生一个或少量 token；detokenizer、stop condition 和安全/格式检查再把模型输出变成用户看到的文本。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.91\textwidth]{00-16-00-request-to-token.jpg}
+\caption{从请求到流式 token：prefill 与 decode 处在同一控制循环中。}
+\figsource{课堂视频 00:14:12--00:16:21。}
+\end{figure}
+
+\subsection{Continuous batching：batch 每一步都在变化}
+
+静态 batching 会等一批请求全部结束后再装入下一批，短请求因此被长请求拖住。Continuous batching 在每个 decode step 后检查完成请求，释放其 KV blocks，并把新请求插入可用槽位。这样可以提高利用率，但 scheduler 必须同时满足显存、KV block、优先级和 SLA 约束。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.91\textwidth]{00-16-40-continuous-batching.jpg}
+\caption{Continuous batching：请求在不同 step 到达、结束或因资源不足而排队。}
+\figsource{课堂视频 00:16:23--00:18:02。}
+\end{figure}
+
+读图时应沿时间轴向下看：蓝色长请求占据资源，绿色短请求完成后腾出空间，橙色请求若没有足够 KV capacity 就只能等待。这里的核心不是颜色，而是资源状态会在每一步改变，batch 不是固定数组，而是动态集合。
+
+\subsection{Prefix sharing：缓存的是已经完成的计算}
+
+前面看到 batch 会动态变化，这里进一步利用请求之间的重复。多轮对话、共享 system prompt 和重复长文都会产生公共 prefix。如果每次都重新 prefill，相当于重复计算相同的 key/value。Radix Tree 或 trie 可以按 token prefix 索引已存在的 KV blocks：最长匹配部分直接复用，只有 cache miss 的后缀需要新计算。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-18-30-radix-prefix-cache.jpg}
+\caption{Radix Tree prefix sharing：共享 system prompt 与会话前缀只计算一次。}
+\figsource{课堂视频 00:18:02--00:19:13。}
+\end{figure}
+
+\begin{warningbox}{Prefix 相同不等于语义相似}
+KV reuse 通常要求 token 序列精确匹配，不能因为两段文本“意思相近”就直接复用。模型版本、RoPE 设置、量化格式和 adapter 状态变化也会让旧 KV state 失效。
+\end{warningbox}
+
+\subsection{Prefill/decode disaggregation}
+
+因此，既然 prefill 偏计算、decode 偏带宽，就可以把它们放到不同 worker pool：prefill worker 处理长上下文并生成 KV，decode worker 接收 KV 后专注低延迟自回归。这样可以独立扩容两类资源，也能采用不同并行策略和硬件配置。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-20-30-prefill-decode-disaggregation.jpg}
+\caption{Prefill/decode disaggregation：在两个资源池之间传输 KV state。}
+\figsource{课堂视频 00:19:13--00:21:10。}
+\end{figure}
+
+分离并非免费：KV transfer 会消耗网络带宽并增加 TTFT；路由错误可能让某一池饱和、另一池空闲；多轮对话若频繁跨节点搬运 KV，收益会被抵消。因此 disaggregation 需要和 cache locality、network topology、append-prefill 比例一起设计。
+
+\subsection{本章小结}
+
+推理引擎是 scheduler、cache manager 与模型执行器组成的循环。Continuous batching 提高资源复用，prefix sharing 避免重复 prefill，prefill/decode disaggregation 允许按不同资源属性扩容；三者都依赖准确的状态追踪与路由。
+
+\section{KV cache：推理系统里的“内存层级”}
+
+KV cache 把过去 token 的 attention key/value 保存下来，避免 decode 时重复计算历史。它把计算问题转化成容量、带宽和 locality 问题：模型越大、上下文越长、并发会话越多，缓存就越可能成为系统的真正稀缺资源。
+
+\subsection{先做一个容量估算}
+
+本节先做容量账本，再讨论调度。设 Transformer 有 $L$ 层，每层有 $n_{kv}$ 个 KV heads，head dimension 为 $d_h$，序列长度为 $T$，每个元素占 $b$ bytes。忽略 metadata，一个会话的 KV cache 近似为：
+
+\[
+M_{\mathrm{KV}} \approx 2L T n_{kv} d_h b.
+\]
+
+系数 $2$ 来自 key 和 value。这个公式解释了为什么 MQA/GQA、低比特 KV、分页缓存与 prefix reuse 会直接改变服务容量，也解释了为什么长上下文不是“只把 max sequence length 改大”那么简单。
+
+\subsection{GPU、CPU DRAM 与 SSD 形成缓存层级}
+
+在容量公式之后，接下来要决定状态放在哪里。最热的 KV blocks 留在 GPU HBM，较冷状态被 pin 到 CPU DRAM，更冷的会话可以落到 NVMe 或分布式 store。新请求到达时，scheduler 尝试提前 prefetch；资源紧张时，根据未来复用概率和 SLA 选择 eviction。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-26-30-kv-cache-hierarchy.jpg}
+\caption{KV cache 的层级化管理：offload、prefetch、共享与淘汰。}
+\figsource{课堂视频 00:25:33--00:29:54；图中文字只作示意，层级机制由课堂口述核验。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{L{0.14\textwidth}L{0.18\textwidth}L{0.25\textwidth}L{0.27\textwidth}}
+\toprule
+层级 & 优点 & 代价 & 适合保存 \\
+\midrule
+GPU HBM & 最低访问延迟 & 容量贵、与权重竞争 & 当前 batch、热会话、即将 decode 的 blocks \\
+CPU DRAM & 容量更大 & PCIe/NVLink 搬运延迟 & 暂停会话、近期可能复用的 prefix \\
+NVMe/SSD & 容量最大、成本低 & 延迟高、带宽共享 & 长时间冷却但仍有恢复价值的会话 \\
+Distributed store & 跨节点共享 & 网络与一致性复杂 & 大规模共享 prefix、集群级 cache \\
+\bottomrule
+\end{tabular}
+\caption{KV cache hierarchy 的典型权衡。}
+\end{table}
+
+\subsection{这其实是经典操作系统问题}
+
+LRU、working set、prefetch、page fault 和 admission control 都会重新出现。区别在于“页面”现在是 KV blocks，miss 的代价可能是重新做长 prefill，访问模式又受到用户行为、agent loop 和 router 决策影响。若用户刚打开一个月前的会话页面，这本身就是强 prefetch 信号。
+
+\teachervoice{课堂提示：最优淘汰需要知道未来；工程系统只能预测未来。比起盲目套用 LRU，更重要的是记录会话恢复概率、KV 大小、重算成本和 SLA 违约成本。}
+
+\subsection{Production bug 为什么需要 observability}
+
+回到真实系统，讲者列出三类故障：早期 kernel launch 产生 NaN；tool-call 相关变更导致输出长度分布突然漂移；一个 off-by-one kernel bug 读到未初始化显存，最终让模型随机输出中文字符并沿错误上下文继续生成。第三个例子说明，模型行为异常不一定来自训练数据或量化，也可能来自底层内存错误。
+
+\begin{knowledgebox}{课堂提示：万亿 token 规模会把“几乎不发生”变成日常事故}
+讲者强调，小规模测试看似稳定的系统，在每天服务万亿级 token 时一定会遇到 $0.001\%$ 甚至更低概率的边界条件。NaN 重复 token、tool-call doom loop 和未初始化显存导致的随机中文输出，分别要求监控数值、长度分布和语言分布。事故的共同教训是：模型输出本身就是 systems telemetry，不能只看 kernel 单测是否通过。
+\end{knowledgebox}
+
+\begin{warningbox}{单元测试覆盖不了流量分布}
+Kernel 测试可能只验证常见 shape，却遗漏特定 batch、长度或边界条件。线上必须监控 valid output rate、token length distribution、language distribution、NaN/Inf、cache hit、queue delay 和模型版本切换点，并保留可回放请求。
+\end{warningbox}
+
+\subsection{本章小结}
+
+KV cache 是推理系统的状态核心。容量公式决定并发上限，层级化存储决定 miss 成本，预取与淘汰决定 TTFT。调试时也要把模型输出与 kernel、内存、流量分布和版本变化联动观察。
+
+\section{集群级问题：长上下文、故障与 cache-aware routing}
+
+前面讨论的是单个引擎的状态管理，本节把范围扩大到集群。当模型跨越几十张 GPU、上下文达到百万 token 时，单机优化不再足够。系统需要处理节点故障、跨卡通信、context sharding 和不同请求之间的干扰；许多收益来自 routing layer 的几行决策，而不是重新写整个模型。
+
+\subsection{Context parallelism 与故障域}
+
+本节从两个同时出现的规模问题入手。百万 token 上下文可以沿 sequence dimension 切到多张 GPU，让每张卡只保存局部 KV，再在 attention 中交换必要信息。与此同时，模型若跨 64 或 72 张 GPU 执行，任何一张卡故障都可能中断整次请求；fault tolerance 必须考虑重路由、KV 恢复、冗余 expert 和局部重算。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-31-20-context-parallelism.jpg}
+\caption{长上下文的 context parallelism：序列与 KV 状态跨 GPU 分片。}
+\figsource{课堂视频 00:29:56--00:31:29。}
+\end{figure}
+
+\subsection{CPD：先按 cache hit 把 cold 与 warm 分开}
+
+进一步，Cache-aware prefill-decode disaggregation（CPD）在普通 PD 分离之外增加一个关键判断：新请求若几乎没有可复用 prefix，就送到 pre-prefill/cold pool；高 cache-hit 的 warm request 进入快速 prefill path；decode pool 保持延迟隔离。这样可以避免一个超长 cold prefill 阻塞大量只需追加少量 token 的会话。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-32-30-cache-aware-pd.jpg}
+\caption{CPD：cache-aware router 将 cold prefill、warm prefill 与 decode 分离。}
+\figsource{课堂视频 00:31:31--00:33:37；机制与 Together AI 公开 CPD 说明交叉核验。}
+\end{figure}
+
+若平均会话约十轮，fresh request 只占一部分，但它们的 prefill 成本可能远高于续聊。CPD 利用这种异质性，把“有没有可复用状态”提升为一等调度信号。课堂报告该简单路由可带来最高约 $40\%$ 的 serving 改善；官方说明把收益表述为在特定 long-context mixed workload 下提高约 $35\%$--$40\%$ 的 sustainable throughput。
+
+\begin{importantbox}{Routing 也是算法}
+两行 routing logic 能改变整个集群的干扰结构。系统优化不一定要写新 kernel；只要识别出 cold/warm、prefill/decode、short/long 等成本类别，并让它们不再互相阻塞，就可能获得大收益。
+\end{importantbox}
+
+\subsection{本章小结}
+
+规模扩大后，sequence sharding、fault domain 与 cache locality 必须一起考虑。CPD 的关键不是多加一个服务名字，而是用 cache reuse 区分工作类别，让高成本 cold prefill 不再污染低延迟路径。
+
+\section{Megakernel：把 GPU 看成一个分布式系统}
+
+Decode 的关键矛盾是：为了生成一个 token，需要运行整个模型；计算量并不总是大，但权重和状态必须被持续搬运。若每个算子都由独立 kernel 执行，launch、tear-down、同步和尾部等待会在整层、整模型范围内累积。
+
+\teachervoice{课堂提示：Megakernel 的目标不是让单个矩阵乘更快，而是消除整条 decode 时间线上的 boundary、straggler 与 weight-load 空洞。读性能图时应先看哪些 SM 在等待，再判断 fusion 是否真的移动了瓶颈。}
+
+\subsection{为什么会出现 GPU bubbles}
+
+本节先解释空洞从哪里来。传统实现按 RMSNorm、QKV projection、RoPE、attention、O projection、MLP 等算子逐个 launch。时间线上的彩色条代表 SM 在做有效工作，空白代表等待。即使单个 kernel 已经很快，kernel boundary、weight-load latency 和 straggler 仍会造成大面积空洞。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.87\textwidth]{00-36-45-kernel-bubbles.jpg}
+\caption{独立 kernel 带来的 launch gap、load latency 与 tail effects。}
+\figsource{课堂视频 00:35:03--00:37:32。}
+\end{figure}
+
+\begin{warningbox}{平均利用率掩盖依赖关系}
+空洞不是简单把 batch 加大就能消除。部分空洞来自算子依赖，部分来自不同序列长度，部分来自下一组权重尚未到达。必须知道每段工作依赖什么、需要什么 memory page，才能安全重排。
+\end{warningbox}
+
+\subsection{Whole-model megakernel 的核心思想}
+
+因此，Megakernel 不再让每个算子拥有独立 kernel boundary，而是在一个长期驻留 kernel 内定义更细粒度的 instructions，把各个 SM 当成工作节点。调度器依据 dependency graph 分配 QKV、attention、reduction、O projection 和 MLP 等任务，并尽可能让 load、compute 与 reduction 重叠。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-38-20-megakernel-solution.jpg}
+\caption{Megakernel 通过细粒度调度填补 kernel 之间的空洞。}
+\figsource{课堂视频 00:37:32--00:38:53。}
+\end{figure}
+
+这与 FlashAttention 的 fusion 有共同思想，但范围更大：不仅在一个 attention 算子内部融合 load/compute，还可能覆盖整层乃至整个 Llama-1B forward pass。代价是调度、共享内存和硬件适配都变得更复杂。
+
+\subsection{Fine-grained overlap：依赖未结束，准备可以先开始}
+
+接下来把 overlap 具体化。QKV+RoPE 尚未完全结束时，可以先加载已存在的 KV cache；attention 尚未完全结束时，可以预取 O projection 权重。关键是把“数学依赖”与“数据准备”拆开：真正依赖结果的计算必须等待，但不依赖结果的 load、地址计算和部分 reduction 可以提前。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-39-40-fine-grained-overlap.jpg}
+\caption{细粒度 overlap：attention 与权重/KV load 在同一时间线上交错。}
+\figsource{课堂视频 00:39:04--00:40:15。}
+\end{figure}
+
+\subsection{ThunderKittens 提供什么抽象}
+
+为了让上述 schedule 可实现，课堂中的系统使用 instruction-based abstraction：每个 sub-kernel 仍可独立编写，但由统一 interpreter 和 virtualized shared memory 协调。ThunderKittens 提供 tile、async load/store、shared-memory page 与 worker specialization 等底层构件，比 Triton 更低层，也给程序员更细的控制。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{00-40-45-thunderkittens.jpg}
+\caption{ThunderKittens 的抽象层：把 load/store、shared memory 与 compute worker 显式化。}
+\figsource{课堂视频 00:40:15--00:40:56。}
+\end{figure}
+
+\subsection{收益与适用边界}
+
+本节不把一次 benchmark 当作普遍结论，而是用它判断瓶颈是否真正被移动。这里要同时检查延迟、吞吐和硬件利用率，确认加速不是把成本转移到另一个未观测阶段。课堂图报告 H100 上约百分之 72 的 bandwidth utilization，并显示 megakernel 在该 Llama-1B decode 设置中明显快于通用引擎。这里应把数字理解为“特定模型、batch 和硬件下接近带宽上限”的证据，而不是所有模型都能获得相同收益。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.84\textwidth]{00-41-10-decoding-payoff.jpg}
+\caption{Megakernel 的 decode throughput 与带宽利用率证据。}
+\figsource{课堂视频 00:40:56--00:41:32；具体数值以该次课堂展示配置为准。}
+\end{figure}
+
+\begin{dialoguebox}{问答：为什么不把所有模型都写成 megakernel？（01:03:28--01:04:44）}
+学生问 megakernel 的代价。Dan Fu 的回答可以概括为：速度上限很高，但需要大量 kernel engineering；一个工程师一年可能只覆盖一种硬件、少数模型和有限 batch 范围，batch 或硬件变化都可能要求重新调优。
+\end{dialoguebox}
+
+这段回答指出了自动化编译器的真正价值：不是让一个已知 kernel 再快 $1\%$，而是降低跨模型、跨硬件、跨 shape 维护 whole-model schedule 的人力成本。
+
+\subsection{本章小结}
+
+Megakernel 的本质是把 GPU 从“依次调用算子”改看成“带依赖图、局部内存和工作节点的分布式系统”。收益来自消除 boundary 与重叠 load/compute；代价是可移植性和工程复杂度。
+
+\section{Parcae：用循环复用参数，而不是只扩大模型}
+
+前半讲讨论怎样更好地服务既有模型，后半讲进一步问：系统瓶颈能否启发一种更适合推理的架构？Parcae 的答案是 looped language model：让中间 block 重复执行，用更多 FLOPs 换质量，但不同比例增加参数和权重内存。
+
+\teachervoice{课堂提示：Looping 提供的是独立缩放旋钮。参数量固定后仍可增加 recurrence 和 FLOPs，但朴素重复层会放大 residual dynamics；因此 Parcae 的重点不是“多跑几遍”，而是先让循环在谱意义上稳定。}
+
+\subsection{Looped model 提供一个新的缩放旋钮}
+
+回到模型架构，固定深度 Transformer 主要通过增加参数 $N$ 或数据 $D$ 扩大训练 FLOPs。Looped model 引入 recurrence $T$：同一组参数重复处理 activation。这样可以在参数量近似固定时增加计算，也可能以较小权重 footprint 获得更高质量。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.91\textwidth]{00-42-45-parcae-overview.jpg}
+\caption{Parcae 的两个问题：怎样稳定循环，以及 recurrence 应怎样随训练规模增长。}
+\figsource{课堂视频 00:41:50--00:43:28；术语与结论由 Parcae 论文交叉核验。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-44-30-why-loop.jpg}
+\caption{Looped model 将 activation 多次送回同一 recurrent block。}
+\figsource{课堂视频 00:43:28--00:44:36。}
+\end{figure}
+
+\begin{importantbox}{参数、计算与内存不再被绑死}
+增加 recurrence 会增加训练和推理计算，却不必线性增加权重参数。对于受权重内存、模型切分或通信约束的服务，这提供了不同于“做更宽/更深模型”的设计点。
+\end{importantbox}
+
+\subsection{朴素循环为什么容易爆炸}
+
+问题是，已有 recurrent-depth model 对 learning rate 和 normalization 很敏感：小幅超参数变化就可能产生 NaN、loss spike 或 residual norm 爆炸。简单地在每层加 norm 可能压住 activation 大小，却没有消除系统内部“想放大”和“被强制缩回”的冲突。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-46-00-loop-instability.jpg}
+\caption{朴素 looped model 对 learning rate 高度敏感，容易出现 loss spike。}
+\figsource{课堂视频 00:45:38--00:46:38。}
+\end{figure}
+
+\subsection{把 residual stream 写成动力系统}
+
+为了找到可分析的根因，Parcae 不直接解析 attention、softmax、RoPE 和 MLP 的全部非线性，而是先观察每次循环对 residual 的增量。论文把 recurrent update 写成：
+
+\[
+e=\operatorname{LN}(P(s)),\qquad
+h_{t+1}=A h_t+B e+\mathcal{R}(h_t,e),
+\]
+
+其中：
+
+\begin{itemize}
+  \item $s$ 是输入 token sequence，$P$ 是进入循环前的 prelude blocks；
+  \item $e$ 是注入 recurrent core 的输入表示；
+  \item $h_t\in\mathbb{R}^{d_h}$ 是第 $t$ 次循环的 residual state；
+  \item $A$ 控制历史 state 怎样进入下一步，$B$ 控制输入 $e$ 怎样被注入；
+  \item $\mathcal{R}$ 汇总 attention 与 feed-forward 等非线性 Transformer blocks。
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{00-48-00-residual-dynamics.jpg}
+\caption{把复杂 recurrent Transformer 抽象成 residual 上的动力系统。}
+\figsource{课堂视频 00:46:38--00:49:17。}
+\end{figure}
+
+\subsection{线性近似暴露 spectral radius}
+
+下面用线性近似隔离重复相乘的部分。若先忽略 $\mathcal{R}$ 的高阶影响，得到 $h_{t+1}\approx \bar A h_t+\bar B e$。展开 $T$ 步：
+
+\[
+h_T=\bar A^T h_0+\sum_{i=0}^{T-1}\bar A^i\bar B e.
+\]
+
+长期行为由 $\bar A^i$ 主导。若 spectral radius $\rho(\bar A)>1$，某些方向会随循环次数指数放大；标量类比就是 $2^{16}$。若 $\rho(\bar A)<1$，历史影响衰减，系统更容易保持稳定。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-50-30-spectral-radius.jpg}
+\caption{线性化后的闭式解把稳定性问题归约到 $\bar A$ 的 spectral radius。}
+\figsource{课堂视频 00:49:17--00:51:10；公式按 Parcae 论文记号整理。}
+\end{figure}
+
+\begin{warningbox}{Spectral radius 不是“另一种 norm”}
+课堂为直觉简化了术语。严格地说，spectral radius 是特征值绝对值的最大值；operator norm 与它相关但不恒等。对非正规矩阵，短期 transient growth 也可能在 $\rho(A)<1$ 时出现。因此论文选择结构化参数化，而不是只在训练后测一个数。
+\end{warningbox}
+
+\subsection{Parcae 怎样强制稳定}
+
+因此，Parcae 不等待训练后再修补爆炸，而是在参数化阶段限制动力系统。它在连续参数空间中令 $A_c=-\operatorname{Diag}(\exp(a))$，使其特征值为负；再通过离散化得到 $\bar A=\exp(\Delta A_c)$，从而把离散系统的特征值约束在单位圆内。输入注入 $B e$ 还配合 normalization，降低尺度漂移。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-51-45-parcae-constraints.jpg}
+\caption{Parcae 的稳定参数化：负对角连续系统、离散化与输入归一化。}
+\figsource{课堂视频 00:51:13--00:51:55；具体参数化由 Parcae 论文第 4 节核验。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-52-15-stable-loss.jpg}
+\caption{稳定约束后，Parcae 的 recurrent state norm 和训练 loss 更可控。}
+\figsource{课堂视频 00:51:55--00:53:26。}
+\end{figure}
+
+这里的关键不是“再加一个 norm”，而是先从动力系统找出会被重复相乘的结构，再让参数化从定义上满足稳定条件。它把训练经验问题转化为可分析的 architecture constraint。
+
+\subsection{稳定之后，质量是否值得这笔计算}
+
+稳定只是必要条件，接下来还要验证额外 FLOPs 是否换来质量。这里的 perplexity（PPL）是 token 交叉熵取 $\exp$ 后的困惑度，越低通常表示语言建模预测更好。课堂结果显示，Parcae 相比既有 recurrent-depth models 和强 Transformer baseline 获得更好 PPL/下游质量。论文报告在部分设置下相对既有大规模 looped model 最多降低 $6.3\%$ validation perplexity，并在固定参数与数据预算下提升多个 downstream aggregate。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-54-00-quality-table.jpg}
+\caption{Parcae 与既有 looped model、强 Transformer baseline 的质量比较。}
+\figsource{课堂视频 00:53:26--00:54:13；精确指标应回到 Parcae 论文表格与实验设置。}
+\end{figure}
+
+\subsection{本章小结}
+
+Parcae 通过复用中间 block，把 recurrence 变成独立缩放维度。它的核心贡献不是“把层多跑几次”，而是用 residual dynamical system 找到不稳定根因，再用结构化参数化约束 spectral radius。
+
+\section{Recurrence scaling laws：什么时候应该多循环}
+
+能够稳定训练只回答“能不能 loop”，还没有回答“应该 loop 几次”。Parcae 进一步把 recurrence 放进 scaling law：在参数量、数据量和 FLOP budget 之间，寻找 compute-optimal 的循环次数。
+
+\subsection{先回顾参数与数据的经典缩放}
+
+为了理解 recurrence 的位置，本节先回顾经典经验模型，它把 validation loss 写成参数量 $N$ 与数据量 $D$ 的幂律和：
+
+\[
+\widehat{L}(N,D)=E+X N^{-\alpha}+Y D^{-\beta}.
+\]
+
+在固定训练 FLOPs 下，等 FLOP 曲线的最优点通常随预算向“更大模型、更多数据”共同移动。曲线若向右下方移动，含义不是只增加其中一个，而是两者协同扩大。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-55-00-classic-scaling.jpg}
+\caption{传统 scaling law：参数量与数据量共同决定 compute-optimal 点。}
+\figsource{课堂视频 00:54:13--00:55:44。}
+\end{figure}
+
+\subsection{把 recurrence 加入等参数、等 FLOP 曲线}
+
+Parcae 在固定参数量下改变数据量与 recurrence。课堂图中，每条曲线对应一个 FLOP budget；随着数据增多，最优点向更高 recurrence 移动。换句话说，在这些实验范围内，固定模型若训练更多数据，完全保持固定 depth 可能不是最优。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-58-30-recurrence-scaling.jpg}
+\caption{Parcae 的 recurrence scaling：更多数据对应更高 compute-optimal recurrence。}
+\figsource{课堂视频 00:55:44--00:58:31。}
+\end{figure}
+
+可以用一个不带具体指数的经验式表达这种关系：
+
+\[
+T^{\star}(D;N,C)\approx kD^{\gamma},\qquad \gamma>0,
+\]
+
+其中 $T^{\star}$ 是给定参数量 $N$ 与 FLOP budget $C$ 下的最优循环次数，$k,\gamma$ 由实验拟合。讲义故意不填入单个指数，因为它依赖模型规模、数据分布和训练设置，不能从一张课堂图外推到所有模型。
+
+\subsection{同等 FLOPs 下，循环可能优于只加数据}
+
+进一步，课堂把 fixed-depth Transformer 与 compute-optimal looping model 放在相同参数和 FLOP 预算下比较。初步结果显示，把部分额外计算用于 recurrence，而不是只增加数据 token，能获得更低 validation loss 和更好的下游分数。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{00-59-00-loop-vs-fixed-depth.jpg}
+\caption{相同参数和 FLOP 预算下，optimal looping 与 fixed-depth 的经验比较。}
+\figsource{课堂视频 00:58:31--00:59:30。}
+\end{figure}
+
+\begin{warningbox}{不要把初步 scaling law 读成普遍定律}
+这些曲线来自有限模型规模和数据设置。它们支持“recurrence 值得成为独立搜索维度”，但还不足以证明所有 frontier pretraining 都应循环。更大的模型、MoE、不同数据 mixture、长上下文和 post-training 都可能改变最优点。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Parcae 的 scaling 结果把问题从“loop 或不 loop”改成“在给定参数、数据和 FLOPs 下 loop 多少”。初步证据表明数据与 recurrence 应协同增长，但结论必须在更大规模和更多 workload 上复现。
+
+\section{问答中的系统设计原则}
+
+课程最后十分钟的问答把前面分散的结论连接起来：参数复用为什么可能改善推理、硬件怎样约束模型、agentic workload 与 batch workload 为什么需要不同 architecture，以及 megakernel 在多 GPU 上会遇到什么边界。
+
+\subsection{预训练模型能不能直接多跑几层}
+
+有学生问 Parcae 是否必须从头训练。讲者提到已有非正式实验把预训练模型的少数层重复执行，在部分数学任务上出现提升，但机制并不清楚，不能当作稳定可复现的方法。
+
+\begin{dialoguebox}{问答：预训练后再 loop（01:00:46--01:01:58）}
+学生：能否不从头训练，直接让现有模型的部分层重复执行？\par
+Dan Fu：有早期现象显示少量 looping 可能提升某些任务，但原因尚未解释，需要检查 activation 与权重，而不是把偶然 leaderboard 结果当成结论。
+\end{dialoguebox}
+
+\subsection{较少参数为什么可能带来非线性推理收益}
+
+回到推理系统，较少权重不只是节省模型文件：它可能让更多 KV cache 留在 GPU、减少模型跨卡切分、降低通信，还可能让 recurrent block 整体驻留在片上或更近的 memory tier。若跨过某个容量阈值，收益会突然出现，而不是随参数量线性变化。
+
+\begin{dialoguebox}{问答：looped model 的推理意义（01:01:58--01:03:25）}
+学生：固定计算预算下，循环对 inference memory 有什么影响？\par
+Dan Fu：更少参数可以换更多 KV cache 和更少跨 GPU 通信；若 recurrent block 足够小，甚至可能把循环做成高速 megakernel，不过当前 block 还不够小。
+\end{dialoguebox}
+
+\subsection{Hardware/model co-design 从 memory 开始}
+
+进一步，若模型明确部署在特定 wafer-scale accelerator、GPU 或 LPU 上，首先要问能否把权重和足够 KV state 放进可用 memory。其次再看硬件原生支持的量化格式、通信拓扑、tensor core shape 和软件栈。模型维度、attention 形式与 quantization 不再只是训练选择，也是部署选择。
+
+\begin{dialoguebox}{问答：已知部署硬件时怎样设计模型（01:04:47--01:06:14）}
+学生：若已知模型将服务在特定新硬件上，架构应该怎样改变？\par
+Dan Fu：先按可用 memory 设计模型与 KV 余量，再考虑硬件支持的数值格式和算子；不同 GPU 生态支持的 FP4 格式与最佳选择可能不同。
+\end{dialoguebox}
+
+\teachervoice{课堂提示：Hardware/model co-design 从 memory capacity 开始。先保证权重与足够 KV cache 能驻留，再谈 tensor core、量化格式和 kernel；否则算力再高也会被状态搬运或跨设备切分吞掉。}
+
+\subsection{Agentic workload 把 hot KV 变成核心资产}
+
+Agent loop 会反复调用模型、工具和环境，并持续追加同一会话；因此 cache locality、KV 压缩和恢复策略非常重要。一次性 batch processing 则可能只访问每个文档一次，KV reuse 的价值低得多。DeepSeek MLA、低比特 KV 和 causal/non-causal attention 的价值都要放回 workload 判断。
+
+\begin{dialoguebox}{问答：agent 与 batch 是否需要不同模型（01:07:56--01:09:59）}
+学生：coding agent 和批处理任务的最优架构差异是什么？\par
+Dan Fu：agentic workflow 更依赖热 KV cache；一次性文档处理不一定需要同样的缓存。是否需要持续 decode、是否能用双向 attention，也会改变最佳架构。
+\end{dialoguebox}
+
+\teachervoice{课堂提示：Agentic workflow 的核心资产是 hot KV state。相同模型若用于一次性翻译，缓存复用价值很低；用于多轮 coding agent，则 MLA、低比特 KV、稳定路由和会话恢复都会直接改变系统最优点。}
+
+\subsection{Megakernel 能否融合多 GPU 通信}
+
+本节最后把范围扩到多 GPU。理论上可以把 NCCL/NVLink communication 也纳入 megakernel schedule，让通信与局部计算重叠。但若瓶颈就是 collective latency，fusion 不能消除物理延迟。更现实的形态可能是“局部 megakernel”：只融合一个 MoE layer、attention block 或 recurrent core，而不是强求整个多 GPU 模型都进入单一 kernel。
+
+\begin{dialoguebox}{问答：多 GPU megakernel（01:10:27--01:11:28）}
+学生：当模型包含跨 GPU 通信时，megakernel 怎么工作？\par
+Dan Fu：通信调用可以被融合，但未必存在 whole-model killer use case；未来更常见的可能是为某个计算片段写专用 megakernel。
+\end{dialoguebox}
+
+\teachervoice{课堂提示：把 NCCL call 融进 megakernel 可以增加 overlap，却不能消除 collective 的物理 latency。实际落地更可能是 MoE layer、attention block 或 recurrent core 的局部 megakernel，而不是一个覆盖所有 GPU 的万能 kernel。}
+
+\subsection{本章小结}
+
+问答给出四个可复用原则：不要把未经解释的 post-hoc looping 当结论；容量阈值会带来非线性收益；模型设计应从目标硬件和 workload 出发；megakernel 更可能以局部、专用形式扩散。
+
+\section{总结与延伸}
+
+这堂嘉宾课最终把推理系统和模型研究统一起来。服务端不是训练完成后的附属工程，而是新的观测窗口：真实 workload 揭示 cache 与 scheduler 问题，GPU 时间线揭示 kernel 空洞，memory footprint 又提示参数复用和循环架构的价值。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{01-00-00-takeaway.jpg}
+\caption{讲者的收束：理解 inference 与 GPU kernels，才能做 full-stack ML innovation。}
+\figsource{课堂视频 00:59:33--01:00:30。}
+\end{figure}
+
+\subsection{一张端到端设计检查表}
+
+为了把整堂课变成可执行流程，下面的检查表按层次记录“先问什么”和“必须观测什么”。它的核心用法不是逐项打勾，而是沿着因果链追踪：workload 变化是否先改变 SLA，随后改变 queue/cache，最后才在 kernel 或 architecture 层表现出来。
+
+{\small
+\setlength{\tabcolsep}{4pt}
+\begin{longtable}{L{0.18\textwidth}L{0.36\textwidth}L{0.36\textwidth}}
+\toprule
+层次 & 先问什么 & 需要记录什么 \\
+\midrule
+Workload & 输入/输出长度、会话轮数、到达间隔怎样分布？ & histogram、cache hit、cold/warm 比例、工具调用模式 \\
+SLA & 用户在乎首 token、流畅度还是总体完成时间？ & p50/p95/p99 TTFT、TBT、完成率、QPS/GPU \\
+Scheduler & 谁能进入 batch，谁被谁阻塞？ & queue delay、preemption、KV blocks、priority、admission \\
+Cache & 哪些状态值得留在 HBM，何时 prefetch？ & block size、reuse distance、eviction reason、transfer time \\
+Parallelism & 模型、expert、sequence 怎样切分？ & topology、collective time、failure domain、imbalance \\
+Kernel & 时间线空洞来自 launch、load 还是 tail？ & SM utilization、bandwidth、kernel boundaries、shape \\
+Architecture & 参数、recurrence、KV 大小如何匹配硬件？ & weight footprint、loop count、quantization、target hardware \\
+Validation & 优化是否只对单一 benchmark 有效？ & mixed traffic replay、tail SLA、quality regression、故障演练 \\
+\bottomrule
+\caption{从 workload 到 architecture 的全栈审计表。}
+\end{longtable}
+}
+
+\subsection{五条最终结论}
+
+\begin{enumerate}
+  \item \textbf{先定义 workload，再定义最优。} 没有输入/输出长度、会话和 cache 分布，“最快引擎”没有可比较含义。
+  \item \textbf{KV cache 是在线推理的核心状态。} Continuous batching、prefix sharing、offload、CPD 和 agentic serving 都围绕它展开。
+  \item \textbf{Decode 优化的核心常是搬运与调度。} Megakernel 通过消除 boundary、重叠 load/compute 接近硬件带宽上限。
+  \item \textbf{系统约束可以产生架构创新。} Parcae 用 recurrence 增加计算而不同比例增加参数，并用动力系统约束稳定性。
+  \item \textbf{Full-stack co-design 需要承认工程成本。} 专用 kernel、硬件格式与模型结构能带来巨大收益，但可移植性、验证和维护必须进入目标函数。
+\end{enumerate}
+
+\enlargethispage{2\baselineskip}
+\subsection{拓展阅读}
+
+\begin{itemize}
+  \item Parcae 论文与代码：\href{https://arxiv.org/abs/2604.12946}{arXiv:2604.12946}，\href{https://github.com/sandyresearch/parcae}{SandyResearch/parcae}；
+  \item Cache-aware prefill--decode disaggregation：\href{https://www.together.ai/blog/cache-aware-disaggregated-inference}{Together AI 官方说明}；
+  \item Whole-model megakernel：\href{https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles}{HazyResearch: Look Ma, No Bubbles!}；
+  \item Kernel 框架：\href{https://github.com/HazyResearch/ThunderKittens}{HazyResearch/ThunderKittens} 与 \href{https://github.com/HazyResearch/Megakernels}{HazyResearch/Megakernels}。
+\end{itemize}
+
+\end{document}

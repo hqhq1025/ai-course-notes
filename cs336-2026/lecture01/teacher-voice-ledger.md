@@ -1,0 +1,14 @@
+# Lecture 01 Teacher-Voice Ledger
+
+Source: `transcript_timed.txt` generated from the official CS336 Spring 2026 Lecture 1 video. The note paraphrases these spoken points rather than fabricating classroom commentary.
+
+| Time | Spoken point | Why it matters | Where it appears in note |
+|---|---|---|---|
+| 00:02:26--00:03:13 | The from-scratch philosophy remains, but the course deliberately chooses which layers are most valuable to rebuild; newer emphasis includes MoE, agents and long context. | “From scratch” is a pedagogical selection, not a claim that every dependency is reimplemented. | 本讲定位；API 抽象；fundamentals/specs distinction. |
+| 00:03:58--00:04:38 | Higher abstractions are useful but leaky; prompting alone constrains the design space for fundamental research. | Explains why the course tears open the stack instead of treating model APIs as the object of study. | `API 抽象为什么不够` warning and executable-lecture explanation. |
+| 00:04:51--00:05:30 | Language models have industrialized: frontier training is extremely expensive and public reports omit crucial construction details. | Motivates small-scale experiments, resource accounting and explicit limits on what can transfer. | 工业化与尺度；industrialisation and GPT-4 opacity figures. |
+| 00:07:20--00:08:21 | Knowledge separates into mechanics, mindset and intuitions; mechanics and efficiency mindset transfer better than scale-specific modeling intuitions. | Prevents small-model classroom results from being presented as frontier recipes. | 三类可迁移知识 table and scale-transfer warning. |
+| 00:09:15--00:11:36 | The Bitter Lesson does not mean algorithms are irrelevant; algorithms that scale matter, and efficiency becomes more valuable at larger budgets. | Establishes the course-wide objective of maximizing capability under fixed data and compute resources. | Bitter Lesson section; `accuracy = efficiency x resources`; final takeaways. |
+| 00:22:25--00:23:28 | This is not the first course for someone seeking only application results or the newest trends; remote viewers learn most by doing assignments, not only watching lectures. | Clarifies intended audience, workload and the role of hands-on implementation. | 课程机制 and executable-source logistics index. |
+| 00:25:15--00:26:13 | Coding agents can solve assignments, but answer-only use bypasses learning; AI should be pedagogical, answering questions without silently implementing the homework. | Provides the rationale for the course AI policy and pedagogical `AGENTS.md`. | AI policy warning. |
+| 01:12:55--01:18:31 | BPE repeatedly merges frequent adjacent byte-token pairs; the simple implementation works but is extremely slow, and production use needs indexes, chunking and special-token handling. | Preserves the teacher’s engineering emphasis beyond the mathematical merge rule. | BPE training/usage sections, off-by-one warning and Assignment 1 performance goal. |

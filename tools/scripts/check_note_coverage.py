@@ -21,6 +21,26 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+FIGURE_MACRO_RE = re.compile(r"\\(?:videofigure|lecturefigure)\{")
+
+
+def figure_count(text: str) -> int:
+    """Count raw figures or common repository figure macros without expansion."""
+    return max(
+        len(re.findall(r"\\includegraphics", text)),
+        len(re.findall(r"\\begin\{figure\}", text)),
+        len(FIGURE_MACRO_RE.findall(text)),
+    )
+
+
+def is_visual_line(line: str, prefer_macros: bool = False) -> bool:
+    if FIGURE_MACRO_RE.search(line):
+        return True
+    if prefer_macros:
+        return False
+    return "\\includegraphics" in line or line.strip().startswith(r"\begin{figure}")
+
+
 def extract_manifest_required(manifest: Path) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
     if not manifest or not manifest.exists():
@@ -68,7 +88,7 @@ def prose_char_count(lines: list[str]) -> int:
         line = raw.strip()
         if not line or line.startswith("%"):
             continue
-        if "\\includegraphics" in line or "\\caption" in line or "\\figsource" in line:
+        if is_visual_line(line) or "\\caption" in line or "\\figsource" in line:
             continue
         if any(cmd in line for cmd in [r"\toprule", r"\midrule", r"\bottomrule", r"\endhead"]):
             continue
@@ -83,10 +103,24 @@ def prose_char_count(lines: list[str]) -> int:
 
 def figure_local_explanation_counts(lines: list[str]) -> list[tuple[int, int]]:
     counts: list[tuple[int, int]] = []
-    for idx, line in enumerate(lines):
-        if "\\includegraphics" not in line:
+    body_start = next(
+        (idx + 1 for idx, line in enumerate(lines) if r"\begin{document}" in line),
+        0,
+    )
+    body = lines[body_start:]
+    prefer_macros = any(FIGURE_MACRO_RE.search(line) for line in body)
+    prefer_graphics = not prefer_macros and any(r"\includegraphics" in line for line in body)
+    for idx in range(body_start, len(lines)):
+        line = lines[idx]
+        if prefer_macros:
+            is_visual = FIGURE_MACRO_RE.search(line) is not None
+        elif prefer_graphics:
+            is_visual = r"\includegraphics" in line
+        else:
+            is_visual = line.strip().startswith(r"\begin{figure}")
+        if not is_visual:
             continue
-        window = lines[max(0, idx - 10) : min(len(lines), idx + 24)]
+        window = lines[max(body_start, idx - 10) : min(len(lines), idx + 24)]
         counts.append((idx + 1, prose_char_count(window)))
     return counts
 
@@ -115,18 +149,28 @@ def weak_section_openers(lines: list[str]) -> list[tuple[int, str]]:
                 continue
             if not first_meaningful:
                 first_meaningful = stripped
-            if stripped.startswith(r"\begin{figure}") or stripped.startswith(r"\includegraphics"):
+            if is_visual_line(stripped):
                 break
             opener_lines.append(stripped)
             if prose_char_count(opener_lines) >= 120:
                 break
         opener_text = " ".join(strip_latex(x) for x in opener_lines)
         opener_chars = len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", opener_text))
-        starts_with_visual = first_meaningful.startswith(r"\begin{figure}") or first_meaningful.startswith(r"\includegraphics")
+        starts_with_visual = is_visual_line(first_meaningful)
         has_bridge = any(word in opener_text for word in BRIDGE_WORDS)
-        if starts_with_visual or opener_chars < 90 or not has_bridge:
+        # A substantial prose opener is already a valid transition even when it
+        # does not contain one of the small hand-written bridge-word probes.
+        # Keep requiring an explicit bridge for shorter openers, and continue
+        # rejecting sections that start directly with a visual.
+        if starts_with_visual or opener_chars < 90 or (opener_chars < 120 and not has_bridge):
             weak.append((idx + 1, title))
     return weak
+
+
+def find_first_use(text: str, term: str) -> re.Match[str] | None:
+    flags = 0 if term == "ZeRO" else re.I
+    pattern = rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])"
+    return re.search(pattern, text, flags=flags)
 
 
 def main() -> None:
@@ -137,17 +181,20 @@ def main() -> None:
     warnings: list[str] = []
     lines = text.splitlines()
 
-    figs = len(re.findall(r"\\includegraphics", text))
+    figs = figure_count(text)
     readfig = len(re.findall(r"读图|怎么看|图.*说明|图.*含义", text))
     boxes = len(re.findall(r"\\begin\{(?:importantbox|knowledgebox|warningbox)\}", text))
     term_digest = len(re.findall(r"术语消化|术语表|背景概念|什么是|概念.*解释", text))
-    teacher_voice = len(
-        re.findall(
-            r"课堂提示|老师强调|讲者强调|讲义提醒|口头|课上|经验判断|实践经验|"
-            r"这里的提醒|课程提醒|老师在这里|teacher voice|speaker note",
-            text,
-            flags=re.I,
-        )
+    teacher_voice = max(
+        len(re.findall(r"\\teachervoice\{", text)),
+        len(
+            re.findall(
+                r"课堂提示|老师强调|讲者强调|讲义提醒|口头|课上|经验判断|实践经验|"
+                r"这里的提醒|课程提醒|老师在这里|teacher voice|speaker note",
+                text,
+                flags=re.I,
+            )
+        ),
     )
     formulas = len(re.findall(r"\\\[|\\\]|\$\$", text)) // 2 + len(re.findall(r"\\begin\{(?:align|equation)\*?\}", text))
     symbol_words = len(re.findall(r"其中|符号|表示|定义为|记为", text))
@@ -207,7 +254,7 @@ def main() -> None:
     }
     unexplained_terms: list[str] = []
     for term, clues in first_use_terms.items():
-        match = re.search(re.escape(term), text, flags=re.I)
+        match = find_first_use(text, term)
         if not match:
             continue
         window = text[max(0, match.start() - 450) : min(len(text), match.end() + 700)]
@@ -218,14 +265,16 @@ def main() -> None:
 
     required = extract_manifest_required(args.manifest) if args.manifest else []
     if required:
+        searchable_text = re.sub(r"(?m)^\s*%.*$", "", text)
         missing = []
         for node_id, kind, title in required:
             probe = title.strip("` ")
             if kind in {"slide", "figure"}:
-                candidates = [probe, Path(probe).name]
+                path = Path(probe)
+                candidates = [probe, path.name, path.stem]
             else:
                 candidates = [probe[:40]]
-            if not any(c and c in text for c in candidates):
+            if not any(c and c in searchable_text for c in candidates):
                 missing.append((node_id, kind, title))
         if missing:
             warnings.append(f"manifest-required-nodes-not-obviously-covered={len(missing)}")

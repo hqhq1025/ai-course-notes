@@ -1,16 +1,15 @@
 # Lecture 10 Coverage Matrix
 
-Status: complete after source-first rewrite and verification on 2026-05-12.
+Status: second-round executable-source and teacher-voice verification completed on 2026-08-11.
 
-Source: `lecture10-slides.py`, official executable lecture source. The rewritten note follows source clusters rather than a PDF slide deck.
+Source: `lecture10-slides.py`, official executable lecture source. The note follows source clusters rather than a PDF slide deck, and maps spoken-style `text(...)` narration in `lecture10-teacher-voice-ledger.md`. Additional deployment guidance not stated by the source is labeled `讲义提醒`.
 
 Verification evidence:
 
-- `xelatex -interaction=nonstopmode -halt-on-error lecture10-notes.tex` run twice successfully.
-- `tools/scripts/check_quality.sh cs336-2026/lecture10/lecture10-notes.tex` reports `21p  ⭐⭐⭐`.
-- `python3 tools/scripts/check_note_coverage.py cs336-2026/lecture10/lecture10-notes.tex --manifest cs336-2026/lecture10/lecture10-manifest.md` reports `figs=29 readfig=23 boxes=34 term_digest=4 formulas=3 code=0 summaries=4` with no hard errors or warnings.
-- LaTeX log scan reports no `LaTeX Error`, `Undefined control sequence`, rerun warning, `Overfull`, or `Missing character`.
-- Visual PDF QA was rendered and checked in `qa/lecture10-notes/`.
+- Strict coverage reports `figs=29 readfig=24 boxes=47 term_digest=4 teacher_voice=11 formulas=4 code=0 summaries=4 prose_chars=12498`, with no warnings or hard errors.
+- Quality check reports 26 pages, 7 sections, 47 teaching boxes, 29 source figures, `⭐⭐⭐`.
+- Double-pass XeLaTeX succeeds; final logs have no overfull boxes, LaTeX errors, undefined control sequences, missing characters, emergency stops, or fatal errors.
+- Visual QA inspected the complete 26-page contact sheet and full-size pages 25--26; the sparse summary continuation was expanded into a five-ledger serving acceptance matrix and Pareto-frontier warning.
 
 | Source node | Type | Required? | Note section | Treatment | Status |
 |---|---|---|---|---|---|

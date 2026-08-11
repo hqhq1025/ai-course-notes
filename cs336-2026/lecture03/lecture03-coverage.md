@@ -1,18 +1,26 @@
 # Lecture 03 Coverage Matrix
 
-| Source node | Type | Required? | Note section | Treatment | Status |
-|---|---|---|---|---|---|
-| slides 001-008 | framing + recap | yes | 目标、baseline 与现代默认值 | slide-complete figures + narrative explanation | planned |
-| slides 009-019 | normalization cluster | yes | Norm 与 residual stream | every teaching slide shown, read-the-figure for pre/post norm, RMSNorm, bias removal | planned |
-| slides 020-029 | activations + FFN + parallel blocks | yes | Activations 与 FFN | activation glossary, GLU/SwiGLU formulas, evidence slides interpreted | planned |
-| slides 030-035 | position embeddings / RoPE | yes | Position Embeddings 与 RoPE | every RoPE slide shown, formula chain and geometry explanation | planned |
-| slides 036-051 | hyperparameters | yes | Hyperparameter Defaults | slide walkthrough, tables for ff ratio/head dim/aspect ratio/vocab/dropout/weight decay | planned |
-| slides 052-056 | stability tricks | yes | Stability Tricks | softmax/z-loss/QK norm/logit soft-cap definitions and read-the-figure | planned |
-| slides 057-066 | attention variants | yes | Attention Variants and Inference Pressure | GQA/MQA/local attention slides with read-the-figure and first-use glossary | planned |
-| slide 067 | recap | yes | 总结与延伸 | final synthesis and course connections | planned |
-| dense terminology clusters | glossary | yes | Throughout | first-use explanation for pre-norm, RMSNorm, SwiGLU, RoPE, z-loss, QK norm, GQA/MQA, sliding-window attention | planned |
-| PDF visual QA | QA | yes | `qa/lecture03-notes/` | rendered pages + contact sheet + report | planned |
+Status: second-round slide-complete rewrite completed and visually verified on 2026-08-11.
 
-## Omission Policy
+Source deck: `lecture03-slides.pdf`, 67 pages. The note includes all 66 teaching-bearing pages in source order. `slide-000.jpg` is a pure title page duplicated by the note cover and is the only intentional omission.
 
-All teaching slides are included. Pure title/outline slides are still included because the user requested slide-complete coverage; they receive concise explanatory captions rather than long read-the-figure boxes.
+Verification evidence:
+
+- Strict coverage: `figs=67 readfig=28 boxes=51 term_digest=5 teacher_voice=0 formulas=5 summaries=10 prose_chars=17440`, with no warnings or hard errors.
+- Quality check: 48 pages, 67 figures, 260 prose characters per figure, `⭐⭐⭐`.
+- Double-pass XeLaTeX succeeds with no overfull box, LaTeX error, fatal error, or undefined control sequence.
+- Visual QA: `qa/lecture03-notes/contact.png` plus representative full-size pages reviewed; checklist signed.
+
+| Source cluster | Required? | Note section | Treatment | Status |
+|---|---|---|---|---|
+| slide 000 | no | note cover | Pure course title duplicated by the note cover; intentionally omitted. | optional |
+| slides 001--008 | yes | 本讲目标 | Every screenshot included; original/modern baselines, release survey and coverage map explained. | complete |
+| slides 009--018 | yes | Norm 与 residual stream | Every screenshot included; pre/post norm mechanisms, non-residual norm, RMSNorm runtime and no-bias evidence explained. | complete |
+| slides 019--028 | yes | Activations、FFN 与 parallel blocks | Every screenshot included; activation taxonomy, gated FFN formulas, corroborating evidence and systems motivation explained. | complete |
+| slides 029--034 | yes | Position embeddings 与 RoPE | Every screenshot included; relative-position geometry, rotations, formulas, implementation and extrapolation limits explained. | complete |
+| slides 035--050 | yes | Hyperparameter defaults | Every screenshot included; FFN ratios, GLU budget, T5 exception, head/aspect ratios, vocabulary and regularization evidence explained. | complete |
+| slides 051--055 | yes | Stability tricks | Every screenshot included; failure signals, softmax instability, z-loss, QK norm and soft-capping explained. | complete |
+| slides 056--065 | yes | Attention variants and inference pressure | Every screenshot included; arithmetic intensity, KV-cache accounting, MQA/GQA quality tradeoffs and hybrid attention explained. | complete |
+| slide 066 | yes | 本章小结：Recap | Final recap screenshot included and connected to an evidence-aware recipe checklist. | complete |
+| teacher voice | not available | whole note | No transcript, subtitles, speaker notes or executable narration nodes exist in the lecture directory; no classroom voice is fabricated. | not applicable |
+| PDF visual QA | yes | `qa/lecture03-notes/` | Full contact sheet and representative full-size pages inspected; checklist signed. | complete |

@@ -4,6 +4,13 @@ Status: implemented under the new source-first workflow on 2026-05-12.
 
 The final note follows this blueprint and adds explicit `读图` blocks, first-use glossary explanations, collective-operation tables, bandwidth formulas, and code walkthroughs for the official PyTorch distributed examples.
 
+## Teacher Voice Plan
+
+- Treat executable `text(...)` nodes and implementation choices as narration, not disposable slide labels.
+- Preserve the locality hierarchy, foundations-versus-workhorses distinction, collective use cases, hardware-path reasoning, benchmark protocol, data-parallel invariant, and explicit omissions.
+- Record every source-backed `课堂提示` in `lecture07-teacher-voice-ledger.md`.
+- Use `讲义提醒` for editorial debugging or analysis advice that is useful but not stated by the executable source.
+
 ## Goal
 Regenerate Lecture 07 as a source-node-complete note on distributed communication and multi-GPU training. It should teach collectives, hardware topology, PyTorch distributed, communication benchmarking, and data/tensor/pipeline parallelism.
 

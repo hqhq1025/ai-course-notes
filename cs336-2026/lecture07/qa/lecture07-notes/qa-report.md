@@ -1,11 +1,11 @@
 # PDF Visual QA: `lecture07-notes.pdf`
 
 - PDF: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture07/lecture07-notes.pdf`
-- Rendered pages: `cs336-2026/lecture07/qa/lecture07-notes`
-- Contact sheet: `cs336-2026/lecture07/qa/lecture07-notes/contact.png`
-- Page count rendered: 26
+- Rendered pages: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture07/qa/lecture07-notes`
+- Contact sheet: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture07/qa/lecture07-notes/contact.png`
+- Page count rendered: 29
 - Renderer: pdftoppm
-- Renderer log: `cs336-2026/lecture07/qa/lecture07-notes/pdftoppm.log`
+- Renderer log: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture07/qa/lecture07-notes/pdftoppm.log`
 - Near-blank rendered pages: none
 
 ## Manual Checklist
@@ -16,7 +16,9 @@
 - [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## Notes
+## Manual Review
 
-- Contact sheet reviewed after the new source-first rewrite. The 26 rendered pages show no near-blank pages, missing figures, visible crop failures, table/formula/code spillover, or dense figures without nearby `读图` explanation.
-- All local teaching images in `images/` are referenced by `lecture07-notes.tex`, including the newly localized classic topology figure from the official source.
+- Reviewed on 2026-08-11 after executable-narration attribution and two-pass XeLaTeX compilation.
+- Inspected the full 29-page contact sheet and full-size pages 5, 14, 15, 18, 19, 24, 25, and 29.
+- Reworked the initially sparse final page into a readable state/communication ledger, reproduction exercise, and closed-book self-test.
+- Confirmed that collective diagrams, topology figures, code listings, formulas, tables, teacher-voice boxes, and the final page have no crop, overflow, orphan caption, malformed title, or near-blank layout.

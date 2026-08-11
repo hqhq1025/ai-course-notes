@@ -1,25 +1,26 @@
 # Lecture 04 Coverage Matrix
 
-Status: complete after source-first rewrite and verification on 2026-05-12.
+Status: second-round slide-complete rewrite completed and visually verified on 2026-08-11.
 
-Source deck: `lecture04-slides.pdf`, 60 pages. The rewritten note includes every source slide image `slide-000.jpg` through `slide-059.jpg`, plus the course cover, for 61 figures total.
+Source deck: `lecture04-slides.pdf`, 60 pages. The note includes all 59 teaching-bearing pages in source order. `slide-000.jpg` is a pure title page duplicated by the note cover and is the only intentional omission.
 
 Verification evidence:
 
-- `xelatex -interaction=nonstopmode -halt-on-error lecture04-notes.tex` run twice successfully.
-- `tools/scripts/check_quality.sh cs336-2026/lecture04/lecture04-notes.tex` reports `41p  ⭐⭐⭐`.
-- `python3 tools/scripts/check_note_coverage.py cs336-2026/lecture04/lecture04-notes.tex --manifest cs336-2026/lecture04/lecture04-manifest.md` reports `figs=61 readfig=105 boxes=42 term_digest=3 formulas=2 code=0 summaries=10` with no hard errors.
-- LaTeX log scan reports no `LaTeX Error`, `Undefined control sequence`, rerun warning, `Overfull`, or `Missing character`.
-- Visual PDF QA was rendered and checked in `qa/lecture04-notes/`.
+- Strict coverage: `figs=60 readfig=97 boxes=49 term_digest=3 teacher_voice=0 formulas=2 code=0 summaries=10 prose_chars=15691`, with no warnings or hard errors.
+- Quality check: 43 pages, 60 figures, 261 prose characters per figure, `⭐⭐⭐`.
+- Double-pass XeLaTeX succeeds with no overfull box, LaTeX error, fatal error, or undefined control sequence.
+- Visual QA: full contact sheet plus representative full-size pages reviewed; the initially sparse final page was replaced with an annotated reading table and counterfactual exercise, then the checklist was signed.
 
-| Source node | Type | Required? | Note section | Treatment | Status |
-|---|---|---|---|---|---|
-| slides 001-013 | attention alternatives | yes | Attention alternatives | slide-complete figures, linear attention formulas, DSA/GDN glossary | complete |
-| slides 014-024 | MoE motivation | yes | Why MoE | slide-complete figures, MoE definition, FLOPs vs params explanation | complete |
-| slides 025-035 | routing variants | yes | Routing | top-k routing formula, token-choice/expert-choice glossary, evidence slides interpreted | complete |
-| slides 036-043 | MoE training and balancing | yes | Training MoEs | load balancing losses, stochastic approximations, DeepSeek bias, z-loss explanation | complete |
-| slides 044-047 | MoE systems side | yes | Systems side | expert parallelism, all-to-all, communication compression, stochasticity | complete |
-| slides 048-053 | stability, fine-tuning, upcycling | yes | Stability and adaptation | router z-loss, fine-tuning caveats, upcycling glossary | complete |
-| slides 054-059 | DeepSeek MoE v1-v3, MLA, MTP | yes | DeepSeek MoE case study | slide-complete, MLA/MTP first-use glossary, architecture timeline | complete |
-| slide 060 | recap | yes | Summary | final synthesis | complete |
-| PDF visual QA | QA | yes | `qa/lecture04-notes/` | rendered pages + contact sheet + report | complete |
+| Source cluster | Required? | Note section | Treatment | Status |
+|---|---|---|---|---|
+| slide 000 | no | note cover | Pure title page duplicated by the note cover; intentionally omitted. | optional |
+| slides 001--013 | yes | 本讲主线 / Attention alternatives | Every screenshot included; cost motivation, linear/recurrent/hybrid attention and DSA explained. | complete |
+| slides 014--023 | yes | MoE 为什么流行 | Every screenshot included; active-vs-total parameters, training/quality evidence and four-account resource ledger explained. | complete |
+| slides 024--034 | yes | Routing | Every screenshot included; token/expert choice, classic top-k, recent routing variants and ablations explained. | complete |
+| slides 035--042 | yes | Training MoEs | Every screenshot included; sparsity, REINFORCE/stochastic approximation, load balancing and auxiliary-free methods explained. | complete |
+| slides 043--046 | yes | MoE systems side | Every screenshot included; expert parallelism, all-to-all pipeline, communication compression and routing stochasticity explained. | complete |
+| slides 047--052 | yes | 稳定性、fine-tuning 与 upcycling | Every screenshot included; z-loss, fine-tuning behavior and dense-to-MoE cases explained. | complete |
+| slides 053--058 | yes | DeepSeek MoE case study | Every screenshot included; v2/v3, MLA latent reconstruction and MTP combination logic explained. | complete |
+| slide 059 | yes | 总结 | Final summary screenshot included and connected to a resource acceptance table. | complete |
+| teacher voice | not available | whole note | No transcript, subtitles, speaker notes or executable narration nodes exist in the lecture directory; no classroom voice is fabricated. | not applicable |
+| PDF visual QA | yes | `qa/lecture04-notes/` | 43-page contact sheet and representative full-size pages inspected; final page expanded and checklist signed. | complete |

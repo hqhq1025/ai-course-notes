@@ -3,12 +3,21 @@
 ## Files
 
 - `cover.jpg`
+- `lecture-manifest.md`
 - `lecture01-blueprint.md`
 - `lecture01-coverage.md`
 - `lecture01-manifest.md`
 - `lecture01-notes.pdf`
 - `lecture01-notes.tex`
 - `lecture01-slides.py`
+- `lecture01.en-orig.srt`
+- `lecture01.en.srt`
+- `lecture01.info.json`
+- `lecture01.jpg`
+- `lecture_01.py`
+- `metadata.json`
+- `transcript_clean.txt`
+- `transcript_timed.txt`
 
 ## Local Visual Assets
 
@@ -26,6 +35,16 @@
 - `images/tokenized-example.png`
 - `images/transformer-architecture.png`
 - `images/wei-emergence-plot.png`
+- `official-images/chinchilla-isoflop.png`
+- `official-images/compute-memory.png`
+- `official-images/course-staff.png`
+- `official-images/divine-benevolence.png`
+- `official-images/gpt4-no-details.png`
+- `official-images/prefill-decode.png`
+- `official-images/roller-flops.png`
+- `official-images/tokenized-example.png`
+- `official-images/transformer-architecture.png`
+- `official-images/wei-emergence-plot.png`
 
 ## Coverage Nodes
 
@@ -52,7 +71,7 @@
 | py-019 | text | optional | `lecture01-slides.py:why_this_course_exists` | Philosophy of this course: **understanding via building**. |
 | py-020 | text | optional | `lecture01-slides.py:why_this_course_exists` | But there's one small problem... |
 | py-021 | section | yes | `lecture01-slides.py:why_this_course_exists` | The industrialization of language models |
-| py-022 | figure | yes | `lecture01-slides.py:why_this_course_exists` | https://upload.wikimedia.org/wikipedia/commons/c/cc/Industrialisation.jpg |
+| py-022 | figure | yes | `lecture01-slides.py:why_this_course_exists` | images/industrialisation.jpg |
 | py-023 | text | optional | `lecture01-slides.py:why_this_course_exists` | Frontier models are really expensive: |
 | py-024 | text | optional | `lecture01-slides.py:why_this_course_exists` | - 2023: GPT-4 supposedly cost $100M to train. |
 | py-025 | text | optional | `lecture01-slides.py:why_this_course_exists` | - 2025: xAI builds cluster with 230K GPUs for training Grok. |
@@ -73,7 +92,7 @@
 | py-040 | text | optional | `lecture01-slides.py:why_this_course_exists` | - **Intuitions**: which data and modeling decisions yield good accuracy |
 | py-041 | text | optional | `lecture01-slides.py:why_this_course_exists` | We can teach mechanics and mindset (these do transfer). |
 | py-042 | text | optional | `lecture01-slides.py:why_this_course_exists` | We can only partially teach intuitions (do not necessarily transfer across scales). |
-| py-043 | section | yes | `lecture01-slides.py:why_this_course_exists` | Intuitions? 🤷 |
+| py-043 | section | yes | `lecture01-slides.py:why_this_course_exists` | Intuitions? |
 | py-044 | text | optional | `lecture01-slides.py:why_this_course_exists` | Some design decisions are simply not (yet) justifiable and just come from experimentation. |
 | py-045 | text | optional | `lecture01-slides.py:why_this_course_exists` | Example: Noam Shazeer paper that introduced SwiGLU |
 | py-046 | figure | yes | `lecture01-slides.py:why_this_course_exists` | images/divine-benevolence.png |
@@ -285,7 +304,7 @@
 | py-252 | text | optional | `lecture01-slides.py:scaling_laws` | TL;DR: D = 20 N is roughly optimal (e.g., 70B parameter model should be trained on ~1.4T tokens) |
 | py-253 | text | optional | `lecture01-slides.py:scaling_laws` | Caveat: this doesn't take into account inference costs (want a smaller model) |
 | py-254 | text | optional | `lecture01-slides.py:scaling_laws` | Live example from Marin |
-| py-255 | figure | yes | `lecture01-slides.py:scaling_laws` | https://pbs.twimg.com/media/HDuErvvbsAAQ5Yt?format=jpg&name=4096x4096 |
+| py-255 | figure | yes | `lecture01-slides.py:scaling_laws` | images/marin-loss-forecast.jpg |
 | py-256 | text | optional | `lecture01-slides.py:scaling_laws` | Should be done training this week, should see how well we match the preregistered loss! |
 | py-257 | section | yes | `lecture01-slides.py:scaling_laws` | Assignment 3 (scaling laws) |
 | py-258 | text | optional | `lecture01-slides.py:scaling_laws` | - We define a training API (hyperparameters → loss) based on previous runs |
@@ -306,7 +325,7 @@
 | py-273 | section | yes | `lecture01-slides.py:data` | Data curation |
 | py-274 | text | optional | `lecture01-slides.py:data` | - Data does not just fall from the sky. |
 | py-275 | text | optional | `lecture01-slides.py:data` | - Sources: webpages crawled from the Internet, books, arXiv papers, GitHub code, etc. |
-| py-276 | figure | yes | `lecture01-slides.py:data` | https://ar5iv.labs.arxiv.org/html/2101.00027/assets/pile_chart2.png |
+| py-276 | figure | yes | `lecture01-slides.py:data` | images/pile-chart.png |
 | py-277 | text | optional | `lecture01-slides.py:data` | - Appeal to fair use to train on copyright data? |
 | py-278 | text | optional | `lecture01-slides.py:data` | - Might have to license data (e.g., Google with Reddit data) |
 | py-279 | text | optional | `lecture01-slides.py:data` | - Raw data is HTML, PDF, directories (not text), requires processing |
@@ -420,7 +439,10 @@
 
 ## Generation Contract
 
-- Every required slide/figure node must be placed in the note or explicitly omitted with a reason.
+- Review every slide and figure node; teaching-bearing nodes are required by default.
+- Every required slide/figure/section node must be placed in the note or explicitly marked optional with a concrete omission reason in the coverage matrix.
+- Administrative, blank, duplicated, or genuinely redundant build-up slides may be marked optional only after review.
+- For progressive reveals, include the final complete state at minimum and retain intermediate states when they teach a distinct step.
 - Every important figure needs a nearby `读图` explanation.
 - Dense terminology clusters need a table or concept box.
 - Foundational concepts need diagram/table/formula scaffolding.

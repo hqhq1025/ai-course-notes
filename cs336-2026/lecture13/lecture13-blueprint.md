@@ -22,6 +22,7 @@ Generate Lecture 13 as a source-node-complete note on Data I: why data matters, 
 ## Required Treatment
 
 - Localize and include every source image asset referenced by `lecture13-slides.py`.
+- Build a teacher-voice ledger from executable `text(...)` nodes and weave source-backed motivations, warnings, and transitions into the teaching prose.
 - Add nearby `读图` explanations for all important data-source, filtering, dataset, and result figures.
 - Explain first-use terms: crawler, WARC, WET, robots.txt, ToS, license, fair use, shadow libraries, Common Crawl, MinHash, model-based filtering, PII, benchmark decontamination.
 - Perform visual PDF QA after compilation.

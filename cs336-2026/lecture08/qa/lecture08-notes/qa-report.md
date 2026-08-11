@@ -1,11 +1,11 @@
 # PDF Visual QA: `lecture08-notes.pdf`
 
 - PDF: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture08/lecture08-notes.pdf`
-- Rendered pages: `cs336-2026/lecture08/qa/lecture08-notes`
-- Contact sheet: `cs336-2026/lecture08/qa/lecture08-notes/contact.png`
-- Page count rendered: 53
+- Rendered pages: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture08/qa/lecture08-notes`
+- Contact sheet: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture08/qa/lecture08-notes/contact.png`
+- Page count rendered: 55
 - Renderer: pdftoppm
-- Renderer log: `cs336-2026/lecture08/qa/lecture08-notes/pdftoppm.log`
+- Renderer log: `/home/v-haoqiwang/ai-course-notes/cs336-2026/lecture08/qa/lecture08-notes/pdftoppm.log`
 - Near-blank rendered pages: none
 
 ## Manual Checklist
@@ -16,7 +16,4 @@
 - [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## Notes
-
-- Contact sheet reviewed after the new source-first rewrite. The 53 rendered pages show all 73 teaching slides in order, no near-blank pages, no visible crop failures, and no obvious table/formula overflow.
-- The note uses the official slide deck as the visual spine: every slide image `slide-001.jpg` through `slide-073.jpg` is referenced in `lecture08-notes.tex`.
+Manual review completed on 2026-08-11. Contact sheet inspected in full; pages 4, 18, 31, 43, 51, and 55 were additionally checked at full resolution. The initially orphaned final reading-list bullets were replaced with an annotated reading table and configuration exercise before acceptance.

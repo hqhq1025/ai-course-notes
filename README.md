@@ -98,13 +98,15 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
 | [**CS329A**](cs329a/) | Self-Improving AI Agents | 9 | Aakanksha Chowdhery, Azalia Mirhoseini |
-| [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 13 | Percy Liang, Tatsu Hashimoto |
+| [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 18 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
 | [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
 | [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
 | [**CS146S**](cs146s/) | The Modern Software Developer | 10 | Mihail Eric + 业界嘉宾 |
 | [**CS224N**](cs224n/) | NLP with Deep Learning | 17 | Chris Manning |
 | [**CS231N**](cs231n/) | Deep Learning for Computer Vision | 18 | — |
+
+> **CS336 Spring 2026 第二轮重写已完成（2026-08-11）**：18/18 讲共 607 页、561 张图、824 个教学盒；全部通过 strict source coverage、`⭐⭐⭐` 质量检查、双遍 XeLaTeX 与人工 PDF 视觉 QA。有 transcript 或 executable narration 的讲次均附 teacher-voice ledger。
 
 ### 🏛 MIT 课程 (10 份)
 
@@ -213,7 +215,7 @@ Ilya Sutskever → Dario Amodei → Lex Fridman State of AI 2026
 ai-course-notes/
 ├── cs329a/                   # Stanford CS329A Self-Improving AI Agents (9 讲)
 ├── cs336/                    # Stanford CS336 (17 讲)
-├── cs336-2026/               # Stanford CS336 Spring 2026 (13 讲, 进行中)
+├── cs336-2026/               # Stanford CS336 Spring 2026 (18 讲, 完整)
 ├── cs153/                    # Stanford CS153 Infra @ Scale (11 讲)
 ├── cs224n/                   # Stanford CS224N (17 讲)
 ├── cs231n/                   # Stanford CS231N (18 讲)

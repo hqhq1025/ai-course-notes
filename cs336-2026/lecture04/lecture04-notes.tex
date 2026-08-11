@@ -59,7 +59,7 @@
 \newpage
 
 \section{本讲的问题：为什么 Transformer 不总是 full dense compute？}
-Lecture 4 把两个看似不同的方向放在一起：attention alternatives 和 mixture of experts。前者问：长上下文下，是否每个 token 都必须 attend 所有历史？后者问：每个 token 是否必须激活模型的所有参数？两者的共同目标是 selective computation：把昂贵计算只花在必要位置。
+Lecture 4 把两个看似不同的方向放在一起：attention alternatives 和 mixture of experts。前者问：长上下文下，是否每个 token 都必须 attend 所有历史？后者问：每个 token 是否必须激活模型的所有参数？两者的共同目标是 selective computation：把昂贵计算只花在必要位置。本讲因此会同时追踪质量、每 token FLOPs、状态大小、路由负载和跨设备通信，而不是只比较参数量。
 \begin{importantbox}{本讲主线}
 Attention alternatives 选择“看哪些历史状态”；MoE 选择“用哪些专家参数”。二者都是在模型质量、训练效率、推理成本和系统复杂度之间做条件计算 tradeoff。
 \end{importantbox}
@@ -68,24 +68,19 @@ Attention alternatives 选择“看哪些历史状态”；MoE 选择“用哪�
 本节建立两条主线：attention alternatives 用更便宜的状态/稀疏机制控制长上下文成本；MoE 用条件计算扩大参数量但控制每 token FLOPs。
 
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-000.jpg}
-\caption{Slide 1: Lecture 4}
-\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
-\end{figure}
 
 \noindent\textbf{展开说明：}A T T E N T I O N A LT E R N AT I V E S A N D M I X T U R E S O F E X P E R T S
+
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-001.jpg}
-\caption{Slide 2: Attention alternatives}
+\caption{Slide 2：Attention alternatives 的动机；上下文变长后 full attention 成本快速增长。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Cost of attention rises with large context sizes… how do we control those costs?
+\noindent\textbf{展开说明：}Cost of attention rises with large context sizes… how do we control those costs? 读这页时应把问题拆成三种资源：训练时的二次 attention FLOPs、推理时随序列增长的 KV/state memory，以及跨设备搬运状态的通信。Linear/recurrent attention、local/global hybrid 和 sparse selection 分别压缩不同资源，因此不能只用一个“复杂度更低”概括。
 
 
 \begin{figure}[H]
@@ -260,7 +255,7 @@ Mixture of Experts 把 dense MLP 替换成多个 experts，并由 router 为每�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}GPT4 (?)
+\noindent\textbf{读图说明：}这张过渡页借当时业界对大模型采用 MoE 的讨论引出主题，但专有模型的具体结构没有公开证据，不能把“GPT4 (?)”当作事实引用。教学重点是区分两种规模：dense model 的总参数几乎都会参与每个 token 的计算；MoE 可以让总参数容量远大于单 token 激活参数，从而把“模型能存多少模式”和“每步花多少 FLOPs”部分解耦。
 
 
 \begin{figure}[H]
@@ -270,7 +265,7 @@ Mixture of Experts 把 dense MLP 替换成多个 experts，并由 router 为每�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}[Fedus et al 2022]
+\noindent\textbf{读图说明：}Fedus 等人的示意图把 dense MLP 拆成 router 与多个 expert MLP。读图时先沿单个 token 的路径看：hidden state 进入 router，得到各 expert 的分数，只把 token 发送给 top-$k$ experts，再按 gate 权重合并输出。总参数量包含全部 experts，但 active parameters 只包含本次被选中的部分；这正是 MoE 提升容量而保持近似固定计算量的机制。
 
 
 \begin{figure}[H]
@@ -287,30 +282,36 @@ Mixture of Experts 把 dense MLP 替换成多个 experts，并由 router 为每�
 \end{knowledgebox}
 
 
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-016.jpg}
-\caption{Slide 17: Why are MoEs getting popular?}
+\caption{Slide 17：MoE 在相同目标质量下可更快达到训练结果。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Faster to train MoEs
+\noindent\textbf{展开说明：}Faster to train MoEs。比较时必须固定 active FLOPs 和 token budget：MoE 通过每个 token 只激活少数 experts，让总参数容量远大于每步计算；曲线更快并不表示其总参数更少，也不保证 wall-clock 更快，因为 routing、all-to-all 和不均衡会吃掉理论收益。
 
-\begin{knowledgebox}{读图：Slide 17 应该怎么看}
+\begin{knowledgebox}{讲义补充：源 Slide 17 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
+
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-017.jpg}
-\caption{Slide 18: Why are MoEs getting popular?}
+\caption{Slide 18：MoE 与 dense equivalent 的质量和成本竞争力。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Highly competitive vs dense equivalents
+\noindent\textbf{展开说明：}Highly competitive vs dense equivalents。第一比较轴是相同 training compute 下的 loss，第二轴是相同 serving budget 下的 active parameters、显存和通信。MoE 的优势来自扩大可用知识容量，但部署时仍要存储所有 experts；因此“每 token FLOPs 小”与“模型容易服务”是两件不同的事。
 
-\begin{knowledgebox}{读图：Slide 18 应该怎么看}
+\begin{importantbox}{MoE 证据的四本账}
+阅读 Slides 16--24 时分别记录 total parameters、active parameters、training FLOPs 与 end-to-end time。Total parameters 决定容量和存储，active parameters 近似决定 token 计算，training FLOPs 用于公平 scaling 比较，end-to-end time 则包含 dispatch、all-to-all、capacity padding 与负载不均衡。只报告其中一项，都会把 conditional compute 的代价藏起来。
+\end{importantbox}
+
+\begin{knowledgebox}{讲义补充：源 Slide 18 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
 
@@ -423,7 +424,7 @@ Router 为每个 token 产生 expert scores；top-k routing 选择分数最高�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Routing function.
+\noindent\textbf{读图说明：}“What varies”不是列名词，而是在定义 MoE 的设计空间：router 输入用什么表示、每个 token 选择几个 experts、是否共享 expert、capacity factor 多大、溢出 token 如何处理、是否加入 load-balancing loss，以及 experts 如何跨设备放置。两个模型都叫 MoE，不代表它们的训练稳定性、通信量和推理延迟可直接比较。
 
 
 \begin{figure}[H]
@@ -433,17 +434,18 @@ Router 为每个 token 产生 expert scores；top-k routing 选择分数最高�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Many of the routing algorithms boil down to ‘choose top k’
-
+\noindent\textbf{读图说明：}Router 通常把 token hidden state $x$ 映射为 expert logits $r(x)$，再执行 top-$k$ 选择与归一化。真正困难的不只是“选最大值”：top-$k$ 是离散操作，负载可能集中到少数 experts；归一化范围、噪声、capacity 限制与 auxiliary loss 都会改变梯度。读图应同时追踪 routing quality 和每张设备实际收到的 token 数。
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-027.jpg}
-\caption{Slide 28: Routing type}
+\caption{Slide 28：Routing types；token-choice、expert-choice 与 learned routing 的关系。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Almost all the MoEs do a standard ‘token choice topk’ routing. Some recent ablations
+
+
+\noindent\textbf{读图说明：}Token-choice routing 让每个 token 选择 experts，实现简单且最常见；expert-choice routing 则让每个 expert 从 token 池中挑选固定数量样本，更容易控制负载，却可能让某些 token 无 expert 或被多个 experts 重复选择。两者优化对象不同：前者优先保证 token 获得计算，后者优先保证设备工作量均衡，不能只按最终 loss 比较。
 
 
 \begin{figure}[H]
@@ -453,15 +455,16 @@ Router 为每个 token 产生 expert scores；top-k routing 选择分数最高�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Used in most MoEs
-
+\noindent\textbf{读图说明：}常见 top-$k$ 变体围绕三个约束变化：是否在 top-$k$ 前加入噪声促进探索，是否设置 per-expert capacity 并丢弃/旁路溢出 token，以及是否用额外损失逼近均匀负载。图中的流程应从 token 到 router、dispatch、expert compute、combine 依次阅读；任何一步都可能引入 all-to-all 通信或动态 shape，决定真实吞吐。
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-029.jpg}
-\caption{Slide 30: Other routing methods}
+\caption{Slide 30：其他 routing 方法及其约束方式。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
+
+
 
 \noindent\textbf{展开说明：}RL to learn routes              Used in some of the earliest work
 
@@ -508,16 +511,21 @@ Router 为每个 token 产生 expert scores；top-k routing 选择分数最高�
 \end{knowledgebox}
 
 
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-033.jpg}
-\caption{Slide 34: Ablations from OlMoE}
+\caption{Slide 34：fine-grained experts 与 shared experts 的消融结果。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Gains from fine-grained experts, none from shared experts.
+\noindent\textbf{展开说明：}Gains from fine-grained experts, none from shared experts. 这页提醒读者不要把 architecture diagram 当作因果证据：更多小 experts 可能提高组合空间，而 shared experts 的收益会依赖数据、路由和容量配置。正确做法是在相同 active FLOPs、相同总参数和相同 routing budget 下分别消融。
 
-\begin{knowledgebox}{读图：Slide 34 应该怎么看}
+\begin{knowledgebox}{Routing 的三层失败模式}
+算法层可能出现 router collapse，让多数 token 选择少数 experts；统计层可能出现某些 experts 只学习高频模式，长尾 token 得不到容量；系统层则表现为 device load imbalance、capacity overflow 和 all-to-all 尾延迟。Auxiliary loss、bias adjustment、expert-choice 和 stochastic routing 分别针对不同层，不能互相替代。
+\end{knowledgebox}
+
+\begin{knowledgebox}{讲义补充：源 Slide 34 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
 
@@ -564,7 +572,7 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}RL via REINFORCE does work, but not so much better that it’s a clear win
+\noindent\textbf{读图说明：}把 expert 选择视为离散 action 后，可以用 REINFORCE 根据下游 loss 学习 routing policy。它理论上允许直接优化非可微选择，但梯度方差高、credit assignment 困难，还要设计 baseline 与探索噪声。课程结论不是“RL 无效”，而是收益不足以稳定抵消复杂度；在已有 top-$k$、辅助负载损失和可微近似表现良好时，RL routing 尚未形成明确默认值。
 
 
 \begin{figure}[H]
@@ -574,15 +582,16 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}From Shazeer et al 2017 – routing decisions are stochastic with gaussian perturbations.
-
-
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-038.jpg}
-\caption{Slide 39: Stochastic approximations}
+\caption{Slide 39：stochastic approximation 的第二步推导与可训练近似。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
+
+\noindent\textbf{展开说明：}From Shazeer et al 2017 – routing decisions are stochastic with gaussian perturbations.
+
+
 
 \noindent\textbf{展开说明：}Stochastic jitter in Fedus et al 2022. This does a uniform multiplicative perturbation for the
 
@@ -647,19 +656,20 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 
 \section{MoE systems side：expert parallelism 与通信}
 
-本节解释 MoE 作为系统问题：all-to-all dispatch、expert parallelism、通信压缩和随机性。
+前面的 routing 公式只说明“某个 token 应该去哪里”，还没有说明 token 真正如何跨 GPU 到达 expert。本节把 MoE 还原成运行时流水线：router 在本地计算目的地，dispatch 按 expert 重排 token，all-to-all 把 activation 发送到持有对应权重的设备，expert GEMM 完成计算，随后 combine communication 把结果送回原序列位置。每一步都可能引入 padding、同步和尾延迟，因此算法层的稀疏 FLOPs 只有在系统流水线也高效时才会变成 wall-clock 收益。
+
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-043.jpg}
-\caption{Slide 44: Training MoEs – the systems side}
+\caption{Slide 44：expert parallelism；不同设备保存不同 experts。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}MoEs parallelize nicely – Each FFN   Enables additional kinds of parallelism
+\noindent\textbf{展开说明：}MoEs parallelize nicely – Each FFN enables additional kinds of parallelism。这里的“nice”有前提：expert weights 可以天然分片，但 token 必须按路由结果发送到远端设备，再把输出发回；计算分片简单，通信调度并不简单。吞吐取决于每卡 token 数是否均衡、all-to-all 是否与 expert GEMM 重叠，以及小 expert matrix 是否仍能高效利用 GPU。
 
-\begin{knowledgebox}{读图：Slide 44 应该怎么看}
+\begin{knowledgebox}{讲义补充：源 Slide 44 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
 
@@ -685,6 +695,17 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{slide-046.jpg}
+\caption{Slide 47：MoE stochasticity；路由会给训练和复现引入额外随机性。}
+\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
+\end{figure}
+
+\begin{warningbox}{Expert parallelism 不是免费扩容}
+MoE 把 dense FFN 的本地 GEMM 变成 dispatch、all-to-all、expert compute、combine 四阶段。若 batch 太小、路由过于偏斜或 experts 切得太细，通信和 launch overhead 会主导；若为了平衡加入 padding，又会重新花掉被稀疏性省下的 FLOPs。系统验收应报告每阶段时间、发送字节、capacity overflow 和专家利用率。
+\end{warningbox}
+
 \noindent\textbf{展开说明：}New ideas from Nemotron 3 – down-projecting the activations to reduce communication
 
 \begin{knowledgebox}{读图：Slide 46 应该怎么看}
@@ -692,12 +713,6 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 \end{knowledgebox}
 
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.88\textwidth]{slide-046.jpg}
-\caption{Slide 47: Fun side issue – stochasticity of MoE models}
-\figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
-\end{figure}
 
 \noindent\textbf{展开说明：}MoEs can have additional stochasticity beyond normal models..
 
@@ -706,7 +721,7 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 
 \section{MoE 稳定性、fine-tuning 与 upcycling}
 
-本节解释 router z-loss、fine-tuning overfit、dense-to-MoE upcycling。
+前面的 routing 与 systems 章节说明 MoE 能扩展容量，但训练结束并不代表模型可稳定使用。本节解释 router z-loss 如何抑制极端 logits、fine-tuning 为什么可能让少数 experts 过拟合，以及 dense-to-MoE upcycling 如何复用已有权重，降低从头训练大规模稀疏模型的成本。
 
 
 \begin{figure}[H]
@@ -765,14 +780,15 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 \end{knowledgebox}
 
 
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-051.jpg}
-\caption{Slide 52: Upcycling example - MiniCPM}
+\caption{Slide 52：MiniCPM 的 dense-to-MoE upcycling 案例。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Uses the MiniCPM model (topk=2, 8 experts, ~ 4B active params).
+\noindent\textbf{展开说明：}Uses the MiniCPM model (topk=2, 8 experts, ~ 4B active params). Upcycling 的关键不是简单复制 FFN，而是让新 experts 初始行为接近 dense checkpoint、router 不立即坍缩，并在后续训练中逐渐分化。它节省从随机初始化开始的成本，但也可能复制原模型偏差，且总存储与通信会立刻上升。
 
 
 \begin{figure}[H]
@@ -796,30 +812,32 @@ MoE 想要稀疏激活来省 FLOPs，但系统效率要求 experts 被均匀使�
 MLA 是 Multi-head Latent Attention，把 K/V cache 压缩为低维 latent 后再投影恢复，降低长上下文推理内存。MTP 是 Multi-Token Prediction，让轻量模块预测多个未来 token，可用于改善训练信号或推理草稿。DeepSeek v3 把 MoE、MLA、MTP 等选择组合成一套系统 recipe。
 \end{knowledgebox}
 
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-053.jpg}
-\caption{Slide 54: DeepSeek MoE v1-v2-v3}
+\caption{Slide 54：DeepSeek MoE case study 的路线图。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}To wrap up, we’ll walk through the DeepSeek MoE architecture.
+\noindent\textbf{展开说明：}To wrap up, we’ll walk through the DeepSeek MoE architecture. 这组页面不是模型宣传，而是检查前文机制如何组合：fine-grained/shared experts 改变容量，auxiliary-loss-free balancing 改变路由稳定性，MLA 压缩 inference state，MTP 增加训练信号并可能支持 speculative decoding。
 
-\begin{knowledgebox}{读图：Slide 54 应该怎么看}
+\begin{knowledgebox}{讲义补充：源 Slide 54 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
+
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-054.jpg}
-\caption{Slide 55: DeepSeek MoE v2}
+\caption{Slide 55：DeepSeek MoE v2 的总参数、active parameters 与架构组件。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}V2 (236B – 21 active):
+\noindent\textbf{展开说明：}V2 (236B – 21 active): 总参数和 active parameters 必须分开读。前者说明模型能容纳的专家容量，后者近似每个 token 的计算；但服务仍需存放或跨节点访问完整专家集合，因此不能用 21B active 把它当成普通 21B dense model。
 
-\begin{knowledgebox}{读图：Slide 55 应该怎么看}
+\begin{knowledgebox}{讲义补充：源 Slide 55 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
 
@@ -838,30 +856,36 @@ MLA 是 Multi-head Latent Attention，把 K/V cache 压缩为低维 latent 后�
 \end{knowledgebox}
 
 
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-056.jpg}
-\caption{Slide 57: Bonus: What else do you need to make DeepSeek MoE v3?}
+\caption{Slide 57：DeepSeek v3 attention 中 MLA 与 latent state 的位置。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}MLA : Multihead, latent attention
+\noindent\textbf{展开说明：}MLA : Multihead latent attention。它把可缓存的 K/V 信息先压到低维 latent，再通过投影参与 attention，从而减少长上下文 decode 的 cache bytes；收益来自 memory traffic，而不是让 attention 数学本身消失。
 
-\begin{knowledgebox}{读图：Slide 57 应该怎么看}
+\begin{knowledgebox}{讲义补充：源 Slide 57 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
+
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{slide-057.jpg}
-\caption{Slide 58: What else do you need to make DeepSeek MoE v3?}
+\caption{Slide 58：MLA 的低维 latent 分解与 Q/K/V 重构。}
 \figsource{CS336 Spring 2026 Lecture 4 官方幻灯片。}
 \end{figure}
 
-\noindent\textbf{展开说明：}Basic idea: express the Q, K, V as functions of a lower-dim, ‘latent’ activation
+\noindent\textbf{展开说明：}Basic idea: express the Q, K, V as functions of a lower-dim latent activation。读公式时先区分训练投影 FLOPs 与推理缓存大小：低秩表示可能增加投影步骤，却能显著减少每层、每 token 需要长期保存和读取的状态。
 
-\begin{knowledgebox}{读图：Slide 58 应该怎么看}
+\begin{importantbox}{DeepSeek case study 的组合逻辑}
+MoE、MLA 与 MTP 解决的资源不同：MoE 控制每 token 激活参数，MLA 控制 decode KV/state memory，MTP 增加多步预测监督并为草稿生成提供接口。把它们放在一起时必须同时检查 router balance、expert communication、latent projection cost、cache bytes 和多 token 目标权重；任何单项收益都可能被另一项的系统开销抵消。
+\end{importantbox}
+
+\begin{knowledgebox}{讲义补充：源 Slide 58 应该怎么看}
 这页是机制或证据页。先看它比较的是 compute、参数量、routing、负载均衡还是通信；再看结论支持的是质量提升、训练速度、推理成本还是系统复杂度。MoE 和 attention alternatives 的图常把模型结构和系统代价混在一起，读图时要分清“算法机制”和“硬件执行成本”。
 \end{knowledgebox}
 
@@ -882,9 +906,36 @@ MLA 是 Multi-head Latent Attention，把 K/V cache 压缩为低维 latent 后�
 \subsection{本章小结}
 本节的共同线索是 selective computation：通过结构选择让 token 不必总是访问所有历史或所有参数。但选择性越强，越需要额外机制保证信息流、负载均衡和训练稳定。
 
+\subsection{Selective computation 的资源验收表}
+
+现在所有教学 slide 都已按源顺序纳入，最后需要把图中的机制转成可执行验收。Attention alternatives 与 MoE 都会把一类 dense cost 变成新的稀疏状态和调度成本；如果只测理论复杂度，很容易得到方向正确但系统错误的结论。下面的账本用于小规模原型、scaling experiment 和服务 benchmark：每一行都应有实际 profiler 或日志，而不是只写架构名称。
+
+\begin{longtable}{p{0.20\textwidth}p{0.32\textwidth}p{0.38\textwidth}}
+\toprule
+机制 & 节省什么 & 必须新增测量什么 \\
+\midrule
+Linear/recurrent attention & 避免完整 $n\times n$ attention matrix，压缩长序列计算或状态。 & state size、update kernel、长距离任务质量、prefill/decode latency。 \\
+Sparse/local attention & 只访问少量历史位置或局部窗口。 & 选中位置数、索引/稀疏 kernel 开销、全局信息恢复周期、长程 retrieval。 \\
+Top-$k$ MoE & 每个 token 只激活少数 experts，以较小 active FLOPs 使用更大总容量。 & total/active params、router entropy、expert utilization、capacity overflow。 \\
+Expert parallelism & 把完整 expert weights 分散到多设备，扩展总参数。 & dispatch/combine bytes、all-to-all 时间、尾部设备负载、通信计算重叠率。 \\
+Upcycling & 复用 dense checkpoint，减少 MoE 从头预训练成本。 & 初始化函数等价性、expert 分化速度、router collapse、继续训练 token 数。 \\
+MLA & 压缩长期缓存的 K/V 信息，降低 decode memory traffic。 & latent/cache bytes、重构投影 FLOPs、quality delta、batch/sequence 长度下的吞吐。 \\
+MTP & 一次训练多个未来 token，并可提供 speculative draft。 & 辅助 loss 权重、acceptance rate、额外训练 FLOPs、端到端 decode speedup。 \\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{最小可复现实验：不要一上来训练超大 MoE}
+先用相同 tokenizer、数据顺序、hidden size 与 token budget 构造三个小模型：一个 dense FFN baseline，一个总参数更大但 active FLOPs 对齐的 top-2 MoE，一个加入 expert parallelism 的同配置 MoE。训练时同时记录 validation loss、router entropy、每个 expert 的 token histogram、capacity overflow、dispatch/combine bytes、expert GEMM 时间和完整 step time。随后把 batch size 或设备数改到未参与调参的 hold-out setting；若 MoE 只在原始设置中更快，说明收益来自偶然的 kernel shape 或通信拓扑，而不是可迁移的 conditional-compute recipe。对 attention alternatives 也采用相同原则：固定模型和数据，只改变 state/window 机制，并在短序列、目标长序列与未见过的更长序列上同时比较质量和 latency。
+\end{importantbox}
+
+\begin{warningbox}{稀疏性会把平均成本问题变成尾延迟问题}
+Dense layer 的每个 token 工作量接近固定，而 routing 后不同 experts 的 token 数会波动。平均 FLOPs 很低时，最忙 expert、最慢通信 rank 或容量溢出可能决定整个 step；因此必须看分位数、最大负载和跨 rank variance，而不能只报告平均 expert utilization。线上推理还要分别测单请求 latency 与高并发 throughput：较大的 batch 可能改善 expert GEMM 利用率，却也会增加排队、路由聚合和尾部等待。只有在目标并发、上下文长度和硬件拓扑下都复验，才能把实验室稀疏性称为部署收益。训练侧也应保留逐步 expert-load 日志，因为最终平均均衡可能掩盖早期长时间 collapse；这种早期失衡会改变各 expert 接触的数据分布，即使后期 loss 恢复，也不代表训练轨迹等价。
+还要结合多个 checkpoint 的路由分布复核。
+\end{warningbox}
+
 \section{总结：Selective computation 的两条路}
 
-最后把 attention alternatives 和 MoE 统一为 selective computation：不是所有 token 都需要看所有历史，也不是所有 token 都需要激活所有参数。
+前面分别从 attention 状态选择和 expert 参数选择展开，现在把两条路线统一为 selective computation：不是所有 token 都需要看所有历史，也不是所有 token 都需要激活所有参数。真正的工程判断是节省的 dense 计算能否覆盖新增的路由、状态维护、负载不均与跨设备通信成本。
 
 
 \begin{figure}[H]
@@ -917,9 +968,20 @@ Lecture 4 的核心不是“linear attention vs MoE 谁更好”，而是学会�
 \section{总结与延伸}
 Attention alternatives 和 MoE 是现代 LLM 架构里最重要的两类非 dense 思路。前者改变 token 如何访问上下文，后者改变 token 如何访问参数。二者都能带来 scale 或 inference efficiency 的收益，但都把问题转移到 routing、state design、load balancing、communication 和 stability 上。
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Linear attention, Mamba-2, Gated DeltaNet, DeepSeek Sparse Attention.
-    \item Switch Transformer, GShard, DeepSeek MoE, OlMoE, Mixtral, Qwen MoE.
-    \item JAX Scaling Book sections on attention and inference systems.
-\end{itemize}
+\begin{longtable}{p{0.27\textwidth}p{0.31\textwidth}p{0.32\textwidth}}
+\toprule
+阅读对象 & 带着什么问题读 & 对应本讲证据 \\
+\midrule
+Linear attention、Mamba-2、Gated DeltaNet & 状态更新如何避免 $n^2$ matrix？哪些长程信息会丢失？ & Slides 4--10 的公式、recurrent form 和 hybrid performance。 \\
+DeepSeek Sparse Attention & 重要位置如何被选择，稀疏索引开销是否抵消计算节省？ & Slides 11--13 的 sparse selection 与质量/速度结果。 \\
+Switch Transformer、GShard & 经典 top-$k$ routing、capacity factor 与 load-balancing loss 如何形成？ & Slides 15--31 的 MoE 动机与 routing 基线。 \\
+DeepSeek MoE、OlMoE、Mixtral、Qwen MoE & Fine-grained/shared experts、auxiliary-free balancing 与 upcycling 在什么条件下有效？ & Slides 32--53 的消融、系统和适配证据。 \\
+DeepSeek v2/v3 & MoE、MLA 与 MTP 分别节省哪种资源，组合后新增什么耦合？ & Slides 54--59 的完整 case study。 \\
+JAX Scaling Book & 如何把 attention/MoE 公式转换为 FLOPs、GPU 显存读写、collective 与 latency 账本？ & 本讲资源验收表和最小复现实验。 \\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{课后练习：为 selective computation 写一份反事实报告}
+选择一个 attention alternative 或 MoE 配置，先写出它声称节省的资源，再构造一个可能让它更慢或更差的反事实环境。例如：短序列使 sparse indexing 得不偿失；小 batch 让 expert GEMM 太碎；慢互联让 all-to-all 主导；长程 retrieval 需要更高 full-attention 频率。最后列出能区分“机制无效”和“实现不佳”的指标。这个练习的目标不是支持某种架构，而是训练在部署前主动寻找失效边界。
+\end{importantbox}
 \end{document}

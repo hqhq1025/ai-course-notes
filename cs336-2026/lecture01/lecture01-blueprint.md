@@ -43,5 +43,6 @@ Regenerate Lecture 01 as a self-contained, new-standard CS336 note covering all 
 
 ## QA Requirements
 - `tools/scripts/check_quality.sh cs336-2026/lecture01/lecture01-notes.tex` reports `⭐⭐⭐`.
-- `check_note_coverage.py` warnings are reviewed against this coverage matrix.
-- `render_pdf_qa.py` contact sheet is generated and manually inspected.
+- `check_note_coverage.py --strict` has no errors or warnings.
+- `teacher-voice-ledger.md` maps transcript timestamps to spoken motivations, caveats and engineering heuristics used in the note.
+- `render_pdf_qa.py` contact sheet and representative full-size pages are generated and manually inspected.

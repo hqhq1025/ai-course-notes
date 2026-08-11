@@ -140,6 +140,10 @@ collective & 集合通信；所有 rank 共同进入同一个通信原语。 & �
 单卡性能工程是在 HBM、cache、register 之间安排数据；多卡性能工程是在 GPU、node、pod 之间安排数据。上一讲用 fusion/tiling 减少内存访问，本讲用 replication/sharding 减少或重排通信。真正的问题不是“用了多少张卡”，而是每一步训练中数据必须移动多远、移动多少、何时移动。
 \end{importantbox}
 
+\begin{knowledgebox}{课堂提示：这是同一个 locality 问题的放大版}
+官方可执行讲义先把“上周”和“本周”并排：上周在一张 GPU 内用 fusion/tiling 减少数据搬运，本周在多张 GPU 和多个节点间用 replication/sharding 重排数据。老师要读者保留的不是某个 API，而是一条连续主线：算力离输入输出越远，越需要把计算安排到数据附近，或减少数据必须跨越的层级。
+\end{knowledgebox}
+
 \subsection{为什么要多 GPU}
 
 多 GPU 的动机可以分成两类。第一类是容量：模型参数、梯度、optimizer state 和激活放不进一张卡。第二类是速度：单卡算力太小，训练 wall-clock time 不可接受，需要更多 FLOPs。实际大模型训练通常先被容量推着走，然后再被速度逼着优化并行效率。
@@ -216,7 +220,17 @@ all-to-all & 每个 rank 都给每个 rank 发送一部分。 & MoE token routin
 \bottomrule
 \end{longtable}
 
+\begin{knowledgebox}{课堂提示：基础原语是为了构造训练工作马}
+官方源明确把 broadcast、scatter、gather、reduce 称为 foundations，把 all-gather、reduce-scatter、all-reduce 称为 workhorse，并把 all-to-all 指向 MoE。这个顺序不是历史知识清单：基础原语先训练输入输出布局直觉，工作马再把这些布局组合成参数重建、梯度分片和梯度复制。
+\end{knowledgebox}
+
 \subsection{broadcast、scatter、gather、reduce}
+
+前面的点对点通信只能描述一对 ranks，本节开始建立集合通信的基本字母表。Broadcast 从一个源复制数据，scatter 把不同分片发给各 rank，gather 反向收集分片，reduce 则在聚合时执行求和等运算；四者的输入输出归属不同，必须所有 ranks 以相同顺序参与。
+
+\begin{knowledgebox}{讲义提醒：collective 是全体协议，不是普通函数调用}
+只要某个 rank 漏掉 collective、调用顺序不同或 tensor shape 不一致，其他 ranks 就可能永久等待。调试 distributed deadlock 时先对齐每个 rank 的控制流与日志，再检查网络；“单卡代码能跑”不能证明多卡协议正确。这是根据 collective 协议约束给出的调试建议，不冒充源文件中的课堂原话。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -267,6 +281,12 @@ broadcast 和 gather 都会产生完整副本，但语义不同：broadcast 是�
 \end{warningbox}
 
 \subsection{all-gather、reduce-scatter、all-reduce}
+
+在基础原语之上，本节讨论训练系统最常见的三种组合：all gather 把分片恢复成完整张量，reduce scatter 聚合后只保留各 rank 对应分片，all reduce 则让所有 ranks 获得相同聚合结果。理解它们的数据量和结果布局，是后续 DDP、ZeRO/FSDP 与 tensor parallel 的前提。
+
+\begin{knowledgebox}{讲义提醒：先画每个 rank 最终持有什么}
+比较 collectives 时不要只背名字。先画输入分片、运算和输出归属，再计算每个 rank 发送/接收的 bytes；all-reduce 可分解为 reduce-scatter 加 all-gather，正是 ZeRO 在保持数学等价时避免完整状态复制的基础。这是讲义把官方输入输出示例提炼成的分析步骤。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -368,6 +388,10 @@ Collectives 是分布式训练的基础语言。读懂本讲后，看到 DDP、F
 
 官方源给出的数量级是：PCIe 7.0 x16 约 \(242\) GB/s，B200 的 NVLink 5.0 节点内可达 TB/s 量级，HBM 约 \(8\) TB/s，而跨节点 InfiniBand 链路可能只有 \(0.05\) TB/s 量级。具体硬件会变化，但排序稳定：片上/本卡最快，节点内互连其次，跨节点最慢。
 
+\begin{knowledgebox}{课堂提示：不要把不同层级统称为“网络”}
+官方可执行讲义把 HBM、NVLink/NVSwitch、InfiniBand 和 Ethernet 排成一条速度层次，并进一步解释普通 Ethernet 的 CPU copy 路径与 RDMA 的设备直达路径。这里的教学重点不是背某一代硬件数字，而是先问通信究竟经过本卡显存、节点内交换还是跨节点 fabric；同样大小的 tensor 走不同层级，代价不是一个常数倍关系。
+\end{knowledgebox}
+
 \[
 T_{\text{comm}} \approx \alpha + \frac{S}{B_{\text{effective}}},
 \]
@@ -389,6 +413,10 @@ NCCL 和 PyTorch 可以隐藏 API 细节，但不能消除物理层级。一个�
 \subsection{NVIDIA Collective Communication Library (NCCL)}
 
 NCCL，即 \textbf{NVIDIA Collective Communication Library (NCCL)}，把 all-reduce、all-gather、reduce-scatter 等 collective 映射到底层 GPU 通信路径。它会检测拓扑，选择 ring/tree 等算法，启动 GPU kernel 来收发数据。PyTorch 的 \code{torch.distributed} 在 GPU 场景下常用 NCCL backend。
+
+\begin{knowledgebox}{课堂提示：NCCL 不只是一个 API wrapper}
+官方源把 NCCL 的工作拆成三步：检测节点、交换机和 NVLink/PCIe 拓扑，优化 GPU 间路径，再启动 GPU kernel 收发数据。因此同一个 \code{all\_reduce} 在不同机器上可能选择不同执行计划；但 NCCL 只能优化既定 collective，不能替模型消除同步语义或决定应该采用哪种 sharding。
+\end{knowledgebox}
 
 \begin{knowledgebox}{术语消化：NCCL 负责什么，不负责什么}
 \begin{tabular}{L{0.22\textwidth}L{0.34\textwidth}L{0.34\textwidth}}
@@ -475,6 +503,10 @@ dist.all_gather_into_tensor(output_tensor=output,
 
 官方讲义的 benchmark 不是为了得到一个漂亮数字，而是训练读者形成判断：某个集群上 all-reduce、reduce-scatter 的实际速度是多少，是否足以支持当前并行策略。若 benchmark 已经显示通信占比过高，继续调学习率或 batch size 都解决不了根因。
 
+\begin{knowledgebox}{课堂提示：计时边界本身就是 benchmark 的一部分}
+可执行示例先 warmup，再调用 \code{torch.cuda.synchronize()} 等待 GPU kernel，随后用 barrier 对齐 ranks，最后才读取 wall-clock duration。少掉其中任一步，数字都可能只反映 kernel launch、某个 rank 的局部时间或冷启动开销。老师用代码强调：通信 benchmark 的第一项结果不是 GB/s，而是“你究竟测到了什么”。
+\end{knowledgebox}
+
 \begin{lstlisting}[caption={all-reduce benchmark 的关键步骤}]
 data = torch.randn(num_elements, device=cuda_if_available(rank))
 dist.all_reduce(tensor=data, op=dist.ReduceOp.SUM, async_op=False)
@@ -534,6 +566,10 @@ B_{\text{reduce-scatter}}
 \subsection{基本策略}
 
 Data parallelism 沿 batch dimension 切分数据。每个 rank 保留完整模型参数，读取自己的 batch slice，独立 forward/backward，然后用 all-reduce 同步梯度。同步后每个 rank 执行相同 optimizer step，因此参数保持一致。
+
+\begin{knowledgebox}{课堂提示：允许 local loss 不同，不允许参数悄悄分叉}
+官方源专门列出三个观察：各 rank 因本地数据不同而得到不同 loss；梯度经过 all-reduce 后相同；所以更新后的参数继续相同。Data parallel 的正确性不要求每张卡看见同一批样本，却要求复制模型在同步点保持同一状态。若某个参数跳过归约或某个 rank 的 optimizer step 不一致，程序可能继续运行，但已经不再等价于同步 data parallel。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -598,9 +634,15 @@ Data parallelism 是最容易理解的并行策略：数据切开，模型复制
 
 \section{Tensor Parallelism：沿 width 维切分}
 
+前面的 data parallelism 沿 batch 复制模型，pipeline parallelism 沿 depth 切层；本部分转向同一层内部的 width 维。Tensor parallelism 让多个 ranks 协作完成一个矩阵乘和 Transformer block，适合单层权重过大或希望使用节点内高速互连的场景，但通信会进入每层关键路径。
+
 \subsection{基本策略}
 
-Tensor parallelism 沿层内部张量维度切分，例如把矩阵乘法的输出宽度切给多个 rank。每个 rank 保存该层参数的一部分，计算一部分激活，然后通过 all-gather 或 all-reduce 恢复下一层需要的完整张量。
+本节先建立最小策略：Tensor parallelism 沿层内部张量维度切分，例如把矩阵乘法的输出宽度切给多个 rank。每个 rank 保存该层参数的一部分，计算一部分激活，然后通过 all-gather 或 all-reduce 恢复下一层需要的完整张量；列切、行切的选择决定通信发生在层间哪个边界。
+
+\begin{knowledgebox}{课堂提示：TP 通常应留在最快互连域}
+官方总结强调 tensor parallel 需要 very fast interconnects。原因是 TP 的 collective 几乎每层都会发生，频率远高于只在 step 边界同步的 data parallel。跨节点扩展 TP 很容易让网络延迟和带宽进入关键路径，因此常把 TP size 绑定到单机 NVLink/NVSwitch 域，再用 PP 或 DP 扩展到更多节点。
+\end{knowledgebox}
 
 \begin{figure}[H]
 \centering
@@ -712,6 +754,10 @@ for x in micro_batches:
 Pipeline parallel 的通信对象通常是 stage 边界激活，频率低于 tensor parallel。但它引入调度问题：stage 时间不均、forward/backward 依赖、microbatch 数、activation 保存或重算策略，都会影响吞吐。
 \end{importantbox}
 
+\begin{knowledgebox}{课堂提示：最小实现故意保留了生产系统要消除的 bubble}
+官方 pipeline 代码在末尾明确写出尚未处理 communication/computation overlap，课程总结也提醒必须设法减少 pipeline bubbles。因而这段程序的价值是暴露 stage、microbatch、send/recv 和 bubble 的最小机制，而不是提供可直接用于生产的调度器。真实系统还要安排 forward/backward 交错、激活生命周期和跨 stage overlap。
+\end{knowledgebox}
+
 \subsection{为什么 pipeline 能跨较慢链路}
 
 Pipeline stage 之间的通信发生在层段边界，粒度较粗。如果每个 stage 内部有足够多层和足够大计算，通信可以被较长的 compute window 吸收。因此 pipeline parallel 更可能跨节点使用。但这要求模型切分均衡：每个 stage 的参数量、计算量、激活大小和 backward 时间都要接近。
@@ -763,6 +809,10 @@ communication & 把状态放到别的 rank 或分片存储。 & 消耗网络带�
 \subsection{JAX/TPU 路线为什么看起来不同}
 
 官方源提到 JAX/TPU 路线：定义模型、定义 sharding strategy，编译器负责很多底层映射。PyTorch 课程选择从 primitives 讲起，是为了让读者看见底层机制。两者不是谁高谁低，而是抽象层不同：高层 sharding API 更省心，但当性能异常时，仍然需要理解 collectives、拓扑和通信账本。
+
+\begin{knowledgebox}{课堂提示：选择 PyTorch 是为了看见 primitive 如何搭起来}
+官方源主动说明：JAX/TPU 可以让用户声明模型和 sharding strategy，再由编译器处理大量细节；本讲仍用 PyTorch，是为了展示如何从 collective primitives 一层层构造训练策略。这个取舍限定了课程目标：学会读底层通信账本，而不是断言手写 PyTorch 永远优于编译器自动 sharding。
+\end{knowledgebox}
 
 \begin{warningbox}{抽象越高，越不能忘记通信账本}
 自动 sharding 可以搜索或生成并行计划，但目标函数仍然受物理通信约束。性能调试时，如果不知道某个 tensor 被 all-gather 了几次、某个 expert routing 是否 all-to-all，就很难解释 step time。
@@ -840,8 +890,33 @@ Lecture 7 的 Summary 可以压缩成一句话：分布式训练不是“把模�
 \end{enumerate}
 \end{importantbox}
 
-\begin{knowledgebox}{和下一讲的连接}
-本讲先搭起 collectives 和三种基本 parallelism。下一步自然是更系统地处理模型状态分片：ZeRO/FSDP 如何用 all-gather 和 reduce-scatter 降低 replicated state，以及怎样通过 overlap/prefetch 把通信藏到计算后面。
-\end{knowledgebox}
+\subsection{和下一讲的连接}
+
+本讲先搭起 collectives 和三种基本 parallelism。下一步自然是更系统地处理模型状态分片：ZeRO/FSDP 如何用 all-gather 和 reduce-scatter 降低 replicated state，以及怎样通过 overlap/prefetch 把通信藏到计算后面。进入下一讲前，应能把下面四个问题写成一张状态与通信账本：
+
+\begin{center}
+\begin{tabular}{L{0.2\textwidth}L{0.28\textwidth}L{0.38\textwidth}}
+\toprule
+问题 & 本讲已有答案 & 下一讲继续追问 \\
+\midrule
+参数放哪里 & DDP 每个 rank 完整复制。 & ZeRO-3/FSDP 何时 all-gather 当前层参数，何时释放？ \\
+梯度放哪里 & all-reduce 后每卡保留完整梯度。 & reduce-scatter 后如何只保留本 rank shard？ \\
+optimizer state 放哪里 & 普通 DDP 每卡完整复制。 & ZeRO-1 如何分片 Adam 的 \(m,v\)，由谁更新参数？ \\
+通信何时发生 & 同步示例把 collective 放在关键路径。 & prefetch、bucketing、overlap 如何把通信藏进 forward/backward？ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{最小复现实验：}选择一个两层 MLP，在 1/2/4 张 GPU 上分别记录每步计算时间、all-reduce 时间、峰值显存和有效带宽。然后把梯度同步拆成 reduce-scatter 与 all-gather，先验证数值等价，再预测哪一部分状态可以不再完整复制。若预测、显存曲线与通信 trace 对不上，就回到本讲的两张图：状态图说明“谁持有什么”，通信图说明“何时把什么送给谁”。
+
+\textbf{闭卷自测：}
+\begin{enumerate}
+    \item 给定四个 ranks、每个 rank 一段不同向量，分别画出 all-gather、reduce-scatter 和 all-reduce 后每个 rank 持有的内容；不能只写操作名字。
+    \item 若一次 tensor-parallel block 每层都要 all-gather 激活，解释为什么把 TP 从节点内 NVLink 域扩到跨节点 fabric 后，扩展效率可能突然下降，而不是平滑下降。
+    \item 对比 data parallel 与 pipeline parallel：前者复制哪些模型状态、后者传输什么激活；各自最怕“张量太大”还是“同步太频繁”。
+    \item 看到一个宣称“all-reduce 达到 300 GB/s”的结果时，列出必须补齐的实验条件：tensor bytes、dtype、world size、拓扑、warmup、同步方式和带宽口径。
+\end{enumerate}
+
+完成这四题的标准不是术语正确，而是每个答案都同时写出 \textbf{state placement、collective、frequency、hardware path}。这四列若有一列空白，就还没有形成可用于真实系统设计的并行账本。
 
 \end{document}

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Regenerate Lecture 03 under the new workflow as a slide-complete, self-contained guide to modern LM architecture and hyperparameter defaults.
+Regenerate Lecture 03 under the new workflow as a slide-complete, self-contained guide to modern LM architecture and hyperparameter defaults. Retain every teaching-bearing source page in lecture order; only the pure title page may be omitted because the note cover already carries the same metadata.
 
 ## Section Plan
 
@@ -52,7 +52,8 @@ Regenerate Lecture 03 under the new workflow as a slide-complete, self-contained
 
 ## QA Requirements
 
-- Every slide image 000-066 appears in the note or is explicitly discussed as title/outline/recap.
+- Slide images 001--066 all appear in the note; slide 000 is intentionally omitted as a pure title page duplicated by the note cover.
 - Important evidence slides have `读图` boxes.
-- `check_note_coverage.py` warnings are reviewed against `lecture03-coverage.md`.
-- `render_pdf_qa.py` contact sheet is generated and reviewed.
+- No teacher-voice source is available: the directory contains the slide deck but no transcript, subtitles, speaker notes, or executable narration nodes.
+- `check_note_coverage.py --strict` has no errors or warnings.
+- `render_pdf_qa.py` contact sheet and representative full-size pages are manually reviewed.
