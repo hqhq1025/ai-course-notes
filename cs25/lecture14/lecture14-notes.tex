@@ -1,188 +1,689 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 14：Strategic Games、Inference-Time Search 与 Cicero}
+\renewcommand{\noteauthors}{基于 Noam Brown 讲座、官方人工字幕、恢复幻灯片与一手论文整理}
+\renewcommand{\notedate}{CS25 V2 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-01-31；上传 2023-05-22}
+\renewcommand{\videoduration}{53:20}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=phWxl0nkgKk}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Strategic Games (Diplomacy) — Noam Brown, Meta}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2023}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2023}
-\newcommand{\videoduration}{约55分钟}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth,height=0.54\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与课程主问题}
 
-\section{引言：从扑克到外交——不完美信息博弈}
+这讲课表面上从扑克、围棋一路讲到七人桌游 Diplomacy，真正贯穿全场的却是两个系统问题。第一，训练结束以后，一个模型还应当为单次决策投入多少计算；第二，当任务同时需要世界建模、策略优化和自然语言沟通时，哪些责任应该交给同一个模型，哪些责任必须拆开。Noam Brown 用搜索说明\term{计算预算应随决策价值而变化}，再用 Cicero 说明\term{语言流畅度不能替代战略闭环}。
 
-Noam Brown 来自 Meta AI（FAIR），是 Libratus/Pluribus（扑克 AI）和 Cicero（外交游戏 AI）的核心研究者。本讲聚焦于\textbf{外交游戏（Diplomacy）}中 AI 面临的独特挑战。
+\subsection{本讲如何重建}
 
-\begin{knowledgebox}{外交游戏简介}
-外交是一款 7 人策略棋盘游戏，设定在一战前的欧洲。每个玩家控制一个国家，核心特点：
-\begin{itemize}
-    \item \textbf{同时行动}：所有玩家同时提交行动，而非轮流
-    \item \textbf{自然语言沟通}：玩家在每轮行动前可以自由交流、结盟、谈判
-    \item \textbf{背叛是允许的}：承诺不具约束力，``破坏友谊的游戏''
-    \item 核心技能：\textbf{在鼓励不信任的环境中建立信任}
-\end{itemize}
+课程官网没有提供可下载的独立 slide deck，因此本讲不能把旧稿或网络二手总结当作视觉来源。我们以 Stanford Online 官方 1080p 录像为母版，对 screen-share 区域每两秒采样一次，从 1,600 帧中筛出 70 个高召回候选，再人工去重为 42 个有独立教学意义的画面。正文的口头解释来自官方人工英文字幕，共 1,176 个时间区间；公式和术语则回到课堂推荐的一手论文核对。
+
+\begin{longtable}{L{0.22\textwidth}L{0.31\textwidth}L{0.37\textwidth}}
+\toprule
+证据层 & 本地材料 & 在讲义中的职责 \\
+\midrule
+官方录像 & 53:20 视频与 42 张恢复幻灯片 & 决定课堂顺序、图表、系统架构和演示案例 \\
+官方人工字幕 & \texttt{lecture14.en.srt} & 恢复动机、课堂类比、限制条件、Q\&A 与讲者语气 \\
+课程推荐论文 & Cicero、piKL、No-Press Diplomacy & 核对算法目标、实验边界和术语含义 \\
+本地审计文件 & manifest、coverage、teacher-voice ledger & 证明每个 source node 在正文中都有明确去向 \\
+\bottomrule
+\end{longtable}
+
+\begin{warningbox}{历史边界}
+本讲重建截至 2023 年 1 月 31 日的课堂内容。后来的 reasoning model、test-time scaling law 或通用 agent 产品不能倒灌进课堂事实。末尾会单列“现代系统延伸”，但会与讲者当时的主张明确分开。
+\end{warningbox}
+
+\subsection{四个贯穿全讲的问题}
+
+读后面的扑克曲线和 Cicero 架构时，不要把注意力停在“AI 又击败人类”这一层。更值得追踪的是：决策质量究竟来自训练好的 base policy，还是来自当场 search；人类行为是优化目标、先验还是环境模型；语言模型是在决定策略，还是只把已决定的策略表达出来；系统又如何拒绝一条语法正确、却会破坏未来收益的消息。
+
+\begin{importantbox}{本讲的系统论命题}
+强智能体不是“一个更大的语言模型加一个 prompt”，而是一条受预算约束的闭环：预测环境中的其他参与者，规划自己的策略，把策略压缩成可沟通的 intent，生成候选语言，评估语言会怎样改变他人行为，然后重新规划。
+\end{importantbox}
+
+\subsection{术语表：先把相近概念分开}
+
+本讲会反复在训练、推理、策略和语言四个层面切换。下表先做一次术语消化，避免把“模型更大”“搜索更深”“更像人类”和“更会沟通”误写成同一种能力。
+
+\begin{longtable}{L{0.23\textwidth}L{0.30\textwidth}L{0.37\textwidth}}
+\toprule
+术语 & 解决的问题 & 核心机制与课程关系 \\
+\midrule
+Base policy & 不搜索时如何快速给出行动分布 & 由训练得到，是 search 的候选先验而不是最终答案 \\
+Inference-time search & 当前决策是否值得多花计算 & 在固定权重下展开、评估和比较候选，预算可随价值变化 \\
+Exploitability & 策略能被最优对手利用多少 & 衡量离 Nash equilibrium 的最坏情况距离，低于普通胜率更稳健 \\
+Human anchor policy & 怎样保留人类可理解的行动 convention & 从人类数据模仿，既提供协调先验，也会继承人类弱点 \\
+Intent & 语言模型究竟要表达哪项计划 & Cicero 用近程可执行 actions 作为结构化生成条件 \\
+Grounded dialogue & 消息如何与共享世界状态相连 & 每条消息应对应 board、history、plan 与可能的行为后果 \\
+Value-based filtering & 如何拒绝流畅但战略有害的消息 & 预测消息对他人 policy 的影响，再评估计划的 expected value \\
+\bottomrule
+\end{longtable}
+
+\subsection{本章小结}
+
+本讲采用官方录像、人工字幕和一手论文三层证据。接下来先把“为什么 search 值得在推理时花钱”讲清，再进入需要沟通、合作与竞争同时存在的 Diplomacy。
+
+\section{扑克：Inference-Time Search 为什么可能压过训练规模}
+
+Poker 是不完全信息博弈：玩家看不到对手手牌，行动还会反过来暴露信息。它因此特别适合检验一个问题：如果训练得到的策略已经很强，是否还值得在每个新局面上临时求解。讲者从 2015 年的人机赛失败讲起，不是为了列历史，而是为了说明研究文化曾经低估了推理时计算的收益。
+
+\subsection{从 2015 年失利到“当场多想一会儿”}
+
+第一张图把人类牌手与当时 AI 的差距放在同一张记分牌上。2015 年 Brains vs. AI 比赛中，Claudico 面对四位顶尖 heads-up no-limit Texas Hold'em 选手并未取胜。关键诊断不是“参数还不够多”，而是 bot 在困难局面仍近似查表式地瞬间行动；人类则会把更多时间分配给高风险手牌。
+
+\lecturefigure{slide-01-2015-brains-ai-poker.jpg}{2015 Brains vs. AI Poker Competition：搜索转向前的失败基线}{官方录像恢复幻灯片 V001；Stanford CS25 Lecture 14}
+
+\teachervoice{老师强调，最值得模仿的人类行为不是某套扑克技巧，而是\textbf{按局面难度动态分配思考时间}。容易的牌快速行动，决定整场收益的牌则值得重新求解。这个观察把研究问题从“再训练一个更大的策略”改写为“给现有策略多少 inference compute”。}
+
+\subsection{用 exploitability 读懂搜索曲线}
+
+扑克策略不能只看它对固定测试对手的胜率，因为一个策略可能恰好克制该对手，却能被另一种针对性打法轻易利用。更稳健的量是 \term{exploitability}：最优对手相对于均衡收益最多还能从该策略榨取多少额外收益。若用 $u_i(\pi_i,\pi_{-i})$ 表示玩家 $i$ 在联合策略下的期望收益，可把近似均衡误差写成
+\begin{equation}
+\epsilon_i(\pi)
+= \max_{\pi_i'} u_i(\pi_i',\pi_{-i}) - u_i(\pi_i,\pi_{-i}).
+\end{equation}
+其中 $\pi_i'$ 是玩家 $i$ 的任意最佳响应，$\pi_{-i}$ 是其他玩家策略；$\epsilon_i$ 越小，说明策略越难被针对。课堂图纵轴写作 distance from Nash，本质上要读成“离不可利用策略还有多远”，而不是普通 accuracy。
+
+\lecturefigure{slide-02-search-poker-scaling.jpg}{中等规模扑克中的 scaling：search 曲线整体显著低于 no-search}{官方录像恢复幻灯片 V002；曲线引用 Brown 与 Sandholm 的安全子博弈求解工作}
+
+\begin{knowledgebox}{读图：先比较纵向差距，再看横向 scaling}
+横轴 buckets 是 base abstraction / policy 的规模，从约 200 增至 20,000；纵轴是对数刻度的 Nash distance，越低越好。蓝线表示不做 search，橙线表示在当前子博弈中重新求解。两条线都会随 base model 变大而下降，但橙线在每个规模上都低很多。讲者把代表点概括为 exploitability 约下降七倍：真正强的信号不是某个点，而是 search 带来的整条曲线位移。
 \end{knowledgebox}
 
-\section{搜索时计算（Test-Time Compute）}
+\begin{warningbox}{曲线没有证明什么}
+这张图不能证明“search 永远等价于把模型扩大固定倍数”，更不能把扑克中的七倍改进直接外推到语言任务。它只证明在该不完全信息博弈和该求解器下，局部推理时计算比继续扩张同类 base abstraction 更高效。
+\end{warningbox}
 
-\subsection{从快思考到慢思考}
+\subsection{为什么这么有效的方法仍被忽视}
 
-\begin{importantbox}{搜索的价值}
-Noam 首先回顾了在扑克 AI 中的关键发现：
-\begin{itemize}
-    \item 训练后的 bot 在困难局面下\textbf{瞬间}做出决策（查表）
-    \item 人类在困难局面下会\textbf{花时间思考}（有时数分钟）
-    \item 给 bot 加入\textbf{推理时搜索}（test-time compute）——在当前局面重新计算更好的策略——可以用极少的参数达到大参数模型的效果
-\end{itemize}
-这一发现预示了后来的``思考 token''和 o1 等方向。
+第三张 slide 不是技术细节，而是研究激励的诊断。许多团队把资源投入可复用的离线策略；search 需要每一步额外计算，工程路径复杂，且早期社区曾认为已知方法在大型游戏中不够有效。于是大家反复扩大 base model，却很少测量“同一模型在决策时多算一会儿”能换来多少收益。
+
+\lecturefigure{slide-03-why-search-overlooked.jpg}{为什么 poker search 长期没有成为默认路线}{官方录像恢复幻灯片 V003；Stanford CS25 Lecture 14}
+
+\teachervoice{讲者把这段历史讲成一个研究管理教训：当社区普遍相信某个方向“不会扩展”时，团队会停止为它建基础设施，缺少基础设施又进一步让实验看起来昂贵。search 的迟到既有算法原因，也有文化、算力预算与发表激励原因。}
+
+\subsection{Libratus：把局部求解带进高水平单挑}
+
+2017 年 Libratus 在 120,000 手牌的人机赛中战胜四位顶尖 heads-up no-limit poker 选手。这里的贡献不是每回合暴力枚举完整游戏树，而是先有一个离线 blueprint strategy，再在实际到达的子博弈里安全地细化策略。这样，系统把昂贵计算集中在真实出现、且对收益重要的分支上。
+
+\lecturefigure{slide-04-libratus-2017.jpg}{Libratus：搜索驱动的双人无限注扑克系统}{官方录像恢复幻灯片 V004；Brown 与 Sandholm，Science 2017}
+
+\begin{importantbox}{Blueprint 与局部 search 的分工}
+Blueprint 提供全局可行的先验策略，使系统不会从零开始；subgame solving 则在已观察到的公共局面附近重新分配概率质量。前者负责覆盖，后者负责精度。若只有 blueprint，困难局面过于粗糙；若每次都从零求全局均衡，计算又不可承受。
+\end{importantbox}
+
+\subsection{Pluribus：从两人零和扩展到六人桌}
+
+多人 poker 不再满足简洁的两人零和结构：某个行动对第三方的影响、临时利益一致和非传递性都会让求解更难。2019 年 Pluribus 仍以 modest compute 击败多位人类职业牌手，说明 search 的价值并不只存在于最干净的理论设定。图中最该读的不是杂志封面，而是“六人、实时、有限预算”这三个约束同时成立。
+
+\lecturefigure{slide-05-pluribus-2019.jpg}{Pluribus：六人无限注德州扑克中的搜索系统}{官方录像恢复幻灯片 V005；Brown 与 Sandholm，Science 2019}
+
+\begin{knowledgebox}{从扑克抽象出的通用 search 接口}
+一个实用推理时求解器至少需要四件事：候选行动生成器、对未来状态的展开规则、状态或策略价值估计器、以及明确的预算停止条件。不同领域会替换具体算法，但“用 base model 提议，用 evaluator 比较，用预算控制深度”的接口可以迁移。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Budgeted inference-time search 的领域无关骨架},label={lst:budgeted-search}]
+def search(state, base_policy, transition, evaluator, budget):
+    frontier = [(state, 1.0, [])]
+    best = None
+    for _ in range(budget):
+        node = select_promising(frontier)
+        for action, prior in base_policy(node.state):
+            next_state = transition(node.state, action)
+            value = evaluator(next_state)
+            candidate = (value, node.path + [action])
+            best = max(best, candidate) if best else candidate
+            frontier.append(expand(node, next_state, prior, value))
+    return best[1][0]
+\end{lstlisting}
+
+这段伪代码故意不指定 tree search、counterfactual regret minimization 或 beam search。它表达的是资源账户：预算增加时，系统可以探索更多候选、看得更深或调用更精确的 evaluator；如果 evaluator 有系统偏差，更多 search 也可能把偏差放大，因此计算量从来不是单独的质量保证。
+
+\subsection{本章小结}
+
+Poker 的核心证据是：同一 base policy 配上局部 search，可以显著降低可利用性；Libratus 和 Pluribus 则证明这种设计能在真实时间和有限硬件中工作。下一步要问的是，这条规律是否只属于扑克，还是能够上升为更一般的 inference-time computation 原则。
+
+\section{Go、Bitter Lesson 与通用 Inference Compute}
+
+围棋提供了第二种对照。它是完全信息游戏，没有隐藏手牌，却仍依赖 search 将 policy/value network 转化为强行动。讲者借 AlphaGo Zero 的 ablation 和 Bitter Lesson，把“搜索”从特定博弈算法扩展为一个更宽的定义：在收到输入以后继续投入计算，以改善这一次输出。
+
+\subsection{AlphaGo Zero：网络不是搜索的替代品}
+
+图中的柱状条按系统版本展示棋力。Full AlphaGo Zero 同时使用训练好的网络和 Monte Carlo Tree Search；移除 MCTS 后，即使网络本身来自强 self-play，表现仍会大幅下降到 expert-human 以下。这里并不是说 MCTS 可直接搬到所有任务，而是说明训练得到的启发式与推理时展开彼此互补。
+
+\lecturefigure{slide-06-search-go.jpg}{AlphaGo Zero 的搜索消融：Full system 与 no-search 版本差距明显}{官方录像恢复幻灯片 V006；Silver et al., Science 2017}
+
+\begin{knowledgebox}{读图：柱高是棋力，不是训练 loss}
+这张图比较的是最终对局水平。policy/value network 提供 move prior 和 leaf evaluation，MCTS 把它们组合成更可靠的局面决策。移除搜索后，模型并非“什么都不会”，但无法把局部预测组织成足够强的长程行动序列。因此不能把模型参数和 search visits 当成可完全互换的单一尺度。
+\end{knowledgebox}
+
+\subsection{课堂中的 100,000 倍类比应怎样理解}
+
+讲者用一个非常粗的规则帮助建立数量级直觉：若 base system 的某项规模每扩大十倍，只换来约 50 Elo，而 search 带来约 250 Elo，那么达到同样 Elo 差距需要五次十倍扩张，即
+\begin{equation}
+R_{\text{equiv}}
+\approx 10^{\Delta E/50}
+=10^{250/50}=10^5.
+\end{equation}
+$\Delta E$ 是待替代的 Elo 增益，50 是课堂中的经验斜率，$R_{\text{equiv}}$ 是粗略规模倍数。这个计算的价值在于提醒我们不要忽视大幅曲线位移，而不是宣称 search 在任意任务上都固定等价于十万倍训练计算。
+
+\teachervoice{老师明确把“约 100,000 倍”当作便于讨论的 extrapolation，而不是定律。真正主张是：如果只沿着 base-model scaling 轴优化，我们可能会错过一个便宜得多、但需要新系统设计的 inference axis。}
+
+\subsection{Bitter Lesson：一般方法与可扩展计算}
+
+Richard Sutton 的 Bitter Lesson 认为，长期最可靠的 AI 进步往往来自能利用不断增长计算的一般方法，尤其是 learning 与 search，而不是把大量人类知识硬编码进系统。课堂引用它，是为了把扑克和围棋放在同一条历史线上：领域知识仍有用，但应当服务于可扩展的计算过程，而不是替代它。
+
+\lecturefigure{slide-07-bitter-lesson.jpg}{The Bitter Lesson：search 与 learning 是可随计算扩展的一般方法}{官方录像恢复幻灯片 V007；Richard Sutton, 2019}
+
+\begin{warningbox}{“一般方法”不等于“无领域结构”}
+Libratus、Pluribus、AlphaGo Zero 与 Cicero 都包含大量领域建模。Bitter Lesson 在本讲中的作用是选择优化方向：优先建设能吃到更多计算的机制，而不是声称所有 hand-crafted representation 都应立刻删除。
+\end{warningbox}
+
+\subsection{下一目标：能否做 general inference computation}
+
+第八张 slide 把问题直接推向语言模型：如果 base model 已经很大，是否可以用比训练便宜得多的 inference compute 继续提升单次输出；如果某个答案价值极高，是否应该允许系统花几分钟、几小时甚至更久。这里的 \term{search} 是广义词，不限于显式树结构，也可以是反复生成、验证、修正或调用环境反馈。
+
+\lecturefigure{slide-08-next-goal-generality.jpg}{从博弈搜索走向通用 inference-time computation}{官方录像恢复幻灯片 V008；Stanford CS25 Lecture 14}
+
+\begin{importantbox}{价值敏感的推理预算}
+合理的 inference budget 不应只由输入长度决定，还应由错误代价、可验证性和机会成本决定。推荐一首歌可以快速回答；药物设计、芯片布线或关键谈判则值得生成更多候选并进行更严格评估。系统目标是最大化“额外计算带来的边际价值”，而不是统一让所有请求变慢。
+\end{importantbox}
+
+\teachervoice{讲者把 chain-of-thought 视为一种很通用、但仍有限的额外计算方式：模型通过生成中间 token 展开问题，却不一定拥有可回溯、可验证或能长期维护状态的规划器。课堂的开放问题是：是否存在比 CoT 更一般、更可靠的 planning mechanism。}
+
+\subsection{本章小结}
+
+Go 的消融证明强 network 仍需要 search，Bitter Lesson 提供了历史解释，而 generality slide 则把研究议程转向可变预算的推理系统。接下来，Diplomacy 会把难度再提高一层：环境中的其他“状态”是会说话、会合作、也会改变主意的人。
+
+\section{为什么选择 Diplomacy}
+
+如果只想再做一个超人游戏 AI，围棋和扑克已经提供了成熟舞台。Cicero 团队选择 Diplomacy，是因为现成路线无法简单 scale in：它既有组合式战略行动，又允许玩家用自然语言协商；收益既竞争又合作；真正重要的信息常常存在于承诺、信任和他人预期之中。
+
+\subsection{系统团队本身就是技术证据}
+
+Cicero 不是单一论文技巧的产物。团队 slide 同时列出 reinforcement learning、game theory、NLP、工程和产品化背景的研究者。保留这张看似“行政”的图，是因为它解释了后面的模块化架构：当任务横跨策略与语言时，评估、数据、规划、生成和线上部署必须共同闭环。
+
+\lecturefigure{slide-09-fair-diplomacy-team.jpg}{FAIR Diplomacy 团队：跨 game AI、RL 与 NLP 的系统工程}{官方录像恢复幻灯片 V009；Stanford CS25 Lecture 14}
+
+\teachervoice{老师在此暂停并逐项感谢团队，不只是礼貌。他强调 Cicero 的难点不是找到一个“神奇 loss”，而是让多条研究线在真实多人环境中稳定协作。对复杂 agent 项目，这种 integration work 本身就是核心研究。}
+
+\subsection{两条历史线终于相交}
+
+游戏 AI 的历史从 chess、Go、poker 不断攻克更大的决策空间；语言模型的历史则从 sequence modeling 走向能够生成连贯文本。第十张 slide 把多种游戏里程碑放在一起，第十一张 slide 则用 GPT-2 的独角兽故事提醒观众：到 2019 年，语言生成已经能维持局部连贯，但“会续写”并不等于“会围绕共享世界状态谈判”。
+
+\lecturefigure{slide-10-game-ai-history.jpg}{游戏 AI 里程碑：从棋盘搜索到复杂多人环境}{官方录像恢复幻灯片 V010；Stanford CS25 Lecture 14}
+
+读图时要比较每个任务新增的困难，而不是只看年份：chess 和 Go 主要是完全信息规划；poker 增加隐藏信息与欺骗；实时游戏增加长动作空间与部分可观测性；Diplomacy 再增加自由语言和人类社会约定。每一步都让“状态”更难写成一个封闭张量。
+
+\lecturefigure{slide-11-gpt2-unicorn.jpg}{GPT-2 的流畅生成：语言能力进步与 grounded planning 之间仍有缺口}{官方录像恢复幻灯片 V011；Stanford CS25 Lecture 14}
+
+\begin{warningbox}{语言流畅度不是战略能力代理}
+GPT-2 示例证明模型能生成风格连贯文本，却没有证明文本与可执行计划一致。Diplomacy 中一句“我会支持你进入某地”必须对应合法行动、当前单位位置、对手可能反应和未来关系；任何一层脱节，语言越自然反而越容易误导人。
+\end{warningbox}
+
+\subsection{规则：同时行动与无约束谈判}
+
+上一节已经说明语言模型与游戏 AI 两条历史线为何要相交；现在必须先把环境的状态转移讲清，否则后面的“grounded”只会成为口号。Diplomacy 由七个国家在欧洲地图上争夺 supply centers。每回合先进行私下或公开沟通，再由所有玩家同时提交行动；承诺不具强制力，玩家可以攻击、支援、运输或按兵不动。由于行动同时揭晓，语言并不是赛后解释，而是会改变联合行动分布的前置控制信号。
+
+\lecturefigure{slide-12-what-is-diplomacy.jpg}{What is Diplomacy：从名称进入规则与任务定义}{官方录像恢复幻灯片 V012；Stanford CS25 Lecture 14}
+
+\lecturefigure{slide-13-diplomacy-rules-challenge.jpg}{七人地图、同步行动、自然语言与超大联合动作空间}{官方录像恢复幻灯片 V013；Stanford CS25 Lecture 14}
+
+\begin{knowledgebox}{联合动作空间为何迅速爆炸}
+若第 $i$ 位玩家有合法动作集合 $A_i(s)$，同一回合的联合动作数为 $\prod_{i=1}^{7}|A_i(s)|$。这还没有计入对话历史和隐藏意图。系统不可能简单枚举所有消息与行动组合，因此必须学习其他玩家的 policy，并把 search 集中在高概率、高价值的局部区域。
+\end{knowledgebox}
+
+第十四张 slide 把地图与真实聊天并排放置。读这张图应先在地图上找单位和争夺区域，再读消息中提出的合作方案，最后问该承诺会怎样改变双方下单。语言只有落回 board state 和 possible orders，才成为 grounded dialogue。
+
+\lecturefigure{slide-14-diplomacy-map-dialogue.jpg}{Diplomacy 的核心输入：同一个地图状态与不断变化的对话历史}{官方录像恢复幻灯片 V014；Stanford CS25 Lecture 14}
+
+\subsection{Support：为什么沟通会直接改变棋盘结果}
+
+Diplomacy 的单位通常以相同基础力量行动。若一个单位支持另一个单位进攻或防守，联合力量才可能突破。slide 15 用三个小图展示失败、单方 support 成功以及对抗 support 后的结果。这里的教学重点是：跨玩家支援不能由单个玩家独立完成，因此谈判不是装饰，而是合法高价值行动的必要条件。
+
+\lecturefigure{slide-15-support-is-key.jpg}{Support is key：协同承诺如何转化为棋盘上的力量优势}{官方录像恢复幻灯片 V015；Stanford CS25 Lecture 14}
+
+\begin{importantbox}{从消息到状态转移的因果链}
+消息提出联合意图；接收者判断可信度并改变 policy；双方提交相互兼容的 orders；规则引擎解析 support；地图状态才发生变化。Cicero 必须建模整条链，而不是只优化下一句最像人类的话。
+\end{importantbox}
+
+\subsection{“破坏友谊”与专家真正重视的信任}
+
+Support 规则说明合作能立即改变棋盘，但还没有回答玩家为什么愿意合作。本节因此转向重复互动中的信任成本。媒体常把 Diplomacy 描绘成鼓励背叛的游戏；第十六张 slide 用夸张标题呈现这种印象，第十七张则转向经验丰富玩家的说法：长期稳定合作、可信承诺和可预测性往往比频繁撒谎更有价值。背叛存在，但它会消耗未来合作资本，且这种损失可能跨越多个回合。
+
+\lecturefigure{slide-16-diplomacy-headlines.jpg}{大众叙事：Diplomacy 被称为“会破坏友谊的游戏”}{官方录像恢复幻灯片 V016；Stanford CS25 Lecture 14}
+
+\lecturefigure{slide-17-trust-quote.jpg}{专家视角：在允许背叛的环境里，信任反而更稀缺、更重要}{官方录像恢复幻灯片 V017；Stanford CS25 Lecture 14}
+
+\teachervoice{讲者提醒观众不要把“能骗人”误当作高级智能的充分条件。强玩家会考虑一次谎言之后别人是否还愿意合作；在重复互动里，truthfulness 往往是有战略价值的资源，而不是单纯道德姿态。}
+
+\subsection{为什么它同时是 multi-agent 与 NLP 问题}
+
+规则与信任共同说明，单独优化棋力或单独优化语言都不够。第十八张 slide 用两个相交圆概括任务：reinforcement learning / planning 负责在组合动作空间中做决策，natural language 负责影响其他玩家并建立协作。交集不是把两个模型并排放置，而是让语言产生可测量的策略后果，并让策略模型能判断哪些消息值得相信。
+
+\lecturefigure{slide-18-why-diplomacy.jpg}{为什么选择 Diplomacy：策略学习与自然语言的交集}{官方录像恢复幻灯片 V018；Stanford CS25 Lecture 14}
+
+从 multi-agent 视角看，纯竞争算法会忽略共同收益和人类约定；纯合作算法又可能假设目标完全一致。Diplomacy 处在 mixed-motive 区域：今天的盟友可能是明天的对手，玩家必须推断别人相信什么、期待什么，以及哪些均衡是人类社群中可接受的。
+
+\lecturefigure{slide-19-multi-agent-perspective.jpg}{Multi-agent perspective：混合合作、竞争、常识与人类约定}{官方录像恢复幻灯片 V019；Stanford CS25 Lecture 14}
+
+从 NLP 视角看，已有模型擅长模仿文本，却未必把句子 grounding 到计划。Cicero 追求的是 intentional dialogue：每条消息有明确的沟通目标，能与当前 state、planned action 和收件人的可能反应对齐。
+
+\lecturefigure{slide-20-nlp-perspective.jpg}{NLP perspective：从 imitation 走向 grounded、intentional dialogue}{官方录像恢复幻灯片 V020；Stanford CS25 Lecture 14}
+
+\begin{knowledgebox}{两个视角的共同接口：belief over policies}
+规划器需要一个关于“别人接下来会怎么做”的概率模型；对话模块则需要知道“我希望别人怎么做”。这两者都可以落到 policy distribution。语言的作用是改变该分布，search 的作用是在改变后的分布下选择高价值行动。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Diplomacy 的难点不是规则本身，而是联合动作、自由对话、人类约定和长期信任相互耦合。它迫使系统回答一个比“生成下一句”更严格的问题：这句话是否与可执行计划一致，并且是否会让未来状态更好。
+
+\section{Cicero 的结果与闭环架构}
+
+在理解任务后，才能正确解读 Cicero 的成绩。系统使用约 50,000 局人类游戏数据建立语言与行为模型，并在在线联赛匿名参加 40 局。课堂刻意同时展示定性案例和定量表格，因为“像人”与“打得强”是两条不同证据。
+
+\subsection{系统定位：会沟通的 Diplomacy agent}
+
+slide 21 给出最简定义：Cicero 把战略推理与自然语言生成结合，用于在线 high-level play。这里的“AI agent”不是只有一个模型 endpoint，而是持续接收 board、orders 和 messages，再产生行动与消息的循环系统。
+
+\lecturefigure{slide-21-cicero-intro.jpg}{Cicero：结合 strategic reasoning 与 grounded dialogue 的 Diplomacy agent}{官方录像恢复幻灯片 V021；Bakhtin et al., Science 2022}
+
+\subsection{定性证据：玩家是否把它当作参与者}
+
+系统定义只说明 Cicero 打算做什么，不能证明模块在真实联赛中形成了可信行为。本节先看定性证据，再与下一节的分数表交叉验证。第二十二张 slide 展示匿名参赛和玩家反馈。一个好的 qualitative result 不是“消息语法正确”，而是其他玩家愿意依据消息协调行动，并在长局中持续把 Cicero 当作有策略、可谈判的参与者。课堂也保留边界：有人赛后表达过怀疑，但并未形成系统性识别。
+
+\lecturefigure{slide-22-cicero-human-qualitative.jpg}{Cicero 与人类在线对局的定性反馈}{官方录像恢复幻灯片 V022；Stanford CS25 Lecture 14}
+
+\subsection{定量证据：强，但不宣称 superhuman}
+
+定性反馈说明系统没有频繁破坏协作，但强度必须回到可比较的数值。本节读表时要同时保留样本量、参与者门槛和排名口径。slide 23 给出更具体的审计数据：40 局、82 位 unique players、每局平均收发 292 条消息；在至少参加五局的 19 位玩家中，Cicero 平均得分 25.8\%，排名第二，并进入全部参与者前 10\%。这些数字证明其在线竞争力，但样本、联赛构成和评分规则仍不足以支持无条件“超人”结论。
+
+\lecturefigure{slide-23-cicero-human-results.jpg}{Cicero 在线联赛结果：25.8\% 平均分、40 局与前 10\% 排名}{官方录像恢复幻灯片 V023；Stanford CS25 Lecture 14}
+
+\begin{warningbox}{不要把“未被识别”写成通过图灵测试}
+实验是在真实联赛中匿名对局，不是预注册的 bot-detection study。结果能说明消息没有频繁暴露明显机器模式，却不能证明人类无法识别 AI，也不能单独证明语言理解达到人类水平。
+\end{warningbox}
+
+\teachervoice{老师主动使用“strong human-level”而不是“superhuman”。这是一条重要的证据纪律：系统结果足够令人兴奋时，更应说明比较群体、局数和评价条件，而不是用更强形容词替代实验设计。}
+
+\subsection{闭环架构：预测、规划、意图、生成、过滤}
+
+架构图从左到右并不是一次性 pipeline，而是每收发一条消息都会重跑的 recurrent loop。board state、action history 和 dialogue history 进入 action prediction；human imitation policy 经 piKL search 调整；规划出的近程行动形成 intents；dialogue model 生成候选消息；过滤器剔除 nonsense、矛盾和战略上有害的候选。
+
+\lecturefigure{slide-24-cicero-architecture.jpg}{Cicero 完整闭环：从状态与对话到行动预测、规划、意图和消息过滤}{官方录像恢复幻灯片 V024；Bakhtin et al., Science 2022}
+
+若 $s$ 是 board state，$h$ 是 action history，$d$ 是 dialogue history，七位玩家下一回合行动的联合预测可以写成
+\begin{equation}
+p(a_1,\ldots,a_7\mid s,h,d).
+\end{equation}
+这里 $a_i$ 往往是某位玩家多个单位 orders 的组合。预测不是最终目标，它既给 search 提供他人策略模型，也决定哪些消息可能真正改变联合行动。
+
+\begin{importantbox}{模块化不等于模块彼此独立}
+战略模型与语言模型职责分开，但通过 intent 和 predicted response 紧密耦合。若完全端到端，语言模型同时承担世界建模、策略选择和表面表达，难以控制；若完全分离，语言又无法改变计划。Cicero 的设计是在中间接口处交换结构化意图和行为分布。
 \end{importantbox}
 
 \subsection{本章小结}
 
-搜索时计算是 AI 博弈中的关键技术，其思想已扩展到语言模型推理中。
+Cicero 的在线结果显示系统能在高消息密度的人类联赛中稳定工作，但课堂没有把它夸大为无条件超人。架构的关键是闭环：语言不是最终包装，而是会改变其他玩家 policy、随后被重新纳入规划的行动。
 
-\section{Cicero：外交游戏 AI}
+\section{贡献一：Intent-Conditioned Controllable Dialogue}
 
-\subsection{系统架构}
+如果直接让语言模型根据完整状态自由续写，它既要决定“应该做什么”，又要决定“应该怎样说”，还可能泄露私有计划或编造非法行动。Cicero 先由战略模块决定近程意图，再让语言模型专注于把意图表达成自然、合时宜的消息。
 
-\begin{importantbox}{Cicero 的核心组件}
-Cicero 由两个主要模块组成：
+\subsection{为什么需要显式 intent}
+
+贡献总览 slide 的第一项是 controllable dialogue：模型不仅 condition on game state 和 dialogue history，还 condition on intended actions。这个接口把“策略正确性”和“语言实现”分成可单独评估的两层。
+
+\lecturefigure{slide-25-main-contribution-dialogue.jpg}{Main contribution：用 intended actions 控制对话生成}{官方录像恢复幻灯片 V025；Stanford CS25 Lecture 14}
+
+\begin{knowledgebox}{Intent 在这里不是抽象心理状态}
+Cicero 的 intent 主要是可执行的近程行动，例如某个单位本回合或下一回合准备移动、支持或防守到哪里。它比一句自然语言更结构化，便于检查与 board state 一致；但它也比长期战略目标窄，这一限制将在后文返回。
+\end{knowledgebox}
+
+\subsection{怎样从人类对话中构造 intent 标签}
+
+人类日志没有手工标注“这句话背后的计划”。系统先训练 intent model，根据 state、history 与对话预测说话者和接收者在回合结束时的 actions；再用实际 orders 为历史消息自动生成近程意图标签。为了减少把谎言当作训练目标，流程会过滤高概率不真实的 turn。
+
+\lecturefigure{slide-26-intent-model-training.jpg}{Intent model training：从对话和最终行动反推消息对应的计划}{官方录像恢复幻灯片 V026；Bakhtin et al., Science 2022}
+
+\lecturefigure{slide-27-intent-annotation.jpg}{Intent annotation：为人类消息自动附加 speaker 与 recipient 的行动意图}{官方录像恢复幻灯片 V027；Stanford CS25 Lecture 14}
+
+\teachervoice{老师特别说明，训练标签来自较可信的 turns，而不是假设所有人类消息都真实。这个选择会牺牲一部分语言多样性，却让 controllability 问题更清楚：先学会稳定表达真实计划，再讨论更复杂的欺骗。}
+
+\subsection{推理时怎样使用 intent}
+
+在线运行时，planner 先给出 Cicero 希望自己和对方采取的行动；intent model 将其组织为条件；dialogue model 再结合 state 和 history 生成多个消息候选。这样，语言模型不必从海量可能策略中重新发明目标，而是解决一个更可控的条件生成问题。
+
+\lecturefigure{slide-28-dialogue-inference.jpg}{Dialogue inference：规划结果先成为 intent，再约束消息候选}{官方录像恢复幻灯片 V028；Stanford CS25 Lecture 14}
+
+若 $m$ 是待发送消息，$z_s$ 和 $z_r$ 分别表示 speaker 与 recipient 的近程行动意图，可以写成
+\begin{equation}
+p(m\mid s,h,d,z_s,z_r).
+\end{equation}
+与只建模 $p(m\mid d)$ 相比，这个条件分布显式要求消息同时符合局面、历史与计划。它并不保证生成内容真实或有效，但为一致性检查提供了结构化抓手。
+
+slide 29 的地图示例把 intent 和 message 并排展示。读图时要先看动作箭头，再看语言如何把动作转化为请求或承诺：同一组 orders 可以有不同措辞，但消息若要求一个与箭头冲突的支援，就应被判为 plan-inconsistent。
+
+\lecturefigure{slide-29-intent-conditioned-dialogue.jpg}{Intent-conditioned dialogue：从地图行动意图到自然语言请求}{官方录像恢复幻灯片 V029；Stanford CS25 Lecture 14}
+
+\subsection{结果：可控性与质量为何同时提升}
+
+slide 30 比较三种输入：纯 language model、加入 game-state grounding、再加入 intent grounding。四列分别是与 state 一致、与 plan 一致、人工 high-quality 比例和 perplexity。完整 Cicero 达到 87.30\%、92.86\%、37.30\% 与 7.70，四项均优于前两种设置。
+
+\lecturefigure{slide-30-intent-quality-results.jpg}{Intent grounding 同时改善 state consistency、plan consistency、质量与 perplexity}{官方录像恢复幻灯片 V030；Bakhtin et al., Science 2022}
+
+\begin{knowledgebox}{Perplexity 的第一次解释}
+Perplexity 是 token-level cross-entropy 的指数：$\mathrm{PPL}=\exp(H)$。直觉上，它表示模型在每一步面对多少个“等效选择”；越低通常说明对 held-out human dialogue 的概率分配更集中。但 perplexity 不是战略收益，必须与一致性、人工质量和实际游戏结果一起看。
+\end{knowledgebox}
+
+\begin{importantbox}{为什么加约束反而让语言更好}
+Intent conditioning 缩小了生成问题：模型无需一边发明策略、一边组织语言，只需在给定目标下选择合适表达。因此约束不只是安全护栏，也是一种任务分解，能减少 nonsense 并提高语言模型对有限容量的利用效率。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Intent-conditioned dialogue 把战略决策从语言表面实现中分离出来。自动标注提供训练信号，结构化 intent 提供控制接口，而结果表说明这一分解不仅提高 plan consistency，也改善整体语言质量。
+
+\section{贡献二：Dialogue-Aware Search 与 piKL}
+
+有了可控语言，还需要一个会与人类共处的 planner。纯 self-play 可以追求高收益，却可能收敛到人类从未见过的约定；纯 imitation 容易被理解，却只复制平均人类错误，并可能被一条诱导消息操纵。piKL 把这两个极端放进同一个优化目标。
+
+\subsection{从贡献列表进入规划问题}
+
+slide 31 将第二项贡献高亮：planner 必须同时考虑 dialogue 与 human behavior。它不能把消息当作无关文本，因为可信的承诺会改变他人行动；也不能无条件服从消息，因为对手可能建议一个对 Cicero 不利的计划。
+
+\lecturefigure{slide-31-main-contribution-planning.jpg}{Main contribution：面向对话与人类行为的 planning}{官方录像恢复幻灯片 V031；Stanford CS25 Lecture 14}
+
+\subsection{Search 与 imitation 的互补失败}
+
+slide 32 左侧的 pure search / RL 追求 return，却不受人类惯例约束；右侧 imitation 贴近数据，却继承弱行动，并把语言相关性学成表面相关。中间的 piKL 像一条“腌黄瓜”连接两端：以 human policy 为 anchor，再允许 search 在价值驱动下偏离。
+
+\lecturefigure{slide-32-dialogue-aware-search-rl.jpg}{Dialogue-aware search：在纯优化与纯模仿之间寻找可用策略}{官方录像恢复幻灯片 V032；Stanford CS25 Lecture 14}
+
+\begin{warningbox}{两个极端各自会怎样坏掉}
+纯 self-play policy 可能采用只有自己复制体理解的 convention，面对人类时不可协调；纯 imitation policy 则可能忠实复现人类次优行为，并对“请把你的关键领地让给我”这类消息反应过度。可沟通 agent 既要让人类可预测，也要保留拒绝坏建议的能力。
+\end{warningbox}
+
+\subsection{piKL：价值与人类先验的显式权衡}
+
+令 $\pi_H(a\mid s,h,d)$ 为从人类数据学习的 anchor policy，$Q^{\pi}(s,a)$ 为 search 下动作价值，piKL 的单状态直觉目标可写成
+\begin{equation}
+\pi^*
+=\arg\max_{\pi}
+\left[
+\mathbb{E}_{a\sim\pi}Q^{\pi}(s,a)
+-\lambda D_{\mathrm{KL}}\!\left(\pi(\cdot\mid s)\,\|\,\pi_H(\cdot\mid s)\right)
+\right].
+\end{equation}
+$\lambda$ 控制偏离人类行为的成本。$\lambda$ 太小，策略可能强但怪异；$\lambda$ 太大，系统接近原始 imitation，难以纠正数据中的次优行动。它不是把 human-likeness 当作最终目标，而是把人类 convention 作为规划 prior 和他人预期模型。
+
+\lecturefigure{slide-33-pikl.jpg}{piKL：以 human imitation policy 为锚的 KL-regularized search}{官方录像恢复幻灯片 V033；Jacob et al., ICML 2022}
+
+\begin{knowledgebox}{读图：三类模型在同一个循环中的位置}
+图左的 human policy 提供 anchor，中央 search / RL 计算价值改善，右侧环境反馈更新状态。KL 正则不是简单 post-processing，而是在每次策略更新中持续限制分布漂移。结果应当同时评估 exploitability / return 与 human predictability，不能只报一边。
+\end{knowledgebox}
+
+\teachervoice{讲者指出，类似 KL penalty 并不新鲜；Cicero 更特别的地方是把 anchor policy 同时当成“人类会怎么做”和“人类认为别人会怎么做”的模型。这里出现了 common knowledge / theory-of-mind 味道：一个行动的价值取决于别人是否把它视为合理 convention。}
+
+\subsection{对话怎样真实改变策略}
+
+slide 34 连续展示三种对话后的策略变化。第一种消息表示合作方要退出某方向，Cicero 因而回防；第二种表达不信任，使它降低依赖该合作的行动；第三种提出对 Cicero 不利的建议，value model 阻止系统盲从。关键不是“每条消息都改变动作”，而是只有可信且有战略后果的消息才应改变概率分布。
+
+\lecturefigure{slide-34-strategic-response-sequence.jpg}{Strategic response sequence：对话信号如何改变或不改变行动 policy}{官方录像恢复幻灯片 V034；Stanford CS25 Lecture 14}
+
+\begin{importantbox}{Dialogue-aware 不等于 instruction-following}
+对手消息是带策略目的的 observation，不是系统指令。planner 应把它作为更新 belief 的证据，再用自身 value function 决定是否响应。这个区分使 Cicero 能合作，也能拒绝 manipulation。
+\end{importantbox}
+
+\subsection{Modeling Human Policies}
+
+上一节已经展示 policy 会随可信对话移动；要实现这种更新，系统必须先把文本转成行为预测。本节说明 planner 如何消费语言，而不只是如何生成语言。slide 35 把自然语言历史输入 BART，再预测人类 orders。它体现了一个常被忽略的接口：语言模型不只用于生成消息，也可把对话转化为对其他玩家行为的概率预测。预测分布随后进入 search，形成 dialogue 到 action 的可审计路径。
+
+\lecturefigure{slide-35-model-human-policies.jpg}{Modeling human policies：从对话与状态预测人类行动分布}{官方录像恢复幻灯片 V035；Stanford CS25 Lecture 14}
+
+\teachervoice{老师用多个实例说明，Cicero 并不会因为对方“说了”就改变计划。只有消息与局势、历史和对方利益共同支持某种行为时，policy 才明显移动；value estimate 则负责挡住容易利用 imitation model 的诱导。}
+
+\subsection{本章小结}
+
+piKL 通过 KL 正则，把 search 的战略强度与人类惯例的可协调性结合起来。对话感知规划的本质也不是服从语言，而是把语言转化为他人行动分布，再在价值约束下更新自己的策略。
+
+\section{贡献三与四：Self-Play RL 和 Value-Based Filtering}
+
+前一章描述单次 planning，Cicero 还需要在训练阶段改进策略模型，并在发送消息前做最后一道行为级检查。self-play RL 让 policy 超越 imitation 的平均水平；value-based filtering 则把“这句话会让别人怎么行动”纳入候选选择。
+
+\subsection{Self-play RL：超过模仿但不脱离人类}
+
+slide 36 高亮第三项贡献。团队不是直接用 unconstrained self-play 替换 human model，而是继续使用 piKL，让 RL 在价值上进步的同时保持对人类政策分布的解释力。课堂报告的结论是，这种方式对人类行为的建模也优于单纯 imitation。
+
+\lecturefigure{slide-36-main-contribution-selfplay.jpg}{Main contribution：用 piKL-regularized self-play RL 改进策略}{官方录像恢复幻灯片 V036；Stanford CS25 Lecture 14}
+
+\begin{knowledgebox}{训练时 RL 与推理时 search 的区别}
+Self-play RL 更新参数，使未来许多局面上的 base policy 改善；inference-time search 不一定改权重，而是在当前局面临时投入额外计算。Cicero 同时需要两者：训练得到可用先验，推理时根据具体对话和局面细化。
+\end{knowledgebox}
+
+\subsection{为什么语言过滤必须看 strategic value}
+
+第四项贡献从生成后的候选开始。普通 toxicity、重复和规则过滤只能发现表面问题；Cicero 还会遇到语法完美却自毁策略的消息。例如讲者展示的荒谬候选，一边威胁“把你从棋盘上清除”，一边请求对方提供“croissant”。更隐蔽的失败则是无意中暴露攻击计划或诱导对方采取对自己不利的行动。
+
+\lecturefigure{slide-37-main-contribution-filtering.jpg}{Main contribution：对候选消息执行战略与一致性过滤}{官方录像恢复幻灯片 V037；Stanford CS25 Lecture 14}
+
+\subsection{Value-based filtering 的因果测试}
+
+设候选消息为 $m$，接收者未来行动为 $a_{-i}$，Cicero 的计划行动为 $a_i$。系统可用行为模型预测消息发送前后的对方政策，并比较计划价值：
+\begin{equation}
+V(m)
+=\mathbb{E}_{a_{-i}\sim p(\cdot\mid s,h,d,m)}
+\left[Q_i(s,a_i,a_{-i})\right].
+\end{equation}
+若 $V(m)$ 明显低于不发送或发送基准消息的价值，候选就应被拒绝。这里评价的不是句子情感，而是它通过改变别人行为对未来收益产生的因果影响。
+
+\lecturefigure{slide-38-value-filtering.jpg}{Value-based filtering：预测消息对他人行动和计划收益的影响}{官方录像恢复幻灯片 V038；Stanford CS25 Lecture 14}
+
+\begin{knowledgebox}{读图：过滤器的输入输出}
+左侧是候选生成，中央 action predictor 模拟接收者读到候选后的 policy，右侧 evaluator 估计 Cicero 原计划在该响应下的价值。一个候选可以通过语法和安全检查，却在这一层因降低 expected value 被丢弃。过滤因此是轻量 counterfactual evaluation，而不是关键词黑名单。
+\end{knowledgebox}
+
+\begin{warningbox}{Evaluator 错误会成为系统性盲区}
+如果 action predictor 低估人类的愤怒、报复或长期记忆，$V(m)$ 会错误地偏高。过滤器只和内部世界模型一样好；它不能凭空弥补模型没有表示的社会后果。这正是后面 truthfulness 限制的根源。
+\end{warningbox}
+
+\begin{lstlisting}[caption={Cicero-style strategic dialogue closed loop},label={lst:cicero-loop}]
+while game_is_active(state):
+    human_anchor = predict_human_policies(state, history, dialogue)
+    policy = pikl_search(state, human_anchor, value_model)
+    own_plan, expected_others = choose_joint_intents(policy)
+
+    candidates = dialogue_model.generate(
+        state=state,
+        history=history,
+        dialogue=dialogue,
+        own_intent=own_plan,
+        recipient_intent=expected_others,
+    )
+    candidates = filter_nonsense_and_inconsistency(candidates)
+    message = max(candidates, key=predicted_strategic_value)
+    send(message)
+    state, history, dialogue = observe_next_event()
+\end{lstlisting}
+
+这段伪代码最重要的是最后一行：系统观察新消息或新状态后再次预测和规划。若把输出消息当作 pipeline 终点，就会丢失 agent 的定义；真正的智能体必须让沟通结果回流到 belief 和 policy。
+
+\subsection{本章小结}
+
+Self-play RL 改善长期 base policy，piKL 保留人类可协调性，value-based filtering 则在每次发送前检查语言的战略后果。三者共同说明：自然语言候选必须经过行为模型和价值函数，而不是直接从 decoder 走向环境。
+
+\section{真实对话、局限与未来方向}
+
+最后一组 slide 把抽象模块重新落回对话。案例展示 Cicero 怎样用地图上可执行的替代方案说服玩家；限制 slide 则明确列出 intent 表示、truthfulness 和 domain-specific planning 尚未解决的问题。理解这些限制，才能避免把模块化成功误读成通用社会智能。
+
+\subsection{奥地利案例：语言必须指向合法协作}
+
+前面已经分别解释 intent、planner 和 filter，现在要检查它们是否在一段真实对话中共同落地。本节不按文采评价消息，而按“规则合法、利益可接受、失败可回退”三层标准阅读。slide 39 展示 Cicero 作为 Austria 与其他玩家的交互；地图圈出争夺区域，右侧对话把单位、位置和建议动作绑定起来。读图时还要检查对方若不合作，Cicero 是否仍有备选计划。
+
+\lecturefigure{slide-39-dialogue-austria.jpg}{Cicero as Austria：以局面和行动为基础的协商}{官方录像恢复幻灯片 V039；Stanford CS25 Lecture 14}
+
+这类消息之所以优于泛泛“我们结盟吧”，是因为它降低协调歧义。对方可以根据具体 orders 判断收益，Cicero 也能在下一轮比较承诺与实际行动，从而更新信任。
+
+\subsection{法国与 Tunis：策略性说服而非漂亮续写}
+
+slide 40 的 Tunis 对话更清楚地显示 persuasion。Cicero 不是只要求 Turkey 让步，而是提出能让 Turkey 获得其他收益的替代动作，同时为 France 腾出 Tunis。消息的质量来自对联合行动空间的重新构造：给对方一个可接受方案，才能改变其 policy。
+
+\lecturefigure{slide-40-dialogue-france.jpg}{Cicero as France：围绕 Tunis 提出兼顾对方利益的替代方案}{官方录像恢复幻灯片 V040；Stanford CS25 Lecture 14}
+
+\teachervoice{老师把这个例子称为 grounded strategic persuasion：语言不是独立“很有说服力”，而是背后确实存在一个对双方短期收益都说得通的行动组合。没有 planner，decoder 很容易生成听起来合作、实际却不可执行的建议。}
+
+\subsection{四类局限}
+
+limitations slide 把系统边界集中列出。第一，intent 主要表示近期 actions，难以表达长期目标、语气或关系策略；第二，dialogue model 与 strategy model 分开，前者不承担完整 world model；第三，value model 不读取 dialogue，因此无法估计撒谎造成的长期信任损失；第四，planning 仍是 Diplomacy-specific，并非讲者期待的通用推理机制。
+
+\lecturefigure{slide-41-limitations.jpg}{Cicero 的限制与未来方向：intent、世界模型、信任和通用规划}{官方录像恢复幻灯片 V041；Stanford CS25 Lecture 14}
+
+\begin{longtable}{L{0.22\textwidth}L{0.31\textwidth}L{0.37\textwidth}}
+\toprule
+限制 & 现有设计 & 直接后果 \\
+\midrule
+Intent 过窄 & 以近程 orders 为主要接口 & 难表达长期 alliance、交流风格和多步承诺 \\
+世界模型分离 & planner 负责状态与价值，LM 负责表达 & 提高可控性，但跨模块错误可能累积 \\
+Value model dialogue-blind & 不直接建模话语与长期关系 & 无法给“失去信任”可靠定价 \\
+规划器领域化 & 利用 Diplomacy 规则与动作表示 & 不能直接迁移到开放世界任务 \\
+文本模态有限 & 只处理 text-based communication & 难覆盖语音、视觉、时间压力与非语言信号 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Truthfulness 是工程约束，不是道德证明}
+
+因为 value model 看不到 dialogue 的长期后果，它可能认为一条短期有效的谎言价值很高，却无法计算未来所有玩家不再信任 Cicero 的损失。团队因此让 dialogue model 从 truthful intents 出发，并过滤疑似不真实训练 turn。这是一种在模型盲区前收缩 action space 的安全设计。
+
+\begin{warningbox}{不要从 Cicero 推出“真实总是最优”}
+课堂证据只能支持：在当前表示和 evaluator 下，系统没有能力可靠评估长期欺骗，因此 truthfulness 是更稳健的工程选择。它没有证明所有 Diplomacy 局面都不需要 deception，也没有证明模型拥有稳定道德意图。
+\end{warningbox}
+
+\teachervoice{讲者非常坦率地说，truthful intention 的原因之一正是 value model 不理解长期 trust damage。这个解释比“我们让模型成为诚实的人”更精确，也展示了系统安全常见路径：当 evaluator 不会评估某类风险时，先限制生成空间。}
+
+\subsection{从游戏走向 general planning}
+
+closing slide 回顾 Cicero 的结果并给出论文、代码与模型入口。更重要的是 Q\&A：讲者并不期待再找一个“更难的桌游”重复同一路线，而希望研究能够作用于 foundation model 的通用 planning；文本输入输出是当时可行选择，却不是最终多模态智能体的完整接口。
+
+\lecturefigure{slide-42-thanks-results.jpg}{结语：Cicero 的成绩、论文、代码与开放研究议程}{官方录像恢复幻灯片 V042；Stanford CS25 Lecture 14}
+
+\teachervoice{在最后问答中，讲者说自己更关心 general planning，而不是为每个新任务单独 fine-tune 一个求解器。CoT 令人印象深刻，因为它跨任务通用，但它的规划能力仍有限；课堂判断是，更强、更一般的推理时方法应该存在。}
+
+\begin{importantbox}{本讲留下的开放问题}
+能否让同一个 foundation model 在不同任务中学习何时展开、展开什么、如何验证、何时停止，并把 search 产生的中间状态与外部世界可靠对齐？这比“多生成一些 token”更严格，也比为每个游戏手写求解器更通用。
+\end{importantbox}
+
+\subsection{本章小结}
+
+对话案例证明 Cicero 的语言由可执行策略支撑；局限则说明它没有解决长期 intent、信任建模和通用 planning。系统的诚实倾向主要来自 evaluator 能力边界下的工程约束，而不是通用社会推理已经完成。
+
+\section{现代系统延伸：从 Cicero 读 Agent 架构}
+
+本节是 2026 年的工程解读，不属于 2023 年课堂事实。它不引入后来产品作为讲者论据，而是把 Cicero 已经展示的接口翻译成更一般的 agent 设计语言。
+
+\subsection{把“说什么”与“做什么”分开}
+
+现代 agent 常同时维护 private plan、tool actions 与 user-facing response。Cicero 的经验说明，直接把完整内部计划交给语言模型自由表达会产生泄密、矛盾和不可审计问题；更好的做法是先形成结构化 action intent，再由受约束的 communication layer 决定对外信息。
+
+\begin{knowledgebox}{可迁移的五层接口}
 \begin{enumerate}
-    \item \textbf{战略推理引擎}：预测所有玩家的行动，搜索最优策略（类似于扑克 AI 的均衡求解）
-    \item \textbf{对话模型}：基于大语言模型的自然语言生成，用于与其他玩家沟通
+  \item \textbf{State estimator}：把环境、历史和反馈转为当前 belief；
+  \item \textbf{Policy prior}：给出常见、低成本、与人类惯例兼容的候选；
+  \item \textbf{Planner / search}：按任务价值分配额外 inference compute；
+  \item \textbf{Intent interface}：把内部决策压缩成可验证的结构；
+  \item \textbf{Communication evaluator}：预测输出会怎样改变环境与他人行为。
 \end{enumerate}
-两个模块的协调是系统的关键——战略意图必须通过语言准确传达。
-\end{importantbox}
-
-\subsection{对话生成的挑战}
-
-\begin{warningbox}{对话模型的``愚蠢''泄露}
-一个有趣的技术难题：战略引擎会将\textbf{完整的己方计划}（包括对当前对话伙伴的敌对行动）输入对话模型。由于对话模型并不``理解''策略，它可能会\textbf{直接告诉对手你要攻击他}——这种``诚实得过分''的行为需要额外的过滤机制来防止。
-\end{warningbox}
-
-\subsection{实验结果}
-
-Cicero 在 webDiplomacy.net 上与人类玩家匿名对战：
-\begin{itemize}
-    \item 在多局游戏中达到\textbf{前 10\%} 的表现水平
-    \item 大部分人类玩家\textbf{未能识别}出 Cicero 是 AI
-    \item Cicero 表现出了合作、谈判和适度欺骗的能力
-\end{itemize}
-
-\subsection{本章小结}
-
-Cicero 是首个在需要自然语言沟通的多人策略游戏中达到人类水平的 AI 系统。
-
-\section{更广泛的意义}
-
-\subsection{从游戏到现实}
-
-\begin{itemize}
-    \item 外交游戏中的技能（谈判、信任建立、策略沟通）直接适用于商业、外交等现实场景
-    \item \textbf{语言和推理的结合}是 AI 的下一个前沿——不仅要``说得好''，还要``想得深''
-    \item 搜索时计算的思想正在从博弈领域扩展到通用语言模型推理
-\end{itemize}
-
-\subsection{本章小结}
-
-外交游戏之所以重要，不是因为它接近真实世界，而是因为它逼迫 AI 同时处理策略、沟通和不完全信息。
-
-\section{构建可沟通智能体的工程原则}
-
-\subsection{战略状态与语言状态必须分离}
-
-像 Cicero 这样的系统揭示了一个很少被讨论但非常关键的工程原则：\textbf{内部战略表示和对外语言表达不应完全混在一起}。前者追求对局面和收益的准确建模，后者则需要考虑合作关系、时机与社会规范。如果二者不分层，系统很容易出现``把私有意图直接说出去''或``语言承诺与行动不一致''的问题。
-
-\begin{knowledgebox}{多智能体系统中的双轨表示}
-今天很多 agent 系统也面临类似问题：规划器负责生成内部计划，执行器负责采取动作，对外接口负责与用户或其他 agent 沟通。把三者混成一个 prompt 虽然简单，但在复杂环境里往往不稳定、不可审计，也难以做权限控制。
 \end{knowledgebox}
 
-\subsection{需要可追踪的协商日志}
+\subsection{Prompt injection 与战略消息的共同结构}
 
-如果智能体会谈判、会承诺、会修改计划，那么系统就必须保留谈判历史、状态快照和约束检查。否则，开发者既无法分析失败原因，也无法判断模型究竟是在``合理改变计划''还是在``前后矛盾地迎合对话对象''。
+Diplomacy 对手的消息不是可信系统指令，而是环境中一个带目标的 observation。这与工具型 agent 面对不可信网页、邮件或第三方文档时的安全边界相似：内容可以更新 belief，却不应自动获得控制权。Cicero 的“预测对方行为，再由自身 value 判断”提供了比直接 instruction-following 更稳健的范式。
 
-\subsection{本章小结}
-
-可沟通智能体的难点并不只是生成自然语言，而是让语言、计划和执行保持一致并可审计。
-
-\section{从 Diplomacy 到 LLM 推理代理}
-
-\subsection{test-time compute 的统一视角}
-
-Noam Brown 的工作之所以对今天的 LLM 特别重要，是因为它把``思考时间''重新引入了 AI 系统设计。无论是博弈搜索、tree-of-thought、tool-augmented planning 还是 verifier-guided decoding，本质上都在做同一件事：用更多的推理时计算换取更高质量的行动。
-
-\begin{importantbox}{推理代理的一条通用原则}
-当环境复杂、错误代价高、一步做错很难补救时，最应该投入的资源不是再加一点训练数据，而是在\textbf{推理时}给系统更多搜索、验证和回溯空间。
-\end{importantbox}
-
-\subsection{不要误读``会说话''}
-
-\begin{warningbox}{语言流畅不代表战略成熟}
-Cicero 的成功容易让人误以为``只要语言模型足够强，社交推理自然会出现''。但实际上，系统之所以有效，是因为背后有明确的战略搜索与一致性约束。对现代 agent 也是一样：流畅的话术不能替代真正的规划能力。
+\begin{warningbox}{类比的边界}
+Diplomacy 有封闭规则、可模拟动作和明确计分；开放世界 agent 往往缺少可靠 transition model 与 reward。因而不能简单复制 piKL 或 value filter，而应继承其审计思想：区分数据与指令、显式记录 intent、让高风险输出经过独立评价。
 \end{warningbox}
 
+\subsection{成本治理：不是所有请求都值得 search}
+
+推理时计算应有预算策略。一个实用系统需要估计问题价值、验证难度、失败代价和剩余 latency，再决定候选数、搜索深度、tool calls 与 evaluator 强度。若没有停止条件，agent 会把“多想”退化为无限循环；若所有请求固定一次 greedy decode，又放弃了 search 最有价值的动态资源分配。
+
+\begin{importantbox}{工程上的预算问题}
+每增加一次 rollout 或 evaluator 调用，都应能回答：它降低了哪类错误，是否有独立验证信号，边际收益何时转负，以及错误相关性会不会让多数投票失效。Inference compute 只有进入可测量的决策流程，才是系统能力，而不是账单增长。
+\end{importantbox}
+
 \subsection{本章小结}
 
-从外交游戏到 LLM agent，核心延续的是``推理时搜索 + 受约束的沟通''，而不是单纯更会说话。
+Cicero 对现代 agent 最有价值的遗产不是某个特定模型，而是模块之间的契约：不可信语言先进入 belief，不直接控制行动；planning 输出结构化 intent；对外语言在发送前接受行为后果评估；计算预算随任务价值变化。
 
 \section{总结与延伸}
 
-Noam Brown 的工作展示了 AI 在\textbf{需要沟通的策略环境}中的能力。Cicero 结合了博弈论推理和语言模型生成，代表了从``纯棋盘 AI''（AlphaGo、Libratus）到``社交 AI''的重要一步。推理时搜索的思想更是对整个 AI 领域产生了深远影响。
+\subsection{一张表回收全讲}
+
+本讲从 poker search 出发，在 Diplomacy 中落成完整 agent。下面的表把每个模块要解决的问题、主要机制和失败模式放到一起，便于后续阅读多智能体系统或 reasoning 论文时复用。
+
+\begin{longtable}{L{0.20\textwidth}L{0.30\textwidth}L{0.40\textwidth}}
+\toprule
+模块 & 解决的问题 & 机制与主要风险 \\
+\midrule
+Base policy & 快速给出合理候选 & 覆盖广但在关键局面可能粗糙；不能代替 search \\
+Inference-time search & 用额外计算改善当前决策 & 展开、评估和选择；可能放大错误 evaluator \\
+Human anchor policy & 维持人类可理解的 convention & imitation 提供先验；也会继承平均人类弱点 \\
+piKL & 在价值与 human-likeness 间权衡 & 用 KL penalty 限制策略漂移；$\lambda$ 决定折中 \\
+Intent model & 把计划变成可控生成条件 & 近程 action 清晰可查；长期目标表达不足 \\
+Dialogue model & 实现 grounded communication & 在 state、history 与 intent 条件下生成候选 \\
+Action predictor & 预测他人收到消息后的行为 & 连接语言与策略；对分布外人类可能失准 \\
+Value filter & 拒绝战略上有害的消息 & 比较 counterfactual expected value；忽略未建模后果 \\
+Closed loop & 让沟通结果回到下一次规划 & 每个事件后重估 belief；复杂度和延迟上升 \\
+\bottomrule
+\end{longtable}
+
+\subsection{最终结论}
+
+第一，训练规模和推理时计算是两条不同能力轴。Poker 与 Go 说明，强 base model 仍可能因缺少 search 而远离可达性能。第二，语言 agent 的核心不是生成，而是语言、belief 与 action 的因果闭环。第三，人类数据既是行为先验，也是社会 convention 的载体，但不能替代价值优化。第四，系统若无法评估某类长期风险，就应诚实承认盲区并限制 action space，而不是用流畅输出掩盖 evaluator 缺失。
+
+\begin{importantbox}{最值得带走的一句话}
+把更多计算花在正确的决策上，把世界建模、策略选择和语言表达交给有清晰契约的模块，再让输出后果回到下一轮规划——这就是本讲从 poker search 到 Cicero 的共同设计原则。
+\end{importantbox}
 
 \subsection{拓展阅读}
+
+以下资料均在课堂日期前公开，并直接构成本讲证据链。建议先读 Cicero 系统论文，再用 piKL 论文理解 planner，最后回看 poker 与 AlphaGo 的 search 传统。
+
 \begin{itemize}
-    \item FAIR et al., ``Human-level play in the game of Diplomacy by combining language models with strategic reasoning,'' Science, 2022
-    \item Brown \& Sandholm, ``Superhuman AI for heads-up no-limit poker: Libratus beats top professionals,'' Science, 2018
-    \item Snell et al., ``Scaling LLM Test-Time Compute,'' 2024
+  \item \href{https://www.science.org/doi/full/10.1126/science.ade9097}{Bakhtin et al., Human-level play in the game of Diplomacy by combining language models with strategic reasoning}：Cicero 的系统架构、在线结果、对话与限制。
+  \item \href{https://proceedings.mlr.press/v162/jacob22a.html}{Jacob et al., Modeling Strong and Human-Like Gameplay with KL-Regularized Search}：piKL 的正式目标和 human-policy modeling。
+  \item \href{https://proceedings.neurips.cc/paper/2021/hash/95f2b84de5660ddf45c8a34933a2e66f-Abstract.html}{Anthony et al., Learning to Play Diplomacy with No Human Supervision}：No-Press Diplomacy、自博弈和多均衡问题。
+  \item \href{https://www.science.org/doi/10.1126/science.aao1733}{Brown and Sandholm, Superhuman AI for heads-up no-limit poker}：Libratus 与安全子博弈求解。
+  \item \href{https://www.science.org/doi/10.1126/science.aay2400}{Brown and Sandholm, Superhuman AI for multiplayer poker}：Pluribus 与多人扑克。
+  \item \href{https://www.science.org/doi/10.1126/science.aar6404}{Silver et al., Mastering the game of Go without human knowledge}：AlphaGo Zero 与 search ablation。
+  \item \href{http://www.incompleteideas.net/IncIdeas/BitterLesson.html}{Richard Sutton, The Bitter Lesson}：可扩展 learning 与 search 的历史论证。
 \end{itemize}
+
+\subsection{课后自检}
+
+\begin{importantbox}{八个自检问题}
+\begin{enumerate}
+  \item Exploitability 与对固定对手的胜率有什么区别？
+  \item 为什么 slide 2 不能证明 search 永远等价于固定倍数的 base-model scaling？
+  \item Diplomacy 的 support 规则为什么让语言直接进入状态转移？
+  \item Intent conditioning 为什么能同时提高 controllability 和 perplexity？
+  \item 纯 self-play 与纯 imitation 各自怎样失败？
+  \item piKL 中 $\lambda$ 太大或太小分别会发生什么？
+  \item Value-based filter 为什么仍无法可靠评估长期撒谎的代价？
+  \item 一个开放世界 agent 要迁移 Cicero 架构，还缺哪些 transition、reward 和权限边界？
+\end{enumerate}
+\end{importantbox}
 
 \end{document}

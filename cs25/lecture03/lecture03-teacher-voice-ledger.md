@@ -1,0 +1,16 @@
+# CS25 Lecture 03 Teacher-Voice Ledger
+
+| Time / source node | Spoken point | Why it matters | Planned note location | Status |
+|---|---|---|---|---|
+| 00:05--01:59 / T001 | A general visual representation should let non-programmers rapidly teach systems new visual tasks; vision is only one component of that broader goal. | Grounds the lecture in adaptation rather than architecture novelty. | motivation | complete |
+| 02:00--07:19 / T002 | Humans infer flower, satellite and abstract-object classes from very few examples; VTAB formalizes this quick-adaptation game across heterogeneous tasks. | Explains why average ImageNet accuracy is not the full target. | VTAB | complete |
+| 07:20--10:39 / T003 | Self-supervised and semi-supervised vision did not automatically reproduce the language recipe; labels, model class and benchmark setup still matter. | Prevents a simplistic “copy NLP” narrative. | pretraining routes | complete |
+| 10:40--23:43 / T004 | BiT's practical message is to be patient, scale data and model together, and evaluate transfer and robustness rather than only pretraining accuracy. | Preserves the speaker's engineering heuristics and evidence hierarchy. | BiT | complete |
+| 23:44--25:11 / T005 | Large pretraining corpora must be checked for near-duplicates with downstream test sets; leakage can create a false transfer result. | Makes deduplication part of scientific validity. | deduplication | complete |
+| 25:12--30:31 / T006 | ViT was deliberately simple: convert image patches to tokens and let data reveal whether strong convolutional priors are necessary. | Frames ViT as a scaling experiment, not merely a new block diagram. | ViT architecture | complete |
+| 30:32--39:39 / T007 | ViT can underperform on small data and overtake CNN baselines at larger scale; position embeddings and compute plots should be read under the actual training recipe. | Connects inductive bias to data and regularization. | data/compute scaling | complete |
+| 39:40--52:31 / T008 | Uniformly scaling depth, width and patch size is not equally efficient; inference cost and receptive-field behavior expose different tradeoffs from accuracy alone. | Adds systems and shape-design interpretation. | ViT details | complete |
+| 52:32--59:51 / T009 | During Q&A, Lucas revisits position embeddings and architecture details to distinguish learned behavior from hard-coded locality. | Captures clarification absent from static slides. | Q&A bridge | complete |
+| 59:52--63:35 / T010 | Larger ViTs require search over feasible shapes, long or effectively unbounded learning-rate schedules, and head-specific regularization; scaling is a recipe problem. | Prevents “just add parameters” reasoning. | Scaling ViT | complete |
+| 63:36--65:31 / T011 | MLP-Mixer extends the “let the data speak” experiment by removing attention while retaining token/channel mixing and large-scale training. | Shows that the deeper thesis concerns inductive bias and scale, not loyalty to attention. | MLP-Mixer | complete |
+| 65:32--68:33 / T012 | Parameter count and FLOPs are imperfect measures of model size; language and vision allocate parameters differently, and the field's resource distribution shapes observed scale. | Preserves the closing methodological caveat. | conclusion/Q&A | complete |

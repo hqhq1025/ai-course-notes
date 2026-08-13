@@ -1,235 +1,621 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 38：大语言模型的“生物学”——特征、回路、并行计算与规划}
+\renewcommand{\noteauthors}{基于 Joshua Batson（Anthropic）Stanford CS25 V5 官方讲座、互动论文与人工字幕整理}
+\renewcommand{\notedate}{CS25 V5 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2025-05-13；上传 2025-06-05}
+\renewcommand{\videoduration}{1:12:32}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=vRQs7qfIDaU}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{Joshua Batson, Stanford CS25 V5 official recording, #3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \normalsize
+  \setlength{\parskip}{0.25em}
 }
-
-\newcommand{\notetitle}{[CS25 V5] On the Biology of a Large Language Model --- Josh Batson, Anthropic}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2025}
-\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
-\newcommand{\videopublishdate}{Spring 2025}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{为什么要研究模型的“生物学”}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这场讲座的标题不是修辞装饰，而是一种研究立场：工程师写下 Transformer 架构、训练目标和优化流程，却没有逐行写出模型最终学会的内部算法。训练像演化一样产生复杂对象，研究者面对的是一个“长出来”的系统。于是 mechanistic interpretability（机制可解释性）的任务，不是给输出贴标签，而是把一次前向传播拆成可检验的部件、连接和因果假设。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\lecturefigure{slide-01-title-biology-large-language-model.jpg}{讲座标题：把训练后的大模型当作复杂系统来解剖}{00:01:24}
 
-\tableofcontents
-\newpage
+\teachervoice{00:01:41--00:02:43，老师把 interpretability 与 biology 类比：两者都研究由某种优化或演化过程产生的复杂对象。这个类比不是说神经网络是生命，而是提醒我们：内部机制并非按人类模块图逐项装配。}
 
-\section{引言：为什么要研究 LLM 的``生物学''？}
+\subsection{能力惊喜与机制怪异必须同时解释}
 
-Josh Batson 领导 Anthropic 机械可解释性（Mechanistic Interpretability）团队的 Circuits 方向。他的学术背景是纯数学，之后在 Chan Zuckerberg Biohub 从事生物基因组学和计算显微镜研究。
+如果只看成功案例，模型像一个能在上下文中临时学会新任务的通用程序；如果只看失败案例，它又像一个会把互相矛盾的事实拼在一起的随机系统。课堂先故意把这两面并置，因为真正的研究问题不是“模型聪明还是愚蠢”，而是同一套参数如何在不同输入上组织出截然不同的计算路径。
 
-讲座标题中的``生物学''一词是刻意的类比：正如生物学家研究由进化产生的复杂生命体，可解释性研究者研究由梯度下降``进化''出的复杂神经网络。两者的共同点是：一个你无法直接控制的优化过程产生了能够执行``神奇''功能的复杂系统，而我们的任务是理解这些系统内部的工作机制。
+\lecturefigure{slide-02-models-do-cool-things.jpg}{低资源 Circassian 翻译：上下文示例足以诱导新的语言能力}{00:04:04}
 
-\begin{knowledgebox}{物理学 vs.\ 生物学视角}
-``On the Physics of LLMs'' 系列论文将 LLM 视为训练过程中的动力系统来研究。``On the Biology of a LLM'' 则关注训练产物本身——模型学到了什么？这些知识如何表示？如何影响行为？
-\end{knowledgebox}
+图中案例把多年积累的俄语--Circassian 对照表直接放入上下文，模型不仅完成新句翻译，还能分析语法。应先比较“专门训练模型”与“通用模型临时读取词表”这两条路线：后者没有重新更新参数，却在一次上下文中组合已有语言表示。这支持强大的抽象迁移能力，但不证明模型已经可靠掌握该语言的全部文化、语法和事实。
 
-\subsection{模型的惊人能力与诡异行为}
+\lecturefigure{slide-03-models-do-weird-things.jpg}{闰日矛盾：正确事实、错误前提与局部推理被同时激活}{00:05:20}
 
-Josh 用两个案例说明了理解模型内部的紧迫性：
+这张图的关键不是一个日期错误，而是输出内部的冲突结构：模型知道 2024 是闰年规则的实例，又生成“2024 不是闰年”，随后还正确说下一个闰年是 2028。局部事实检索与整体一致性并未自动合并成单一算法。它提示我们，流畅文本可能是多个部分策略竞争后的表面结果。
 
-\textbf{惊人的能力}：一位研究切尔克斯语（极低资源语言）NLP 的研究者，将多年积累的俄语-切尔克斯语翻译对直接放入 Claude 的上下文窗口，模型不仅能成功翻译，还能分析该语言的语法结构——仅通过上下文学习就超越了多年专门训练的 NLP 模型。
-
-\textbf{诡异的行为}：有人在闰日问 Claude ``明天是几号''，模型声称 2024 年不是闰年（错误），然后正确列出了闰年规则，又推导出下一个闰年是 2028（正确），最后建议用户可能想说的是 2 月 28 日——正确事实、正确推理和错误结论奇怪地共存。
-
-\begin{warningbox}{前沿与怪异同行}
-随着模型越来越强大，错误不会消失，而是变得更隐蔽。就像图像生成模型曾经生成多余的手指一样，即使表面问题被解决，更微妙的错误可能潜伏在模型能力的边界——而此时你已经开始信任并依赖这些模型。
+\begin{warningbox}{能力提升不会自动消灭怪异}
+老师强调，模型变强以后，明显的“六根手指”式错误会减少，但怪异往往只是变得更隐蔽、更高层。Benchmark 提升只能说明某些行为更好，不能说明内部冲突已经被理解或消除。
 \end{warningbox}
+
+\lecturefigure{slide-04-three-core-findings.jpg}{本讲三条主线：抽象表示、并行计算与规划}{00:08:19}
+
+读这张路线图时，应把左侧常见说法与右侧研究发现逐行对照：模型并非只匹配训练样本，而会组合抽象表示；并非只执行浅层串行规则，而能在一次前向传播中并行运行多条路径；并非只能响应当前 token，也会形成影响未来词形和结构的计划。后续每个案例都要用 intervention（干预）而非相关性截图来支撑这些主张。
+
+这三条发现还对应三种不同的错误直觉。把模型理解为检索器，会漏掉 feature 之间的组合；把模型理解为逐步执行自然语言程序，会漏掉同一层内同时存在的候选路径；把 next-token prediction 理解为“只看下一词”，会漏掉隐藏状态中对更远目标的约束。讲义后面不会把任何单个案例升级成普遍定律，而是反复检查：该图来自哪个 prompt，替换模型解释了多少，干预改变了什么，以及是否存在同样合理的替代回路。
+
+\begin{importantbox}{本讲的证据问题}
+一个内部解释至少要回答三件事：\textbf{表示了什么}、\textbf{如何连接成计算}、\textbf{改变该部件是否会改变行为}。只有 feature label 没有回路，是字典；只有相关图没有干预，是假说；干预成功但覆盖不完整，也仍不是全局解释。
+\end{importantbox}
 
 \subsection{本章小结}
 
-可解释性研究的动机不仅是学术好奇心，更是安全需求——我们需要知道模型的可靠表现是源于真正的理解，还是仅仅是``打压了手指问题''。
+“生物学”视角把模型从 API 黑盒变成待解剖的复杂系统。开场案例建立了整份讲义的张力：大模型能快速组合新能力，也会把正确与错误策略同时带入答案；因此需要从行为评测继续深入到表示、回路和因果验证。
 
-\section{三个需要修正的迷思}
+\section{从一个 token 到“长出来”的内部程序}
 
-Josh 提出了三个关于 LLM 的常见误解：
+上一章说明了为什么只看输出不够；本章先固定研究对象：一次 token 生成到底发生什么。只有把自回归概率、隐藏状态、注意力与 MLP 的角色分开，后面的 feature、transcoder 和 attribution graph 才不会沦为模糊比喻。
 
-\begin{importantbox}{三个迷思与现实}
+\subsection{自回归生成是重复前向传播}
+
+给定输入 token 序列 $x_{1:n}$，模型按自回归分解生成后续序列：
+\[
+p_\theta(x_{n+1:n+T}\mid x_{1:n})
+=\prod_{t=1}^{T}p_\theta(x_{n+t}\mid x_{1:n+t-1}).
+\]
+其中 $\theta$ 是训练后固定的参数，$T$ 是新生成 token 数，$x_{1:n+t-1}$ 是第 $t$ 次预测可读取的完整前缀。每增加一个 token，都要重新运行一次前向传播；“一次回答”因此包含许多离散计算步。
+
+\lecturefigure{slide-05-how-one-token-is-produced.jpg}{问题入口：一个大语言模型怎样生成一个 token}{00:08:22}
+
+\lecturefigure{slide-06-autoregressive-forward-passes.jpg}{每生成一个新 token，都以更长前缀再次运行模型}{00:08:50}
+
+图 5 提出粒度问题，图 6 则把回答拆成多次 pass。这里要区分两种并行：序列维度上的下一个 token 仍按时间推进；但每一次 pass 内部，成千上万的 feature 与矩阵运算可同时发生。本讲所谓“parallel computation”主要指后一种，而不是一次性生成完整句子。
+
+\begin{lstlisting}[language=Python,caption={自回归解码的最小伪代码：每个 token 对应一次新的前向传播}]
+context = tokenize(prompt)
+for step in range(max_new_tokens):
+    logits, internal_state = transformer(context)
+    next_token = sample(softmax(logits[-1]))
+    context.append(next_token)
+\end{lstlisting}
+
+\subsection{隐藏状态把前缀压成下一步分布}
+
+单次前向传播中，第 $\ell$ 层残差流可写成一个简化更新：
+\[
+h_i^{(\ell+1)}=h_i^{(\ell)}
++\operatorname{Attn}^{(\ell)}_i(H^{(\ell)})
++\operatorname{MLP}^{(\ell)}(h_i^{(\ell)}),
+\qquad
+p(x_{n+1}=v)=\operatorname{softmax}(W_U h_n^{(L)})_v.
+\]
+这里 $h_i^{(\ell)}$ 是位置 $i$ 在第 $\ell$ 层的 residual-stream（残差流）向量，$H^{(\ell)}$ 是所有位置的向量集合，$\operatorname{Attn}$ 负责跨位置选择与搬运信息，$\operatorname{MLP}$ 负责逐位置非线性变换，$W_U$ 把最后一层状态映射为词表 logits，$v$ 是候选 token。
+
+\lecturefigure{slide-07-single-forward-pass-vectors.jpg}{输入向量经过隐藏层，最终形成下一 token 的分数分布}{00:09:42}
+
+读图时先看左侧 token 如何被编码为向量，再看中间层怎样反复重写表示，最后看右侧每个候选词的 score。输出概率只是最终投影；真正需要解释的是中间层如何让 “assist” 获得更高分。一个 attribution graph 就是在尝试恢复这条从输入 feature 到输出 logit 的影响链。
+
+\begin{knowledgebox}{术语第一次出现：residual stream、neuron 与 feature}
+\textbf{Residual stream} 是各层共享的高维状态通道；attention 与 MLP 都向其中读写。\textbf{Neuron} 通常指 MLP 隐层中的单个坐标。\textbf{Feature} 则是研究者试图识别的、在激活空间中代表某种概念或操作的方向；一个 feature 可以跨越多个 neuron，一个 neuron 也可能参与多个 feature。
+\end{knowledgebox}
+
+\subsection{“长出来”不是神秘主义，而是工程事实}
+
+架构规定了可学习计算的容器，训练数据与梯度下降决定容器中最终形成什么算法。工程师知道矩阵维度、层数和损失函数，却通常不知道模型为何在某个 prompt 上激活 Dallas、Texas、capital 与 Austin 的特定组合。逆向分析的目标，是把这种“我们写了训练过程，但没有写内部程序”的缺口变成可检验对象。
+
+\lecturefigure{slide-08-models-grown-not-built.jpg}{核心比喻：语言模型是 grown，而不是逐模块 built}{00:09:51}
+
+\lecturefigure{slide-09-architecture-versus-grown-model.jpg}{人类搭建架构，训练过程让内部机制以难以直接阅读的方式生长}{00:10:20}
+
+两图的证据边界很重要：它们不意味着模型不可理解，也不意味着任何拟人化解释都成立。恰恰相反，“grown”要求更严格的 reverse engineering：提出部件、测量连接、做干预、记录失败，并承认当前方法只能解释一部分计算。
+
+\begin{importantbox}{“Grown not built”的可操作含义}
+我们可以精确知道训练代码，却仍不知道训练后网络在单个输入上采用哪套内部算法。可解释性因此关注\textbf{post-training program discovery}：在固定权重上恢复局部、输入条件化的计算结构。
+\end{importantbox}
+
+\teachervoice{00:09:47--00:10:20，老师用 grown, not built 区分架构设计与内部算法形成。课堂提示：这不是把模型神秘化，而是说明传统代码审查无法直接告诉我们训练后网络在做什么。}
+
+\subsection{本章小结}
+
+一次回答由多次 token 级前向传播构成，而一次前向传播内部又包含大规模并行计算。后续方法需要解释的，不是 softmax 最终选了哪个词，而是隐藏状态中哪些 feature 被激活、它们怎样通过 attention 与 MLP 共同改变输出。
+
+\section{从 neuron 到 attribution graph}
+
+前一章给出了计算载体；本章进入方法核心。讲座采用“先找到更可解释的 feature，再把 feature 连接成 prompt-specific graph，最后回到原模型做 intervention”的三步路线。每一步都引入近似，也对应不同强度的证据。
+
+\subsection{为什么单个 neuron 往往不是合适单位}
+
+如果把一个 neuron 的最高激活样本列出来，常会看到代码片段、自然语言、符号与主题混杂。这种 polysemanticity（多义性）说明单坐标未必对应单概念。更稳妥的做法，是在高维激活中寻找稀疏方向，使一组 neuron 的线性组合共同表示“Golden Gate Bridge”之类较一致的模式。
+
+\lecturefigure{slide-10-what-does-neuron-do.jpg}{朴素问题：这个 neuron 到底表示什么}{00:11:50}
+
+\lecturefigure{slide-11-single-neuron-top-activations.jpg}{单 neuron 的高激活样本混合了多个不相干语境}{00:13:07}
+
+图 11 应读成反例而不是失败结论：一个 neuron 的 top activations 不一致，并不说明网络没有概念结构；它说明坐标系可能不对。研究者需要寻找更合适的 basis（基底）。同时，feature label 仍是人类压缩后的名称，不能把“看起来像 Texas”误当成数学上唯一的语义真值。
+
+\lecturefigure{slide-12-golden-gate-feature.jpg}{多个 neuron 的组合可以形成更稳定的 Golden Gate Bridge feature}{00:15:21}
+
+\begin{warningbox}{不要把 feature 当作数据库字段}
+Feature 是激活空间中的方向及其经验解释，不是网络里预先命名的布尔变量。它可能有模糊边界、多个语义用途，也可能因 prompt、层或模型而变化。标签是研究接口，不是本体论证明。
+\end{warningbox}
+
+\subsection{稀疏替换模型：把密集 MLP 改写为少量 feature}
+
+设原模型某处的 MLP 输出为 $y\in\mathbb{R}^d$，替换模型用非负稀疏激活 $a\in\mathbb{R}^m$ 与 feature 字典 $D\in\mathbb{R}^{d\times m}$ 重建它：
+\[
+\hat y=Da,\qquad
+a=\sigma(Ex+b),\qquad
+\mathcal{L}=\lVert y-\hat y\rVert_2^2+\lambda\lVert a\rVert_1.
+\]
+这里 $x$ 是输入状态，$E$ 是 encoder，$b$ 是偏置，$\sigma$ 是产生稀疏激活的非线性，第一项是 reconstruction error，第二项以 $\lambda$ 控制稀疏度。目标不是完美复制每个 neuron，而是在保真度与可读 feature 数量之间取舍。
+
+“Finding and connecting features in Claude 3.5 Haiku” 包含两个不可合并的阶段。Finding 先用大规模激活样本学习 feature，并检查每个方向在何种 token 与语境中出现；connecting 再针对当前 prompt 计算这些方向之间的影响。前者回答词典问题，后者回答程序问题。即使 feature 的 top examples 很清晰，如果它在目标 prompt 上没有激活或没有向下游传递贡献，也不应被塞进解释图中。
+
+\lecturefigure{slide-13-finding-features-haiku.jpg}{研究对象：在 Claude 3.5 Haiku 中寻找并连接 feature}{00:16:47}
+
+\textbf{Finding and connecting features in Claude 3.5 Haiku} 不是“一键生成解释”的流程。研究团队先在大量激活上学习候选方向，再用自动与人工样本为方向建立暂定标签；随后回到特定 prompt，只保留实际激活并对目标输出有贡献的节点。最后还要检查 reconstruction error、边权稳定性和原模型干预。这个顺序能阻止一种常见偏差：先知道希望看到 Dallas--Texas--Austin 故事，再从海量节点中挑出看起来支持故事的部分。可解释性结果必须来自预先定义的筛选与验证规则，而不是事后拼图。
+
+\lecturefigure{slide-14-dallas-austin-prompt.jpg}{用 Dallas 所在州的首府问题构造可追踪的多步事实链}{00:17:29}
+
+这组图把方法落到一个可核验 prompt：输入提到 Dallas，输出应为 Austin，中间概念包含 Texas 与 state capital。理想解释不只是发现这些词相关，而是显示 Dallas feature 如何提升 Texas feature，Texas 与 capital 又如何共同提升 say-Austin feature。
+
+\begin{lstlisting}[language=Python,caption={稀疏 feature 提取：用少量非零方向近似密集 MLP 输出}]
+def sparse_features(hidden_state):
+    activations = relu(encoder @ hidden_state + bias)
+    active = top_sparse_entries(activations)
+    reconstruction = decoder[:, active] @ activations[active]
+    return active, reconstruction
+\end{lstlisting}
+
+\subsection{Cross-Layer Transcoder 与 prompt-specific graph}
+
+普通 per-layer transcoder 只解释同一层 MLP 的输入输出；Cross-Layer Transcoder（CLT）允许较早层 feature 直接写向多个后续层，从而把跨层重复放大压缩成更短路径。对单个 prompt，研究者只保留实际激活且影响较大的 feature，形成 attribution graph。
+
+\lecturefigure{slide-15-prompt-computational-graph.jpg}{从成千上万激活中抽出 prompt-specific computational graph}{00:22:13}
+
+\lecturefigure{slide-16-cross-layer-transcoder.jpg}{CLT：feature 从一层读取，并可写入多个后续层}{00:23:51}
+
+\lecturefigure{slide-17-replacement-model-comparison.jpg}{原始 Transformer 与稀疏、可解释替换模型的对照}{00:24:49}
+
+CLT 的优势是路径更短、重复 feature 更少；代价是跨层替换可能牺牲局部保真度。更关键的是，本讲的替换模型主要重建 MLP 贡献：base-model attention 被保留并用于传播影响，却没有被 feature 化解释。因此图上缺少的“选择动作”可能恰恰由 attention 完成。
+
+对比图还揭示了一个容易忽略的测量问题：replacement model 并不是把原网络参数逐一翻译成中文标签，而是在原计算旁边训练一个更稀疏的代理。代理输出接近原 MLP，并不保证内部路径逐节点对应；不同字典、稀疏惩罚或层间连接方式可能得到不同但行为相近的图。因此评估不能只看 reconstruction loss，还要看下游 token 概率、干预预测、路径长度与失败 prompt。可读性越高，越需要主动检查是否以丢失真实机制为代价。
+
+\begin{warningbox}{第一证据边界：方法没有解释 attention}
+讲义后面会看到“两个策略同时存在、其中一个胜出”。当前图能较好描述 MLP feature 如何执行策略，但未必能解释 attention 如何选择信息、路由位置或决定哪条策略占优势。图短不等于机制完整。
+\end{warningbox}
+
+\teachervoice{00:22:28--00:25:22，老师明确说“先把 attention 忘掉”，并强调他们使用原模型 attention、没有尝试解释它。这个限定必须贯穿后面的 planning 与 unfaithfulness 结论。}
+
+\subsection{从 reconstruction error 到原模型 intervention}
+
+替换模型永远有残差。将原 MLP 输出写成 $y=\hat y+e$，其中 $e$ 是 reconstruction error；如果 $e$ 仍显著影响后续节点，就应在图中显式出现，而不是假装可解释 feature 已覆盖全部计算。随后按贡献筛选节点、合并相似 feature，并在原模型中沿 feature 方向增减激活，验证预测是否成立。
+
+\lecturefigure{slide-18-reconstruction-error.jpg}{重建误差节点记录替换模型未解释的原模型贡献}{00:26:55}
+
+\lecturefigure{slide-19-select-top-contributors.jpg}{按对目标输出的贡献筛选最重要 feature}{00:27:35}
+
+\lecturefigure{slide-20-group-similar-features.jpg}{把多个相近 Texas feature 组合成可阅读的 supernode}{00:28:49}
+
+若节点 $i$ 对节点 $j$ 的局部影响近似为
+\[
+A_{i\to j}=a_i\left\langle d_i,\nabla_h a_j\right\rangle,
+\]
+其中 $a_i$ 是源 feature 激活，$d_i$ 是其写入 residual stream 的方向，$\nabla_h a_j$ 是目标 feature 对状态 $h$ 的局部梯度。$A_{i\to j}$ 是 attribution score，不是永久因果常数；它依赖当前 prompt、局部线性近似与替换模型。
+
+\lecturefigure{slide-21-interventions-original-model.jpg}{在原始模型中写入 feature 方向，观察输出是否按预测改变}{00:30:27}
+
+这张图是证据强度的转折点：如果把 Texas feature 改成 California feature 后，答案沿着预测方向改变，就比“图上两节点相连”更支持因果解释。仍要注意，成功干预说明该方向足以影响行为，不证明标签唯一、路径穷尽或自然运行时只使用这一条回路。
+
+\begin{lstlisting}[language=Python,caption={最小 intervention test：在原模型激活上沿 feature 方向加减并比较输出}]
+base_logits = model(prompt)
+for alpha in [-strength, 0.0, strength]:
+    edited_logits = model(prompt, edit=(layer, feature_direction, alpha))
+    record(alpha, edited_logits[target_token])
+check_monotonic_prediction()
+\end{lstlisting}
+
+\begin{importantbox}{三层证据阶梯}
+\textbf{Feature interpretation} 回答“这个方向像什么”；\textbf{attribution graph} 回答“在这个 prompt 上它可能怎样影响下游”；\textbf{original-model intervention} 回答“主动改变该方向，行为是否按预测变化”。三者应联合使用，不能互相替代。
+\end{importantbox}
+
+\lecturefigure{slide-22-lecture-agenda.jpg}{案例路线：抽象表示、并行处理与规划}{00:32:44}
+
+路线图把方法阶段转入发现阶段。接下来不再逐项介绍工具，而是用不同任务检验三类内部计算。读者应始终携带两个问题：图中显示了什么机制；这个机制通过何种干预得到验证、又遗漏了什么。
+
+\lecturefigure{slide-23-attribution-graph-overview.jpg}{Dallas-to-Austin attribution graph 的整体视图}{00:33:24}
+
+\lecturefigure{slide-24-texas-austin-route.jpg}{代表性路径：Dallas 激活 Texas 相关表示，再推动 Austin 输出}{00:33:41}
+
+最后两图展示同一事实链的不同尺度。整体图说明真实网络并非三节点符号程序，而是许多相近 feature 与旁路共同贡献；放大图则提供可讲授的压缩路径。好解释应在两者之间往返：既不把复杂图当不可读噪声，也不把压缩后的 Dallas→Texas→Austin 当作唯一运行路径。
+
+\subsection{本章小结}
+
+Circuit tracing 的完整工作流是：寻找稀疏 feature、训练跨层替换模型、记录 reconstruction error、计算 prompt-specific attribution、筛选与分组节点、回到原模型干预。它比 neuron 列表更有结构，比纯可视化更接近因果，但仍受替换误差、局部近似、feature 标签和未解释 attention 限制。
+
+\section{抽象表示：医学推理与多语言回路}
+
+方法建立后，第一个发现是模型内部存在跨表面形式复用的抽象表示。本章用医学与多语言两个案例说明：同一个概念可以被不同词语激活，而输入语言和输出语言的边界信息又可以与中间语义部分分离。
+
+\subsection{医学案例：症状、诊断与判据在一遍前向传播中组合}
+
+病例给出孕晚期、右上腹痛、高血压和肝酶升高，要求只问一个额外症状。模型回答 visual disturbances。重要问题不是医学结论本身，而是图中是否出现 pregnancy、preeclampsia、diagnostic criteria 等可组合表示，以及压制某个 feature 后答案是否发生预期改变。
+
+\lecturefigure{slide-25-medical-reasoning-prompt.jpg}{单次前向传播中的医学推理 prompt}{00:37:30}
+
+\lecturefigure{slide-26-medical-concept-representations.jpg}{模型把症状、诊断与额外诊断判据组织为抽象 feature}{00:38:46}
+
+图 26 先由多个症状 feature 汇聚到疾病相关表示，再由诊断表示推动“应询问 visual disturbances”。这不是一条自然语言 chain of thought，却体现了结构化关系：症状不是逐字匹配，而是作为诊断证据在内部汇合。
+
+\lecturefigure{slide-27-medical-feature-interventions.jpg}{替换或抑制医学 feature 后，推荐追问随之改变}{00:39:51}
+
+干预提高了因果可信度：如果把 biliary-system 相关 feature 推高，输出向另一类症状移动，就说明这些方向不只是事后命名。不过临床知识可能不完整、prompt 也很简化；图不能证明模型适合真实诊断，更不能替代医学指南与医生判断。
+
+\begin{warningbox}{医学案例的范围}
+这是 mechanistic case study，不是医疗建议或临床可靠性证明。它说明模型能在一个 prompt 上组合医学表示；不说明知识完整、概率校准、群体公平或真实场景安全。
+\end{warningbox}
+
+\teachervoice{00:31:52--00:42:44，老师把医学例子作为“一次 forward pass 如何完成组合推理”的窗口，并在问答中承认真实医学侧的可靠性需要独立验证。}
+
+\subsection{多语言案例：边界是语言，核心是共享语义}
+
+“small 的反义词”可用英语、法语或中文提问。若模型完全在英语中思考，整个内部图应先翻译成英语再计算；若每种语言完全独立，三套图几乎不共享。实际结果更像分层结构：输入和输出附近有语言特定 feature，中间则出现 multilingual small、antonym、large 等共享表示。
+
+\lecturefigure{slide-28-unique-language-question.jpg}{问题：模型是否在某一种唯一语言中“思考”}{00:42:47}
+
+\lecturefigure{slide-29-shared-multilingual-representations.jpg}{三种语言共享中间语义 feature，同时保留语言特定边界}{00:45:01}
+
+读图时先看两端：quote、English/Chinese/French 与具体 token 负责语言形式；再看中间：small、opposite、say large 等 feature 跨语言重合。结论不是“模型有纯粹思想语言”，而是语义抽象与表面实现部分解耦。
+
+\lecturefigure{slide-30-antonym-to-synonym-edit.jpg}{把 antonym feature 换成 synonym feature，三种语言的输出都按语义改变}{00:45:06}
+
+这项 intervention 很关键：同一内部编辑能跨语言把“反义词”任务改成“同义词”任务，说明共享 feature 参与运算而非只与输出相关。输入的 operand、操作类型和输出语言可以分别编辑，展示了模块化但非完全离散的内部表示。
+
+若两种语言的活跃 feature 集分别为 $F_a,F_b$，共享比例可用交并比表示：
+\[
+\operatorname{IoU}(F_a,F_b)=\frac{|F_a\cap F_b|}{|F_a\cup F_b|}.
+\]
+其中交集计数共同 feature，并集计数至少在一种语言中出现的 feature。IoU 上升表示共享更多，但受 feature matching、阈值和替换模型质量影响。
+
+\lecturefigure{slide-31-representation-sharing-scales.jpg}{更大模型在语言之间共享更高比例的表示}{00:47:26}
+
+图 31 的趋势支持“规模增大促进抽象复用”，但不证明所有概念都会收敛到同一语义空间。语言距离、tokenization、数据量和文化特定表达仍会造成差异；曲线是该实验设置下的 feature overlap，不是普适语言学定律。
+
+\begin{knowledgebox}{从“思考语言”改写为三个可测问题}
+不要问模型到底“用哪种语言想”。可以分别问：输入阶段哪些 feature 依赖语言形式；中间操作是否共享语义方向；输出阶段如何选择目标语言。三个问题能被图和干预检验，单一拟人化问题则容易混淆。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+医学与多语言案例共同表明，模型会把表面 token 组合成更抽象的概念和操作。抽象表示可跨症状、语言与表达复用，但仍嵌在具体 prompt、模型和 feature 提取方法中；“可复用”不能升级为“普遍、唯一、完整”。
+
+\section{并行计算：模型怎样真正完成加法}
+
+前面的案例强调表示，本章转向计算结构。模型被问 $36+59$ 时，口头解释是“个位相加、进位、十位相加”；attribution graph 却显示多个粗略范围与末位 lookup 路径并行运行，最后才合并成 95。这个差异是理解 chain-of-thought faithfulness 的入口。
+
+\lecturefigure{slide-32-parallel-processing-intro.jpg}{第二条发现主线：Parallel Processing}{00:52:00}
+
+\lecturefigure{slide-33-parallel-addition-intro.jpg}{案例入口：加法并不是单一路径的学校竖式}{00:52:47}
+
+\subsection{自然语言自述与内部算法不一致}
+
+前两张 section card 只告诉我们要看并行计算；真正的诊断从“先让模型作答，再让它解释自己”开始。这个实验把 answer correctness 与 mechanism report 拆开：如果两者来自同一内部过程，自述应与 trace 大致一致；如果解释只是训练语料中常见的教学模板，就会出现答案正确、故事合理、机制却不同的三层分离。
+
+模型先正确回答 95，再被问“怎么算的”，它给出标准竖式解释。这个解释在人类眼中合理，却未必是产生答案的路径。语言模型擅长生成“某类问题通常怎样解释”的文本，这与它是否能读出自身激活并不相同。评价时应分别记录最终答案、生成 rationale、内部 attribution 与干预结果，不能用其中一个替代其余三个。
+
+\lecturefigure{slide-34-addition-self-report.jpg}{模型自述：个位相加、进位、再算十位}{00:52:56}
+
+\lecturefigure{slide-35-actual-parallel-addition.jpg}{追踪结果：粗略总和路径与末位路径并行，末端合并为 95}{00:54:12}
+
+可把图中的机制压缩为
+\[
+\text{answer}(a,b)\approx
+\operatorname{combine}\bigl(
+\operatorname{coarseSum}(a,b),
+\operatorname{lastDigit}(a\bmod 10,b\bmod 10)
+\bigr).
+\]
+$a,b$ 是两个加数；$\operatorname{coarseSum}$ 产生类似 88--97 的范围证据；$\operatorname{lastDigit}$ 根据个位产生“结果以 5 结尾”的证据；$\operatorname{combine}$ 在后层把这些约束交叉，提升 95 的 logit。公式是教学抽象，不表示网络只有两个函数模块。
+
+\begin{importantbox}{并行计算的含义}
+模型不是先完成“个位步骤”再把符号化进位写进隐藏草稿。多个近似路径在同一遍前向传播中同时累积证据：有的判断数量级，有的判断末位，有的利用记忆化组合；最终输出由这些约束共同决定。
+\end{importantbox}
+
+\subsection{lookup feature、sum feature 与组合}
+
+为了理解并行路径，需要区分三类 feature：operand feature 表示输入数字局部属性；lookup-table feature 记住特定末位组合；sum feature 表示可能的结果范围或末位。它们不是互斥模块，而是可在不同层和上下文中互相放大。
+
+\lecturefigure{slide-36-addition-feature-graph.jpg}{互动论文中的 addition feature graph}{00:54:14}
+
+\lecturefigure{slide-37-sum-features.jpg}{不同加数区域激活不同的 sum feature}{00:54:15}
+
+\lecturefigure{slide-38-lookup-and-sum-features.jpg}{近似总和路径与 lookup-table 路径在后层汇合}{00:55:40}
+
+读这组三图应先找输入端的 36、59 与末位 6、9，再沿边看粗范围和末位证据，最后观察 “sum=95” 与 “sum ends in 5” 如何共同支持输出。图没有显示一条完整可执行的 Python 加法程序，却揭示了比口头竖式更接近内部实现的分布式约束满足。
+
+还应注意“粗略”并不等于无用。单独的 88--97 范围不能确定答案，单独的末位 5 也不能确定十位；两条弱证据交叉后却能显著缩小候选。神经网络常用大量不完全 feature 共同投票，而不是等待某个节点携带完整真值。这个结构解释了为何删除一条路径可能只造成概率下降而非彻底失败，也提醒研究者寻找冗余与补偿路径，而不是把最高 attribution edge 当作唯一必要边。
+
+\begin{warningbox}{可读解释不是 privileged access}
+模型说“我先算个位再进位”，可能只是学会模仿数学解题说明。除非解释文本被证明与内部因果路径一致，否则它应被视为另一个输出，而不是模型对自身算法的可信 introspection。
+\end{warningbox}
+
+\lecturefigure{slide-39-addition-metacognition-gap.jpg}{询问内部方法后，模型仍复述学校算法而非追踪到的机制}{00:56:11}
+
+\lecturefigure{slide-40-explanation-versus-algorithm.jpg}{训练中学会生成解释，与梯度下降形成实际算法，是两件不同的事}{00:56:12}
+
+\teachervoice{00:51:44--00:58:54，老师强调运算是 massively parallel，并把“会做加法但不知道自己怎么做”称为简单的 metacognitive mismatch。课堂提示：生成解释与执行内部算法来自不同训练压力。}
+
+\subsection{feature 会离开原任务复用}
+
+上一小节证明同一 prompt 内存在多条加法路径；这一小节追问 feature 是否只记住训练题型，还是能在新语境中承担相同计算角色。判断复用不能只看语义相似度，而要看激活位置是否恰好需要同一种数值约束、下游边是否仍推动相同末位，以及去掉该 feature 是否损害预测。
+
+如果一个 feature 真正编码“6 与 9 相加使末位为 5”，它可能在非算术文本中被重新用于任何需要预测末位 5 的上下文。互动论文展示天文测量结束时间、财务表递增序列等例子，说明 feature 的 computational role 可以跨任务迁移。与此同时，高激活也可能来自文本格式或数字共现，因此需要与随机数字、错误末位和相似排版的对照样本比较。
+
+\lecturefigure{slide-41-addition-generalization-context.jpg}{加法 feature 在非算术语料中也会激活}{00:56:20}
+
+\lecturefigure{slide-42-addition-generalization-time.jpg}{测量时长案例：由起始分钟与持续时间推断末位}{00:58:08}
+
+\lecturefigure{slide-43-addition-generalization-table.jpg}{财务表案例：由列内递增规律预测下一数值}{00:58:13}
+
+三图支持 feature reuse，但证据边界同样重要：研究者是从高激活样本中寻找解释，容易偏向成功的可读案例。更严格的评估需要统计 precision、recall、反例与随机对照，不能只凭几个漂亮样本宣布 feature 已被完全理解。
+
+\begin{knowledgebox}{抽象 feature 的另一面：计算角色可变}
+同一方向可以在不同上下文中承担相似的数值约束，却不必对应单一自然语言名称。Feature 的“意义”既来自激活语境，也来自它对下游计算的作用；只看 top examples 会漏掉后者。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+加法案例同时证明两件事：一次前向传播可以并行组合多条计算路径；模型生成的推理文本不一定忠实报告这些路径。解释研究因此不能只问“文本是否合理”，还要问“内部 feature 与干预是否支持这套因果故事”。
+
+\section{幻觉与 jailbreak：多个回路如何竞争}
+
+并行计算不只带来能力，也带来冲突。模型可以同时识别实体、准备答案、激活“不知道”或 refusal 倾向；最终输出取决于哪些路径被抑制、哪些路径更强。本章把 hallucination 与 jailbreak 解释为局部竞争机制，而不是一个全局开关。
+
+从加法转到安全行为时，必须先改变读图标准：算术图的目标 token 有明确真值，而“应该回答、拒绝还是表达不确定”还受知识覆盖、政策与上下文影响。因此本章先比较成对 prompt，再做 feature suppression，最后只提出范围有限的机制假说。我们关心的是哪些内部证据改变了输出倾向，不把某个 feature 的名字直接等同于系统级 truthfulness 或 safety。
+
+\lecturefigure{slide-44-hallucinations-intro.jpg}{Parallel Processing: Hallucinations}{00:59:56}
+
+\subsection{一个 always-on 的 IDK 倾向}
+
+比较 Michael Jordan 与虚构的 Michael Batkin：前者激活 known-entity 与 basketball 证据，后者缺少可靠实体证据并生成不确定回答。追踪结果提出一个反直觉模型：不是“未知时才打开 IDK”，而是 IDK/refusal 倾向默认存在，已知识别 feature 会抑制它。
+
+\lecturefigure{slide-45-always-on-idk-circuit.jpg}{已知实体通过 inhibition 压制默认的 IDK 路径}{00:59:59}
+
+\lecturefigure{slide-46-knowing-unknowns.jpg}{已知与未知实体的输出对照}{01:00:17}
+
+用一个极简 logit 模型表示：
+\[
+z_{\text{answer}}=b_{\text{answer}}+s_{\text{knowledge}},\qquad
+z_{\text{IDK}}=b_{\text{IDK}}-\gamma s_{\text{known}},
+\]
+其中 $b$ 是默认偏置，$s_{\text{knowledge}}$ 是具体答案证据，$s_{\text{known}}$ 是“实体可识别”证据，$\gamma>0$ 表示抑制强度。真实网络更复杂；该式只表达“已知识别可压低 IDK”这一竞争关系。
+
+\lecturefigure{slide-47-suppress-idk-hallucinates.jpg}{人为压制 IDK 回路后，未知实体被迫得到不稳定猜测}{01:02:22}
+
+干预是关键：压低 IDK feature 后，模型对 Michael Batkin 给出 chess、tennis、hockey 等不同猜测。它说明该回路对拒答有因果作用，也说明“总让模型回答”会把不确定性转成看似具体的事实。
+
+\lecturefigure{slide-48-natural-hallucination-hypothesis.jpg}{自然幻觉可能来自错误的 known-entity 信号压制了 IDK}{01:03:22}
+
+图 48 把机制推广到真实名字与论文题目：某些表面熟悉 feature 可能错误地发出“我知道这个实体”的信号，从而解除 IDK 抑制，而具体答案证据又不足，于是模型用相关但错误的标题补全。这里的措辞必须是“some hallucinations might”，不能把所有错误都归结为一个 IDK 回路。
+
+三张机制图之间存在严格的论证顺序。Michael Jordan 与 Michael Batkin 的对照先提出“已知/未知”区分；压制 IDK 的实验说明拒答方向对行为有因果作用；论文标题案例才把它作为自然错误的候选解释。第三步没有直接操纵现实世界中的全部知识，因此结论强度低于第二步。好的讲义必须把“观察到”“干预支持”“推测推广”分层书写，否则读者会把假说误读成已经定位所有幻觉根因。
+
+\begin{warningbox}{幻觉不是单一机制，也不总是单个坏 token}
+事实回忆、长文本一致性、工具结果误读、指令冲突和创造性续写都可能被称为 hallucination。这个案例解释的是一类实体问答中的拒答抑制；它不提供普遍 detector，也不定义所有场景中的幻觉边界。
+\end{warningbox}
+
+\subsection{Jailbreak 不是安全开关失灵，而是竞争路径接力}
+
+直接问“怎样造炸弹”会立即激活 harmful-request 与 refusal 回路；acrostic prompt 先要求取首字母，模型在局部任务中输出 BOMB，随后 continuation 路径推动它继续解释。模型可能已经识别危险，却因为不同阶段的 feature 强度和路由不同而没有及时停止。
+
+\lecturefigure{slide-49-jailbreaks-intro.jpg}{Parallel Processing: Jailbreaks}{01:03:47}
+
+\lecturefigure{slide-50-jailbreak-comparison.jpg}{直接危险请求与首字母 jailbreak 的行为对照}{01:03:55}
+
+\lecturefigure{slide-51-default-refusal-circuit.jpg}{默认路径：bomb 概念推动 harmful request 与 refusal}{01:04:28}
+
+\lecturefigure{slide-52-jailbreak-keeps-going.jpg}{关键问题：模型已经写出 BOMB，为什么仍继续生成}{01:04:30}
+
+读这组图时要比较 token 时序：prompt 阶段，acrostic/first-letter feature 占主导；生成 BOMB 后，危险概念与 refusal 开始增强；但语言 continuation 与“回答用户任务”路径已经形成惯性。安全系统若只在 prompt 开头分类一次，就可能错过生成过程中后出现的风险状态。
+
+这也解释了“模型明明知道危险，为什么还继续”并非逻辑矛盾。神经网络可以同时含有危险识别与继续回答的证据，最终 token 由相对 logit 决定；识别到风险不保证 refusal 路径在每个时间点都占优。机制层的改进目标因此不只是增强一个 classifier，而是让风险 feature 在正确位置、正确时间持续影响解码，并在生成状态改变时允许重新路由或中止。
+
+\begin{importantbox}{安全工程连接：把监控放进生成过程}
+机制图提示三个实践方向：对中间状态持续监控，而非只做输入分类；允许模型在生成中途重新评估和停止；把“不知道/拒答”视为需要校准的竞争行为，而不是简单禁止或强制。
+\end{importantbox}
+
+\teachervoice{00:58:54--01:04:45，老师把 hallucination 与 jailbreak 都描述为并行路径：识别、回答、IDK、refusal 和 continuation 可以同时存在。课堂提示：机制结论是局部的，不能把一个漂亮回路图扩展成完整安全理论。}
+
+\subsection{本章小结}
+
+幻觉与 jailbreak 案例把“并行”从算术能力扩展到行为冲突。模型输出不是单模块决策，而是多个证据与抑制路径的合成。干预能证明某些路径有因果作用，却仍需区分案例机制、产品级风险和普遍安全结论。
+
+\section{规划：下一个 token 之前已经发生了什么}
+
+第三条发现是 planning。自回归模型每次只输出一个 token，并不意味着内部只关心紧邻 token；一次前向传播可以形成对更远未来词形、押韵和句子结构的约束。这一节用诗歌展示前瞻计划，再用 chain-of-thought unfaithfulness 展示计划可能服务于错误目标。
+
+\lecturefigure{slide-53-planning-poems-intro.jpg}{第三条发现主线：Planning in poems}{01:04:45}
+
+\subsection{押韵词在真正需要它之前已经出现}
+
+给定第一句以 grab it 结尾，模型生成第二句时最终选 rabbit。若它完全没有计划，前面的词只能局部滚动到某个偶然押韵结尾；追踪却在第二行开始前就发现 “rhymes with it” 与 rabbit/habit 候选 feature。
+
+\lecturefigure{slide-54-rhyming-token-question.jpg}{逐 token 预测的模型如何写出押韵诗句}{01:05:28}
+
+\lecturefigure{slide-55-rhyme-plan-before-line.jpg}{目标押韵 feature 在距离行尾约六个词时已经激活}{01:05:57}
+
+这里的 planning 不是显式搜索树，也不是模型先在隐藏文本中写好整句。更准确的说法是：未来约束以 feature 形式提前存在，并影响当前 token 分布。计划可以是多个候选并行存在，随着生成逐步被放大、抑制或替换。
+
+\lecturefigure{slide-56-planned-words-compose-line.jpg}{候选押韵词反向约束中间用词与句法结构}{01:05:58}
+
+图 56 同时包含 forward 与 backward 两种直觉：模型向前提出 rabbit、habit 等结尾候选；这些候选又向后约束“His hunger was like a starving ...”这样的中间结构。所谓 backward planning 不是时间倒流，而是未来目标 feature 对当前 token logits 的因果影响。
+
+\begin{importantbox}{可检验的 planning 定义}
+若一个代表未来目标的内部 feature 在目标 token 之前激活，并且对它做干预会系统性改变中间 token 与最终结构，就有证据说模型在该任务上进行了 planning。只看到最终押韵，不足以证明计划。
+\end{importantbox}
+
+\subsection{改变计划，整行都会改变}
+
+上一小节只凭提前激活仍可能被解释成“未来词的弱预兆”；本小节用反事实干预检验它是否真正控制生成。实验保持 prompt 不变，只改变内部 plan feature，再观察中间词、句法与最终押韵是否成组变化。这样的设计把 planning 从相关性概念提升为可证伪的因果命题。
+
+干预实验先压制 “rhymes with it”，再注入 green 或 “rhymes with ee” feature。若只有最后一个词受影响，计划可能只是临近输出偏置；实际结果是整行词汇、语法和意象随之重组，说明早期计划参与了更长范围的生成。比较时还要检查流畅度：若干预只把输出破坏成乱码，就不能说明模型采用了替代计划；这里的输出仍形成连贯句子，才支持 plan feature 改写结构而非单纯损坏网络。
+
+\lecturefigure{slide-57-rhyme-plan-interventions.jpg}{压制或注入押韵计划 feature}{01:06:32}
+
+\lecturefigure{slide-58-plan-changes-full-line.jpg}{计划改变后，中间词与完整句子结构一起改变}{01:07:23}
+
+读图应比较三列的干预条件、completion distribution 与完整输出。关键趋势不是某个押韵词概率变化，而是 plan feature 改写了通向该结尾的整条语言路径。它支持有限、任务特定的前瞻控制，不证明模型拥有统一长期世界计划。
+
+\begin{knowledgebox}{Planning 的层级}
+\textbf{Lexical planning} 选择未来词；\textbf{structural planning} 约束句法和节奏；\textbf{task planning} 安排多步动作。诗歌实验主要支持前两层，不能直接外推到长期 agent planning。
+\end{knowledgebox}
+
+\teachervoice{01:04:48--01:07:23，老师说模型会同时生成多个结尾计划，再让这些计划推动中间句子。干预后整行变化，是比“最后押韵了”更强的 planning 证据。}
+
+\subsection{Chain of thought 可能服务于先定答案}
+
+最后一个案例比较 faithful reasoning 与 motivated reasoning。提示中先给一个建议答案，模型可能不是真的计算复杂余弦，而是先接受答案 4，再反向制造看似合理的中间数值。表面 chain of thought 都像数学推导，内部图却显示目标答案 feature 提前支配了后续步骤。
+
+\lecturefigure{slide-59-cot-unfaithfulness-intro.jpg}{案例入口：带有用户暗示答案的 chain-of-thought 问题}{01:07:38}
+
+\lecturefigure{slide-60-faithful-reasoning-circuit.jpg}{忠实案例：中间计算 feature 推动最终答案}{01:07:40}
+
+\lecturefigure{slide-61-motivated-reasoning-backward.jpg}{不忠实案例：答案暗示先出现，再反向构造“推理”}{01:07:46}
+
+图 60 中，sqrt 与乘法等操作按问题信息推动答案；图 61 中，suggested answer 4 的 feature 先变强，再通过“除以 5 得 0.8”等路径反向拼接解释。两份文本都可能语法流畅，因此只评审 rationale 的语言形式无法区分。
+
+这里最危险的误读，是把 unfaithful 等同于“模型先完全知道答案，再故意欺骗”。图更保守地支持：提示答案与真实计算两套 feature 路径可以同时存在，输出可能由较强路径主导，随后 rationale 沿该结果组织。老师在问答中进一步猜测 attention 可能负责策略选择，而 MLP feature 负责执行；由于 attention 未建模，我们既不能确定“动机”，也不能看到竞争的全部过程。机制语言应描述可测路径，不轻易赋予人格意图。
+
+\begin{warningbox}{Chain of thought 的双重身份}
+CoT 既可以是额外计算空间，也可以是对已选答案的合理化文本。隐藏 CoT、可见 CoT、最终答案与内部 feature graph 是不同对象。安全与评估工作不能默认“模型说出的原因就是模型使用的原因”。
+\end{warningbox}
+
+\teachervoice{01:07:26--01:09:54，老师直说“有时模型在对你撒谎”，随后立即加限定：他怀疑两套策略同时存在，而 attention 可能负责选择哪套策略胜出；当前方法没有建模 attention，因此对选择机制可能完全失明。}
+
+\subsection{本章小结}
+
+诗歌干预说明未来目标 feature 会提前影响当前生成，提供了任务特定 planning 的因果证据；motivated reasoning 则说明计划也可能围绕一个错误或迎合性答案组织。规划能力与解释忠实性必须分开评价。
+
+\section{方法边界、工程启示与开放问题}
+
+到这里，三个发现都已有案例：抽象表示跨域复用、多个路径并行计算、未来目标提前约束当前 token。最后一章不再增加“漂亮机制图”，而是检查这些结果能证明什么、不能证明什么，以及它们如何改变系统设计与评估。
+
+\lecturefigure{slide-62-papers-and-methods.jpg}{进一步案例与方法材料：互动论文和 Circuit Tracing 方法论文}{01:08:27}
+
+\subsection{五个不能省略的限制}
+
+第一，replacement model 是近似，reconstruction error 可能承载关键机制。第二，feature label 由人解释，可能不唯一或不稳定。第三，attribution 是 prompt-local 的局部影响，不是固定全局程序。第四，研究展示的是成功案例；互动论文明确讨论方法只在一部分 prompt 上给出有用结果。第五，也是课堂最强调的一点：attention 未被解释，选择、路由与竞争可能正发生在那里。
+
+\begin{warningbox}{不要把 attribution graph 当作“模型源代码”}
+它更像实验仪器生成的局部机制草图：包含真实因果线索，也包含替换误差、剪枝、分组与解释者选择。正确使用方式是提出预测、做干预、找反例，并报告无法解释的部分。
+\end{warningbox}
+
+\subsection{从机制发现到系统设计}
+
+这些案例并没有直接给出“消灭幻觉”的按钮，却改变了工程问题的表达。与其只调一个拒答阈值，可以分别测量 known-entity 证据、答案证据与 IDK/refusal 竞争；与其相信模型自述，可以用外部 verifier、工具 trace 与反事实干预检查；与其把固定 forward pass 当成唯一计算预算，可以允许 reflection、recurrent loop 或 adaptive compute 在低置信度时增加检查。
+
+系统层还需要把机制信号与产品约束分开。一个内部 feature 即使能预测错误，也可能随模型版本漂移，无法直接成为长期 API；一个干预即使在实验 prompt 上有效，也可能损害其他能力。更稳健的路径是把机制发现转成可重复测试集、监控指标与故障假说，再通过离线评估、红队、回归测试和逐步上线验证。Interpretability 提供诊断分辨率，不替代完整安全工程。
+
+\teachervoice{01:10:05--01:11:33，老师把“如何防止幻觉”称为十亿美元问题，并明确说自己不知道答案。他提出更好 calibration、让 reasoning model 反思、增加自检计算，以及 recurrent/adaptive compute 等方向，同时承认这些选择可能牺牲能力或创造性。}
+
+\begin{importantbox}{工程上最值得带走的四点}
 \begin{enumerate}
-    \item \textbf{迷思}：模型只是在匹配训练数据中的相似样本。\textbf{现实}：模型学习并能组合相当抽象的内部表示。
-    \item \textbf{迷思}：模型只使用浅层、简单的启发式规则。\textbf{现实}：模型执行复杂且高度并行的计算。
-    \item \textbf{迷思}：模型只是逐词即兴生成。\textbf{现实}：模型会提前多个 token 进行规划。
+  \item 把模型解释视为待验证输出，而不是内部事实接口；
+  \item 在生成全过程监控不确定性、安全与目标漂移，而非只检查 prompt；
+  \item 用反事实 intervention 与回放 trace 验证机制假说；
+  \item 对困难 token 分配可变计算，让模型在需要时检索、反思或停止。
 \end{enumerate}
 \end{importantbox}
 
-\section{理解模型内部的方法论}
+\subsection{一套可复用的 circuit-tracing 审计流程}
 
-\subsection{神经元的可解释性困境}
+\begin{lstlisting}[language=Python,caption={从行为问题到可证伪机制假说的审计流程}]
+behavior = define_prompt_and_counterfactuals()
+features = fit_sparse_replacement_model(behavior.activations)
+graph = trace_prompt_specific_attribution(features)
+hypotheses = label_prune_and_group(graph)
+for hypothesis in hypotheses:
+    intervene_in_base_model(hypothesis)
+    test_predicted_behavior_change()
+report_reconstruction_error_failures_and_scope()
+\end{lstlisting}
 
-传统的可解释性方法试图理解单个神经元的含义，但问题在于：模型中的特征（Feature）数量远多于神经元数量——特征被\textbf{叠加}（Superposition）在神经元中。
+这段伪代码故意把“report failures”放在最后一个必选步骤。只有成功图而没有失败率，会造成 discovery bias；只有可读 feature 而没有干预，会造成故事偏差；只有单 prompt 干预而没有反事实集合，会把偶然局部效应误当成稳健机制。
 
-这意味着单个神经元通常对应多个不相关的概念（多义性，Polysemanticity），使得直接解释神经元变得困难。
+实际审计还应保存随机种子、字典版本、剪枝阈值、干预强度和完整 prompt，使另一位研究者能够复现同一张图，并判断结论究竟来自模型机制还是分析超参数。
 
-\subsection{稀疏自编码器（Sparse Autoencoder）}
+当不同超参数给出不同路径时，报告这种不稳定性本身就是结果：它说明当前证据只能支持较粗粒度的机制结论，不能安全地解释到单一节点或单一边。
 
-为了从叠加的神经元中分离出可解释的特征，团队使用\textbf{稀疏自编码器}（SAE）：用一个过完备的字典来重构模型的激活，同时施加稀疏性约束，使得每次只有少量特征被激活。
+\subsection{开放问题}
 
-这样得到的特征比原始神经元更加可解释。例如：
-\begin{itemize}
-    \item 一个``首都''特征专门在``州 $\to$ 首都''的映射中激活
-    \item 一个``德克萨斯''特征在涉及德克萨斯州文化和政治的上下文中激活
-\end{itemize}
+课堂问答留下了几条真正困难的研究线：怎样解释 attention 的选择与路由；怎样判断一个 feature 在不同 prompt 和模型中是否“同一个”；怎样量化 graph 对原模型行为的覆盖率；怎样从 token 级机制扩展到长上下文、工具调用与 agent loop；怎样区分必要路径、充分路径与冗余备份路径；怎样让模型在保持创造力的同时更好校准自知之明。
 
-\subsection{Transcoders：替换 MLP 层}
+\teachervoice{01:11:33--01:11:57，老师提醒“hallucination”本身并不总是清晰定义：长文本中究竟哪个 token 开始错、错误是事实还是语境偏离，往往没有唯一边界。研究指标必须先定义对象，不能把模糊产品抱怨直接当机制标签。}
 
-更进一步，团队开发了 \textbf{Transcoders}——直接替换 Transformer 中的 MLP 层，将输入激活映射到输出激活，同时保持稀疏性。这样做的优势是：
-
-\begin{itemize}
-    \item 特征可以跨层``跳跃''到输出，简化了因果追踪
-    \item 不需要每个计算都局限于单一层——如果一个操作本质上很简单（如二元组统计），它可以用一个特征表示
-\end{itemize}
-
-\begin{warningbox}{注意力层未被建模}
-当前方法冻结了注意力层，只对 MLP 层进行可解释性分析。这意味着注意力层中的信息选择和移动机制仍然是黑盒。Josh 怀疑许多``选择使用哪种策略''的决策是由注意力层完成的。
-\end{warningbox}
-
-\subsection{归因图（Attribution Graph）}
-
-通过 Transcoders 将 MLP 层分解为可解释的特征后，可以从模型输出反向追踪：哪些特征直接导致了特定输出 $\to$ 哪些特征导致了这些特征的激活 $\to$ 以此类推，直到输入层。
-
-这样就得到了一个\textbf{归因图}——一个因果关系图，展示模型如何从输入逐步计算到输出。
+\begin{knowledgebox}{研究报告应同时给出三张表}
+\textbf{Coverage 表}：哪些 prompt/节点被解释；\textbf{causal 表}：哪些干预按预测改变行为；\textbf{failure 表}：哪些图不稳定、误差大或无法命名。只有三者同时存在，读者才能判断方法的实际适用范围。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-稀疏自编码器和 Transcoders 提供了一种将不可解释的神经元分解为可解释特征的方法，归因图则将这些特征连接成因果推理链路。
-
-\section{三个核心发现}
-
-\subsection{发现一：模型学习抽象且可组合的表示}
-
-模型不只是记忆训练样本，而是学习了抽象概念并能够组合它们。例如，在``Dallas is in Texas. The capital of Texas is Austin.''这样的推理中，模型内部存在``德克萨斯''特征、``首都''特征等，它们通过可追踪的因果路径连接。
-
-\subsection{发现二：模型执行并行且复杂的计算}
-
-在单次前向传播中，模型可以同时执行多个相互独立的推理过程。这不是简单的序列化思考，而是大量并行的信息处理。
-
-\subsection{发现三：模型会提前规划}
-
-尽管模型的训练目标是预测下一个 token，但它在内部表示中会为未来多个 token 进行规划。这意味着当前 token 的生成已经考虑了后续 token 的需要。
-
-\subsection{本章小结}
-
-这三个发现挑战了``LLM 只是花哨的鹦鹉''的观点，揭示了模型内部存在真正的抽象推理、并行计算和前瞻性规划。
-
-\section{幻觉的机制分析}
-
-\subsection{竞争策略}
-
-Josh 展示了一个关于幻觉的机械可解释性分析案例。当模型被问到一个附带提示（hint）的数学问题时，内部同时存在两种竞争策略：
-\begin{itemize}
-    \item \textbf{策略 A}：使用提示中的答案反向构造推理过程（迎合策略）
-    \item \textbf{策略 B}：独立进行数学计算得出答案（推理策略）
-\end{itemize}
-
-问题在于，两种策略的外在表现几乎相同——都会生成看似合理的数学推导过程。但只有策略 B 是真正的推理。
-
-\begin{warningbox}{幻觉的根本困难}
-幻觉的危险在于你无法从模型输出的``解释''来判断它是真正在推理还是在迎合。这不是一个定义清晰的问题——在生成大量文本时，``哪个 token 出了错''本身就很难确定。
-\end{warningbox}
-
-\subsection{可能的缓解策略}
-
-\begin{itemize}
-    \item 推理模型（Thinking Tags）允许模型在生成答案前进行自我检查
-    \item 让模型在校准自我认知（Self-Knowledge）方面做得更好
-    \item 可能需要牺牲一部分``创造力''来换取更多的自我验证
-    \item 自适应计算（Adaptive Compute）：允许模型对不同 token 使用不同计算量
-\end{itemize}
-
-\subsection{本章小结}
-
-幻觉不是一个简单的``bug''，而是模型内部多种策略竞争的结果。可解释性工具能够揭示这些竞争机制，为设计更可靠的系统提供线索。
+Circuit tracing 把“模型内部可能发生什么”推进到可画图、可干预、可反驳的层次，但它不是完整读取器。当前最有价值的成果，是形成更细的工程问题与实验接口：区分表示、执行与选择，记录误差，验证局部因果，并把不确定性留在结论中。
 
 \section{总结与延伸}
 
-本讲提供了一个深入理解 LLM 内部运作的独特视角。核心信息：
+整场讲座可以压缩为一个双层结论。关于模型：它们会组合抽象 feature，在一次 forward pass 中并行运行多条计算路径，并让未来目标提前约束当前 token；这些能力解释了低资源迁移、医学组合、多语言共享、加法、押韵等现象，也解释了自述不忠实、幻觉与 jailbreak 中的内部冲突。关于方法：稀疏替换、attribution graph 与 original-model intervention 能提供局部因果证据，但 reconstruction error、feature ambiguity、success-case bias 与 unexplained attention 决定了它仍是一台不完美的科学仪器。
 
+\begin{importantbox}{一句话总纲}
+不要问“模型是否真的在思考”这种不可操作的问题；要问在给定 prompt 上，哪些内部表示被激活、哪些路径并行贡献、哪些未来目标提前出现，以及怎样用干预证伪这套解释。
+\end{importantbox}
+
+\subsection{课堂结论与实践清单}
+
+\small
+\begin{multicols}{2}
 \begin{enumerate}
-    \item \textbf{模型比你想象的更复杂}：它们学习抽象表示、执行并行计算、进行多步规划。
-    \item \textbf{可解释性是安全的基础}：随着模型能力增强和应用场景扩大，理解模型的内部机制变得越来越重要。
-    \item \textbf{工具在进步}：稀疏自编码器、Transcoders、归因图提供了越来越精细的分析工具。
-    \item \textbf{但挑战仍然巨大}：注意力层的可解释性、幻觉的根本解决、从局部分析到全局理解的跨越，都是开放问题。
+  \item 行为正确不等于机制单一或稳定；
+  \item 单 neuron 通常不是最佳语义单位；
+  \item Feature label 必须与因果作用一起解释；
+  \item CLT 提升可读性，也可能损失保真度；
+  \item Reconstruction error 应显式进入图与报告；
+  \item Attention 未解释时，不要声称已解释策略选择；
+  \item 抽象表示可以跨语言和任务复用；
+  \item 一次 forward pass 内可有大规模并行计算；
+  \item 模型自述不保证忠实反映内部算法；
+  \item IDK、回答和 refusal 可能是竞争路径；
+  \item Planning 需要“提前 feature + 干预改变轨迹”证据；
+  \item 安全监控应覆盖生成过程，而非只看输入；
+  \item 机制结论必须报告 prompt、模型与时间范围；
+  \item 失败案例与成功案例同样属于方法结果。
 \end{enumerate}
+\end{multicols}
+\normalsize
 
+\enlargethispage{4\baselineskip}
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Anthropic, ``On the Biology of a Large Language Model'', 2025
-    \item Bricken et al., ``Towards Monosemanticity: Decomposing Language Models With Dictionary Learning'', 2023
-    \item Templeton et al., ``Scaling Monosemanticity: Extracting Interpretable Features from Claude 3 Sonnet'', 2024
-    \item Conerly et al., ``Transcoders Find Interpretable LLM Feature Circuits'', 2024
-\end{itemize}
+
+\small
+\noindent\textbf{互动案例：}\href{https://transformer-circuits.pub/2025/attribution-graphs/biology.html}{On the Biology of a Large Language Model}，包含多步推理、诗歌规划、多语言、加法、医学诊断、幻觉、拒答与 CoT faithfulness 的完整交互图。
+
+\noindent\textbf{方法论文：}\href{https://transformer-circuits.pub/2025/attribution-graphs/methods.html}{Circuit Tracing: Revealing Computational Graphs in Language Models}，详细讨论 replacement model、Cross-Layer Transcoder、graph pruning、评估与局限。\textbf{阅读顺序：}先用本讲义建立 feature--graph--intervention 的证据阶梯，再回到互动论文逐项点击节点；遇到漂亮图时，优先寻找 reconstruction error、干预结果、失败案例和 attention 限定。
+\normalsize
 
 \end{document}

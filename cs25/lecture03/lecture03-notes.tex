@@ -1,272 +1,598 @@
 \documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
 
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.4cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{subcaption}
-\usepackage{listings}
-\usepackage[hidelinks]{hyperref}
-\usepackage{booktabs}
-\usepackage{float}
-\usepackage{enumitem}
-\usepackage{tabularx}
-\usepackage{caption}
-\setlist[itemize]{topsep=0.3em,itemsep=0.2em}
-\captionsetup{font=small,labelfont=bf}
+\renewcommand{\notetitle}{Lecture 03：Vision Transformers——通用视觉表示、规模化与归纳偏置}
+\renewcommand{\noteauthors}{基于 Lucas Beyer 讲座、时间戳字幕与 VTAB/BiT/ViT/Scaling ViT/MLP-Mixer 原始论文整理}
+\renewcommand{\notedate}{Fall 2021 课程 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-12}
+\renewcommand{\videoduration}{1:08:36}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=BP5CM0YxbP8}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, boxrule=1pt, sharp corners
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners, boxrule=1pt
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners, boxrule=1pt
-}
-
-\lstset{
-    language=Python,
-    basicstyle=\ttfamily\small,
-    keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black},
-    commentstyle=\color{green!60!black},
-    breaklines=true,
-    frame=single,
-    numbers=left,
-    numberstyle=\tiny\color{gray},
-    captionpos=b,
-    extendedchars=false
-}
-
-\newcommand{\notetitle}{[CS25] Transformers in Vision — Lucas Beyer, Google Brain}
-\newcommand{\noteauthors}{基于 Stanford CS25 公开课程资料整理}
-\newcommand{\notedate}{2022年3月1日}
-\newcommand{\videochannel}{Stanford CS25 Vision Series}
-\newcommand{\videopublishdate}{2022年2月28日}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://cs.stanford.edu/people/academic-programs/cs25}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{来源审计：本讲不是“把 Transformer 搬到图像”}
 
-\ifdefempty{\videocoverpath}{
-{\small 封面图未提供。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这场讲座常被压缩成一句话：把图像切成 patch，再送入 Transformer。这个摘要漏掉了真正的方法论。Lucas Beyer 先花近一半时间讨论如何定义“通用视觉表示”、如何用 VTAB 测量快速迁移、为何 self-supervision 并未自动复制 NLP 的成功、以及 Big Transfer 如何把数据、模型容量、训练耐心与去重连接起来；ViT 只是在这条证据链上进一步削弱视觉归纳偏置的实验。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+原视频没有公开独立 slide PDF。本文从 Stanford Online 官方录像中恢复 36 张 distinct teaching slides，并把 bumper、纯分隔页、重复的 progressive build、Q\&A 中反复跳回的旧页面与黑场标为 intentional omissions。课程发生于 2021 年，正文保留当时的研究语境；后续发展只在“延伸”中明确标注，不倒写进讲者原意。
 
-\tableofcontents
-\newpage
+\lecturefigure{slide-01-title.jpg}{Lucas Beyer 的讲座标题把重点放在 large-scale visual representation learning，而不是单一架构。}{官方视频 00:28。}
 
-\section{Vision Transformer 的目标与测量标准}
-\subsection{引入通用视觉表征的价值命题}
-Lucas Beyer 设问：为什么视觉研究者仍然在用 ImageNet 训练模型却直接拿去做卫星图像、医学切片或计数任务？答案在于\textbf{表征泛化}的缺失——传统模型在尘埃未落定的新领域里仍需要从零训练。讲座用 VTAB（Visual Task Adaptation Benchmark）作为统一尺子，强调\textbf{少量样本可适应能力}才是真正的实用标准。
+\begin{knowledgebox}{读图：标题中的三个限定词}
+\textbf{Large-scale} 说明结论依赖数据、模型与计算规模；\textbf{visual representation} 说明目标是可迁移的中间表示，不只是某个分类器；\textbf{learning} 说明研究问题是“哪些结构可由数据学出”，而不是预设 Transformer 天然适合所有视觉任务。后文所有曲线都应带着这三个限定词阅读。
+\end{knowledgebox}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{cover.jpg}
-\caption{课程封面回顾。}
-\end{figure}
-
-\begin{importantbox}{VTAB 的三个核心维度}
+\begin{importantbox}{本讲的四个闭环}
 \begin{enumerate}
-\item \textbf{多样任务集}：包含自然图像、专业图像与非分类任务；
-\item \textbf{限样适应}：每个任务只提供极少 labeled samples；
-\item \textbf{平均分数}：用平均性能而非单一任务决定模型好坏。
+  \item \textbf{Measurement loop}：通用表示 $\rightarrow$ 少量样本适配 $\rightarrow$ 多任务测量 $\rightarrow$ 修正目标；
+  \item \textbf{Pretraining loop}：数据规模 $\times$ 模型容量 $\times$ recipe $\rightarrow$ 可迁移表示；
+  \item \textbf{Architecture loop}：patch tokenization $\rightarrow$ sequence model $\rightarrow$ learned spatial structure；
+  \item \textbf{Scaling loop}：compute budget $\rightarrow$ model shape / schedule / regularization $\rightarrow$ sample efficiency。
 \end{enumerate}
 \end{importantbox}
 
-\begin{knowledgebox}{教学逻辑}
-讲座结构自上而下：先明确“什么是好表征”，再讨论“如何通过规模化与架构设计获得”，接下来讲“如何评估/部署”并在结尾提出风险与开放问题。
-\end{knowledgebox}
-
-\subsection{Transition to Next Sections}
-由此可见，本节关注的问题是“目标与度量”。接下来会依次谈论 \textbf{预训练规模化→架构创新→迁移策略→效率与风险→工程监控} 四个关键环节。
-\subsection{本章小结}
-本章锁定通用视觉表征的问题域，提出 VTAB 等多维度指标，明确后续讨论的教学逻辑：度量、预训练、架构、迁移、部署。
-\newpage
-
-\section{规模化预训练：数据、模型与耐心}
-\subsection{BiT 的实证教训}
-Google Brain 的 Big Transfer（BiT）项目以 ImageNet-21k、JFT-300M 等海量数据配合 ResNet-152/ResNet-50 的方法，得出“数据+模型+训练周期”缺一不可的经验。Lucas 强调：训练早期 loss 不下降也要耐心，只有在足够 epochs 后，deep model 才能显现优势。
-
-\begin{knowledgebox}{BiT 的三条定律}
-\begin{itemize}
-\item 增加数据必须伴随更大模型容量；
-\item 无需人工微调的 checkpoint 可以覆盖更多下游任务；
-\item 训练曲线应提前观察 robustness；在 ObjectNet 上 BiT 模型展现出强鲁棒性。
-\end{itemize}
-\end{knowledgebox}
-
-\subsection{挑战：数据泄露与近重复}
-Lucas 提醒，在大规模预训练中，必须排查下游测试集是否出现在 pre-train set 里。利用 near-duplicate detection kernel 能有效过滤，避免在 VTAB 里因泄露获得虚假的“百宝箱”优势。
-
-\begin{warningbox}{数据泄露风险}
-使用 JFT、ImageNet1k/21k 等数据集时应持续检查：
-\begin{itemize}
-\item 图像哈希重复：去除与下游测试集重复的样本；
-\item 标签一致性：避免错误标签在多个数据集中反复传播；
-\item 法律合规：确认数据采集与使用的授权范围。
-\end{itemize}
+\begin{warningbox}{历史结果不能脱离 protocol 复述}
+“ViT 超过 ResNet”不是无条件命题。它至少依赖 pretraining dataset、训练步数、augmentation、regularization、参数/compute budget、patch size、fine-tuning protocol 与测试集。省略这些条件，会把一条实验曲线误写成架构定律。
 \end{warningbox}
+
 \subsection{本章小结}
-规模化预训练尽管带来 VTAB 上的 progress，但必须与数据审查、训练耐心与鲁棒性监控并驾齐驱。
-\newpage
 
-\section{Vision Transformer 的建模与细节}
-\subsection{Patch-based 序列建模}
-ViT 的核心创新是将图像切成 patch，并平铺喂入 Transformer。每个 patch 被视为 token，通过线性投影后加入 position embedding，再与 [CLS] token 共同输入 Transformer。
+本讲研究的不是一个 block，而是如何在规模化实验中逐步移除视觉先验，并用迁移、鲁棒性、效率和泄漏审计验证所得表示。36 张 slide 是证据骨架，教师口头解释负责连接“为什么要做”和“结果不能说明什么”。
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{cover.jpg}
-\caption{ViT 架构示意（缩略图）。}
-\end{figure}
+\section{通用视觉表示：从人类少样本归纳到可测目标}
 
-\begin{importantbox}{ViT 与 CNN 的差异}
-\begin{enumerate}
-\item \textbf{感受野}：ViT token 全局交互，不依赖局部卷积；
-\item \textbf{位置编码}：需要显式 position embedding 以保留空间；
-\item \textbf{数据需求}：ViT 只在 10M+ 图像时才超过 CNN。
-\end{enumerate}
+在进入模型之前，必须先定义目标。一个表示若只能在预训练标签空间内工作，就更像专用特征；所谓 \term{general visual representation}（通用视觉表示），应让新任务在很少样本、较小适配成本下获得可靠性能，并覆盖自然图像、结构化场景、遥感、计数与几何等不同视觉问题。
+
+\subsection{目标不是“看见”，而是快速适配}
+
+讲者先提出一个面向真实使用者的愿景：未来普通人不需要编程，也能用少量示例教会系统处理新的视觉任务。这里的关键不是机器人外形，而是 adaptation interface——用户提供示例后，系统能否利用已有表示快速理解新分类规则。
+
+\lecturefigure{slide-02-goal-general-representation.jpg}{研究目标是 general visual representation，而不是单个 benchmark 的最高分。}{官方视频 00:36。}
+
+\begin{knowledgebox}{读图：representation 是任务前的公共资产}
+预训练模型可写为特征映射 $h=f_{\theta}(x)$，下游任务再学习 $g_{\phi}(h)$。若 $f_{\theta}$ 真正通用，新的 $g_{\phi}$ 应只需要少量数据或较小参数更新。图中没有指定分类、检测或分割，正是在强调表示先于具体任务；衡量它必须看一组下游任务，而不是只看 upstream accuracy。
+\end{knowledgebox}
+
+\lecturefigure{slide-03-why-visual-representation.jpg}{好的视觉表示应“kick-start”大量含视觉输入的任务，并降低非专家的教学成本。}{官方视频 01:40。}
+
+\begin{importantbox}{什么叫 kick-start}
+Kick-start 不是零成本完成任务，而是显著降低三类成本：\textbf{sample cost}（需要多少标注示例）、\textbf{optimization cost}（需要训练多久、更新多少参数）和 \textbf{specification cost}（用户需要多精确地描述任务）。一个表示可能提高最终精度，却没有降低这些成本，因此仍不算易适配。
 \end{importantbox}
 
-\subsection{数据规模对比}
-ViT 在 ImageNet-1k 上表现不如 ResNet，但在 ImageNet-21k、JFT-300M 上开始领先。手头表格总结了不同数据-模型组合的 performance tipping point：
+\teachervoice{Lucas 用“孩子或父母能教会一个简单机器人”解释研究愿景，同时明确说视觉表示只是完整智能系统的一部分。课堂提示：把表示学习的价值写成用户适配成本，比泛称“模型更智能”更可检验。}
 
-\begin{tabularx}{\textwidth}{lXl}
+\subsection{人类视觉表示提供了哪种参照}
+
+人类并非只擅长识别熟悉物体。讲者通过花朵、卫星图与抽象物体展示：即使类别语义陌生，人也能从少数示例推断规则。真正值得模仿的是从表示中组合出新判别边界的能力，而不是记住海量类别名称。读下面三组图时，应分别判断任务依赖长期语义经验、低层视觉统计，还是数量与关系等抽象规则；只有跨这些机制都能快速适配，才接近“通用”。
+
+\lecturefigure{slide-04-human-visual-representation.jpg}{人类视觉表示被用作少样本归纳能力的参照。}{官方视频 01:48。}
+
+\begin{knowledgebox}{读图：少样本成功可能来自不同机制}
+花朵任务可利用长期视觉经验；卫星图需要迁移纹理与空间结构；抽象物体任务则可能依赖计数或关系规则。三者都表现为 few-shot classification，但需要的 invariance 不同。一个 benchmark 若只包含相似自然物体，无法区分“记住语义模板”和“形成通用视觉结构”。
+\end{knowledgebox}
+
+\lecturefigure{slide-05-vtab-flowers.jpg}{VTAB 示例中的花朵类别接近自然图像分布，少量样本即可形成类别概念。}{官方视频 02:00；Zhai et al. 2019。}
+
+\begin{knowledgebox}{读图：先判断任务与预训练分布的距离}
+花朵图片有真实纹理、颜色与轮廓，通常与 ImageNet 类预训练较接近。若模型在此类任务上表现好，可能来自可迁移表示，也可能来自上游类别/图像的语义重叠。读 benchmark 时第一步不是看分数，而是问 downstream 与 upstream 在图像来源、标签语义和视觉统计上有多近。
+\end{knowledgebox}
+
+\lecturefigure{slide-06-vtab-objects.jpg}{抽象物体任务要求根据数量、形状或关系归纳类别规则。}{官方视频 03:04；VTAB structured tasks。}
+
+\begin{warningbox}{Few-shot 不是“只训练五张图”这么简单}
+模型在下游只看到少量标注，并不代表它没有见过相似视觉模式。应区分 pretraining exposure、downstream labeled examples、hyperparameter tuning data 和 test examples。若在多个下游任务上反复调 recipe，整体系统使用的信息远多于单任务的 $k$ 个样本。
+\end{warningbox}
+
+\subsection{本章小结}
+
+通用表示的核心是快速适配多种规则，而非单一分类精度。人类示例提示我们要同时覆盖熟悉语义、domain shift 与结构化推理；这直接引出 VTAB 的多任务测量框架。
+
+\section{VTAB：如何把“通用”变成可重复实验}
+
+“通用”若没有 protocol，就容易变成营销词。\term{VTAB}（Visual Task Adaptation Benchmark）把评估拆成 upstream pretraining、固定 adaptation budget 与多类 downstream tasks，使研究者能够比较一个表示在广泛任务上的迁移能力，同时暴露只对某一数据域有效的捷径。
+
+\subsection{Upstream：先冻结问题，再比较表示}
+
+VTAB 的第一步允许研究者用自己的数据与模型学习表示。Benchmark 不强制 upstream dataset 或 architecture，但要求后续适配在统一任务与预算下进行。这样比较的对象是“整个预训练方案产生的可迁移性”，而不只是某个 backbone 的参数数量。
+
+\lecturefigure{slide-07-vtab-upstream.jpg}{VTAB 的 upstream 阶段接收预训练数据与模型，输出待评估的表示。}{官方视频 04:40；Zhai et al. 2019。}
+
+\begin{importantbox}{Upstream / downstream 的定义}
+\term{upstream} 指预训练阶段：选择数据 $D_u$、目标 $\mathcal{L}_u$ 与参数 $\theta$。\term{downstream} 指目标任务阶段：给定小型标注集 $D_t$，学习任务头或微调参数。简化写为
+\[
+\theta^{\star}=\arg\min_{\theta}\mathcal{L}_u(D_u;\theta),\qquad
+\phi_t^{\star}=\arg\min_{\phi_t}\mathcal{L}_t(D_t;\theta^{\star},\phi_t).
+\]
+第二式是否允许更新 $\theta^{\star}$，取决于 linear probe、partial fine-tuning 或 full fine-tuning protocol。
+\end{importantbox}
+
+\subsection{Task families：不能让一个 domain 主导结论}
+
+单个平均分会隐藏任务类型差异。VTAB 把任务划分为 natural、specialized 与 structured 等组别：自然图像接近常见预训练分布；专业图像包括遥感、医疗或专用传感；结构任务强调位置、计数、深度与关系。通用表示应在多组中稳定，而不是只在语义接近的组别领先。
+
+\lecturefigure{slide-08-vtab-task-families.jpg}{VTAB 从广泛视觉任务空间抽样 natural、specialized 与 structured tasks。}{官方视频 06:00。}
+
+\begin{knowledgebox}{读图：平均分之前先看分组曲线}
+Natural tasks 可奖励语义与纹理迁移；specialized tasks 检验 domain shift；structured tasks 更依赖空间关系。若方法只在 natural 组大幅领先，应谨慎称为“通用”。推荐报告 macro average、各组平均、最差任务、方差与 adaptation cost，而不是只给一个总分。
+\end{knowledgebox}
+
+\subsection{Adaptation：有限数据下测试表示是否可用}
+
+Benchmark 的最后一步是在固定下游样本预算下适配并测试。这里要比较的不是“谁能在无限微调后达到最高精度”，而是表示是否已经把有用结构编码到容易被小数据利用的坐标系中。阅读 transfer protocol 时要同时记录样本数、可训练参数、调参预算和最终测试方式，因为任何一项放宽都可能把“表示更好”变成“下游训练更强”。
+
+\lecturefigure{slide-09-vtab-transfer-protocol.jpg}{VTAB 把 upstream representation 迁移到一组下游任务，再汇总适配性能。}{官方视频 06:44。}
+
+\begin{knowledgebox}{读图：适配器也属于实验变量}
+Linear probe 测试表示的线性可分性；full fine-tuning 测试初始化是否有利；parameter-efficient adapter 则测试低成本可塑性。不同协议回答不同问题。若 A 用 full fine-tuning、B 用 linear probe，分数差异可能主要来自适配容量，而不是 upstream representation。
+\end{knowledgebox}
+
+\begin{warningbox}{Benchmark 设计本身也有 blind spots}
+VTAB 提供广度，但仍是有限任务集合。它不能完整覆盖 detection、segmentation、video、open-vocabulary reasoning、calibration 与安全性。对 benchmark 优化多年后，还会出现 meta-overfitting：研究社区间接把 test suite 变成训练目标。因此结论应写成“在该 suite 与 protocol 下更可迁移”。
+\end{warningbox}
+
+\teachervoice{讲者把 VTAB 描述成前面少样本小游戏的形式化版本。老师强调的不是“19 个任务等于所有视觉”，而是先用共同 protocol 逼迫研究者回答：表示究竟在哪些任务类型上可迁移、适配成本是多少。}
+
+\subsection{本章小结}
+
+VTAB 将通用表示拆成 upstream、task families 与 adaptation protocol。它比单一 ImageNet accuracy 更接近“快速学习新视觉任务”，但仍需分组报告、控制适配容量并警惕 benchmark meta-overfitting。
+
+\section{从 SSL 到 BiT：规模化预训练需要整套 recipe}
+
+定义测量后，讲座回顾三条获得视觉表示的路线：self-supervised pretraining、semi-supervised learning 与 large-scale supervised pretraining。重点不是给三者排永久名次，而是展示视觉领域的性能取决于 labels、data scale、model class、optimization 与 evaluation 共同作用，不能简单复制语言模型的单一成功叙事。
+
+\subsection{路线图：五个问题而不是一个答案}
+
+概览 slide 将 SSL、半监督、BiT、ViT 与 further scaling 放在同一序列中。读者应把它理解为不断减少人工先验、扩大数据与模型、再用 transfer benchmark 复核的实验程序。每一站都同时改变监督信号、模型类或训练规模，因此本节先建立变量账本，再讨论结果，避免把完整系统增益错误归给一个新名词。
+
+\lecturefigure{slide-10-overview.jpg}{讲座路线从 SSL、半监督与 BiT 走向 ViT、Scaling ViT 和 MLP-Mixer。}{官方视频 07:20。}
+
+\begin{knowledgebox}{读图：每一步改变了哪些变量}
+SSL 改变监督信号；半监督混合 labeled/unlabeled data；BiT 主要扩大监督数据与模型；ViT 改变 architecture prior；Scaling ViT 改变容量、shape 与 schedule；Mixer 进一步移除 attention。若多个变量同时变化，结论只能归因于完整 recipe，除非有消融实验隔离贡献。
+\end{knowledgebox}
+
+\subsection{Self-supervised learning：视觉代理任务不自动等于语义}
+
+\term{self-supervised learning}（自监督学习）从数据本身构造监督信号，例如预测遮挡区域、对比不同增强视图或重建输入。它减少人工标签依赖，但 proxy objective 可能奖励纹理、增强不变性或数据集捷径，而非所有 downstream 所需结构。
+
+\lecturefigure{slide-11-self-supervised-review.jpg}{早期视觉 SSL 结果说明架构与代理任务选择会显著影响迁移。}{官方视频 07:56。}
+
+\begin{knowledgebox}{读图：不要只比较柱子高度}
+图中方法同时改变 pretext task、architecture 与 training recipe。更高 mean score 可以说明某组合更有效，却不能单独证明“无标签数据优于标签”或“某代理任务发现了语义”。应检查同 backbone、同 compute、同 augmentation 的 controlled comparison，并观察 structured/specialized tasks 是否同步受益。
+\end{knowledgebox}
+
+\teachervoice{Lucas 提醒，NLP 中自然出现的 next-token target 在视觉里没有完全对应的唯一目标。课堂提示：无标签不等于无设计；研究者把大量先验放进 augmentation、positive-pair construction、masking pattern 与 architecture。}
+
+\subsection{Semi-supervised learning：标签价值取决于模型类}
+
+\term{semi-supervised learning}（半监督学习）同时使用少量 labeled data 与大量 unlabeled data，常见机制包括 pseudo-labeling、consistency regularization 与 teacher-student training。它看似是折中方案，但模型类别和标签预算会改变收益：新的 architecture 可能让相同标签产生更大增益，也可能让伪标签错误被反复放大。
+
+\lecturefigure{slide-12-semi-supervised-review.jpg}{半监督路线比较标签预算、模型类与无标签数据的组合。}{官方视频 08:36。}
+
+\begin{warningbox}{Pseudo-label feedback loop}
+若 teacher 在某类样本上系统性错误，pseudo-label 会把错误变成训练目标。需要 confidence threshold、class balance、strong augmentation、held-out calibration 与 subgroup analysis。总体准确率提升不能证明少数 domain 或长尾类别没有退化。
+\end{warningbox}
+
+\subsection{Big Transfer：耐心、容量与数据必须一起扩展}
+
+BiT 使用大规模监督预训练的 ResNet 系列研究 transfer。其持久价值不只是一个 checkpoint，而是给出工程规律：更多数据需要更大容量；大模型可能在训练早期看起来更差；下游适配应根据数据规模选择 schedule 与 regularization；鲁棒性和去重必须成为报告的一部分。
+
+\lecturefigure{slide-13-bit-summary.jpg}{BiT 总结了耐心训练、同时扩大数据与模型、few-shot transfer 和 robustness。}{官方视频 23:16；Kolesnikov et al. 2019。}
+
+\begin{knowledgebox}{读图：三条经验如何连接}
+左侧训练曲线提示大模型需要更长优化才能显现优势；中间散点说明数据规模与模型容量共同决定 transfer；右侧 few-shot 曲线显示表示可降低下游样本需求；下方 ObjectNet 结果检验分布变化。四部分共同说明：upstream loss、in-distribution accuracy、few-shot transfer 与 robustness 是不同证据，不能只保留最好看的一个。
+\end{knowledgebox}
+
+\begin{importantbox}{容量匹配的直觉}
+设数据规模为 $D$、模型容量为 $N$、训练计算为 $C$。若固定很小的 $N$ 而只增大 $D$，模型可能无法吸收新增结构；若固定很小的 $D$ 而增大 $N$，则更易过拟合或依赖强 regularization。实际目标是寻找受 compute 约束的组合
+\[
+(N^{\star},D^{\star})=\arg\min_{N,D:\,C(N,D)\le C_0}\mathcal{L}_{\text{transfer}}(N,D),
+\]
+而不是分别最大化参数或样本数。
+\end{importantbox}
+
+\lecturefigure{slide-14-bit-large-scale-pretraining.jpg}{BiT 在大规模预训练与多任务迁移之间建立经验联系。}{官方视频 23:44。}
+
+\begin{knowledgebox}{读图：上游规模不是最终目标}
+横轴对应时间或规模演进，重点是大规模 supervised pretraining 产生可复用 checkpoint。图上领先点不表示所有任务都同幅度提升；应回到 VTAB/few-shot/ObjectNet 分组结果，确认收益是否跨任务、是否超过额外 compute 成本，并检查测试分布是否与预训练重叠。
+\end{knowledgebox}
+
+\teachervoice{老师反复强调“be patient”：更深更大的模型在早期训练可能落后，不能用短跑实验否定规模化方案。实践经验是先确保 schedule 足够长、optimization 稳定，再比较最终 transfer；否则是在比较训练成熟度，而非模型潜力。}
+
+\subsection{Deduplication：没有数据审计就没有可信迁移}
+
+大规模数据集可能包含 downstream test images 的相同或近重复版本。\term{deduplication}（去重）不仅移除完全相同的文件，还要检测裁剪、压缩、缩放、颜色变化与轻度编辑后的 near-duplicates。若测试图进入 pretraining，few-shot transfer 会被记忆伪装成泛化。
+
+\lecturefigure{slide-15-deduplication.jpg}{BiT 对多个下游数据集执行近重复检测，展示潜在泄漏样本。}{官方视频 25:00。}
+
+\begin{warningbox}{数据泄漏的四个层级}
+\begin{enumerate}
+  \item \textbf{Exact duplicate}：文件或像素完全相同；
+  \item \textbf{Near duplicate}：裁剪、缩放、压缩或水印变化；
+  \item \textbf{Semantic duplicate}：同一对象/场景的相邻照片；
+  \item \textbf{Label leakage}：文件名、网页文字或 metadata 暴露答案。
+\end{enumerate}
+仅靠哈希可处理第一层，后续层级需要 perceptual embedding、nearest-neighbor review 与 provenance records。
+\end{warningbox}
+
+\subsection{本章小结}
+
+视觉预训练没有单一魔法目标。SSL 把先验移入代理任务，半监督需要控制伪标签反馈，BiT 证明数据、容量、训练长度与迁移协议必须一起扩展。任何大规模 transfer 结论都应附带去重和分布审计。
+
+\section{ViT：把图像变成序列意味着什么}
+
+有了数据规模与 transfer protocol，讲座才进入 ViT。其研究假设不是“attention 一定优于 convolution”，而是：当数据和 compute 足够时，能否减少 locality 与 translation equivariance 等硬编码视觉先验，让模型从数据中学出空间结构？因此 ViT 的简单性既是优点，也是对规模的要求。
+
+\subsection{Let the data speak：减少手工视觉结构}
+
+在 CNN 中，local receptive field、weight sharing 与层级下采样形成强归纳偏置。ViT 保留更少的二维结构：先把图像分块并线性投影，再用通用 Transformer encoder 处理 token。研究问题从“如何设计更好的卷积模块”变成“数据能否补回被移除的先验”。
+
+\lecturefigure{slide-16-letting-data-speak.jpg}{“ViT: letting the data speak”把架构简化视为规模化实验。}{官方视频 25:12。}
+
+\begin{knowledgebox}{读图：更少先验不是更少假设}
+Patch size、position embedding、class token、augmentation、optimizer 与 dataset composition 仍是强设计选择。所谓 letting the data speak，是相对减少 convolutional locality，而不是消除 inductive bias。更弱先验通常提高表示灵活性，也扩大 sample complexity 和 optimization burden。
+\end{knowledgebox}
+
+\lecturefigure{slide-17-cnn-vs-transformer.jpg}{CNN 通过卷积层级编码视觉结构；Transformer 在语言中已证明可扩展，ViT 询问它能否直接用于图像。}{官方视频 26:24。}
+
+\begin{knowledgebox}{读图：比较的是信息路径与参数共享方式}
+卷积让邻近像素先局部交互，并跨层扩大 receptive field；self-attention 允许任意 patch 在一层中建立内容依赖连接。CNN 的局部性更 data-efficient；attention 的全局交互更灵活，但原始复杂度随 token 数二次增长。二者并非“局部 vs 全局”的绝对二分，深 CNN 也有全局 receptive field，ViT 也会学习局部 pattern。
+\end{knowledgebox}
+
+\subsection{Patch tokenization 与 class token}
+
+设输入图像 $x\in\mathbb{R}^{H\times W\times C}$，patch 边长为 $P$，则 token 数为 $N=HW/P^2$。每个 patch 展平为 $P^2C$ 维向量，经线性矩阵 $E$ 投影到 $D$ 维。再前置可学习 class token，并加入 position embedding：
+\[
+z_0=[x_{\mathrm{cls}};x_p^1E;x_p^2E;\ldots;x_p^NE]+E_{\mathrm{pos}}.
+\]
+这里 $x_p^i$ 是第 $i$ 个 patch，$x_{\mathrm{cls}}$ 用于聚合分类信息，$E_{\mathrm{pos}}$ 提供 token 的空间顺序。
+
+\lecturefigure{slide-18-vit-architecture.jpg}{ViT 将 patch embedding、position embedding 与 class token 输入标准 Transformer encoder。}{官方视频 28:32；Dosovitskiy et al. 2020。}
+
+\begin{knowledgebox}{读图：架构图从下往上读}
+最下方图像被切成固定 patch；线性投影把每个 patch 变成 token；position embedding 防止 permutation invariance 丢失空间；encoder 交替执行 multi-head self-attention 与 MLP；最终 class token 进入分类 head。图中“标准 Transformer”仍包含 LayerNorm、residual connection 与多层堆叠，并非只有 attention 一步。
+\end{knowledgebox}
+
+\begin{importantbox}{Self-attention 的计算代价}
+对 $N$ 个 token、hidden size $D$，attention score $QK^{\top}$ 约需 $O(N^2D)$ 计算和 $O(N^2)$ 中间存储。因为 $N=HW/P^2$，把 patch 边长减半会让 token 数变为四倍，attention matrix 面积变为十六倍。高分辨率视觉任务因此不能只看参数量，还要看 token 数与 activation memory。
+\end{importantbox}
+
+\begin{lstlisting}[caption={Patchify and prepend a class token}]
+def vit_tokens(image, patch_size, projection, cls_token, pos_embed):
+    patches = split_into_patches(image, patch_size)
+    tokens = flatten(patches) @ projection
+    tokens = concatenate([cls_token, tokens], axis=0)
+    return tokens + pos_embed
+\end{lstlisting}
+
+\subsection{本章小结}
+
+ViT 的核心实验是弱化卷积先验，而不是证明图像“本质上就是语言”。Patchify 决定 token 数与 compute，position embedding 恢复顺序，class token 提供聚合接口；简单架构把更多负担交给数据、优化和规模。
+
+\section{数据与计算：ViT 何时超过卷积基线}
+
+架构图本身无法回答 ViT 是否有效。讲座接着比较不同 pretraining dataset 与 compute budget，说明 ViT 在小数据上可能不如强正则化 CNN，却能在更大数据和合适 recipe 下取得更好的 transfer。这里的因果对象是完整训练系统，而不是 attention 单组件。
+
+\subsection{Scaling with data：弱先验需要更多证据}
+
+当预训练从 ImageNet 扩展到 ImageNet-21k 与 JFT-300M，ViT 的性能提升更明显。直觉上，强卷积先验在低数据区间提供 sample efficiency；数据规模扩大后，较灵活的模型可以学习更适合任务分布的结构，先验不足的代价逐渐被数据抵消。
+
+\lecturefigure{slide-19-scaling-with-data.jpg}{ViT 与 BiT 在不同预训练数据规模下的 ImageNet 与 linear few-shot 结果。}{官方视频 30:24；Dosovitskiy et al. 2020。}
+
+\begin{knowledgebox}{读图：先看横轴，再看交叉点}
+左图横轴是预训练数据集规模，纵轴是 ImageNet top-1；右图横轴是 JFT 样本数量，纵轴是 linear few-shot accuracy。小数据端 BiT/ResNet 更稳，大数据端 ViT 曲线上升更快。关键不是某个点领先，而是模型 family 对数据规模的响应斜率不同。曲线不能证明无限数据下永远保持同一趋势。
+\end{knowledgebox}
+
+\begin{warningbox}{数据规模不是“图片数量”一个数字}
+有效规模还取决于 label noise、class diversity、long-tail coverage、duplicate rate、resolution、domain breadth 与 augmentation。300M 个高重复网页样本不等于 300M 个独立信息单元。比较 scaling curve 时应报告清洗与采样策略。
+\end{warningbox}
+
+\subsection{Pretraining frontier：论文结果是系统共同产物}
+
+模型在历史 performance frontier 上的位置受 dataset、hardware、optimizer、training duration 与 hyperparameter search 共同影响。ViT 点位于 ImageNet 模型演进图的上方，说明该 recipe 有竞争力；但这不是“architecture-only”消融，也不意味着每个团队都能在较小预算复现相同增益。
+
+\lecturefigure{slide-20-vit-pretraining.jpg}{ViT 在 ImageNet accuracy 与预训练规模的历史图上形成新的 frontier 点。}{官方视频 30:32。}
+
+\begin{knowledgebox}{读图：frontier 只比较被画出的方案}
+散点图上“更上方”代表更高 accuracy，“更右侧”通常代表更多数据或规模。Frontier 表示在已报告方案中较优，不代表 Pareto 轴完整；若没有标出 energy、latency、memory、annotation cost 与 tuning attempts，图无法回答部署效率或研究成本。
+\end{knowledgebox}
+
+\subsection{Position embedding：空间结构是学出来还是写进去}
+
+没有 position embedding 的 self-attention 对 token 排列近似 permutation-equivariant，无法区分同一 patch 集合的空间顺序。ViT 学习一组绝对位置向量；可视化它们的相似度，可以检查模型是否从二维图像中恢复出邻近关系和网格结构。
+
+\lecturefigure{slide-21-position-embeddings.jpg}{学习到的位置编码相似度呈现二维邻域结构，并与不同初始化/共享方式比较。}{官方视频 33:56。}
+
+\begin{knowledgebox}{读图：热图不是“模型理解空间”的证明}
+每个位置与其他位置的 embedding similarity 若呈局部平滑，说明训练恢复了二维邻近结构。右侧表格比较不同 position embedding 设计的性能。该证据只说明表示中存在空间规律，不证明模型获得物体级几何、因果关系或完整 scene understanding；还需 attention pattern、probe 与 downstream behavior 支持。
+\end{knowledgebox}
+
+\teachervoice{Q\&A 中 Lucas 回到这张 slide，解释 position embedding 的主要作用是区分位置，而局部邻接结构可在训练中出现。课堂提示：可视化是机制线索，不是因果证明；应结合移除、打乱、插值和分辨率迁移实验。}
+
+\subsection{Compute-normalized comparison}
+
+若只按参数量比较，ViT、Mixer 与 CNN 的实际计算可能差异很大。讲座用 compute 轴观察 transfer performance：在相近 FLOPs 下，模型结构与训练 recipe 决定能否把计算转化为可迁移表示。读图前要把理论运算量与真实系统成本分开：同一 FLOPs 可能对应完全不同的矩阵形状、memory traffic、并行度与通信，因此这里只比较算法层面的 compute efficiency。
+
+\lecturefigure{slide-22-scaling-with-compute.jpg}{不同模型在预训练 compute 与 transfer accuracy 之间形成不同效率前沿。}{官方视频 39:24。}
+
+\begin{knowledgebox}{读图：FLOPs 不是时间，也不是成本}
+横轴 approximate compute 便于算法比较，但相同 FLOPs 在不同硬件上可能有不同 latency、memory traffic 与 utilization。Attention、convolution 和 MLP 的 kernel efficiency 不同；分布式通信也未必计入。图能回答“理论计算预算下谁更准确”，不能直接回答“哪个系统更便宜或更快”。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+ViT 的优势出现在数据、regularization 与 compute 足够的 regime。数据 scaling 曲线展示响应斜率，frontier 图展示历史竞争力，position embedding 提供空间结构线索，compute 图则提醒参数量不是唯一成本尺度。
+
+\section{模型形状、推理效率与有效感受野}
+
+达到某个 accuracy 后，下一步不是盲目放大所有维度。Transformer 的 depth、width、MLP width、head 数与 patch size 会改变优化、activation memory、并行效率和推理延迟。讲座用 shape、speed 与 receptive field 三组分析说明：同样参数或 compute 下，形状选择可以显著改变结果。
+
+\subsection{Uniform scaling 并不总是最佳}
+
+所谓 \term{model shape} 是参数如何分配到深度、hidden width、MLP width、heads 与 patch resolution。统一放大所有维度简单，却可能把预算投到边际收益较低的方向。图中不同颜色代表不同 scaling 方式，比较它们在 relative compute 下的平均性能。
+
+\lecturefigure{slide-23-transformer-shape.jpg}{ViT 的 depth、width、patch size 与 MLP width 对 compute efficiency 的影响不同。}{官方视频 46:20。}
+
+\begin{knowledgebox}{读图：曲线接近不代表系统等价}
+纵轴是平均分，横轴是 relative compute。较高曲线表示同预算下更准确。Depth scaling 可能提高表达层级却增加串行路径；width 更利于并行但扩大 activation；更小 patch 提高空间分辨率却使 attention 成本激增。最终 shape 应同时考虑训练吞吐、推理 batch、memory 与目标分辨率。
+\end{knowledgebox}
+
+\subsection{Inference speed：复杂度常数和硬件映射会反转排名}
+
+理论 FLOPs 只描述运算数量，真实 inference speed 还受 kernel implementation、batch size、memory bandwidth 与 accelerator shape 影响。ViT 的 dense matrix operations 容易利用现代硬件，但 token 数增加会迅速扩大 attention 与 activation。
+
+\lecturefigure{slide-24-inference-speed.jpg}{不同 ResNet 与 ViT 变体的推理吞吐随图像规模/模型变化。}{官方视频 47:56。}
+
+\begin{knowledgebox}{读图：速度曲线需要 hardware context}
+纵轴代表推理速度或吞吐，横轴对应输入规模/模型配置。比较时必须固定 accelerator、precision、batch size、compiler 与 preprocessing。一个模型在大 batch 吞吐领先，可能在 batch-1 latency 落后；研究训练友好也不等于移动端友好。
+\end{knowledgebox}
+
+\begin{warningbox}{Patch size 是隐藏的系统旋钮}
+减小 $P$ 能保留细粒度信息，却让 $N=HW/P^2$ 增长。它同时影响 attention FLOPs、KV/activation memory、数据加载后的 tensor shape 和下游 dense prediction resolution。报告“ViT-B”而不报告 `/16` 或 `/32`，会遗漏关键成本变量。
+\end{warningbox}
+
+\subsection{Effective receptive field：attention 也会形成层级结构}
+
+ViT 每层理论上可全局交互，但实际 attention head 可能在浅层偏局部、深层扩大范围。\term{effective receptive field} 指模型对不同空间距离的实际依赖，而非理论可达范围。它能帮助判断局部结构是被硬编码还是从数据中涌现。
+
+\lecturefigure{slide-25-receptive-field.jpg}{不同层与 attention heads 的平均注意距离展示 ViT 学到的局部到全局结构。}{官方视频 49:20。}
+
+\begin{knowledgebox}{读图：点云表示多头异质性}
+横轴是 layer depth，纵轴是平均 attention distance；每个点可对应一个 head。浅层存在局部 heads，深层多数 head 覆盖更远范围，说明模型形成层级。但 attention weight 不等同于 feature attribution，也不能单独证明某 head 的因果功能；需要 masking 或 intervention 实验验证。
+\end{knowledgebox}
+
+\teachervoice{老师在这一段不断回到“同样规模怎么定义”。参数量、FLOPs、实际吞吐与表示容量并不一致。实践中应把模型命名拆成 depth、width、patch、resolution 与 precision，避免用一个总参数数掩盖系统差异。}
+
+\subsection{本章小结}
+
+模型扩展是资源分配问题。Shape 决定计算如何进入 depth/width/token resolution，硬件决定 FLOPs 如何转化为速度，有效感受野则检查模型实际学到的空间层级。三者共同约束“更大 ViT”是否值得。
+
+\section{Scaling ViT：更大模型需要新的训练制度}
+
+讲座第二部分讨论 further scaling。重点不是简单增加参数，而是寻找能放进硬件的 shape、设计足够长且稳定的 learning-rate schedule、对任务头施加合适 regularization，并同时观察 SOTA、few-shot sample efficiency 与 scaling law。Scale 是 recipe 的放大镜：小模型上不明显的优化问题会成为大模型瓶颈。
+
+\subsection{第二阶段的问题清单}
+
+分隔页列出 Scaling ViT 团队与研究方向，提醒读者后续结果来自模型、训练与评估协同，而非原始 ViT 论文的直接外推。读这一组图时，应把“模型能否放得下”“训练是否足够久”“下游头是否过拟合”作为三个独立问题。
+
+\lecturefigure{slide-26-further-scaling-divider.jpg}{Further scaling up ViTs 引出模型形状、训练日程与下游正则化。}{官方视频 52:32。}
+
+\begin{knowledgebox}{读图：团队页也是 provenance}
+这张页本身没有曲线，却界定了后续证据属于 Scaling Vision Transformers 工作。保留它是为了避免把跨论文结果混成同一实验，并提醒读者查看原论文中的 dataset、compute、model family 与 appendix，而不是只从课堂截图复制结论。
+\end{knowledgebox}
+
+\subsection{Scale model：参数放在哪里}
+
+扩大模型时，可以增加 depth、hidden width、MLP width、heads 或更细 patch。不同配置即使参数量接近，也可能在 TPU/GPU memory 与 matrix shape 上差异巨大。团队先从 memory feasibility 出发，再搜索性能更好的结构。
+
+\lecturefigure{slide-27-scaling-model-build.jpg}{进一步扩展 ViT 时，模型维度和硬件内存约束共同决定可行配置。}{官方视频 1:00:08。}
+
+\begin{knowledgebox}{读图：红圈是受约束的设计变量}
+图把 Transformer block、attention heads 与 MLP 维度标出，说明 scaling 不是单一 slider。固定 memory 下，增加 layers 会保存更多 activation；增加 width 会扩大矩阵和 optimizer state；减小 patch 会增加 token。这里的 \term{optimizer state} 指 Adam/AdamW 为每个参数保存的一阶矩 $m$ 与二阶矩 $v$ 等更新状态，它们常比参数本身占用更多训练内存。\term{activation checkpointing}（激活检查点）只保存部分 forward activations，在 backward 时重新计算其余激活，以额外 compute 换 memory；它不同于保存模型权重的 training checkpoint。\term{sharding}（分片）则把参数、梯度、optimizer state 或 activation 切分到多张设备，使这些状态不再在每个 rank 完整复制，但会引入 \term{collectives}（多设备集合通信），例如 all-reduce、reduce-scatter、all-gather 与 broadcast，用于聚合或重新分发各 rank 的张量。低精度训练也能改变可行边界，却需要处理数值范围与累积精度。
+\end{knowledgebox}
+
+\lecturefigure{slide-28-model-shape-search.jpg}{不同 layer count 与 MLP width 的可行区域展示 shape search 如何受内存限制。}{官方视频 1:00:48。}
+
+\begin{knowledgebox}{读图：先区分不可行、可行与最优}
+每个面板对应不同 depth，色块表示可容纳或性能区域。白色/截断区域往往是 memory 不可行，不等于精度差。最佳 shape 是硬件、batch、parallelism 与目标 metric 的联合结果；换 accelerator 或 sequence length 后，最优点可能移动。
+\end{knowledgebox}
+
+\subsection{Scale training：从有限 schedule 到近似无限日程}
+
+大模型需要更多优化步才能进入其优势区间。若预先固定短 schedule，训练结束时模型仍在快速改善，比较会系统性偏向小模型。所谓“infinite” schedule 不是字面无限训练，而是构造可延长、无需预知最终步数的 learning-rate rule，使 checkpoint 在多个预算点都保持可用。
+
+\lecturefigure{slide-29-infinite-lr-schedules.jpg}{不同 learning-rate schedule 随训练步数延伸时的行为。}{官方视频 1:00:56。}
+
+\begin{knowledgebox}{读图：schedule 必须与停止时间解耦}
+传统 cosine decay 需要预先知道总步数；若临时延长训练，学习率可能已衰减过低。可延展 schedule 让研究者在不同 compute budget 上比较 checkpoint，而不为每个终点重新训练。曲线优劣还要看 validation loss、stability 与最终 transfer，不只是学习率形状。
+\end{knowledgebox}
+
+\teachervoice{Lucas 的“be patient”在这里变成具体训练设计：若大模型需要更长时间显现优势，就不能用为小模型设计的短 schedule 评价它。课堂提示：early stopping 规则也属于模型比较的一部分。}
+
+\subsection{Head weight decay：下游小数据需要局部正则化}
+
+预训练 backbone 很大，但 few-shot 任务的 classifier head 只看到少量样本，容易成为过拟合入口。对 head 使用不同 weight decay，可以改变低样本区间的 bias-variance tradeoff；统一 regularization 未必适合 backbone 与新初始化 head。
+
+\lecturefigure{slide-30-head-weight-decay.jpg}{Head weight decay 对 few-shot 网格搜索和训练曲线的影响。}{官方视频 1:01:00。}
+
+\begin{knowledgebox}{读图：看最优区域是否稳定}
+左侧热图展示不同 label budget 与 weight decay 的组合，右侧曲线比较 recipe。低样本下较强正则可能更重要；样本增加后最优值会变化。若只在 test set 上选最优 decay，会产生 selection leakage；应使用 validation protocol 或预先固定规则。
+\end{knowledgebox}
+
+\subsection{结果：SOTA、sample efficiency 与 scaling law 分开看}
+
+扩展后的模型需要从三个维度验收：绝对性能是否提高、少样本迁移是否更有效、性能是否随 compute 呈可预测趋势。它们分别对应 frontier、adaptation cost 与 planning value，不能用一个 ImageNet top-1 代替。
+
+\lecturefigure{slide-31-new-sota.jpg}{扩展 ViT 在 ImageNet、分布迁移与 VTAB 等指标上形成新的结果。}{官方视频 1:01:56；Zhai et al. 2021。}
+
+\begin{knowledgebox}{读图：表格中的每一列是不同承诺}
+ImageNet 衡量常见分类；ImageNet-V2 检验重新采样后的分布变化；ReaL 修正多标签问题；ObjectNet 增强姿态/背景 shift；VTAB 测多任务迁移。一个模型在所有列都改善，比只在原始 ImageNet 提升更有说服力；仍不能外推到 detection、video 或 open-world reliability。
+\end{knowledgebox}
+
+\lecturefigure{slide-32-sample-efficiency.jpg}{更大 ViT 在 10-shot、few-shot 与 full fine-tuning 条件下表现出不同 sample-efficiency 曲线。}{官方视频 1:02:40。}
+
+\begin{knowledgebox}{读图：横轴是下游样本，曲线间距是表示价值}
+当样本很少时，较好的 representation 应降低错误率；样本增多后，所有模型可能收敛但速度不同。若大模型只在 full-data 领先，说明其优势未必是少样本表示；若 10-shot 也领先，才更支持 kick-start 新任务的原始目标。
+\end{knowledgebox}
+
+\lecturefigure{slide-33-vit-scaling-laws.jpg}{ViT 的 error 与 compute/模型规模关系呈现近似幂律区间。}{官方视频 1:02:52。}
+
+\begin{importantbox}{Scaling law 的常用形式}
+在有限实验区间内，可用
+\[
+E(C)=E_{\infty}+aC^{-\alpha}
+\]
+拟合 error $E$ 与 compute $C$；$E_{\infty}$ 是不可约/饱和项，$a$ 是尺度系数，$\alpha$ 是经验 exponent。幂律便于规划预算，却不是自然定律：数据耗尽、distribution shift、optimizer 改变或 metric ceiling 都可能导致转折。
+\end{importantbox}
+
+\begin{warningbox}{外推前必须检查三件事}
+拟合区间是否跨足够数量级；不同 model family 是否共享 exponent；训练是否都接近各自最优 recipe。若小模型欠训练、大模型充分训练，表面 scaling law 可能混入 optimization gap。外推到未测试的百倍 compute 时，应报告区间和不确定性。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Scaling ViT 将规模问题拆成 shape feasibility、schedule extensibility、head regularization、绝对性能、sample efficiency 与 scaling law。更大模型只有在训练成熟、适配稳定且多类评估同步改善时，才构成可信进步。
+
+\section{MLP-Mixer：进一步削弱归纳偏置的对照实验}
+
+讲座最后用 MLP-Mixer 延伸“让数据说话”的思想。Mixer 不使用 convolution，也不使用 self-attention，而是在 token 维与 channel 维交替应用 MLP。它不是要证明 attention 无用，而是测试：在大规模预训练下，简单 dense mixing 能否学到足够好的视觉表示。
+
+\subsection{从 ViT 到 Mixer：研究问题而非品牌替换}
+
+过渡页把 ViT 的成功重新解释为“也许规模与数据比特定 operator 更重要”。因此 Mixer 是一个 controlled provocation：保留 patch embedding、residual/normalization 与大规模 recipe，替换 token interaction mechanism，观察 transfer scaling 是否仍成立。
+
+\lecturefigure{slide-34-mixer-divider.jpg}{MLP-Mixer 延续“letting the data speak”，进一步移除 attention。}{官方视频 1:03:36。}
+
+\begin{knowledgebox}{读图：不要得出“架构不重要”}
+若 Mixer 在大数据上有竞争力，只能说明 attention 不是获得强表示的唯一机制。训练稳定性、compute efficiency、resolution scaling、dense prediction 与小数据性能仍可能不同。更合理的结论是：operator、scale 与 recipe 存在多种可行组合，需要按任务和系统约束选择。
+\end{knowledgebox}
+
+\subsection{Token-mixing 与 channel-mixing}
+
+输入矩阵 $X\in\mathbb{R}^{N\times D}$ 中，$N$ 是 patch tokens，$D$ 是 channels。Token-mixing MLP 对每个 channel 跨 $N$ 个位置混合；channel-mixing MLP 对每个 token 跨 $D$ 个通道混合。两者交替并配合 residual connection，使信息既能跨空间位置传播，也能在特征维组合。
+
+\lecturefigure{slide-35-mlp-mixer-architecture.jpg}{MLP-Mixer 交替执行 token-mixing 与 channel-mixing MLP。}{官方视频 1:03:44；Tolstikhin et al. 2021。}
+
+\begin{importantbox}{Mixer block 的抽象形式}
+忽略 LayerNorm 细节，可写为
+\[
+U=X+W_2\,\sigma(W_1X^{\top})^{\top},\qquad
+Y=U+\sigma(UV_1)V_2.
+\]
+第一式沿 token 维混合，第二式沿 channel 维混合；$\sigma$ 是非线性。与 attention 不同，token mixing 权重不依赖当前输入内容，因此交互是静态的；代价和泛化特性也随 token 数与权重矩阵大小变化。
+\end{importantbox}
+
+\subsection{Scaling comparison：模型族的斜率比单点更重要}
+
+最后一张图比较 Mixer、ViT 与 BiT/ResNet 随训练数据增长的 linear few-shot 表现。重点是三类模型都能从规模获益，但斜率、低数据起点与高数据上限不同；这再次支持“架构先验决定 sample efficiency，数据规模决定灵活模型能否追上”的框架。
+
+\lecturefigure{slide-36-mixer-scaling.jpg}{Mixer、ViT 与 BiT 在不同训练集规模下的 linear few-shot scaling。}{官方视频 1:05:32。}
+
+\begin{knowledgebox}{读图：比较起点、斜率和饱和区}
+低数据端，强视觉先验模型通常有更高起点；随着训练数据增加，ViT/Mixer 曲线可能更陡；高数据端是否继续领先取决于容量与 recipe。单个最大数据点不能说明 sample efficiency，单个最小数据点也不能说明 asymptotic capability。完整曲线才显示 inductive bias 与 scale 的交换关系。
+\end{knowledgebox}
+
+\teachervoice{讲者把 Mixer 放在结尾，不是宣布“MLP 取代 Transformer”，而是强调研究应继续拆解：究竟是 attention、patch representation、规模、数据还是训练制度贡献了结果。老师的口头态度比 slide 标题更谨慎。}
+
+\subsection{本章小结}
+
+MLP-Mixer 证明 attention 不是大规模视觉表示的唯一候选。它把讲座主线推到更一般的结论：归纳偏置、数据规模和系统效率之间存在交换，模型族应通过完整 scaling curve 与多任务 transfer 比较。
+
+\section{Q\&A 方法论：模型规模到底是什么}
+
+最后的问答把多个 slide 重新串联起来。听众询问视觉模型与语言模型谁更大，Lucas 没有给出单一数字，而是区分参数量、每样本 FLOPs、tokenization 结构与研究资源。这段 teacher voice 很重要，因为它阻止读者把“scale”误写成参数计数排行榜。
+
+\subsection{参数量、FLOPs、内存与数据不是同一尺度}
+
+语言模型的大词表 embedding 会贡献大量参数，视觉 patch projection 的参数结构不同；另一方面，图像 token 数、分辨率和 attention activation 会显著影响 compute。一个模型可以参数较少却 FLOPs 更高，也可以训练 FLOPs 高但推理复用效率好。
+
+\begin{longtable}{L{0.19\textwidth}L{0.31\textwidth}L{0.40\textwidth}}
 \toprule
-组合 & 数据规模 & 观察 \\
+尺度 & 它衡量什么 & 主要盲点 \\
 \midrule
-ViT-B/16 + IN-1k & 1.3M & 分数略低于 ResNet-50 \\
-ViT-B/16 + IN-21k & 14M & 与 ResNet-152 持平 \\
-ViT-L/16 + JFT-300M & 300M & 超越所有 ResNet，鲁棒性更强 \\
+参数量 $N$ & 权重存储与部分表示容量 & 不含 activation、token 数、数据和实际利用率 \\
+训练 FLOPs & 完成预训练的理论运算量 & 不含低利用率、通信、失败实验和数据成本 \\
+每样本 FLOPs & 单次 forward/backward 的算术量 & 不等于 wall-clock latency 或 energy \\
+Activation memory & 序列/分辨率、batch 与层数产生的中间状态 & 可被 checkpointing 换成额外计算 \\
+数据规模 $D$ & 样本/信息覆盖 & 原始样本数不反映重复、噪声与多样性 \\
+下游样本效率 & 表示适配新任务所需标注 & 受 adaptation protocol 与 task similarity 影响 \\
 \bottomrule
-\end{tabularx}
+\end{longtable}
 
-\subsection{本章小结}
-ViT 强调序列化视觉，只有在巨量数据与模型容量配合下才显优势，本章概括了 patch token 化、位置编码与规模敏感性。
-\newpage
-
-\section{迁移策略与效率}
-\subsection{Fine-tune vs. Linear Probe}
-讲座评估了两种迁移方式在 VTAB 上的差距：full fine-tuning 虽然性能最好，但时间代价高；linear probe 结合 projector 既保持部分性能又节省 compute。
-
-\begin{knowledgebox}{迁移效率三法}
-\begin{itemize}
-\item Linear probe：冻结主干，仅训练一个线性分类头；
-\item Adapter tuning：插入小模块，仅更新少数参数；
-\item Prompt tuning（Vision prompt）：引入 learnable tokens，保持 backbone freeze。
-\end{itemize}
+\begin{knowledgebox}{术语消化：capacity、scale 与 efficiency}
+\term{capacity} 是模型可表示/拟合函数的能力，不能由参数量完全刻画；\term{scale} 是数据、模型和计算的联合范围；\term{efficiency} 必须指定分母，例如 accuracy per FLOP、per dollar、per joule 或 per labeled example。没有分母的“更高效”没有技术含义。
 \end{knowledgebox}
 
-\subsection{案例：卫星图像任务}
-在 VTAB 的 satellite task 下，ViT 的 backbone 使用 linear probe 后相比 ResNet 仍有 3\% 提升。Lucas 解释为 Transformer 更强的 global attention 能识别长距离光谱模式。
+\teachervoice{Lucas 的个人判断是参数量和 FLOPs 都不是“唯一正确”的模型大小。视觉模型当时规模较小，一部分原因是研究兴趣和资源投入差异，而不是视觉任务存在已证明的容量上限。课堂提示：观察到的 frontier 也反映组织与资源分配。}
+
+\subsection{从课堂结果到工程决策}
+
+如果实际任务数据较少、延迟严格，强先验 CNN 或 hybrid 可能更合适；如果拥有大规模多域数据、dense accelerator 与跨任务迁移需求，ViT 类模型可能更有优势；若系统需要高分辨率 dense prediction，还要重新评估 token cost、hierarchy 与 memory。选择模型应从约束反推，而不是从最新榜单顺推。
+
+\begin{importantbox}{工程决策模板}
+\begin{enumerate}
+  \item 定义 downstream task family、domain shift 与标签预算；
+  \item 固定 latency、memory、training compute 与 data governance 约束；
+  \item 比较至少一个强 CNN/hybrid 与一个 ViT family baseline；
+  \item 同时报告 full-data、few-shot、robustness、calibration 与 failure groups；
+  \item 对 pretraining/downstream 做 exact、near 与 semantic dedup audit；
+  \item 用真实 hardware profile 验证理论 FLOPs 结论。
+\end{enumerate}
+\end{importantbox}
 
 \subsection{本章小结}
-迁移时务必权衡 compute 与 accuracy，ViT 在 linear probe 甚至 adapter 设置下仍有优势，适合工程级 deployment。
-\newpage
 
-\section{系统工程与风险管理}
-\subsection{工程约束}
-Autonomy 的部署还需面对工程约束，包括训练预算、推理 latency 与模型可解释性。讲者建议：
-\begin{itemize}
-\item 使用 model distillation 缩小 ViT 以适配边缘设备；
-\item 采用 mixed precision + gradient checkpoint 降低 GPU 内存；
-\item 为 downstream 任务保留 viewpoint-specific metrics（如 clarity, blur）。
-\end{itemize}
-
-\begin{warningbox}{不可忽视的风险}
-\begin{itemize}
-\item Large model 对 rare artifact 的依赖：需要增强数据多样性；
-\item 解释能力差：Transformer 内部 attention 仍难解释，可以加 attention rollout；
-\item Energy cost：部署 JFT-scale 模型需评估电力与碳足迹。
-\end{itemize}
-\end{warningbox}
-\subsection{运维：监控 VTAB drift}
-建议 setup drift detection：在每次模型 update 之后，重跑 VTAB sample tasks，观察 $\Delta$ performance。若 drift 超过阈值，先 rollback 再分析训练 log。
-
-\begin{knowledgebox}{Drift awareness checklist}
-\begin{itemize}
-\item 记录 pre-training dataset 版本与 sampling policy；
-\item 对 drift task 设立 guardrail（如 success drop > 2% 触发报警）；
-\item 保留 auto-rollback script，便于回到最后 stable checkpoint。
-\end{itemize}
-\end{knowledgebox}
-\subsection{本章小结}
-工程部署需要兼顾 latency、energy 与 interpretability，与此同时用 drift monitoring 保证长期性能，避免“scale drift”。
-\newpage
-
-\section{开放问题与未来方向}
-\subsection{数据高光与预训练上限}
-ViT 展现出在亿级数据上的潜力，但也引发问题：人力是否还能持续获取这些数据？是否能通过 synthetic data + self-training 替代？Beyer 提出未来需要进一步发展\textbf{数据高光 detection} 与 \textbf{low-resource augmentation} 方法。
-
-\subsection{多模态与视频拓展}
-讲者还讨论了将 ViT 扩展到视频、多模态任务的可能性，关键在于如何处理 temporal coherence 与 cross-modal alignment。比如，使用 cross attention 连接 video frame 与 audio/ language cost。
-
-\subsection{本章小结}
-虽然 ViT 取得显著成绩，但数据获取、能源消耗与多模态拓展仍是短期内需解决的开放问题。
-\newpage
+模型规模没有单一标尺。参数、FLOPs、activation、数据和样本效率回答不同问题；研究 frontier 还受到资源投入影响。工程选择必须从任务与系统约束出发，并保留多种强 baseline。
 
 \section{总结与延伸}
-\subsection{核心总结表}
-\begin{tabularx}{\textwidth}{lXl}
-\toprule
-维度 & 核心洞察 & 实践建议 \\
-\midrule
-目标与度量 & VTAB 提供多样任务与少样测评 & 结合 few-shot metric 评估 backbone； \\
-规模化预训练 & BiT 说明数据、模型、训练要一起 enlarge & 增量训练前先做泄露检测与 robustness probe； \\
-架构创新 & ViT 扁平化视觉 token 化需要大量数据 & 在 resource-bounded settings 使用 adapter/linear probe； \\
-迁移与效率 & Transformer 在 linear probe 下仍优于 CNN & 采用 adapter/prompt 避免 full fine-tune； \\
-工程与风险 & 需控制 energy/dataset drift 与 explainability & 建立 drift dashboard + rollback pipeline； \\
-\bottomrule
-\end{tabularx}
 
-\subsection{进一步阅读}
-\begin{itemize}
-\item Beyer et al., ``Are we done with ImageNet?'' NeurIPS Workshop 2021（解释 VTAB）
-\item Kolesnikov et al., ``Big Transfer (BiT): General Visual Representation Learning,'' ECCV 2020
-\item Dosovitskiy et al., ``An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale,'' ICLR 2021
-\item Zhai et al., ``Scaling Vision Transformers,'' CVPR 2022
-\item Touvron et al., ``Training data-efficient image transformers \& distillation through attention,'' ICML 2021
+本讲从“什么是通用视觉表示”出发，经过 VTAB、BiT、ViT、Scaling ViT 与 MLP-Mixer，形成一套比架构记忆更持久的方法论：
+
+\begin{enumerate}
+  \item \textbf{先定义适配目标}：通用表示应降低新任务的样本、优化与规格成本；
+  \item \textbf{用任务族而非单榜测量}：natural、specialized、structured tasks 揭示不同泛化维度；
+  \item \textbf{区分 upstream 与 downstream}：预训练表示和适配器容量必须分别控制；
+  \item \textbf{无标签不等于无先验}：SSL 把设计转移到 proxy objective 与 augmentation；
+  \item \textbf{规模是联合变量}：数据、容量、训练时长与 regularization 必须匹配；
+  \item \textbf{去重是科学有效性要求}：近重复会把记忆伪装成迁移；
+  \item \textbf{ViT 是弱化视觉先验的实验}：patch、position 与 class token 仍构成明确设计；
+  \item \textbf{数据决定归纳偏置的价值区间}：强先验提高低数据效率，灵活模型可能在大数据追上；
+  \item \textbf{Compute-normalized 仍不等于系统效率}：FLOPs、latency、memory 与 utilization 要分别报告；
+  \item \textbf{Shape 和 schedule 是 scaling 的一部分}：大模型不能用小模型的短训练制度评价；
+  \item \textbf{Scaling law 是局部经验模型}：可用于规划，但必须报告拟合区间与转折风险；
+  \item \textbf{Mixer 的意义是反事实比较}：attention 并非唯一机制，完整 recipe 才是因果对象。
+\end{enumerate}
+
+\begin{importantbox}{课程作业：设计一个可信的视觉表示评估}
+选择一个预训练模型与三个差异明显的 downstream tasks。定义 upstream provenance、去重方法、linear probe 与 full fine-tuning 两套 protocol；报告每组任务的 mean/worst-case、10-shot/full-data、calibration、training/inference FLOPs 与真实 latency。最后写出至少三个“结果不能证明什么”，并说明若数据预算扩大十倍，你预期哪种模型族的曲线斜率会变化。
+\end{importantbox}
+
+\begin{warningbox}{最终自检：不要把五种成功混在一起}
+\textbf{Upstream fit}、\textbf{in-distribution accuracy}、\textbf{few-shot transfer}、\textbf{robustness} 与 \textbf{deployment efficiency} 是五种不同成功。论文或系统若只证明其中一项，结论就应停在那一项；不能用 ImageNet top-1 替代通用表示，也不能用理论 FLOPs 替代真实服务成本。
+\end{warningbox}
+
+\subsection{拓展阅读}
+
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://arxiv.org/abs/1910.04867}{\textbf{VTAB}}：多任务视觉表示适配 benchmark 与 task-family 设计。
+  \item \href{https://arxiv.org/abs/1912.11370}{\textbf{Big Transfer (BiT)}}：大规模监督预训练、迁移 recipe 与 robustness。
+  \item \href{https://arxiv.org/abs/2010.11929}{\textbf{An Image is Worth 16x16 Words}}：ViT 架构、数据 scaling 与 transfer。
+  \item \href{https://arxiv.org/abs/2106.10270}{\textbf{How to Train Your ViT?}}：augmentation、regularization、dataset size 与 training recipe。
+  \item \href{https://arxiv.org/abs/2106.04560}{\textbf{Scaling Vision Transformers}}：model shape、schedule、few-shot 与 scaling laws。
+  \item \href{https://arxiv.org/abs/2105.01601}{\textbf{MLP-Mixer}}：token/channel mixing 与 data-scale comparison。
 \end{itemize}
+}
 
-\subsection{本章小结}
-通过目标、规模、架构、迁移、工程与未来展望六个维度，课程勾勒出通用视觉表征的研究与部署路线图，同时提醒我们要持续监控 drift 与投入成本。
 \end{document}

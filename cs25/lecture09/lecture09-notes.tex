@@ -1,201 +1,731 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 09：Audio Transformers——从波形、离散代码到任务自适应听觉前端}
+\renewcommand{\noteauthors}{基于 Prateek Verma 讲座、官方人工字幕与三篇课堂主论文整理}
+\renewcommand{\notedate}{CS25 V1 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-18}
+\renewcommand{\videoduration}{48:18}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=wvE2n8u3drA}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Transformers in Audio/Speech/Music — Prateek Verma}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2021}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2021}
-\newcommand{\videoduration}{约50分钟}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
+\makecscover
+
+\section{来源审计与课程主线：为什么 Audio 是 Transformer 的压力测试}
+
+本讲不是把 NLP Transformer 简单搬到声音上，而是追问更基础的设计问题：连续、高采样率、跨多个时间尺度的声音，应该先被表示成什么，再交给什么预测目标？Prateek Verma 用三篇工作串起 raw waveform synthesis、self-supervised representation learning 与 large-scale audio understanding。三条线看似分别对应生成、表征和分类，实际共享同一条工程链：\term{representation} 决定序列长度与信息损失，\term{objective} 决定模型保留什么，\term{metric} 决定我们究竟证明了什么。
+
+官方课程页将这场课列在 2021-11-29，Stanford Online 到 2022-07-18 才上传录像。视频对应的 Audio Transformers 论文在课堂时是 2021 年 v1；arXiv 后来于 2025 年更新了 v2。本讲义只用 v1 解释课堂实验，不能把四年后的修订倒灌成讲者当时已有的证据。视频未公开独立 slide PDF，因此从 1080p 官方录像的 1,449 个采样点中人工筛选 47 个 teaching states，并用 981 条官方人工字幕恢复老师的口头解释。
+
+\lecturefigure{slide-01-title-understanding-to-synthesis.jpg}{课程标题把主线概括为：从 language modeling 到 understanding，再到 synthesis。}{Stanford Online 官方视频 00:00:24--00:00:47。}
+
+标题页中的三个动词不是营销分类。\emph{Synthesis} 要生成高频波形；\emph{understanding} 要把长信号压成对标签有用的表示；\emph{language modeling} 则要求先把连续声音变成可预测的离散符号。读后文时应不断问：当前系统处理的是 sample、spectrum、embedding 还是 code index？如果这一层没说清楚，所谓“Audio Transformer”就只是一个模糊名称。
+
+\teachervoice{Verma 一开场把这场课称为 ``buffet style''：他不会证明一种统一架构必胜，而是让三篇论文展示多种可组合思路。讲义因此按共同问题组织，而不按论文摘要机械分章。}
+
+\subsection{三篇论文怎样组成一条设计链}
+
+第一篇工作在 8-bit raw samples 上做 next-sample prediction，比较 WaveNet 与 causal Transformer；第二篇先把连续音频变成 codebook tokens，再比较 contrastive learning 与 next-code prediction；第三篇直接让 Transformer 从 raw waveform 学分类表示，并在中间 embedding 上加入 pooling 或 Haar wavelet。三篇工作的连接点如下：
+
+\lecturefigure{slide-02-talk-roadmap.jpg}{课堂路线图：表示基础、raw synthesis、离散 token 表征学习、raw-waveform understanding。}{Stanford Online 官方视频 00:01:08--00:01:45。}
+
+\begin{knowledgebox}{读图：不要把三条路线混成“同一个 Transformer”}
+Raw synthesis 的输出是下一个量化 sample；representation learning 的输出可以是 code prediction 或下游 linear probe；audio understanding 的输出是多标签 sound-event scores。它们共享 attention，但输入粒度、监督信号、序列长度和评价指标都不同。正确比较单位不是模型名字，而是“表示--目标--指标”三元组。
+\end{knowledgebox}
+
+\begin{warningbox}{课堂时间边界}
+讲者在 2021 年把 Transformer 称为跨领域的“当前风潮”，并用 “Adieu WaveNet?”、 “Adieu Convolutions” 作为挑衅性标题。这些标题只能解释当时三组受控实验，不能推出 2026 年所有语音、音乐、codec 或生成系统都应放弃卷积、状态空间模型或扩散模型。
+\end{warningbox}
+
+\subsection{证据应该按什么强度阅读}
+
+后文既有代数事实，也有 benchmark table、滤波器可视化和讲者的未来判断。为了不把它们写成同一强度的结论，本讲采用四级证据：结构上能否实现、受控实验是否改善、内部表示是否可解释、结论能否外推到感知质量或其他任务。任何一级都不能自动替代下一级。
+
+\begin{table}[H]
 \centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
-
-\tableofcontents
-\newpage
-
-\section{引言：音频领域的 Transformer}
-
-Prateek Verma 来自 Stanford，介绍了 Transformer 在音频、语音和音乐领域的应用。音频处理与文本/图像有本质差异：音频信号是\textbf{高采样率的时间序列}（如 16kHz 语音、48kHz 音乐），这对 Transformer 的序列长度提出了极大挑战。
-
-\begin{knowledgebox}{音频表示的特殊性}
-\begin{itemize}
-    \item \textbf{原始波形}：每秒数万个采样点，序列极长
-    \item \textbf{频谱图/梅尔频谱}：时频表示，类似于图像，但时间轴有因果性
-    \item \textbf{离散音频 token}：通过 VQ-VAE 等方法将音频离散化为 token 序列
-\end{itemize}
-\end{knowledgebox}
-
-\section{从不同视角理解 Transformer}
-
-Prateek 提供了 Transformer 自注意力的一个有趣视角：
-
-\begin{importantbox}{自注意力 vs. 小波变换}
-传统信号处理使用\textbf{固定的}基函数（如小波、傅里叶基）来分析信号。Transformer 的自注意力可以看作一种\textbf{自适应的}基函数——它根据输入数据动态决定哪些时间点/频率点需要更多关注。这使得 Transformer 在处理非平稳信号时天然优于固定基方法。
-\end{importantbox}
+\small
+\caption{本讲常见证据与能够支持的结论。}
+\begin{tabularx}{\textwidth}{L{0.21\textwidth}L{0.29\textwidth}X}
+\toprule
+证据 & 例子 & 合理结论 \\
+\midrule
+结构与复杂度 & $n=f_sT$、attention 为 $O(n^2)$ & 说明为什么 raw audio 需要局部窗口、压缩或稀疏结构。 \\
+受控指标 & 同数据下 top-5 accuracy 或 mAP & 说明该设置中的预测/分类性能，不等于主观音质或普适架构优势。 \\
+表示探针 & Linear probe、学习滤波器的频响分析 & 说明表示携带可用信息或出现类似经典信号处理的结构，不证明单个 neuron 有唯一语义。 \\
+外推与判断 & “更多数据会缩小 gap”“Transformer 不是终点” & 是研究假设或方向，应与实测结果分开。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \subsection{本章小结}
 
-Transformer 通过自适应注意力机制，在音频领域提供了超越传统信号处理方法的灵活性。
+本讲的对象不是单一模型，而是音频建模的设计空间。课堂日期、上传日期和论文修订日期必须分开；三篇工作的结果也必须在各自输入表示、目标函数与指标范围内解释。
 
-\section{采样级别的音频语言建模}
+\section{Transformer Revolution：跨领域迁移的是什么}
 
-\subsection{SampleRNN 到 Transformer}
+在进入信号处理之前，讲者先解释为什么 Transformer 会被不断移植到新领域。真正可迁移的不是“把 token 换成 waveform”这一句口号，而是三类结构能力：任意位置间的内容寻址、逐层更新的共享表示、以及借助 residual/normalization 训练深层堆叠。Audio 会让这些能力与代价同时放大，因为采样率把一秒信号变成上万位置。
 
-早期的音频生成模型（如 WaveNet、SampleRNN）逐采样点自回归生成，速度极慢。Transformer 可以在以下层面进行``语言建模''：
+\subsection{模型家族像潮汐，不像终局}
 
-\begin{itemize}
-    \item \textbf{采样级别}：直接预测下一个音频采样值（精度最高但最慢）
-    \item \textbf{帧级别}：预测频谱帧（平衡精度与效率）
-    \item \textbf{Token 级别}：先将音频编码为离散 token，再做语言建模（最高效）
-\end{itemize}
+CNN、RNN 与 Transformer 在 slide 中被画成动物进化图，强调研究社区会围绕新范式快速集中资源。读图时应把“fashion”理解为研究注意力与工具链聚集，而不是旧机制立刻失效；事实上，后文的 VQ encoder、WaveNet baseline、front-end layer 与 pooling 都继续使用非 attention 组件。
 
-\subsection{上下文长度的挑战}
+\lecturefigure{slide-03-transformer-revolution-model-zoo.jpg}{模型家族的潮汐：CNN、RNN 与 Transformer 的研究重心迁移。}{Stanford Online 官方视频 00:01:45--00:02:35。}
 
-\begin{warningbox}{音频的上下文长度瓶颈}
-以 16kHz 采样率的 100ms 音频为例，就有 1600 个采样点。标准注意力需要 $1600^2 \approx 2.56 \times 10^6$ 的内存。对于几秒的音频片段，这个问题更加严峻。解决方案包括：
-\begin{itemize}
-    \item 稀疏注意力模式
-    \item 线性注意力近似
-    \item 分层处理（先局部再全局）
-    \item 音频 tokenization 降低序列长度
-\end{itemize}
+\teachervoice{讲者说模型族群会“流行”又“退潮”。这个玩笑很重要：本讲会展示 Transformer 获胜的几个表格，但课程结论不是“所有声音都应该 token 化并全局 attention”。}
+
+\subsection{每层 attention 都重新决定什么重要}
+
+早期 encoder--decoder 常把 attention 放在编码完成之后；Transformer 把内容寻址放进每一层，使中间表示可以反复聚合远处信息。讲者的直觉是“cascading self-attention with feature learning”：每层一边寻址，一边把任务相关内容写入新的 representation。这个表述有启发性，但 residual stream 并不会真的删除所有“不重要”内容，它只是让某些方向在后续计算中更有影响。
+
+\lecturefigure{slide-04-transformer-architecture.jpg}{从 terminal attention 到逐层 attention：信息寻址进入每一层。}{Stanford Online 官方视频 00:03:00--00:03:50。}
+
+\lecturefigure{slide-05-early-transformer-history.jpg}{从 BiLSTM-with-attention 到多层自注意力堆叠的历史过渡。}{Stanford Online 官方视频 00:03:50--00:04:28。}
+
+两张图应连续读：第一张回答“attention 放在哪里”，第二张回答“为什么长序列需要更短的信息路径”。RNN 把远距离依赖压进递归状态；self-attention 允许两个时间位置在一层内直接交互，但代价是显式构造大量 pairwise scores。
+
+\lecturefigure{slide-06-usual-transformer-tricks.jpg}{Multi-head attention、skip connection 与 normalization 构成可复用训练配方。}{Stanford Online 官方视频 00:04:30--00:05:12。}
+
+\begin{knowledgebox}{术语消化：Audio Transformer 的对象层级}
+\small
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}L{0.27\textwidth}X}
+\toprule
+术语 & 解决的问题 & 在本讲中的具体含义 \\
+\midrule
+Waveform sample & 连续声压怎样被数字化？ & 采样率 $f_s$ 下的单个离散时刻幅值；raw synthesis 会将其量化为 256 类。 \\
+Receptive field & 一个输出能看到多远的过去？ & WaveNet 由 dilation 固定，attention 由数据相关权重选择，但全局选择成本更高。 \\
+Residual stream & 多层怎样共享当前表示？ & 每层把 attention/MLP update 加回共同表示，使局部与长程信息可组合。 \\
+Spectrogram & 怎样把时域信号变成时频图？ & 对滑动窗口做 Fourier transform 并堆叠 magnitude；时间与频率分辨率互相制约。 \\
+Filterbank & 怎样按一组频带分析声音？ & 可以是 mel/constant-Q 等固定滤波器，也可以由前端网络端到端学习。 \\
+Codebook token & 连续 embedding 怎样变成离散符号？ & 选择最近 code vector 的索引，供 Transformer 做 next-code language modeling。 \\
+Linear probe & 表示是否已含任务信息？ & 冻结 encoder，仅训练线性分类头；它测可线性读取性，不测所有下游能力。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{Verma 特别强调 multi-head、skip connection 和 normalization 不只服务 Transformer；它们是可以迁移到其他网络的训练与表示技巧。名称更新不代表所有机制都从零开始。}
+
+\subsection{Scaling 既放大能力，也放大资源差距}
+
+模型规模曲线在这里承担背景角色：compute 改善和大机构投入让极简单的预测目标被训练到巨大规模，随后形成可迁移 representation。对 Audio 而言，这个逻辑立刻遇到采样率墙——文本一句话可能几十 tokens，十秒 16 kHz 音频却有十六万个 samples。规模不是独立变量，representation 决定同一段内容需要多少 sequence positions。
+
+\lecturefigure{slide-07-model-scaling.jpg}{模型与计算规模增长：简单目标、更多数据和更多资源共同推动表示学习。}{Stanford Online 官方视频 00:05:03--00:06:17。}
+
+\begin{warningbox}{“更大”之前先问 token 是什么}
+若把每个 sample 当一个 token，长度随采样率线性增长，attention pair 数随长度平方增长；若先做 spectrogram patch 或 VQ code，长度下降，但细节与归纳偏置改变。参数规模曲线不能脱离表示粒度解读。
 \end{warningbox}
 
 \subsection{本章小结}
 
-音频的高采样率对 Transformer 的上下文长度提出了独特挑战，催生了多种高效注意力方案。
+跨领域迁移的是内容寻址、深层表示更新和成熟训练配方，而不是无条件的全局 attention。Audio 的高采样率会把 pairwise interaction 的代价放大，因此表示选择从第一步就与系统可行性绑定。
 
-\section{语音和音乐的 Transformer 应用}
+\section{从 Waveform 到 Spectrogram：先决定模型看见什么}
 
-\subsection{语音识别与合成}
+声音首先是随时间变化的幅值，而不是天然的二维图片或离散词表。把它交给模型之前，可以保留 raw waveform，也可以投影到 sinusoidal bases、perceptual filterbanks 或 learned features。每次变换都在回答两个问题：哪些变化应被视为相近，以及哪些细节可以被压缩。理解这些选择，是读懂后续三篇工作最重要的前置知识。
 
-\begin{itemize}
-    \item \textbf{ASR（自动语音识别）}：Transformer 已成为主流架构（如 Whisper）
-    \item \textbf{TTS（文本到语音）}：Tacotron 2 + Transformer、VITS 等
-    \item \textbf{语音翻译}：端到端的跨语言语音转换
-\end{itemize}
+\subsection{采样率与序列长度}
 
-\subsection{音乐生成与理解}
+设连续信号为 $x(t)$，采样率为 $f_s$，观察时长为 $T$ 秒，则离散序列长度为
+\[
+n=f_sT.
+\]
+其中 $n$ 是 samples 数。以 $f_s=16\,000\ \mathrm{Hz}$ 为例，一秒有 $16\,000$ 个位置，十秒有 $160\,000$ 个位置。若每个位置都与所有历史位置计算 attention，单层 score 数量近似为
+\[
+N_{\mathrm{pair}}\approx \frac{n(n+1)}{2}=O(n^2).
+\]
+十秒信号会产生约 $1.28\times10^{10}$ 个 causal pairs；这还没计入 heads、layers、batch 与 activation memory。
 
-\begin{itemize}
-    \item \textbf{Music Transformer}（Huang et al.）：基于相对注意力的音乐生成
-    \item \textbf{Jukebox}（OpenAI）：使用 VQ-VAE + Transformer 的原始音频音乐生成
-    \item \textbf{音乐信息检索}：节拍检测、乐器识别、情感分析
-\end{itemize}
-
-\begin{importantbox}{研究中的诚实性}
-Prateek 引用 DeepMind 研究者的观点，强调在发表论文时应诚实报告训练技巧的贡献——很多时候性能提升来自于工程技巧而非模型创新。区分``模型实际贡献''和``训练技巧贡献''对于领域的健康发展至关重要。
+\begin{importantbox}{第一性约束}
+Audio 的“长序列”不是抽象形容词，而是由采样率直接决定。任何可运行方案都必须在局部窗口、下采样、patch、稀疏 attention、latent code 或替代序列模型之间做选择。
 \end{importantbox}
 
-\subsection{本章小结}
+\subsection{Fourier basis 与短时分析}
 
-Transformer 在语音和音乐领域的应用正在快速发展，从识别到生成全面覆盖。
+离散 Fourier transform 把长度 $N$ 的窗口表示为不同频率的复数系数：
+\[
+X[k]=\sum_{n=0}^{N-1}x[n]e^{-j2\pi kn/N},
+\qquad k=0,\ldots,N-1.
+\]
+这里 $x[n]$ 是第 $n$ 个 sample，$k$ 是频率 bin，复数 $X[k]$ 同时包含 magnitude 与 phase。真实声音通常非平稳，因此不能只对整段做一次 transform；短时 Fourier transform（STFT）使用窗口 $w[n]$ 在不同时间帧 $m$ 上重复分析：
+\[
+X[m,k]=\sum_n x[n]w[n-mH]e^{-j2\pi kn/N},
+\]
+其中 $H$ 是 hop size。Spectrogram 常画作
+\[
+S[m,k]=|X[m,k]|^2
+\quad\text{或}\quad \log(|X[m,k]|+\epsilon).
+\]
+时间轴对应 $m$，频率轴对应 $k$，颜色对应能量。窗口越长，频率分辨率更细但瞬时定位更差；窗口越短则相反。
 
-\section{从研究原型到音频系统}
+\lecturefigure{slide-08-spectrogram-overview.jpg}{Spectrogram：窗口化 waveform 后，将短时频谱沿时间堆叠。}{Stanford Online 官方视频 00:06:20--00:10:58。}
 
-\subsection{表示粒度决定系统边界}
-
-同样是``用 Transformer 做音频''，系统设计的关键差异往往不在骨干网络本身，而在于\textbf{音频先被切成什么样的表示}。如果直接在 waveform 上建模，模型会保留最细腻的时域信息，但训练成本和上下文长度都会急剧上升；如果先转为频谱或离散 audio token，训练和推理会稳定得多，但系统的上限也受到 tokenizer 质量约束。
-
-\begin{importantbox}{先压缩，再建模，最后再回看失真}
-今天多数可扩展音频系统的共同策略是：先把连续信号压缩成更短的序列，再让 Transformer 专注于长程依赖。真正的工程问题变成了两件事：一是压缩是否保留任务所需的信息，二是生成后是否会引入可感知的伪影。
-\end{importantbox}
-
-在语音场景里，这意味着系统需要同时衡量字词正确率、说话人一致性和延迟；在音乐场景里，则要兼顾节奏结构、和声连续性和长时间重复带来的审美疲劳。Prateek 这类课程的价值，在于提醒我们不要把``模型分数''误当作``用户体验''。
-
-\subsection{训练、评测与上线的三重约束}
-
-音频模型一旦进入产品环节，会立即遇到三个约束：
-\begin{itemize}
-    \item \textbf{训练约束}：多机训练时，长序列会导致显存碎片和吞吐下降，batch size 很容易失控。
-    \item \textbf{评测约束}：自动指标往往只能覆盖一部分质量维度，例如 WER 关注识别错误，却无法衡量语气、韵律和音乐表现力。
-    \item \textbf{上线约束}：交互式语音系统需要低延迟流式生成，而音乐创作更强调长时一致性，两者的最优架构往往不同。
-\end{itemize}
-
-\begin{knowledgebox}{音频团队常见的评测分层}
-成熟团队通常会把评测拆成三层：第一层是离线客观指标，如 WER、FAD、重建误差；第二层是专家标注，如音色自然度、节奏稳定性、情感一致性；第三层是在线交互指标，如首包延迟、用户中断率、复听率。只有三层都稳定，系统才真正可用。
+\begin{knowledgebox}{读图：从 waveform 到二维图的四步}
+先在横轴上切出重叠窗口；再对每个窗口做 Fourier transform；随后取 magnitude 或 power；最后把相邻窗口按时间排列。图像纹理能支持 vision-like 模型，但 phase、窗口函数与 hop size 若不记录，二维图并不能无损还原原 waveform。
 \end{knowledgebox}
 
+\teachervoice{讲者故意用 “batches” 再改口为 “windowing”：机器学习读者常把 STFT 当预处理黑箱，而信号处理视角要求明确窗口长度、重叠和 basis。}
+
+\subsection{固定表示、感知表示与 learned front end}
+
+Fourier bins 等距排列，但人耳对频率的感知并非线性；mel 与 constant-Q filterbanks 会重新分配频带，使低频更细或让音乐中的 harmonic spacing 更稳定。Raw waveform 保留全部采样信息，却把模型暴露给最长序列。Learned front end 则让任务损失决定滤波器，可能得到介于经典 DSP 与黑箱特征之间的表示。
+
+\lecturefigure{slide-09-audio-representations.jpg}{Audio representations：spectrogram、filterbank、raw waveform 与 learned features。}{Stanford Online 官方视频 00:10:58--00:12:50。}
+
+\begin{table}[H]
+\centering
+\small
+\caption{常见音频表示的主要取舍。}
+\begin{tabularx}{\textwidth}{L{0.19\textwidth}L{0.22\textwidth}L{0.22\textwidth}X}
+\toprule
+表示 & 优势 & 主要损失/偏置 & 对 Transformer 的影响 \\
+\midrule
+Raw waveform & 保留采样级细节与 phase & 序列极长、局部振荡复杂 & 需要局部 context、压缩或高效 attention。 \\
+STFT magnitude & 直观时频结构、成熟工具链 & 时间/频率分辨率折衷；phase 常被省略 & 可按 frame/patch token 化，长度显著下降。 \\
+Mel / constant-Q & 更接近感知或音乐结构 & 频带定义预先固定，可能丢失任务相关细节 & 给模型更强 inductive bias、更少自由度。 \\
+Learned filterbank & 可按任务自适应 & 需要数据与正则；可解释性不自动成立 & 前端与 Transformer 可端到端共同优化。 \\
+Discrete codebook & 直接得到有限词表 & 量化/重构误差、码本塌缩 & 可使用语言建模目标和长程 token dependencies。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{一段声音同时存在多个时间尺度}
+
+讲座用快速动画把同一 waveform 从一秒缩放到百毫秒、十毫秒和一毫秒。这个顺序不是视觉效果：一秒可承载节奏或事件，百毫秒接近音素/瞬态，十毫秒能看到周期性，一毫秒只覆盖少量高频振荡。单一窗口或单一 receptive field 很难同时为这些结构提供最佳分辨率。
+
+\lecturefigure{slide-10-waveform-100ms.jpg}{约 100 ms：局部包络、瞬态与短音素级结构开始显现。}{Stanford Online 官方视频 00:11:50--00:11:53。}
+
+\lecturefigure{slide-11-waveform-1ms.jpg}{约 1 ms：只覆盖少量快速振荡，适合观察高频局部结构。}{Stanford Online 官方视频 00:11:54--00:11:55。}
+
+\lecturefigure{slide-12-waveform-10ms.jpg}{约 10 ms：周期性与局部基频结构更容易辨认。}{Stanford Online 官方视频 00:11:56--00:11:57。}
+
+\lecturefigure{slide-13-waveform-1s.jpg}{约 1 s：事件包络与较慢的语音/音乐结构占主导。}{Stanford Online 官方视频 00:11:58--00:12:53。}
+
+\begin{knowledgebox}{读图：多尺度不是“多放几张图”}
+四张图支持一个建模结论：高频细节需要短窗口，语义与节奏需要长 context。WaveNet 用 dilation 构造多尺度 receptive field；conditioned Transformer 压缩远处 context；wavelet/pooling 在中间层降低时间分辨率；hierarchical VQ 则在 token space 建多级时间尺度。
+\end{knowledgebox}
+
+\teachervoice{讲者让 waveform 在几个尺度间反复切换，是为了让读者“看见”表示问题：模型既要听清局部振荡，又要理解数秒以前发生的结构。后文三篇工作都在不同位置处理这个冲突。}
+
 \subsection{本章小结}
 
-音频 Transformer 真正的难点不是``能不能生成声音''，而是如何在表示压缩、可训练性和最终听感之间取得平衡。
+Waveform、spectrogram、filterbank 与 discrete code 并非等价输入格式。它们改变序列长度、可逆性、时间频率分辨率与归纳偏置。Audio Transformer 的第一项架构决定，往往发生在 attention 之前。
 
-\section{未来趋势：统一的音频基础模型}
+\section{Raw Audio Synthesis：把下一个 Sample 当成分类问题}
 
-\subsection{语音、音乐与环境声音正在合流}
+第一篇工作选择最困难也最直接的表示：不先计算 spectrogram，不先学习 codec，而是在 waveform level 自回归预测下一个量化 sample。这样做的好处是目标清楚、应用通用；坏处是每秒要执行上万次预测，而且误差会逐步反馈进后续 context。本章先建立严格任务定义，再讨论 Transformer 是否真的“击败” WaveNet。
 
-过去研究常把 ASR、TTS、music generation 和 audio tagging 分开讨论，但近年的趋势是用同一套 backbone 统一处理不同模态的声音。原因很直接：说话人的语气、音乐的节奏、环境的事件结构，本质上都包含多尺度时间依赖，只是监督信号不同。
+\lecturefigure{slide-14-audio-transformer-paper-title.jpg}{第一篇工作：用 Transformer architecture 建模 raw audio generation。}{Stanford Online 官方视频 00:13:10--00:14:27；Verma 与 Chafe, arXiv:2106.16036。}
 
-\textit{``The interesting question is not whether Transformer works for audio, but what representation makes audio look learnable.''}
+\subsection{为什么 waveform generator 是通用积木}
 
-这也解释了为什么 Whisper、Jukebox 以及后续多模态模型虽然任务不同，却都在探索同一件事：如何让声音变成适合序列建模的对象。
+WaveNet 类生成器不只用于直接播放声音。只要上游系统产生某种 condition，它就可以充当声码器、去噪器、源分离 decoder、丢包补偿器或音频变换的末端，将 latent/spectral representation 转回时域 waveform。因此，改进 next-sample model 的意义不只是一张音乐生成 demo。
 
-\subsection{需要警惕的误区}
+\lecturefigure{slide-15-raw-audio-synthesis-background.jpg}{Raw synthesis 的应用背景：speech、music、denoising、transforms、vocoders 等。}{Stanford Online 官方视频 00:13:12--00:14:30。}
 
-\begin{warningbox}{参数更大不等于音频体验更好}
-音频系统特别容易出现``客观指标提升但主观体验下降''的情况。例如，更大的模型可能降低了识别错误，却引入更机械的停顿；更长的音乐上下文也可能带来更严重的重复。对于音频，感知质量和结构质量必须一起看。
+\teachervoice{讲者把 WaveNet 称为许多系统里的“core building block”。这句话提醒读者：生成器常是大 pipeline 的 decoder；单独比较 generator 时，必须说明 condition、数据和前端是否相同。}
+
+\subsection{任务为什么困难：长度、因果性与误差敏感}
+
+量化后的 waveform 记为 $x_1,\ldots,x_T$，每个 $x_t\in\{0,\ldots,255\}$。Causal autoregressive model 将联合分布分解为
+\[
+p(x_{1:T})=\prod_{t=1}^{T}p(x_t\mid x_{<t}).
+\]
+训练通常最小化交叉熵
+\[
+\mathcal{L}_{\mathrm{NLL}}
+=-\sum_{t=1}^{T}\log p_\theta(x_t\mid x_{<t}).
+\]
+这里 $T$ 是 samples 数，$x_{<t}$ 是历史样本，$p_\theta$ 输出 256 类概率。生成时，模型采样或选择 $x_t$ 后再把它送回 context；因此局部错误可能改变未来输入分布。
+
+\lecturefigure{slide-16-raw-audio-synthesis-difficulty.jpg}{Raw audio generation 的困难：局部与全局依赖、极长序列、WaveNet/SampleRNN 基线。}{Stanford Online 官方视频 00:14:30--00:16:24。}
+
+\begin{importantbox}{十秒为什么是十六万个决策}
+在 16 kHz 下，十秒 waveform 有 $16\,000\times10=160\,000$ 个 samples。若按 8-bit 量化，每一步是 256-way classification。即使单步准确率很高，自回归 rollout 仍需十六万次条件预测；这与一次生成几十个文本 tokens 的错误传播形态完全不同。
+\end{importantbox}
+
+\teachervoice{Verma 用“眼睛未必察觉一个 pixel，耳朵却会迅速察觉几个 samples 的偏差”解释感知敏感性。这是直觉而非严格心理声学定律，但它准确指出：next-sample metric 与可听质量之间存在复杂映射。}
+
+\subsection{论文问题与受控比较}
+
+论文提出两步问题：在相同数据和相近参数量下，causal Transformer 能否比经典 WaveNet 更好地预测 next sample；若 full attention 的 context 太贵，能否用压缩后的更长历史作为 condition？第一问比较架构，第二问比较 context design。两者都不是“任意 Transformer 对任意 WaveNet”的总判决。
+
+\lecturefigure{slide-17-paper-contributions.jpg}{论文贡献：受控比较、conditional raw-audio Transformer 与通用生成接口。}{Stanford Online 官方视频 00:16:24--00:17:11。}
+
+\lecturefigure{slide-18-dataset-and-setup.jpg}{数据与目标：约 840 条钢琴录音、56 小时、16 kHz、8-bit quantization、100 ms context。}{Stanford Online 官方视频 00:17:12--00:18:14。}
+
+100 ms 在 16 kHz 下对应 $1\,600$ samples。论文使用真实世界钢琴录音，包含不同艺术家、录制条件和 mono/polyphonic 结构；这让数据比单一合成音更复杂，但也把结论限制在该分布。Top-5 metric 定义为
+\[
+\mathrm{Acc}_{5}
+=\frac{1}{T}\sum_{t=1}^{T}
+\mathbf{1}\!\left[x_t\in\operatorname{Top5}\bigl(p_\theta(\cdot\mid x_{<t})\bigr)\right].
+\]
+它检查真值是否落入概率最高的五类，而不是生成的声音是否自然。
+
+\begin{lstlisting}[caption={计算量化 waveform 的 next-sample top-5 accuracy。}]
+def top5_next_sample_accuracy(model, contexts, targets):
+    logits = model(contexts)          # [batch, 256]
+    top5 = logits.topk(k=5, dim=-1).indices
+    hits = (top5 == targets[:, None]).any(dim=-1)
+    return hits.float().mean()
+\end{lstlisting}
+
+\begin{warningbox}{Top-5 accuracy 不是听感分数}
+该指标适合比较同任务下的 local predictive distribution，也能避免只看 negative log-likelihood 难以直觉解释；但它忽略采样策略、长程音乐结构、相位连贯性、累积误差和 human preference。后文所有 “74\% 到 85\%” 都只指这个实验指标。
 \end{warningbox}
 
-因此，一个稳健的研究路线通常是：先确认表示和评测闭环是否成立，再谈模型缩放。否则，团队可能会在错误的目标函数上不断加算力。
+\subsection{本章小结}
+
+Raw synthesis 将 waveform 直接写成 256 类自回归问题，换来通用性，也承担极端长度与误差反馈。公平比较要求固定数据、context 和指标；next-sample accuracy 提供局部证据，不能单独证明高保真生成。
+
+\section{Transformer 对 WaveNet：自适应寻址与 Context Conditioning}
+
+任务定义清楚后，架构差异可以被具体化。WaveNet 通过 dilated causal convolutions 预先规定哪些历史 offsets 被组合；Transformer 通过 query--key scores 为当前输入动态分配权重。前者具有强局部/多尺度归纳偏置和线性序列计算，后者寻址更灵活但 pairwise cost 更高。论文的 conditional design 正是在两者之间寻找工程折中。
+
+\subsection{Causal Transformer 怎样预测 waveform}
+
+每个量化 sample 先查表得到 embedding，再加位置编码并经过多层因果自注意力与前馈模块；causal mask 保证位置 $t$ 只读取 $<t$。最终 linear layer 输出 256 logits。多头结构允许不同 heads 关注周期邻域、近期包络或更远 context，但“可以关注”不表示训练一定学到这些可解释分工。
+
+\lecturefigure{slide-19-autoregressive-transformer-architecture.jpg}{Causal raw-audio Transformer：sample embedding、masked attention、feed-forward 与 256-way output。}{Stanford Online 官方视频 00:18:15--00:19:31。}
+
+\begin{knowledgebox}{读图：固定 dilation 与 learned attention 的差别}
+WaveNet 的 edge pattern 由 kernel size 和 dilation schedule 决定；不同输入共享同一拓扑。Transformer 的所有允许位置理论上都可连边，实际权重由内容决定。灵活性增加了 function class，也增加了数据需求、优化难度与 $O(n^2)$ 成本，不能只列优势。
+\end{knowledgebox}
+
+\subsection{为什么可能比固定 WaveNet 更灵活}
+
+讲者把 attention 描述成可以给 waveform 任意历史位置分配 “weightage”。对近似周期信号，这意味着模型可直接寻找与当前相位、音高或演奏状态相关的样本，而不必等待信息沿固定 dilation tree 传播。另一方面，卷积的 translation equivariance 与局部 bias 对音频很有价值；是否需要全局 adaptive routing 应由数据与 latency 目标决定。
+
+\lecturefigure{slide-20-why-better-than-wavenet.jpg}{直觉比较：attention 学习内容相关 routing，WaveNet 使用固定 dilated topology。}{Stanford Online 官方视频 00:19:32--00:20:09。}
+
+\teachervoice{讲者说 Transformer 能给 waveform 任意部分分配权重，这是 representational argument，不是结果表本身。高质量阅读应先承认 capacity 差异，再用受控实验判断训练是否真正利用了它。}
+
+\subsection{Quadratic bottleneck 迫使 Context 分层}
+
+对 100 ms local context，$n=1\,600$，单 head attention matrix 已有 $2.56$ million entries；context 扩到一秒，矩阵规模增加到一百倍。直接扩大 raw-sample window 很快不可行，因此论文把远处历史先压缩成 condition，再让 local predictor 处理高分辨率 samples。
+
+\lecturefigure{slide-21-quadratic-bottleneck.jpg}{主要瓶颈：raw-sample attention 的 memory/compute 为 $O(n^2)$。}{Stanford Online 官方视频 00:20:10--00:20:17。}
+
+\lecturefigure{slide-22-conditioned-transformer.jpg}{Conditioned Transformer：用额外 context summary 扩展可见历史。}{Stanford Online 官方视频 00:20:18--00:20:59。}
+
+形式化地，将最近的高分辨率窗口记为 $x_{t-L:t-1}$，更远历史记为 $x_{t-R:t-L-1}$。先用压缩器 $g$ 产生
+\[
+c_t=g(x_{t-R:t-L-1}),
+\]
+再预测
+\[
+p(x_t\mid x_{t-L:t-1},c_t).
+\]
+局部路径保留 sample detail，condition path 承载更慢的结构。压缩器若过弱会丢信息，若过重则把成本转移到另一网络；这里的价值是把不同时间尺度显式分工。
+
+\lecturefigure{slide-23-context-conditioning-architecture.jpg}{Context conditioning architecture：宽历史先压缩，再注入局部 autoregressive Transformer。}{Stanford Online 官方视频 00:21:00--00:22:07。}
+
+\begin{importantbox}{多尺度的统一模式}
+Raw context conditioning、WaveNet dilation、VQ hierarchy、pooling 与 wavelet 都在做同一件事：让近处保留高分辨率，让远处用更低带宽表示。区别在于压缩发生在 samples、latent codes 还是 intermediate embeddings。
+\end{importantbox}
+
+\teachervoice{课堂中“conditioning on the context itself”容易被听成一句玄学口号。真正机制是把更远历史降采样/编码为 side information，避免让所有 raw samples 互相做 full attention。}
+
+\subsection{结果表：局部预测改善到什么程度}
+
+前面已经解释了 architecture capacity 与 context design，本节才进入 empirical evidence。读表时应先固定三件事：所有模型都在同一钢琴数据上预测 8-bit next sample，评价都是 top-5 accuracy，数字不包含主观听测；然后再分别比较 WaveNet 与同规模 Transformer、conditioned 与 unconditioned 3-layer model、以及深度增加带来的变化。只有在这个受控边界内，“谁更好”才有明确含义。
+
+论文在同一 next-sample setup 下报告：vanilla WaveNet 为 74\%，stacked WaveNet 为 76\%，3-layer Transformer 为 80\%，加入 wider-context condition 后为 82\%，更深的 6/8-layer Transformer 达到 84\%/85\%。这些数字支持“该数据和指标中 Transformer family 更强”，并显示 context condition 在同深度下约增加 2 个百分点。
+
+\lecturefigure{slide-24-controlled-results.jpg}{受控结果：WaveNet、不同深度 Transformer 与 conditioned model 的 top-5 accuracy。}{Stanford Online 官方视频 00:22:08--00:22:35；arXiv:2106.16036 表格。}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Raw-audio next-sample top-5 accuracy（论文设置）。}
+\begin{tabular}{lr}
+\toprule
+模型 & Accuracy \\
+\midrule
+Vanilla WaveNet $(d=2,N=10,F=128)$ & 74\% \\
+Stacked WaveNet $(d=2,N=30,F=128)$ & 76\% \\
+3-layer Transformer $(H=4,E=128)$ & 80\% \\
+Conditioned 3-layer Transformer & 82\% \\
+Large 6-layer Transformer $(H=8,E=128)$ & 84\% \\
+Large 8-layer Transformer $(H=8,E=128)$ & 85\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\teachervoice{结果页上写着 “Adieu WaveNet? Seems like it.”，体现讲者在课堂上的兴奋语气；他比较的仍是同一 next-sample benchmark。讲义保留语气，也必须同时保留 benchmark 边界。}
+
+\begin{warningbox}{“Adieu WaveNet?” 不能怎样读}
+它不证明卷积对 raw audio 已过时：数据是钢琴录音，指标是 teacher-forced next-sample top-5 accuracy，系统没有比较现代高效 attention、并行生成速度、主观听测、不同采样率或部署延迟。最稳妥的结论是：在该受控设置中，adaptive attention 与更深模型改善了局部预测。
+\end{warningbox}
 
 \subsection{本章小结}
 
-统一音频基础模型是一个合理方向，但它要求研究者同时理解序列建模、感知评测和交互式系统约束。
+Transformer 的优势来自输入相关寻址，WaveNet 的优势来自固定多尺度 bias 与更友好的复杂度。Conditioning 将远处历史压缩后注入局部 predictor，是在 raw detail 与 long context 之间做显式带宽分配。
+
+\section{连续声音怎样变成“语言”：VQ、Codebook 与 Hierarchy}
+
+第二篇工作从生成转向 representation learning。核心障碍是：语言模型预测有限词表，而音频 waveform/embedding 连续且高频。若希望使用 next-token objective，就必须先定义“audio token”。Vector quantization 通过 codebook 把连续 encoder output 映射为离散 index，使 sequence modeling 成为可能，同时引入 reconstruction error、code utilization 与 collapse 等新问题。
+
+\lecturefigure{slide-25-contrastive-audio-representations-title.jpg}{第二篇工作：generative 与 contrastive audio representation learning。}{Stanford Online 官方视频 00:22:36--00:22:44；Verma 与 Smith, arXiv:2010.11459。}
+
+\subsection{为什么要学习 Audio Representation}
+
+Acoustic scene understanding 希望从声音判断环境或事件，而不必生成每个 sample。讲者举出 emergency vehicle、music recommendation 与 health monitoring 等例子：一个好的 representation 应压缩与决策有关的结构，并对无关录音细节保持适当不变性。但这些应用也有不同误报成本，不能只用统一 accuracy 代替实际决策质量。
+
+\lecturefigure{slide-26-applications-overview.jpg}{Acoustic scene understanding 的应用：交通、推荐、医疗与环境感知。}{Stanford Online 官方视频 00:22:45--00:24:32。}
+
+\teachervoice{Waymo 麦克风例子强调声音能在视线外提前暴露警报；医疗中的咳嗽/喷嚏例子则提醒我们，representation 会进入高风险决策。下游意义决定什么信息值得保留。}
+
+\subsection{从连续空间到有限词表}
+
+设 encoder 将片段 $x$ 映射为 $z_e(x)\in\mathbb{R}^d$，codebook 为 $\{e_1,\ldots,e_K\}$。Vector quantization 选择最近 code：
+\[
+k^*(x)=\operatorname*{argmin}_{k\in\{1,\ldots,K\}}
+\|z_e(x)-e_k\|_2^2,
+\qquad z_q(x)=e_{k^*(x)}.
+\]
+离散 token 是 index $k^*$，decoder 再从 $z_q$ 重构 waveform 或 spectrum。Transformer 看到的是 index sequence，不是原始声音；codebook 的时间步长与容量决定 token rate 和重构上限。
+
+\lecturefigure{slide-27-discrete-audio-language-modeling.jpg}{Audio language modeling 的前提：先把连续声音转换为离散 code sequence。}{Stanford Online 官方视频 00:24:33--00:25:57。}
+
+\lecturefigure{slide-28-vector-quantization-recipe.jpg}{VQ/VQ-VAE、k-means 与 wav2vec-like 方法提供不同离散化路径。}{Stanford Online 官方视频 00:25:58--00:26:53。}
+
+\begin{knowledgebox}{术语消化：Codebook 系统里的四个对象}
+Encoder 决定连续 feature；quantizer 选择最近 code；codebook 存储有限 prototypes；decoder 决定 code 中保留的信息能否重建。Code index 可被语言模型预测，但它的“语义”取决于训练目标，不必对应音素、音符或人类命名事件。
+\end{knowledgebox}
+
+\subsection{Voronoi cell、重构与 Codebook Collapse}
+
+几何上，每个 code vector 拥有一个 Voronoi region，落在该区域的 encoder outputs 共用同一 index。$K$ 太小会造成高 quantization error；$K$ 太大或优化失衡会让大量 codes 从不被选择，形成 codebook collapse。训练还要平衡 reconstruction、codebook update 与 commitment，使 encoder 不在 code 边界间任意漂移。
+
+\lecturefigure{slide-29-vq-voronoi.jpg}{Vector quantization 的 Voronoi 视角：连续空间被最近 code 划分。}{Stanford Online 官方视频 00:26:54--00:27:55。}
+
+\lecturefigure{slide-30-vq-autoencoder-transformer.jpg}{Encode--quantize--predict--decode：VQ autoencoder 与 Transformer 的组合。}{Stanford Online 官方视频 00:27:56--00:29:55。}
+
+\begin{lstlisting}[caption={离散 audio-token 建模的概念流程。}]
+def audio_token_pipeline(waveform, encoder, codebook,
+                         transformer, decoder):
+    continuous = encoder(waveform)
+    token_ids = nearest_code_indices(continuous, codebook)
+    predicted_ids = transformer.autoregressive(token_ids)
+    quantized = codebook[predicted_ids]
+    reconstructed = decoder(quantized)
+    return token_ids, reconstructed
+\end{lstlisting}
+
+\begin{warningbox}{离散 token 不是免费压缩}
+更低 token rate 减轻 Transformer 长度，但会丢失 timing、phase、timbre 或微小瞬态；更高 token rate 改善重构，却重新引入长序列。评价 codec/tokenizer 时必须同时报告重构质量、code utilization、bitrate 与下游表现。
+\end{warningbox}
+
+\subsection{Hierarchical Codes：不同层负责不同时间尺度}
+
+Jukebox 类系统使用多级 VQ：高层低频 token 捕捉较慢音乐结构，低层高频 token 补充局部声学细节，再由 decoder 合成 waveform。Hierarchy 将前面看到的多尺度矛盾转化为多条 token streams；代价是训练、sampling 与跨层一致性都更复杂。
+
+\lecturefigure{slide-31-jukebox-hierarchical-tokens.jpg}{Jukebox-style hierarchy：多级 codes 在时间压缩与重构细节之间分工。}{Stanford Online 官方视频 00:29:56--00:30:24。}
+
+\begin{knowledgebox}{读图：Hierarchy 为什么减少 long-range burden}
+如果最高层每个 token 覆盖更长时间，Transformer 可以用较短 sequence 建模歌曲级结构；下层只需在高层 condition 下补细节。它没有消除计算，而是把全局规划与局部重建分配给不同分辨率。
+\end{knowledgebox}
+
+\teachervoice{讲者把 VQ 称为“powerful and under-utilized”。课堂真正值得保留的不是评价词，而是组合方式：把 continuous audio 变成 code，再让 Transformer 学 code 的 long dependency。}
+
+\subsection{本章小结}
+
+Audio language modeling 依赖 tokenizer。VQ 使连续声音进入有限词表，但 token rate、codebook size 与 decoder 共同决定可学的长程结构和可恢复的声学细节。Hierarchy 是一种显式多尺度带宽分配。
+
+\section{Representation Learning：Contrastive 与 Predictive Objectives}
+
+有了离散 code 后，第二篇论文比较两种不依赖标签的路线。Contrastive learning 让同一声音的不同 augmentation 靠近、不同声音远离；generative/predictive learning 则要求 latent code 预测未来。两者都希望学到可迁移 representation，但保留的信息不同：前者编码所定义的不变性，后者编码对未来可预测性有用的状态。
+
+\subsection{Contrastive Learning 在拉近什么}
+
+对 anchor $x$、positive augmentation $x^+$ 与一组 negatives $x_j^-$，可写一个 InfoNCE-style objective：
+\[
+\mathcal{L}_{\mathrm{NCE}}
+=-\log
+\frac{\exp(\mathrm{sim}(f(x),f(x^+))/\tau)}
+{\exp(\mathrm{sim}(f(x),f(x^+))/\tau)
++\sum_j\exp(\mathrm{sim}(f(x),f(x_j^-))/\tau)}.
+\]
+其中 $f$ 是 encoder，$\mathrm{sim}$ 是相似度，$\tau$ 是 temperature。Augmentation 不是中性操作：若 pitch shift 被当作 positive，表示会更忽略音高；这对 scene classification 可能有利，对 pitch estimation 却可能有害。
+
+\lecturefigure{slide-32-contrastive-architecture.jpg}{Contrastive audio representation：augmentation pairs、encoder 与相似度目标。}{Stanford Online 官方视频 00:30:25--00:32:25。}
+
+\begin{warningbox}{Invariant to what?}
+Contrastive objective 不会自动发现“正确语义”，它会学习 augmentation 定义的不变性。Audio 中 pitch、tempo、timbre、noise 与 time shift 是否应被忽略，取决于下游任务；错误 augmentation 会主动删除关键信息。
+\end{warningbox}
+
+\subsection{Generative、Clustering 与 Speech Models 的共同结构}
+
+课堂把 Jukebox、VQ-VAE、k-means、wav2vec-like codes、Tacotron 与 generative speech models 放在同一张比较图上。名称虽多，问题可以压成三列：谁产生 latent units、谁对 units 建模、谁负责重建或读出。这样才能看见“Transformer 预测 code”与“Transformer 直接产生 waveform”处在不同抽象层。
+
+\lecturefigure{slide-33-audio-methods-comparison.jpg}{Audio methods comparison：不同系统在 encoder、discretizer、sequence model 与 decoder 上分工。}{Stanford Online 官方视频 00:31:58--00:33:21。}
+
+\begin{table}[H]
+\centering
+\small
+\caption{音频自监督/生成路线的机制比较。}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}L{0.22\textwidth}L{0.24\textwidth}X}
+\toprule
+路线 & 学习信号 & 主要保留内容 & 主要风险 \\
+\midrule
+Contrastive & 区分 positive 与 negatives & augmentation 后仍稳定的属性 & False negatives、错误 invariance、batch dependence。 \\
+Next-code prediction & 预测未来离散 codes & 对未来有预测力的状态 & Tokenizer bottleneck、exposure bias、局部捷径。 \\
+Waveform prediction & 预测下一个 sample & 采样级细节与局部动力学 & 序列极长，metric 与听感错位。 \\
+Reconstruction & 从 latent 恢复输入 & Decoder 能重建的内容 & 容易保留低级细节而忽略任务语义。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\lecturefigure{slide-34-textless-nlp.jpg}{Textless NLP / generative speech：用离散 speech units 进行序列建模再解码。}{Stanford Online 官方视频 00:33:22--00:33:41。}
+
+\subsection{预测未来为什么可能产生 Summary}
+
+如果当前 latent state 能准确预测未来 codes，它必须压缩历史中与后续有关的信息。讲者把这一点称为“better prediction, better summarization”。形式上，希望 representation $h_t$ 使
+\[
+p(z_{t+1:t+K}\mid z_{\le t})
+\approx p(z_{t+1:t+K}\mid h_t),
+\]
+其中 $z_t$ 是离散 code。这个近似表达 predictive state 的目标；它并不保证 $h_t$ 对所有未来任务都充分，也可能只学到数据中的短期可预测模式。
+
+\lecturefigure{slide-35-long-dependency-cluster-model.jpg}{用 cluster-code sequence 学 long-term dependency：预测能力作为 representation quality 的代理。}{Stanford Online 官方视频 00:33:42--00:34:51。}
+
+\teachervoice{“预测得越好，summary 越好”是课程的关键假设，而不是定义。若未来主要由局部纹理决定，模型可能在不理解场景语义的情况下获得好 prediction loss。}
+
+\subsection{怎样公平比较 Learned Representations}
+
+论文尽量固定 dataset 和 encoder family，冻结表示后训练 linear head。设表示为 $h=f_\theta(x)$，linear probe 为
+\[
+\hat{y}=\operatorname{softmax}(Wh+b),
+\]
+训练时只更新 $W,b$。若 accuracy 高，说明标签信息能被线性读取；若低，可能是信息缺失，也可能只是需要 nonlinear readout。固定 encoder/data 能减少 confounding，但 pretraining objective、augmentation、hyperparameter search 与 code rate 仍会影响结果。
+
+\lecturefigure{slide-36-unsupervised-representation-evidence.jpg}{Controlled comparison 的设计：same encoder、same dataset、linear readout。}{Stanford Online 官方视频 00:34:52--00:36:07。}
+
+\lecturefigure{slide-37-same-encoder-same-data-surface.jpg}{表示结果：supervised 71.3\%，contrastive 55.6\%，next-code Transformer 60.1\%。}{Stanford Online 官方视频 00:36:08--00:37:09；arXiv:2010.11459。}
+
+\begin{knowledgebox}{读图：先看 control，再看 gap}
+同 encoder、同 dataset 使 objective 成为主要变化源。Next-code Transformer 高于该 contrastive setup，但仍落后 supervised baseline 约 11.2 points。右侧训练数据/hidden-size surface 说明规模会改变误差，但不能直接证明“更多无标签数据一定消除 gap”；那是讲者提出的 scaling hypothesis。
+\end{knowledgebox}
+
+\begin{warningbox}{Linear probe 的结论边界}
+71.3\%、55.6\%、60.1\% 是当前 dataset/encoder/probe 的 accuracy。它们不比较 generation quality、few-shot transfer、robustness、calibration 或 compute efficiency，也不能宣称 supervised 与 unsupervised representation 只差一个固定百分比。
+\end{warningbox}
+
+\teachervoice{Verma 明确把“更多数据会缩小 10\% gap”放在结果之后作为推测。讲义保留这个顺序：先报告受控表格，再讨论 scaling，而不是把推测写成论文已验证结论。}
+
+\subsection{本章小结}
+
+Contrastive learning 通过 augmentation 定义 invariance，predictive learning 通过 future codes 定义充分状态。VQ tokenizer、objective 与 probe 一起决定结果；同数据同 encoder 的 control 很重要，但仍不能把 linear accuracy 外推成通用 representation quality。
+
+\section{Audio Transformers：Raw Waveform 与多尺度表示}
+
+第三篇工作不再预测下一个 sample，而是从一秒 raw waveform 识别 sound events。它借鉴 ViT 的核心思路：把输入切成 patches，经 learned front end 映射为 embeddings，再用 Transformer 聚合；同时用 pooling 或 wavelet 让后层看到更宽时间范围。这里的“raw”仍包含前端切块与线性投影，并非把 16,000 个 samples 原封不动全部做 global attention。
+
+\lecturefigure{slide-38-audio-transformers-title.jpg}{第三篇工作：无卷积的 large-scale raw-audio understanding。}{Stanford Online 官方视频 00:37:50--00:38:21；Audio Transformers v1, arXiv:2105.00335v1。}
+
+\subsection{FSD50K 任务与公平比较边界}
+
+课堂使用 FSD50K：约五万条 human-labeled sound events、约 200 类。Slide 中的课堂设置约为 40,000 training clips 与 10,000 validation/test clips，总量约百小时；输入下采样为 16 kHz，并以一秒 waveform 为基本样本。目标是 multi-label audio content classification，而不是 waveform reconstruction。
+
+\lecturefigure{slide-39-fsd50k-dataset-setup.jpg}{FSD50K 与实验设置：raw waveform、固定时长、multi-label content prediction。}{Stanford Online 官方视频 00:37:54--00:38:42。}
+
+对样本 $x$ 与 $C$ 个标签，模型输出 logits $s_c$，常用 binary cross-entropy：
+\[
+\mathcal{L}_{\mathrm{BCE}}
+=-\sum_{c=1}^{C}
+\left[y_c\log\sigma(s_c)+(1-y_c)\log(1-\sigma(s_c))\right].
+\]
+其中 $y_c\in\{0,1\}$ 表示第 $c$ 类是否出现。评价使用 mean average precision（mAP），它综合每类 precision--recall ranking，再对类别平均；因此不能和前文的 top-5 next-sample accuracy 直接比较。
+
+\begin{warningbox}{同叫 Accuracy，任务完全不同}
+前文 raw synthesis 在 256 个 sample states 中做 single-label next-step prediction；这里 FSD50K 是 multi-label event detection，报告 mAP。二者数值大小没有可比性，不能说 0.537 “低于” 85\%。
+\end{warningbox}
+
+\subsection{为什么在 Intermediate Embedding 上做 Multi-Scale}
+
+Raw waveform 包含从瞬态到事件的多尺度结构。单纯堆叠等长 Transformer layers，虽然每层理论上可全局寻址，但表示维度和 token rate 不会自动形成层级。论文引入 pooling 或 wavelet，在若干层之间降低时间分辨率，使更高层以较少 positions 聚合更长时间范围。
+
+\lecturefigure{slide-40-wavelet-motivation.jpg}{Wavelet motivation：在 intermediate embeddings 上显式构建多尺度层级。}{Stanford Online 官方视频 00:38:43--00:39:28。}
+
+\begin{knowledgebox}{背景概念：Receptive field 与 Resolution}
+Receptive field 指一个高层表示能够依赖的输入时间范围；resolution 指时间轴还保留多少位置。Pooling 扩大每个位置覆盖范围但丢失细粒度；wavelet 同时产生低频 approximation 与高频 detail，理论上能比纯平均保留更多变化，但如何组合仍决定信息是否真正被使用。
+\end{knowledgebox}
+
+\teachervoice{讲者把 wavelet 解释成“在一层里学习树状 hierarchy”。这不是说 wavelet 参数由模型学出；课堂使用的是固定 Haar-like operation，学习发生在 Transformer embeddings 与后续层。}
+
+\subsection{Haar Wavelet：平均与差分}
+
+对相邻 embeddings $h_{2i},h_{2i+1}\in\mathbb{R}^d$，最简单 Haar transform 可写成
+\[
+a_i=\frac{h_{2i}+h_{2i+1}}{\sqrt{2}},
+\qquad
+d_i=\frac{h_{2i}-h_{2i+1}}{\sqrt{2}}.
+\]
+$a_i$ 是低频 approximation，概括局部平均；$d_i$ 是 detail，保留相邻变化。若系统只保留平均，则等价于降采样 pooling；若保留或组合 detail，则能携带瞬态差异。长度从 $L$ 变为约 $L/2$ 后，后续 attention pair 数从 $L^2$ 降为约 $L^2/4$。
+
+\lecturefigure{slide-41-wavelet-in-transformer.jpg}{在 Transformer layers 之间插入 Haar wavelet/average pathway。}{Stanford Online 官方视频 00:39:29--00:41:18。}
+
+\begin{importantbox}{为什么“无新增参数”仍会改变模型}
+Haar transform 没有 learned weights，但它改变 sequence length、频率响应、后续 attention graph 与 gradient path。参数量不变不等于计算、信息或 inductive bias 不变。
+\end{importantbox}
+
+\subsection{Architecture：Front End、Transformer 与 Temporal Reduction}
+
+模型先把 waveform patches 输入 learned feed-forward front end，压成较低维 embeddings；随后通过多层 Transformer，并在中间使用 average pooling 或 wavelet pathway；最终聚合并输出多标签 scores。论文的 large model 使用 6 layers、64-dimensional embeddings、8 heads 和 feed-forward blocks，参数量约 2.3M，重点是与同表卷积 baselines 比较表示效率。
+
+\lecturefigure{slide-42-audio-transformer-architecture.jpg}{Raw-waveform Audio Transformer：front-end patches、attention layers、temporal reduction 与 classifier。}{Stanford Online 官方视频 00:41:19--00:42:21。}
+
+\lecturefigure{slide-43-learned-front-end.jpg}{Methodology：front end 学时频表示，Transformer 学 embedding，pooling/wavelet 扩展尺度。}{Stanford Online 官方视频 00:42:22--00:44:01。}
+
+\begin{knowledgebox}{读图：不要把 Front End 当作“没有卷积就没有预处理”}
+左侧仍把 waveform 组织为 patches，并用 2048-unit front end 与 64-dimensional projection 产生 tokens；Transformer 接收的是 learned embeddings。论文所谓无 convolution，指没有传统 convolutional backbone，不是输入 samples 不经过任何局部映射。
+\end{knowledgebox}
+
+\subsection{结果表：参数效率与指标范围}
+
+Slide/论文表格显示：VGG-like 为 0.434 mAP，small Transformer 为 0.469，large 6-layer Transformer 为 0.525，加入 pooling 的同规模模型为 0.537。CRNN、ResNet-18 与 DenseNet-121 在该表中分别为 0.417、0.373、0.425。结果支持 raw-waveform Transformer 在该 FSD50K 设置中有竞争力，也提示 temporal reduction 有帮助。
+
+\lecturefigure{slide-44-results-table.jpg}{Audio understanding 结果：卷积 baselines、Transformer 与 pooling/multi-scale variants。}{Stanford Online 官方视频 00:44:02--00:44:35；Audio Transformers v1 表 1。}
+
+\begin{table}[H]
+\centering
+\small
+\caption{FSD50K classroom-era comparison（mAP；参数量来自 source table）。}
+\begin{tabular}{lrr}
+\toprule
+模型 & mAP & Parameters \\
+\midrule
+CRNN & 0.417 & 0.96M \\
+VGG-like & 0.434 & 0.27M \\
+ResNet-18 & 0.373 & 11.3M \\
+DenseNet-121 & 0.425 & 12.5M \\
+Small Transformer & 0.469 & 0.9M \\
+Large 6-layer Transformer & 0.525 & 2.3M \\
+Large 6-layer Transformer with pooling & 0.537 & 2.3M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warningbox}{“Adieu Convolutions” 的合理结论}
+表格说明在该数据、训练 recipe 与参数范围内，Transformer variants 达到更高 mAP；它没有控制所有现代 convolutional baselines，也没有比较 streaming latency、energy、robustness 或更大数据预训练。标题是研究方向宣言，不是普遍定理。
+\end{warningbox}
+
+\teachervoice{讲者对 pooling/wavelet 的提升感到意外，因为新增 learned parameters 很少。应把这理解为 inductive-bias evidence：改变时间层级本身可能比单纯加参数更重要。}
+
+\subsection{本章小结}
+
+Raw-waveform understanding 不等于把所有 samples 全局互联。Learned front end 先形成 tokens，pooling/wavelet 再降低时间分辨率。结果支持在 FSD50K 上使用 Transformer 与 multi-scale bias，但结论仍受数据、指标和 baseline 范围约束。
+
+\section{模型学会了怎样的“耳朵”：Inspecting the Learned Front End}
+
+只看 mAP 仍不知道模型如何表示声音。论文进一步检查第一层 filters：对每个 learned filter 做 Fourier transform，按 center frequency 排序，再观察频带密度和 filter shape。这个过程把神经网络参数转换成信号处理读者熟悉的频率响应，是本讲最接近 mechanistic inspection 的部分。
+
+\subsection{从 Filter Impulse Response 到 Frequency Response}
+
+若第 $j$ 个前端 filter 的时域权重为 $h_j[n]$，其频率响应为
+\[
+H_j(\omega)=\sum_n h_j[n]e^{-i\omega n}.
+\]
+可用峰值位置定义近似 center frequency
+\[
+\omega_j^*=\operatorname*{argmax}_{\omega}|H_j(\omega)|.
+\]
+将 filters 按 $\omega_j^*$ 排序后，固定 Fourier bank 会近似沿直线均匀展开；learned bank 若在某些频段分配更多 filters，则曲线会弯曲或出现 step pattern，表示模型按任务重新分配频率 resolution。
+
+\lecturefigure{slide-45-ideal-time-frequency.jpg}{理想固定 Fourier bank 与 learned task-specific frequency organization 的比较。}{Stanford Online 官方视频 00:44:36--00:46:09。}
+
+\begin{knowledgebox}{读图：横轴、纵轴与曲线分别是什么}
+横轴是排序后的 filter index，纵轴是每个 filter 响应最大的 center frequency。直线表示均匀频率分布；弯曲表示某些频段获得更密集的 filters。不同任务出现不同曲线，支持“front end 随任务自适应”，但曲线本身不告诉我们哪种表示在分布外更稳健。
+\end{knowledgebox}
+
+\teachervoice{Verma 把这种现象描述为计算机按任务“调整自己的耳朵”。这句比“模型学到了 spectrogram”更准确：它学的是一组非均匀、任务相关的 analysis filters，而不是复制某个固定 STFT。}
+
+\subsection{DSP-like Filters：Onset、Window 与 Sinusoid}
+
+将 individual filters 可视化后，可以看到类似 onset detector、windowing function 与 sinusoidal basis 的形状；同一频段还可能出现多个相位不同的 filters。它们说明 gradient descent 重新发现了若干经典 DSP building blocks，同时也组合出固定 basis 未预设的形状。
+
+\lecturefigure{slide-46-learned-filter-bank.jpg}{Learned filters：onset-sensitive、window-like、sinusoidal 与 phase-diverse patterns。}{Stanford Online 官方视频 00:46:10--00:47:18。}
+
+\begin{warningbox}{Visual resemblance 不是完整机制证明}
+一个 filter 看起来像 Hamming window 或 sinusoid，只说明 shape/response 相似。要证明 causal function，还需 intervention、ablation、输入合成测试与跨 checkpoint 稳定性；多个 filters 也可能共同实现 distributed feature。
+\end{warningbox}
+
+\begin{importantbox}{传统 DSP 与 End-to-End Learning 的关系}
+本讲最有价值的结论不是“神经网络取代信号处理”，而是二者可以形成闭环：DSP 提供可解释 basis、multi-scale transform 与诊断工具；end-to-end learning 根据任务重新分配频带和组合 filters；分析结果再反过来指导 architecture。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Fourier inspection 将 learned weights 映射到 center frequency 与 filter shape，显示前端会形成任务相关 filterbank，并重现部分经典 DSP structure。它是有力的表示证据，但距离完整 causal circuit 仍有一步。
 
 \section{总结与延伸}
 
-音频领域的 Transformer 应用展示了这一架构的通用性，同时也揭示了其在处理长序列信号时的独特挑战。随着高效注意力机制和音频 tokenization 方法的发展，Transformer 在音频领域的能力将持续提升。
+本讲从 2021 年的三篇工作出发，给出了一个仍然适用的音频建模框架：先决定时间分辨率与 representation，再决定预测目标和 context hierarchy，最后用与任务匹配的 metric 评价，并检查模型是否学到合理中间结构。Transformer 只是其中的 sequence operator；真正决定系统性质的，是它与 waveform、spectrogram、codebook、pooling、wavelet 和 decoder 如何连接。
+
+\lecturefigure{slide-47-final-thoughts.jpg}{课堂结论：Transformer 是重大进展，但不应被视为架构演化终点。}{Stanford Online 官方视频 00:47:19--00:48:13。}
+
+\teachervoice{讲者最后说 Transformer 似乎“现在什么都能解”，但希望这不是终点，并邀请大家寻找影响更大的下一种架构。四年后的论文修订与后续音频模型演化，更说明这是一种研究态度，而不是胜利宣言。}
+
+\subsection{把三篇论文压成一个工程循环}
+
+三篇工作可以统一为五步：先识别任务真正需要的时间尺度；选择 waveform、spectrum 或 code representation；为 local 与 global context 分配不同带宽；选择能检验假设而非制造漂亮数字的 metric；最后检查内部表示是否形成可解释结构。这个循环比“使用 Transformer”更可复用。
+
+\begin{table}[H]
+\centering
+\small
+\caption{本讲三条路线的统一比较。}
+\begin{tabularx}{\textwidth}{L{0.17\textwidth}L{0.30\textwidth}L{0.18\textwidth}>{\raggedright\arraybackslash}X}
+\toprule
+路线 & 输入与长程机制 & 主要指标 & 最重要的限制 \\
+\midrule
+原始波形生成 & 8-bit 离散样本；局部 attention 加压缩 condition & Top-5 样本预测 & 非听感指标；生成误差会累积。 \\
+表征学习 & VQ codes 或增强视图；预测/对比目标 & 线性探测准确率 & Tokenizer 与 augmentation 决定可学信息。 \\
+音频理解 & 可学习波形 patches；pooling/wavelet 层级 & 多标签 mAP & 数据与基线范围有限；未覆盖流式成本。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{常见误区清单}
+
+\begin{warningbox}{不要犯的六个推理错误}
+\begin{enumerate}
+  \item 把 raw waveform、spectrogram 与 VQ token 都叫“audio tokens”，却不说明 token rate 与信息损失；
+  \item 用 top-5 sample accuracy 推断音乐或语音听感；
+  \item 用同一个 $O(n^2)$ 标签忽略 local window、downsampling 与 hierarchy 的实际结构；
+  \item 把 supervised/unsupervised linear-probe gap 当成所有下游任务的固定差距；
+  \item 因 learned filter 像 sinusoid 就宣称模型完整复现了人类听觉；
+  \item 把 2021 年 “Adieu” 标题当成对后续所有卷积或混合架构的否定。
+\end{enumerate}
+\end{warningbox}
+
+\subsection{面向后续课程与现代系统的连接}
+
+这套框架自然延伸到 neural audio codecs、speech units、audio-language pretraining、diffusion/flow generation、streaming recognition 与高效长序列模型。读这些系统时仍应问同一组问题：codec bitrate 是多少，tokenizer 是否丢 phase/prosody，context 在哪个尺度交互，生成器是否并行，评价是 reconstruction、perception、semantic accuracy 还是 human preference。新模型名字不会消除旧约束。
+
+\begin{importantbox}{最终教学结论}
+Audio Transformer 的核心不是“attention 也能处理声音”，而是：表示把连续物理信号变成可学习序列；多尺度结构把高频细节与长程语义分层；目标函数决定表示保留什么；指标边界决定我们能声称什么。
+\end{importantbox}
 
 \subsection{拓展阅读}
+
 \begin{itemize}
-    \item Huang et al., ``Music Transformer: Generating Music with Long-Term Structure,'' ICLR 2019
-    \item Dhariwal et al., ``Jukebox: A Generative Model for Music,'' arXiv 2020
-    \item Radford et al., ``Robust Speech Recognition via Large-Scale Weak Supervision (Whisper),'' 2022
+  \item \href{https://arxiv.org/abs/2106.16036}{Verma and Chafe, \emph{A Generative Model for Raw Audio Using Transformer Architectures}}：sample-level Transformer 与 context conditioning。
+  \item \href{https://arxiv.org/abs/2010.11459}{Verma and Smith, \emph{A Framework for Generative and Contrastive Learning of Audio Representations}}：contrastive 与 next-code representation learning。
+  \item \href{https://arxiv.org/abs/2105.00335v1}{Verma and Berger, \emph{Audio Transformers} v1}：课堂对应的 raw-waveform understanding、pooling、wavelet 与 learned front end。
+  \item \href{https://arxiv.org/abs/1609.03499}{van den Oord et al., \emph{WaveNet}}：dilated causal convolution baseline。
+  \item \href{https://arxiv.org/abs/1711.00937}{van den Oord et al., \emph{Neural Discrete Representation Learning}}：VQ-VAE 与 codebook learning。
+  \item \href{https://arxiv.org/abs/2005.00341}{Dhariwal et al., \emph{Jukebox}}：hierarchical discrete music tokens。
+  \item \href{https://arxiv.org/abs/2010.00475}{Fonseca et al., \emph{FSD50K}}：课堂分类实验的数据集来源。
 \end{itemize}
 
 \end{document}

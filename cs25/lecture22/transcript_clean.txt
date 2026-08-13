@@ -1,0 +1,1431 @@
+Hello, everyone.
+Today, we have Nazneen--
+Yes.
+--from Hugging Face who is working on AI
+safety and alignment using reinforcement
+learning with human feedback.
+She's an expert in the space of large language
+models and their evaluation.
+Before Hugging Face, she led a team of researchers
+at Salesforce, focused on building
+robust, natural language generation systems based on LMS,
+and she got her PhD at UT Austin in computer science.
+So everyone, welcome.
+Great.
+Thanks for having me.
+So the title of my talk today is recipes
+for training helpful chatbots.
+So here's the introduction.
+I was part of this team called the H4 for at Hugging Face.
+And today, I'll walk you through what
+we've built, how we decided on what we need for building that.
+And so essentially what we wanted to build
+and the goal of the team and the project
+since earlier this year was to figure out a recipe for H4 which
+stands for helpful, harmless, honest, and Huggy,
+because it's Hugging Face, chatbot.
+And so like, you know, the ingredients essentially
+were to figure out what kind of data sets
+do we need for supervised fine-tuning and RLHF,
+and we wanted to like, you know, not worry about pre-training,
+instead take an open source pre-trained model
+and recreate the secret sauce of alignment on it.
+And the procedure that we wanted to follow and replicate
+on open source is this figure that I'm pretty sure most of you
+are familiar with at this point, it's
+like from this InstructGPT paper from OpenAI,
+which shows three steps.
+I'm going to go into a bit more detail on this
+because this slide is much smaller here,
+but this is what the outline of the talk looks like.
+I'll be getting the detail of like,
+you know, how did we decide what kind of data, how much data,
+and all the details of the data for supervised fine-tuning,
+then similarly for RLHF, then I'm
+going to talk about distillation of language model alignment,
+then experiments with different helpfulness recipes,
+finaly talk about evaluation of these models,
+and quirks of using GPT-4 as an evaluator.
+OK.
+So this is kind of like, you know,
+what overall recipe that InstructGPT paper from OpenAI
+put forward as the steps for training a chatbot.
+So the first step over here is to do supervised fine-tuning.
+Essentially you're doing fine tuning with human instruction
+demonstration data, so the input and the output
+are both given by humans.
+The step two is the input is given by a human,
+the output comes from models, and then the human
+just reads thumbs up, thumbs down or ranks them.
+And then you train a reward model, which is essentially
+just a classifier.
+And then the final step three is doing fine-tuning
+using that reward model with reinforcement learning.
+And so the way I'm looking at is like step one is
+more for making a model into a helpful
+chatbot, and the steps two and are essentially
+trying to add those guardrails in place for harmlessness
+So let's get started with talking about helpfulness,
+and most of my talk today will be focused on the step one.
+So let's start diving deeper into this,
+and let's start out with the dataset.
+Like, how do we decide what we need for doing
+the supervised fine-tuning?
+So the dataset for helpfulness for supervised fine-tuning
+looks somewhat like this.
+This is from the self-instruct paper.
+If you are aware of that from end of last year,
+so you have something that we call
+as a task, which then has an instruction which is essentially
+a request by a user asking the model to fulfill or give
+a response to a certain task.
+And that is followed by an input and an output.
+The input in this case is optional.
+It could just be part of the instruction,
+and then the output is the expected output
+that the model should generate.
+But while we are doing this training,
+the human provides the expected output
+that the model would have generated in the actual test
+case.
+And so here the input and the output
+are called instance or demonstration or completion,
+and that's why this is called instruction demonstration.
+So this is just a high level landscape
+of what these datasets for instruction demonstration
+look like, and you must have been familiar with at least some
+of these.
+And the way I've tried to put this is on this line where
+on one side, I'm showing datasets that were generated
+using models or more powerful language models,
+and so they're more synthetic data sets.
+On the right, I'm showing like human written datasets,
+and so these are datasets that the human wrote the input as
+well as the expected output.
+And so examples of these are like,
+you know, so the surge-instruct is
+the data set that we at Hugging Face H4, you know,
+contracted with this company that, you know,
+that basically had contracts with annotators that
+were writing the inputs and outputs,
+but we had to give them all the specifications of what
+kind of data we need.
+And then you must have heard of--
+obviously, Open Assistant is this other community wide effort
+where people contributed manually
+writing inputs and outputs, similarly with Dolly.
+And then on the other hand, you can
+see the self-instruct instruct dataset.
+I'm going to dive into some of these.
+How are these synthetic data sets
+created for helpfulness or for supervised fine tuning?
+So one of the examples of how the synthetic data is created
+is in the self construct paper, which is
+called bootstrapping the data.
+So in this case, they start with 175 seat task that is a 175--
+like a very small dataset of examples
+where the manually written inputs and outputs from humans,
+those are added to a task pool, then a language model--
+basically, you bootstrap by giving that
+to the language model and a few shot setting,
+and ask it to generate more data like that.
+And then you have another language model that
+does this task classification.
+Like, you know, what kind of task is this?
+Is this sample or the example are belonging to?
+And finally, it also does this more fine grained classification
+as to like, you know, does it have, you know, output first
+or does it require input first and so on.
+And because this is synthetic data
+and created in this like a very scalable way,
+you also have to do a lot of filtering to make sure
+that it is very high quality.
+So another way of generating this kind of synthetic data
+is what UltraChat did.
+And in this case, they had like a human in the loop process.
+So a human would look up like either, you know,
+search Wikipedia or something, and then come up with topics
+that they want to generate data for, and then ask the model,
+like, provide it with the required material that
+would be needed for coming up with, say, question answering
+or summarization or any of these specific tasks,
+and then give it to a more powerful model like ChatGPT
+or GPT-4.
+In this case, it was ChatGPT and then--
+actually, GPT-4, and then you keep
+doing these loops of giving the material to the model
+and say like, come up with questions and answers
+of on this particular task using all this material.
+And then the human looks at it, and then
+keeps querying it and refining it more and more.
+So this is another way of creating synthetic data.
+Obviously, this has a human sitting there
+and doing a lot more filtering in the process.
+Then there's another one which is
+like even less human involved, which is roleplaying,
+And this is the CAMEL dataset.
+In this case, all that the human does
+is come up with an idea of what task or what example they want.
+So at a high level, it would be like develop a trading
+bot for the stock market, and there would be two LLMs.
+One would be role playing as an AI assistant,
+the other would be role playing as a user,
+and then they basically just specify the task
+and let these two bots chat with each other
+and create a conversation dataset,
+which is like a synthetic data set for supervised fine-tuning.
+So this is just going back to this landscape,
+it looks like, you know, there people have been very creative,
+and how do we get very high quality data
+quickly without spending a lot of money.
+And because humans are inefficient and expensive,
+and so these are like, you know, some examples that we looked at.
+But on the other hand, we also cannot underestimate how good
+quality the manually created datasets are.
+And so we at Hugging Face decided
+to go with everything very manual
+and have humans do both the input and the output.
+Also go figure out what are the essential documents
+or other material they need for coming up
+with creating this data.
+But when we started doing that, we were earlier in the year,
+so this is back in January or February of this year,
+and this is what the landscape looked like at that time.
+And so there was very little datasets available.
+A lot of these were mostly synthetically created.
+So we wanted to kind of leverage what was existing out there,
+but we also had to make some really important decisions
+because we're going to pay money and make sure
+that the data that we collect is actually useful for building
+the model and the applications that are built on top of it.
+So these are the learnings that we had from the past papers
+that were creating these supervised fine-tuning datasets.
+We knew that the dataset has to be
+in the range of tens of thousands of examples.
+So this is from the self-instruct dataset.
+And we also knew that these models that
+are trained on this data set showed diminishing returns
+after just a few thousand high quality instructions.
+So you don't need a lot, and then it saturates very quickly.
+So these are the two findings that we
+had when we started to go collect data
+set for supervised fine-tuning.
+But we also had to give some very fine grained specifications
+on what we want for our data set.
+In particular, we had to decide what
+is the task distribution we want for the data
+that we are collecting.
+I mean, we know it's tens of thousands,
+but how many thousands of what task, right?
+The length distribution, like, you know,
+should the prompt have a certain length?
+Is that even an important factor?
+And one thing is that we wanted we
+had decided that we want to make it
+high quality and human written, but then there
+were like options on that as well.
+We could go with external vendors
+like Surge, Scale AI, AWS Ground Truth, and so on,
+or we could hire our own contractors
+from Upwork and MTurk.
+And so those were decisions that we had to make.
+So let's look at each of these one by one.
+So because we were recreating this InstructGPT recipe
+for this helpful chatbot, we wanted to take inspiration
+from their task distribution.
+So on the left, I'm showing the task distribution
+that InstructGPT did for--
+OpenAI did for the InstructGPT paper.
+As you can see, that generation is the majority of it,
+followed by some of these open ended tasks
+and brainstorming tasks and so on.
+And these are examples of what prompts of each of those look
+like.
+So we decided to just go with that,
+but instead, you must have noticed
+that there's this category called other in the table,
+and we obviously don't know what that was,
+but so we decided to replace that with code.
+So essentially it would be like debugging, asking, clarification
+questions about the code.
+So it's like code plus natural language.
+So this is what our final distribution looked like.
+The second question was the length distribution.
+So we also had to figure out how important is the length
+and should we have a certain length distribution?
+Then we ask these companies to collect data for us.
+So we did a pilot study with Surge, Scale AI and AWS
+SageMaker Ground Truth, which is more like a managed service.
+So it's very different from MTurk,
+and they have very high quality human--
+humans like basically writing these examples.
+And so I wanted to just highlight that,
+this or the first two rows here show what the InstructGPT length
+distribution looks like.
+And as you can see, this is obviously the full dataset,
+this is more like pilot, so like the counts are much smaller,
+but you can see the maximum is 2048.
+And as we know, like that was like the standard context size
+in the beginning of the year.
+And then there is obviously like even the mean,
+and that it's not-- like basically,
+it's more or less, you know, in the range, but if you look at,
+these examples from Surge, AWS, or Scale AI,
+there's very high variance.
+So for example, AWS SageMaker, the maximum prompt length
+is 1936, but then the mean is just 54.
+And on the other hand, with Surge, the maximum length
+is 500, but then the mean is much like 104.
+So it's like more in the range of what
+we would expect from this difference in InstructGPT.
+And similarly with Scale AI, we found
+that there are prompts which is very, very short.
+And so just based on this, we said
+that, you know, OK, we should probably
+just go with Surge because that seems like something
+that is more, you know, in the range, not very high variance.
+So we ended up collecting 10,000 instruction demonstration pairs
+from search, and this is what the task distribution looked
+like.
+So this very much follows the task distribution InstructGPT,
+except for the coding part, which
+was like the other category over there.
+And these are the number of examples we collected
+for each of these tasks.
+And year over year, I'm showing the average length
+for each of these task categories.
+And one thing I wanted to highlight was,
+which was very surprising to me, is that the chat is actually
+one of the shortest prompt length categories,
+but for OpenAI, that is actually one of the longest prompt length
+categories, which was very interesting.
+And so obviously, at that time, we did not think much about it,
+but when we started training models
+and started looking at the evaluation results,
+we were like, you know, if we had
+to go back and change things, how would we change that?
+And so these were like things that we
+started looking at more carefully after we had already
+collected the dataset.
+So here are examples of what that dataset
+looked like, you know, classification,
+generation, brainstorming.
+I'm sure you all must have seen at least some
+of these kind of examples of instruction, demonstration
+datasets.
+So it's very much like it has everything
+that you can expect from NLP kind of tasks,
+but also more open ended chatty tasks as well.
+OK, so here are some details about the task force
+that was used by Surge to generate this dataset.
+We requested a US-based based task force mainly
+because, like I said, we just wanted to replicate what
+InstructGPT was doing, and based on Anthropic and OpenAI's paper,
+it seemed like they prefer going with the US-based based task
+force.
+The gender, roughly equally divided, and the age range
+was also very, you know, very it was like a big range going
+all the way from 19 to 62.
+And then people had education background ranges
+from technical degree to PhD.
+So PhD was mainly for tasks like math, coding, and so on.
+OK, so now I wanted to switch gears a little bit,
+and talk about this, this data set
+that we collected for RLHF or for human preferences
+before I get into the experiments
+we ran with this supervised fine-tuning data set
+and what results we got.
+So again, over here, while we were collecting human preference
+data set, we had to come up with what
+are the specifications of these data sets.
+So again, just to contrast this with how is it
+different from SFT, the SFT data set, both the input
+and the output are written by humans.
+In this case, the human rights, the input,
+the output comes from models, which is responses,
+but then the human just ranks or rates them on a certain scale.
+So yeah, essentially we had to decide
+like, what is the task distribution
+looks like for RLHF data?
+Is it going to be same as supervised fine-tuning?
+What about the length distribution?
+And should we do like single turn versus multi-turn?
+So in InstructGPT it was mainly single turn.
+So if we are trying to replicate InstructGPT,
+we would have to go with single turn,
+but if we are trying to replicate something
+like ChatGPT, it would have to be like a multi-turn dialogue.
+And then we had to also like, you
+know, decide on these dimensions of like helpfulness, honesty
+and harmlessness.
+So these are like the HHH that Anthropic follows,
+like OpenAI puts it as like helpfulness, truthfulness
+and harmlessness.
+And then also we had to decide like, you know,
+are they going to rate each of the responses
+individually or are they going to rank them?
+And what are the implications of us
+deciding one way or the other?
+So we started by doing a pilot study again.
+So we took 300 prompts from the self-instruct dataset,
+the data set that was released end of last year,
+and then gave it a generated model responses from our models,
+and then gave it to data vendors to rate
+the responses of the models.
+And we used this Anthropic template
+on the left, which is essentially
+asking the human to choose the most
+helpful and honest response.
+And then these are the responses from model A and model B,
+and this is a scale, which is also
+working as sort of a ranking thing in the sense
+that one to four is like decreasingly model A,
+and five to eight is increasingly model B.
+And also one other thing we had to decide about
+is how much data should we collect.
+And so again, this is from the InstructGPT paper.
+And as you can see, they have the train and validation
+splits for each of the three steps, which
+are the SFD, training the reward model, and the PPO.
+And this one is in the order of tens of thousands,
+and like over all this combined, which is like, you know,
+this process of RLHF, comes up to about 100,000.
+Great.
+OK.
+So then once we got this pilot study data back, we sat down
+and we wanted to also--
+so I looked at it manually, and I
+felt that I did not agree with most of the answers
+that the annotators from each of these companies were providing.
+And so I was kind of like, you know,
+I don't think this is high quality at all.
+So what I decided is like, you know, I told my team,
+let's go and rate it within ourselves.
+And then, we basically rated about 100 examples or so,
+and we followed a similar template of one to four and five
+to eight.
+Basically, the output, like, you know, the takeaway
+was that even we did not agree amongst each other.
+So essentially, like our models earlier in the year were so bad,
+you were essentially breaking ties like arbitrarily.
+Like, you know, you're deciding between like, should it be like,
+you know, three versus seven or something like that.
+So if they're equally bad, it's hard to decide
+which one is better, right?
+And so we were breaking some of these ties arbitrarily.
+And so as you can see there was barely agreement or correlation
+among our outputs.
+And then, you know, when I aggregated that and looked
+at how well do we correlate with like, for example,
+Surge and Scale, and so we decided Scale AI, we had more--
+like, the maximum overlap was with Scale
+compared to like, say, Surge.
+So we ended up collecting 20,000 dialogues,
+so we decided to go with multi-turn.
+And because it was multi-turn, you would have 20,000 overall
+dialogues, but the number of prompts would be 80,000.
+So there would be each dialogue would have
+about four turns on an average.
+So a human would prompt it, the model would respond.
+a human would read the response, and then
+ask the follow up question, and then
+again, the model would generate two responses,
+and that is how it would go on.
+And so the task distribution we decided to follow
+was a little bit different from what we
+had for supervised fine-tuning.
+and the reason behind that we wanted
+to focus more on tasks that were like factual.
+Essentially, this is more about making
+the model learn between positive and negative signals.
+So making the model like discriminate between like,
+you know, what is factual, what is not,
+what is helpful, what is not, and what is harmless
+and what is not.
+And for example, tasks generation and brainstorming,
+there's no one correct answer.
+Everyone can come up with different lists or recipes,
+and it's hard to say, is this the best answer?
+Is it the most helpful answer?
+But if you ask a factual question,
+it's very clear what is correct and what is not.
+So that was kind of like our reasoning behind doing this.
+And so this is a task distribution
+that we came up with for collecting the human preference
+dataset.
+Also about the length, because we
+are doing this in a multi-turn setting,
+and so we wanted to make sure the entire dialogue could fit
+into the context of the models, we
+decided to ask them to keep the overall dialogue to be shorter
+than 2048 tokens.
+And then it was multi-turn with an average
+of four turns per dialogue.
+Then obviously we had to also select
+on the dimension of whether we are going for helpful,
+or harmless or, you know, honesty.
+So we followed this instructions from this OpenAI guidelines.
+I'm not sure if I can pull this up.
+That would be nice.
+OK, great.
+But yeah, so OpenAI has this document, which is public,
+of labeling instructions that they
+shared with their annotators.
+And so they have-- obviously, like I said, they have helpful,
+thoughtful, and harmless, but then they also have this thing--
+how do I scroll down?
+OK.
+So they have definitions what do they mean by helpfulness, what
+do they mean by truthfulness, and what do they
+mean by harmlessness.
+So in our case, because our models were not as good,
+we decided to focus on helpfulness and truthfulness.
+And when they had to break ties, OpenAI
+says that, you know, choose truthfulness over helpfulness
+over here.
+So let me see that.
+Where is that?
+Yeah.
+So they wanted to prioritize harmlessness and truthfulness
+over helpfulness, but we went with the other way around.
+We said we wanted to prioritize helpfulness over honesty
+or harmlessness because--
+I mean, we weren't even focusing on harmlessness
+because we just wanted to get our model
+to a certain capabilities before we start thinking about that.
+But yeah, this is really a very good document
+and defines what should the annotator be looking at,
+and how do they decide when the model responses are very close,
+how do they break those ties?
+And for deciding between what kind of template
+should be used for collecting these annotations,
+we started off with the Anthropic template
+that I showed a few slides earlier, which
+was on a scale of one to eight but essentially
+ranking between these two models,
+and then LLaMA2 came out while we
+were in this iterative process.
+And iterative process was essentially
+we used to give an endpoint to the vendor,
+and then basically the annotators
+that they had in the manage task force
+would prompt these end points.
+The model would respond to response,
+would generate two responses.
+They would follow the instructions
+and give the ranking for each of those model responses,
+and then, you know, again, follow up with the second prompt
+and the conversation would go on,
+and then they would give us the data at the end of that week.
+We would fine tune our model on that data
+so that the model now is hopefully better,
+and then we give a better endpoint
+to them for the next week to continue this process.
+So it's like very iterative, and they
+have to adapt to model getting better week by week.
+So yeah, basically-- but like, you know,
+we decided to switch to I think for one or two weeks we
+collected Anthropics--
+use Anthropic scale for collecting data set.
+But then LLaMA2 came out, and they results
+showed that, you know, clearly that they
+were using this much more easier scale of just one to four.
+So they were choosing which one is a better
+response between the two responses,
+and then saying how much better it is.
+So is it like significantly better
+or is it only slightly better?
+And so that was the ranking of like scale one to four.
+So here are examples of data that we collected.
+So on the left, you can see that it is asking about--
+basically, a human is prompting with a question,
+and then the bot generates a response.
+And then so this is the response that the human chose
+at this turn, and then the human, you know,
+follows up with the second prompt.
+And then this is the bot response
+that was chosen by this human, and this is the rejected bot
+response.
+And this is giving the response margin
+of three, which is saying that they are quite a bit different.
+So four is very different, and one
+being very slightly different.
+And then you're on the right hand
+side is more about generation brainstorming example wherein
+the human is asking like, can you write a text message
+wishing their husband a happy anniversary,
+and then the bot writes something.
+I guess my thing messed up the emojis,
+but you know, then the human follows up with saying,
+hey, you missed this important detail, which is, you know,
+they've been married for eight years.
+And so this is a chosen bot response.
+This is the rejected one that the human, you know,
+chose between those two.
+And as you can see, they're quite good.
+So the response margin is just one.
+So they're just slightly different.
+OK, sounds good.
+So now I'm going to talk about this another recipe
+that we tried, which is using synthetic dataset essentially
+for distillation of AI alignment, which is basically
+the paper that we released last week called Zephyr,
+and which was like a 7 billion parameter model, which actually
+beat ChatGPT.
+And this builds on top of the Mistral model,
+but I just wanted to like--
+basically, we recreated some of the steps that were there
+on the InstructGPT paper, but now
+with using synthetic dataset.
+And so the first one is like, you know,
+you are basically using a dataset.
+In this case, we use UltraChat.
+So this is a data set I showed a few slides earlier
+for supervised fine-tuning wherein a human was
+brainstorming and gathering the material,
+and then chatting with this GPT model
+to generate multiple different outputs for the instruction,
+and then know this is how we collect that data set,
+which is called the UltrChat, and then we use that for fine
+tuning our model.
+And then the second step is the response generation AI ranking.
+So in this case, we used ultra feedback, which
+is a dataset that was released, and the way
+this dataset was constructed was that they asked--
+basically, took some prompts from ChatGPT and some
+of these different data sets of SFT that were already out there,
+and then they gave it to four different models,
+like four different powerful models like PaLM 2,
+Claude 2, GPT-4, and so on.
+And then they asked this GPT-4 to rank, which one is--
+rank each of those four responses.
+And then so the one that is the best is the one that GPT-4
+ranks as the highest.
+So each of these are scored individually
+on a scale of 1 to 10, AND the one that
+gets the maximum score is like the best response.
+And then finally we did something
+called DPO, which you might have been aware of because it
+came out of Stanford.
+It's like this kind of alternative
+to RLHF which is like doing this direct preference optimization.
+And so instead of like basically doing
+this iterative process of fine-tuning,
+you directly optimize on the chosen one.
+So we just take that and then fine tune
+our model directly on that chosen response,
+and the other one that we are using
+is like a random response from these other three responses.
+OK, so I'm going to talk a little bit about experiments
+and evaluation for each of these recipes.
+One is collecting everything with humans involved,
+and the second one is everything, which is synthetic.
+But then before I discuss evaluation,
+I wanted to talk about what are the benchmarks that we
+are evaluating on and how good are these benchmarks
+for evaluating chatbots?
+And to think about evaluation, we
+need to first think about how are we training these models.
+So like today, all the models that are trained
+are more or less have these four ways of learning.
+The first one is pre-training the language model, essentially
+predicting the next token, and examples of these
+are like GPT-3, OPT, and so like the foundation models.
+The second type of learning is incontext learning
+or the prompt-based learning.
+In this case, you're like just giving a new kind of task
+in the context of the model, and then you
+ask it to do that on new examples.
+So if you wanted to write a poem, for example, for GPT-3,
+you would have written that in the context,
+and then it would have generated new poem on some other topic.
+The third type of learning is the supervised fine-tuning,
+which was kind of like the first step of training a chatbot.
+But in this case, you're like fine tuning on the instruction,
+following data, and then you want these language models,
+which are just pre-trained to predict
+the next token to become chatty and to generate
+open ended responses.
+And then finally, the fourth one is reinforcement learning
+from human feedback, which is nudging the language model
+towards the values you desire.
+And examples include LLaMA2 chat from Meta.
+So the first two steps are, you know,
+we have a lot of benchmarks for these two types of training,
+like Sanford HELM is an example of that or the Google BIG-bench
+or even Hugging Face open LLM leaderboard.
+But for these two types of learning,
+which is supervised fine-tuning and reinforcement learning
+from human feedback, which are parts
+of this recipe for training a chatbot, not
+a lot of leaderboards or evaluation benchmarks available,
+but there are some available, and I wanted to like, you know,
+just highlight some of those.
+So like, yeah, this is essentially like the steps
+three and four.
+Your match to like, you know, the step one over here, which
+is helpfulness, and then steps two and three over here, which
+is like, you know, nudging the model
+towards being more harmless.
+So if you had to evaluate the chatbot for each of these steps,
+you would have to think about, how
+do you evaluate instruction following a chattiness?
+You would have to think about how do you
+evaluate the reward model, which is essentially a classifier?
+And then finally think about, how
+do you evaluate for harmlessness,
+which is by red teaming or adversary
+prompting the language model?
+So for the first step, you would have to see like,
+does the model generate useful responses on the topic,
+and are they open ended?
+And one example of a prompt that you
+would try to evaluate the model would
+be to like, say, brainstorm a list of the New Year's
+resolution.
+And so examples of benchmarks and evaluation boards
+that are looking at this sort of supervised fine-tuning
+is like Hugging Face's leaderboard with Elo ratings.
+So Elo is this metric that is used
+in chess, which is like you're pairing
+one player against the other, and you want
+to rank these players when they have
+these tournaments against each other.
+And so in a similar sense, we are using taking these chatbots
+and then putting them in a pairwise setting,
+and then we partnered with ScaleAI,
+and they provided humans to annotate
+which response is better, and we did that
+for every single combination.
+So like it was NC2 where n is the number of prompts
+we are looking at, and so we generate NC2 combinations,
+and we rate each of them.
+And so these are the Elo ratings that we get out of it.
+And on this column here shows that what
+is the rating you would get if you would have used GPT-4
+as a proxy for humans.
+So instead of humans sitting and rating each of you're
+asking GPT-4 to select which is a better response.
+Yeah, and so this is basically the first table
+you're showing if you allow ties in the sense--
+sorry, if there was no tie allowed,
+and this table here is showing that if ties were allowed.
+Another example is this leaderboard
+from Stanford, which is AlpacaEval leaderboard,
+and they are doing something very similar in the sense
+that they have GPT-4 and Claude as an evaluator,
+and they are doing like a pair-wise evaluation
+of these models, chatbot models, and they
+are reporting the win rate of which model
+wins against the other one.
+There is also the LMSYS leaderboard
+from Berkeley, which has this thing called the Chatbot
+Arena, which is essentially like a publicly
+crowdsourced leaderboard wherein you can go chat with any
+of their models, and then give them
+ratings to which one was more helpful
+and which one was better.
+And so this, again, has a leaderboard of Elo ratings
+because this is done in a pair-wise setting.
+There's another benchmark from LMSYS
+which is called the MT bench or the multi-turn bench benchmark,
+and this is the first ever multi-turn dialogue benchmark
+that is evaluating chatbots.
+And so it has-- there are just like 80 examples in this
+across a bunch of categories, but essentially the way it works
+is that the first turn or the first prompt from the benchmark
+is prompted to the model, then GPT-4
+is asked to score on a score of 1 to 10
+with how good is the model's response,
+and then it is followed up by another prompt which
+is the multi-turn prompt, which is related to the question,
+but it might not be related to the model's responses
+because this is already constructed,
+and they always follow up with the same response to every bot.
+And then again, GPT-4 evaluates how good
+was the second turn of the response.
+So this is like the consolidated leaderboard from LMSYS
+showing both the arena Elo rating as well as empty bench
+score.
+So these are scores that are aggregated across all the 80
+examples, and this is GPT-4 scoring from 1 to 10
+essentially.
+Cool.
+So I think the second step that we
+wanted to look at in our evaluating a chatbot chat was
+like, you know, think about how do you evaluate a reward model?
+So when you have these human preference dataset collected,
+and you train this reward model, which is essentially
+a classifier, to discriminate between truthful and untruthful
+response, or can it rank helpful response higher
+than the less helpful responses?
+And, you know, there's literally no open source data leaderboard
+available for evaluating these preference model or the reward
+models, but internally at Hugging Face,
+we have our own dataset for evaluating
+so that we know that as we are adding more human preference
+data, our models are actually getting better.
+So this is essentially we are evaluating on these open source
+data sets, which is the Anthropic helpful dataset,
+the Open Assistant dataset, the Stanford's human preference
+dataset, and also the learning to summarize datasets
+from the very first paper from OpenAI, which was looking
+at learning to summarize.
+So this is like, you know, basically
+saying that how good is our reward model.
+And then finally, the third type of evaluation is red-teaming,
+And so in this case, you want to craft a prompt
+in a way that could surface model vulnerabilities
+and emerging capabilities.
+And for example, if you are asking like,
+how do I plan a bank robbery?
+Is the model actually like, you know, helping you with that
+and trying to elicit undesired behavior from the model.
+And unfortunately, actually, there
+is no open source leaderboard available for this thing.
+There's just one data set from anthropic,
+which has all the three included, which is the--
+actually it has both helpfulness and harmlessness.
+It's the HH data set from Anthropic,
+and that's the only open source data set available
+for red-teaming, but there's no leaderboard available
+for red-temaing.
+And so this was like a blog that I wrote earlier in the year
+saying, like, you know, highlighting this gap,
+and saying that, you know, putting out
+an announcement saying like, we should get together and build
+a data set for red-teaming.
+And if you had heard of like the DEFCON red-teaming design
+challenge and--
+basically, crowdsourcing some of these red-teaming work
+came out of that.
+OK, so now I'm going to get into-- now
+that we have discussed evaluation and benchmarks
+and leaderboards, I'm going to talk about results
+and what do they look like on each of and some
+of these benchmarks.
+So here I'm showing the results for this LLaMA2 2 13 billion
+on the open LLM leaderboard from Hugging Face.
+And in this case, I was using the data set
+that we collected from Surge.
+That was a 10,000 instruction demonstration data.
+These are basically the four datasets
+which are like NLP focused data sets that we have as part
+of Open LLM leaderboard which are
+the arc_challenge, the hendrycks, hellaswag,
+and truthfulqa_mc.
+And you're like-- you know, this is how well our model does,
+and all of this is essentially accuracy,
+and this is the Lima paper or the Lima model,
+which is less is more for alignment that came from Meta,
+and they just use 1,000 examples of high quality instructions
+and showed that you can get a very good chatbot by just using
+thousand examples.
+And this is taking the longest example from Open Assistant
+and just choosing the top 500 of them.
+And so we found that our model does slightly better
+than both of like LLaMA and Open Assistant
+except for in truthfulqa where we found that the Lima and Open
+Assistant did better than us.
+And similarly, in MT bench, we found the opposite was true.
+So this is like, you know, MT is--
+remember that LMSYS had turn zero and turn one, ansd then
+so this is reporting the first response.
+This is like GPT-4 is essentially
+scoring on a score of 1 to 10, how good these models are
+on the first dialogue turn and the second dialogue
+turn and the average score.
+And so actually, this is more counterintuitive to what
+we found on this automatic evals is
+that-- actually, the MT bench says that, you know,
+data that our model trained on the data
+that we collected from Surge is not very good,
+and in fact, Lima and Open Assistant which
+are like a fraction of the size of the data
+we had are much better.
+So this was kind of surprising.
+And then I looked into like, you know-- let me look at--
+is the length a factor in this?
+And it does seem like, you know, like the dat--
+I was looking at each of those and then looked
+at the average length of the prompts in each of those,
+and it seems like there is a very wide range.
+For example, like our dataset, the average length
+was just 211 of these prompts, while Lima
+is like double of that, and Open Assistant is almost double
+of that.
+So then I did this experiment wherein
+I wanted to check if I controlled
+for the size of the data, but then, you
+know, let the length be varied, the prompt length,
+does that affect the performance?
+So in particular, I think I highlighted this before,
+is that our chat category was like really short.
+And so it actually found that length did not really
+affect that much except for this truthfulqa dataset,
+even for this hellaswag, even though it
+looks more it's actually just in the third digit.
+And over here, you can see the actual difference only made
+on truthfulqa which actually preferred models that were
+generating longer responses.
+But on the other hand, the MT bench score was again,
+not aligning or correlated with what
+we found with these automatic metrics and evaluations,
+in the sense that GPT-4 actually did not prefer longer responses,
+and so this was a little bit counterintuitive,
+and so we need to dig more into what's going on over here,
+but it actually found that like shorter responses were better
+than longer responses although there was not
+much of very much of a difference.
+So the other experiment and ablation
+we did is that just removing amounts of data
+and seeing like, if you incrementally add more data,
+how does that affect performance?
+And this is, again, on that autumn
+open LLM from Hugging Face, which
+is looking at some of the standard NLP benchmarks
+and reporting accuracy.
+And so this is starting with just 10% of all the data
+we collected from search.
+And as you can see in all these benchmarks,
+actually, like it's saturates very quickly, and then some
+of them you actually get like--
+you basically lose performance if you keep adding data.
+And so this is kind of aligning with--
+when we started collecting data, we had this diminishing return
+plot wherein you said that, if you have just
+very few thousand examples of very high quality instruction
+following data set, that's good enough,
+and then your performance saturates or plateaus
+very quickly after that.
+And so that is what we got as well.
+Similarly, I think this is where one place where MT bench
+actually correlated with the automated metrics is that GPT-4
+also showed that after like about 4,000 examples,
+it was basically very barely any gain in performance,
+actually like decreasing performance with the model.
+OK, great.
+So that was all the results on using these human-curated, very
+high quality dataset.
+What about results from distillation
+from these synthetic data sets?
+In particular, we use UltraChat for supervised fine-tuning
+and UltraFeedback feedback for DPO.
+And so these are the results.
+So this is basically just work that was released last week.
+We haven't yet released the code and the data
+set which we are going to do this week.
+And so here I'm highlighting that Zephyr
+is the model we release.
+We use Mistral as the foundation model,
+and then fine tuned it using UltraChat and then
+the DPO on UltraFeedback.
+And as you can see that it actually beats ChatGPT
+on this AlpacaEval leaderboard.
+Also it is like the best in the--
+In all the open-- at least it's like it
+beats most of the 13 billion parameter models,
+and it's quite competitive to Claude to, again,
+on the AlpacaEval leaderboard.
+So this is the model which has both SFT and DPO.
+So we did an ablation on how good or how useful is SFT
+and how useful is because there's this 2-step process.
+It's like, first, you fine-tune on instruction demonstration,
+then you fine-tune tune on human preferences.
+The first row over here is showing,
+what if you directly did DPO on UltraFeedback
+and did not do the supervised fine-tuning?
+And you actually saw that that's really bad,
+so that doesn't work at all.
+And then the second one is saying
+that, what if you just did supervised fine-tuning
+and did not do DPO?
+And so this actually-- which is like the first step.
+And this actually works decently well,
+and it's basically getting you to 80% or 90%
+of the overall performance.
+And finally, this is doing like supervised fine-tuning
+on the human preference data.
+So you take this row and do another round
+of supervised fine-tuning, but on this data
+of human preferences.
+So you remember you had the chosen and the rejected,
+so you give all the dialogue history
+and then the expected completion is the chosen dialogue response.
+So in this case, you're not really
+doing that discriminative thing.
+You're still doing the SFT process,
+but using that in a smart-- using the dataset in a smart way
+so that it follows a template of what supervised fine-tuning
+does.
+And then that as well we found that wasn't very helpful.
+So the best recipe, obviously, is DPO plus SFT.
+So, you know, doing SFT first on the UltraChat, and then
+DPO on the UltraFeedfback.
+Both of these data sets are synthetic,
+but it's like only slightly better than just doing SFT.
+OK, so I'm getting to this final section of my talk, which
+is essentially looking at--
+so we have seen a lot of these evaluation and benchmarks
+and leaderboards, and many of them
+are starting to adopt these powerful models like Claude
+2 and GPT-4, and are using as proxy for humans in evaluation.
+And so what are the quirks associated with doing that,
+and are there things that we should
+like be considering when we are doing
+this at a very large scale?
+So when we did that, when we use GPT-4 as an evaluator,
+we found that it actually has a positional bias.
+And so in particular, it is predisposed to generating
+a rating of one in a pair-wise preference collection setting.
+And so this chart over here shows
+like the average rating of four model responses
+across the entire dataset.
+And on the right, on the other hand,
+humans are more or less uniform.
+And so you expect that this distribution seems much more
+better than this distribution which is skewed to the right.
+So then what we did is that we prompted
+GPT-4 to say that, hey, you have this left bias,
+and you always generate this rating of one.
+You know, be aware of this bias, and then
+you tell it to de-bias itself, it actually
+flips the bias in the opposite direction.
+So then it is more self-aware in the sense
+that it knows that, you know, it has this bias
+and now it starts generating more ratings of five and six.
+And the one way of getting rid of this
+is that we make sure that each response is equally likely to be
+in right and left position so that kind of dilutes
+like this bias that it has to each of these positions.
+And then, you know, we found that actually like prompting
+GPT-4 to generate scores-- so asking it to score
+each response individually like MT bench does.
+And then instead of ranking it in a pair-wise setting,
+we actually found that alleviates
+the problem a little bit, but does not completely
+get rid of the problem.
+We also found evidence of doping between training and evaluation.
+So in particular, we found that GPT-4 prefers models that
+were trained on GPT-4's data.
+So all these models here were trained
+on data that was bootstrapped using GPT-4.
+So it prefers that over humans who
+are more factual, much more higher quality,
+but they might be very succinct and to the point.
+So this is one thing that we should
+be aware of when we're using GPT-4 as an evaluator.
+The other thing is that it's also like concurs with findings
+from these other papers, which is that GPT-4 prefers models
+with higher diversity.
+So that is number of unique tokens in the response
+and the longer responses.
+So if you have this list of list kind of response,
+just like ChatGPT does, GPT-4 is predisposed
+to rating that higher compared to a model that
+does not generate that.
+We also found that GPT-4 has poor correlation with humans
+on low entropy tasks such as math, coding, and reasoning.
+So remember that a leaderboard I showed you
+where we had compared like how does GPT-4 Elo rating compare
+to humans, and then we dive deeper into how does that
+compare on each of these different tasks, distribution
+and categories?
+And so this is what it looks like.
+So it seems like it says lower correlation with humans
+on some of these more factual, like, you know,
+kind of expecting one correct answer,
+and they're actually highly correlated with humans
+on these more high entropy tasks where you're
+like brainstorming and creative generation, which
+was kind of unintuitive and counterintuitive
+because you could have so many different ways of coming up
+with a recipe or a list of something.
+But that's where the rating of GPT-4 and humans
+are more correlated.
+OK, so the final thing is takeaways.
+So there's a bunch of this, but let's try to break it down.
+Essentially, we discussed how do we come up
+with steps for data curation for supervised fine-tuning and RLHF,
+and it involves several critical factors such as how much data
+do you need to collect, what is the length of the prompts
+and the distribution of those length, the task distribution,
+and what is the role of humans?
+Like, do you need synthetic data?
+Do you need completely manually curated or something
+in the middle?
+And we looked at, like, there are
+many tools for efficient fine-tuning of open source LLMs.
+From the SFT results, we found that truthfulqa
+was the main differentiating benchmark
+for these automated eval metrics.
+And then we found that MT bench scores were actually not
+correlated with these automated metrics,
+and so it was more sort of--
+only on some of these models we found that they were correlated.
+For the distillation results, which
+is from the Zephyr-7B where we are like fine-tuning
+on synthetic data, we found that the SFT on AI
+generated data and the DPO or distillation of DPO
+on AI feedback data actually beats ChatGPT
+even though the model is just 7 billion parameter.
+And then we found that benchmarking gap
+in assessing our RLHF models, in particular,
+that we don't have benchmarks for assessing reward models,
+and we also don't have open source benchmarks
+for evaluating red-teaming and model vulnerabilities.
+Then finally, we'd dive deeper into looking
+at quirks of using GPT-4 or some of these powerful LLMs
+as an evaluator, and some of them were like,
+you know, they prefer models trained on GPT-4 like data,
+it has a left positional bias, and then
+it has high correlation with humans
+on creative tasks compared to coding or reasoning tasks.
+And my work has been covered on the New York Times article
+cover which talks about the secret ingredient of alignment,
+which is for ChatGPT which is alignment.
+I'm also part of the United Nations advisory board
+that was announced last week.
+So really humbled to be part of that.
+Here are some blog posts.
+Basically, we did not publish a whole lot this year,
+but we wrote a bunch of blog posts highlighting what we
+are releasing and working on.
+And also some of these are part of the talk that I just
+discussed.
+And this is part of the H4 team.
+I'm grateful to be part of this, and thanks for listening.
+When you get alternating responses from these models,
+do you expect really high temperatures
+or do you keep it pretty close to the temperature value that's
+also told when you find one?
+Yeah so we did basically chose like, you know--
+we tried experimenting with different temperatures,
+but then we actually found that just using different sampling
+strategy worked better.
+So using a different value of P and then K
+and some combination of that, as opposed to just like
+relying on temperature.
+[INAUDIBLE] problem [INAUDIBLE] labs on doing that at scale,
+and like, what are the different tactics and techniques
+for [INAUDIBLE].
+Yeah, so I think for red-teaming at scale,
+there's actually a paper that came out recently called
+GPTFUZZER that actually bootstraps and uses
+these powerful LLMs to jailbreak other LLMs.
+And also there was a DeepMind paper--
+I think actually like one and half to almost two years
+ago that was red-teaming teaming large language models
+with large language models.
+So how do you like red-team and evaluate language model
+by using another powerful language model?
+And so I think that is kind of the way to go in terms of scale.
+And-- sorry, what was the second question?
+I guess I was asking like, what are the unique threat factors,
+or what makes red-team LLMs unique from red-team team
+regular infrastructure or software?
+Yeah, so I think one thing is this idea
+of emerging capabilities, which is essentially,
+as you scale up-- and which is a trend that we're seeing.
+As we are scaling up, there are things that these models do or--
+capabilities that emerge that were not there
+in the smaller models.
+I think examples are chain of thought reasoning, which,
+GPT-2 two or GPT was not capable of doing it,
+and as we scale up-- and the other example
+is this few shot prompting that we first saw in GPT-3.
+As in you could give it a completely new task
+and not update its parameters in any way,
+but just put it as part of the prompt,
+and then now it just launched the task,
+and then it can do it on any number of examples right.?
+And so labeling and all these things started coming up,
+like using GPT-3 as a labeler and all
+that when we discovered that thing.
+So I think-- essentially, like you know-- and the other example
+is like manipulation.
+I don't think any open source models are capable of that yet,
+but I know Anthropic and OpenAI and these companies
+are focusing on deception and manipulation
+because when you start chatting with these models,
+you start treating them as a companion,
+especially if you have character AI kind of a thing
+where, you know, you might start confiding in them,
+sharing information that you probably shouldn't, and then
+they can use it against you, maybe.
+An example of that is like, I think recently we
+saw that GPT-4 actually manipulated someone
+to read the capture to it in some way
+and tell it what the capture reads.
+And so that's a really concrete example of manipulation.
+And so it seems like now these models are capable of that.
+I don't think open source models are there yet,
+but these are just like, you know, things that come out
+and vulnerabilities that would surface when you do red-teaming.
+I have [INAUDIBLE] idea [INAUDIBLE]
+as those AI become more real [INAUDIBLE]
+Like creating dataset sets like, pretty important,
+but I know there's also [INAUDIBLE]..
+Like if you're going to open source data sets,
+like are you after just [INAUDIBLE] bad actors,
+how to use models for that?
+And so I guess like what's your take on that idea
+and what's like [INAUDIBLE] lot of open sourcing.
+Yeah, so I would say like it was, it's less
+about open sourcing a data set that is crafted
+to elicit this behavior.
+It's more about the kind of harms
+that we should be thinking about.
+So it's more about like, you know,
+hallucinating, or plagiarism, manipulation,
+trying to leak PII information, people's credit card, SSN,
+and things like that.
+It's more about thinking about these different dimensions
+and giving concrete examples of how these models can
+elicit this behavior.
+But I think what you are trying to talk
+about is that, what if we gave them concrete ways,
+like, concrete prompts on how you jailbreak,
+and then they can go and try to do that.
+I think first thing is, why we are doing this.
+We would have evaluated our models,
+and we would then start thinking about guardrails and safety
+ourself.
+And if indeed, the dataset is so good
+that we can say that a lot of these powerful models
+are failing on that, and obviously you
+don't open source it instantly, but you actually
+think about what is the best way to put it out
+there by first securing the model,
+making sure that it does not like--
+basically does not elicit that kind of behavior,
+and then sharing it while you have already crossed that bridge
+and being like, yeah, my model is safeguarded against that.
+So it's more like, yeah, a process of--
+a gradient of things that you need to do.
+[INAUDIBLE] a good talk.
+Recently gained some papers about retraining, auto
+LLM data, getting to collapse models.
+I mean, obviously [INAUDIBLE] is not the case,
+but if you are using LLMF data for fine-tuning,
+you will see any of those potential collapses.
+What are your thoughts from that?
+Like how to prevent that?
+Yeah, so you're talking about when
+you're using synthetic data bootstrap from another language
+models.
+Have we seen collapse of some kind of mode collapse
+or something like that?
+Or--
+Yes, like that.
+So actually, so far it's been like clear that these are good.
+Like these actually turn like, you know, regular chatbots--
+and like regular language models into chatbots, which
+are as good as the experience that you get by chatting
+with ChatGPT, but although, the quirks that I raised,
+which is like, you know, when you have these models,
+and then you like now put them on a benchmark,
+and then you see that suddenly it's like 90%,
+It might just be because you use the model that was a evaluator
+to generate a data and then train
+this model and that in turn like this doping thing, right?
+And so that is one thing that is important to think about.
+The other thing is--
+what was I going to say?
+I forgot.
+Yeah.
+The other thing is like about the licensing part,
+which is kind of not related to what you were asking,
+but essentially there was this kind of like-- you cannot--
+we cannot open source and commercially.
+So it's still restrictive license.
+And you cannot use it for building and selling
+applications down the line, but then it's still good
+as a research artifact.
+We would have seen these kind of collapses
+happen if it was allowed to use these commercially,
+and then people would have been like,
+but actually, recently, we did see like,
+so there's this company called Daxter which was
+using GPT-4 for summarization.
+They replaced it with the open source model called Mistral,
+and they said that their customers haven't complained,
+and they're saving a ton of money
+and it just seems to work fine.
+And they are like, you know, it's just as good.
+But not that I'm saying that Mistral
+is trained on any of these synthetic data,
+but it's just an example of things
+that would become very clear by doing this sort of A/B testing
+where you like replace this model by another one
+and see how that affects things.
+Thank you.
+I have a question on Zoom.
+Yes.
+Right.
+It seems like another axis you might beat ChatGPT on
+is on cost.
+So I wondered--
+I wonder what your total budget was
+or your total cost was to produce
+your model that beat them.
+So the Zephyr-7B was just four hours of training on 16 A100.
+So that's less than $50, I guess,
+because we use a synthetic dataset which
+was already open source, which is UltraChat and UltraFeedback.
+But the cost associated--
+Like the overall cost, all the people, and everything.
+Yeah.
+I see.
+OK.
+So all the people and everything in the sense [INAUDIBLE]..
+I guess like UltraChat probably might have reported
+some cost and UltraFeedback, but they are mostly synthetically
+created with very little human intervention,
+and so they might--
+I don't know if they report that.
+I haven't looked into that, but I
+would say it was still much more cost-effecient
+than what we spent on buying data from Surge and ScaleAI.
+And we spent about half a million buying about 20,000
+prompts of human preferences, the 20,000 dialogue,
+and about 10,000 instruction demonstration data.
+So that was--
+Thank you.
+--quite a bit.
+One thing I'm curious about is the scale
+that you used in evaluating the bias for GPT-4.
+Uh-huh.
+So I saw it was like 1.7 on the slide.
+Hmm This one?
+Yeah.
+So, yeah, this was the Anthropic scale.
+Like, remember that one to four is decreasingly
+A, and five to eight is increasingly B. Yeah.
+And that's giving the model to outputs [INAUDIBLE]??
+Yes, exactly.
+In these types of valuations, how sensitive to the fault
+do you find the evaluators to be?
+They see you with / telling it that it
+has to account for this left bias or right bias.
+What's stopping you from then saying, [INAUDIBLE]
+distribution should be uniform, and distribution
+should be normal and just kind of playing iteratively
+to see how [INAUDIBLE] things used to be.
+Yeah.
+Yeah.
+I think that's a good point in the sense
+like, we did not study as to whether certain tasks
+or prompts that we're putting off GPT-4
+to generate this kind of bias.
+Although I would say that, you know,
+this was also observed by LMSYS, and it's part of their findings
+as well, [INAUDIBLE].
+But yeah, so the LMSYS paper also has that,
+but it would be interesting.
+Like, it would be surprising if it generates this on very
+long prompts or prompts from math or something, which
+are just hard to evaluate when there are two responses which
+are--
+at least as a human.
+Like when I see a bunch of code on this side and this side,
+and then it's very hard to say-- and both of them
+are trying to do the same thing, but a very different approach.
+It's very hard to evaluate them, right?
+And so, yeah, we haven't looked into that.
+Perhaps another thing is, you think order matters?
+Like which [INAUDIBLE] GPT-4 first.
+Yeah.
+I mean, that was-- basically, the takeaway was that.
+So it's interesting because humans usually
+have recency bias, which is essentially the last thing
+that you read is the thing that you remember,
+and so you would just, you know, try to choose that more.
+You know, you're just inclined to do that.
+And GPT-4 actually had a left bias.
+So the thing that it first saw in some sense.
+I think some-- like I think LMSYS was the one that proposed
+because it has this left to right training,
+maybe that's why it has that kind of a bias.
+But yeah, so I think the way we elevated
+that was that, you know, having every model's output be
+equally likely to be on the left and the right hand side.
+So if we're doing aLPACA and Vicuna, then instead
+of just doing aLPACA on left and Vicuna on right,
+we would just randomly like switch them, AND so
+both of them are likely to occur in both these positions.
+And you still saw the left bias?
+[INAUDIBLE]
+If you just ask it to rate it on a scale of one to five?
+Yes.
+But if you say that, hey, you have this bias
+and make it try to make it aware of it,
+then it flips and it generates something like that.
+So yeah.
+Is there other approaches where you can prompt the model
+by shuffling the prompts?
+Then you [INAUDIBLE] to de-bias the [? model ?] or de-bias
+the results of it?
+By shuffling the prompts, you mean like--
+[INAUDIBLE] bias the [INAUDIBLE] to shuffle the order of how
+you--
+but in the [INAUDIBLE].
+Series.
+Yeah, so that's what we did, is that, you know, we would like,
+you know, randomly shuffle the left and the right.
+And then so each model--
+so basically, you create two combinations.
+Suppose you want to evaluate three models on 10 prompts,
+so you'll have 10c2 2 combinations,
+where n is the number of prompts--
+or sorry, the number of models.
+And then you would basically like generate-- so this
+will be a total dataset.
+So you would have generated 10 responses from each of these
+models, and then put them together in this 3c2 setting,
+and then that will be like a combination of each of these.
+And then you make sure that every time the like,
+the models on the left are equally likely to also occur
+on the right.
+So if you are doing like model one and then model two,
+then you also make sure also do model two and then
+model one on a different prompt.
+OK.
+There's one more question for this one.
+OK.
+[INAUDIBLE]
+[INAUDIBLE] one of the side.
+Oh, OK, Sure.
+Sorry.
+Should I keep the Zoom on?
+[INAUDIBLE]
+This one?
+[INAUDIBLE]
+Thank you.
+[INAUDIBLE] ask you one thing about [INAUDIBLE]..
+Yes.
+So just talking about if I understand this correctly.
+So on the reinforcement learning from movement feedback,
+first you build a reward model, and that reward model
+takes text input and then humans give it scores,
+while the supervised problem we're
+trying to predict from the text of the score.
+Mm-hmm.
+And then after reward model--
+[INTERPOSING VOICES]
+--same token and pump that through the reward model?
+Then the reward model will be optimized on this?
+Yes.
+And that's how [INAUDIBLE] very [INAUDIBLE] was, right?
+Only every once at the very end.
+Very end.
+But that's how you basically--
+Yes, exactly.
+And so you have to-- it's very simple and efficient.
+And so since you have to keep doing this again and again
+and again, and then that's why you need 100,000 examples
+for doing RLHF, but only 10,000-- possible [INAUDIBLE]..
+I see.
+That's going to be [? a problem. ?]
+Thanks so much.
+Very interesting talk.

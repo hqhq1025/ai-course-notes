@@ -1,308 +1,693 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 40：扩散模型中的 Transformer——从 DiT 到 MMDiT 与高效生成}
+\renewcommand{\noteauthors}{基于 Sayak Paul（Hugging Face）Stanford CS25 V5 官方讲座、官方 66 页 deck 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V5 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2025-05-27；上传 2025-06-24}
+\renewcommand{\videoduration}{1:14:32}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=vXtapCFctTI}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{Sayak Paul, official CS25 deck, page #3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \normalsize
+  \setlength{\parskip}{0.25em}
 }
-
-\newcommand{\notetitle}{[CS25 V5] Transformers in Diffusion Models --- Sayak Paul, HuggingFace}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2025}
-\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
-\newcommand{\videopublishdate}{Spring 2025}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{扩散生成不是一张网络图}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这场课讨论的不是“Transformer 能不能生成图片”，而是扩散系统的 denoiser（去噪器）为什么从巨型 U-Net 迁移到可扩展的 Transformer，以及迁移后条件注入、注意力成本、多模态参数化和结构控制怎样重新设计。讲者首先划定范围：不完整讲授 diffusion 或 flow matching 的全部数学，而把焦点放在可学习 backbone 的参数化。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{从生成效果回到迭代过程}
 
-\tableofcontents
-\newpage
+文本生成图像的结果很吸睛，但架构判断不能从样例图直接开始。下面先建立最小生成过程：从噪声出发，沿多个时间步逐渐得到数据样本；文本只是在每一步改变去噪方向的条件。本节要回答的是：每一步究竟由谁更新状态，条件又在何处改变轨迹；带着这两个问题读后面的样例、公式与组件图，才能把视觉效果还原成可分析的系统。
 
-\section{引言：扩散模型中的 Transformer 革命}
+\lecturefigure{slide-04.jpg}{文本到图像扩散模型已经能生成复杂、写实且富有组合性的场景}{04}
 
-Sayak Paul 是 HuggingFace 的工程师，主要负责 Diffusers 库的开发与维护，专注于扩散模型的训练、评估和应用。本讲系统梳理了 Transformer 如何逐步取代 U-Net 成为扩散模型的核心骨干网络。
+图中不同开放或闭源模型都能处理“仙人掌笑脸”“疯狂科学家熊猫”“月球蛋中孵化的宇航员”等组合 prompt。读图时应区分三件事：photorealism、prompt adherence 和 diversity。单个成功样例只证明模型能生成某个结果，不说明覆盖率、可重复性或对长尾组合的可靠性。
 
-\begin{knowledgebox}{讲座范围说明}
-\begin{itemize}
-    \item 不会详细推导扩散或 Flow Matching 的数学原理，仅给出快速概览
-    \item 讨论的架构对扩散和 Flow Matching 是通用的
-    \item 以图像生成为主要示例，但这些架构也适用于音频等连续模态
-\end{itemize}
+\lecturefigure{slide-05.jpg}{扩散直觉：随机噪声通过多步 refinement 逐渐变成真实图像}{05}
+
+与一次前向传播生成样本的 GAN 不同，扩散采样是顺序迭代。若前向加噪写成
+\[
+x_t=\sqrt{\bar\alpha_t}\,x_0+\sqrt{1-\bar\alpha_t}\,\epsilon,
+\qquad \epsilon\sim\mathcal N(0,I),
+\]
+$x_0$ 是干净样本，$x_t$ 是时间步 $t$ 的带噪状态，$\bar\alpha_t$ 由噪声日程决定。生成时从噪声反向走回数据分布。
+
+\lecturefigure{slide-06.jpg}{文本条件在每个去噪步骤中约束生成轨迹}{06}
+
+白色毛怪样例显示文本并非最后做分类，而是持续影响中间状态。条件生成可抽象为 $\epsilon_\theta(x_t,t,c)$ 或 velocity predictor $v_\theta(x_t,t,c)$，其中 $c$ 是文本、类别、图像或其他控制。条件越复杂，注入方式就越成为 backbone 设计的核心。
+
+\teachervoice{00:02:48--00:06:25，老师把扩散压缩成一个最重要的直觉：它是 iterative refinement，而非 one-shot generation。文本条件的作用是持续改变轨迹，不是给最终图片补一个标签。}
+
+\begin{importantbox}{扩散模型的两个可分问题}
+第一是\textbf{路径与目标}：怎样加噪、怎样定义 velocity/noise/score、怎样选 scheduler；第二是\textbf{网络参数化}：用 U-Net、DiT 还是其他结构预测目标。本讲主要回答第二类问题。
+\end{importantbox}
+
+\subsection{一个产品级扩散系统包含什么}
+
+“Diffusion model”常被误称为单一网络。实际 text-to-image pipeline 至少包括 text encoder、latent representation、denoiser、scheduler 和 VAE decoder；有些系统还使用多个文本编码器与 guidance。
+
+\lecturefigure{slide-07.jpg}{扩散系统的第一块：文本编码器把 prompt 变成条件表示}{07}
+
+文本首先进入一个或多个 encoder。Stable Diffusion 3 等系统会组合多个文本编码器，因为词汇、长文本理解和语义空间各有偏差。条件表示的质量决定模型能否理解 prompt，但也增加显存、延迟与训练接口复杂度。
+
+\lecturefigure{slide-08.jpg}{第二块：生成在 noisy latent 空间而非原始像素空间中进行}{08}
+
+Latent diffusion 先用 VAE 把图像压缩为低分辨率 latent，再在 latent 上扩散。若图像是 $H\times W$、下采样率为 $f$，latent 空间约为 $H/f\times W/f$，显著降低 token 数；代价是 VAE 可能丢失文字、纹理或高频细节。
+
+\lecturefigure{slide-09.jpg}{第三块：U-Net 或 Transformer denoiser 预测每一步更新方向}{09}
+
+Denoiser 接收 noisy latents、时间步和文本条件，输出 noise、velocity 或其他参数化。讲义后面所有架构争论都围绕这一蓝色模块展开。替换 backbone 不会自动替换 scheduler、VAE 或文本编码器，因此端到端收益必须分组件测量。
+
+\lecturefigure{slide-10.jpg}{完整系统：文本、latent、denoiser、scheduler 与 VAE 形成迭代闭环}{10}
+
+Scheduler 使用网络输出计算下一个 latent，循环若干次后由 VAE 解码成图像。推理延迟近似等于“每步 denoiser 成本 × 采样步数”，因此一个单步更快但需要更多步的架构未必端到端更快。讲者在 Q\&A 中也保留了 GAN 在超低延迟 one-shot generation 中的价值。
+
+\begin{knowledgebox}{第一次出现：Scheduler 与 denoiser}
+Scheduler 是确定噪声水平与反向更新规则的数值过程；denoiser 是学习得到的网络。二者共同决定采样，却可相对独立替换。比较模型速度时必须同时报告采样步数与单步成本。
 \end{knowledgebox}
 
-\section{扩散模型基础}
+\subsection{Diffusion、flow matching 与本讲焦点}
 
-\subsection{核心思想}
+为了看清 backbone，仍需知道训练信号来自哪里。Diffusion 常预测加入的噪声，flow matching 则在噪声与数据之间定义概率路径并预测速度场；两者都能使用相似 Transformer。
 
-扩散模型的核心思想是：从随机噪声出发，通过\textbf{迭代去噪}过程逐步生成逼真图像。与 GAN（一步生成）不同，扩散模型是\textbf{序列化}的——需要多步去噪才能完成生成。
+\lecturefigure{slide-11.jpg}{扩散训练：由干净图像与噪声构造 $x_t$，让网络恢复目标}{11}
 
-当以文本作为条件时，去噪过程被引导向文本描述的方向，从而实现文本到图像的生成。
+最常见的 noise-prediction objective 为
+\[
+\mathcal L_{\epsilon}
+=\mathbb E_{x_0,\epsilon,t}
+\left[\|\epsilon-\epsilon_\theta(x_t,t,c)\|_2^2\right].
+\]
+这里 $t$ 决定信噪比，$c$ 是条件。不同 timestep weighting 会改变模型关注的噪声区间，因此训练 recipe 与架构不能完全分开讨论。
 
-\subsection{系统组件概览}
+\lecturefigure{slide-12.jpg}{Flow matching：沿定义好的路径学习从噪声到数据的速度场}{12}
 
-一个完整的文本到图像系统包含以下组件：
-\begin{enumerate}
-    \item \textbf{文本编码器}：将文本提示转换为嵌入向量（当前最先进模型通常使用多个文本编码器，如 Stable Diffusion 3 使用三个）
-    \item \textbf{噪声潜变量}：从高斯分布采样的初始噪声
-    \item \textbf{时间步}：控制去噪过程进度的调度参数
-    \item \textbf{核心扩散网络}：执行去噪的主体网络（本讲重点）
-    \item \textbf{解码器}：将去噪后的潜变量转换为最终图像
-\end{enumerate}
+若采用线性路径 $x_t=(1-t)x_0+t x_1$，目标速度为 $u_t=x_1-x_0$，可训练
+\[
+\mathcal L_{\mathrm{FM}}
+=\mathbb E\left[\|v_\theta(x_t,t,c)-u_t\|_2^2\right].
+\]
+实际路径与参数化可以更复杂，但核心是网络预测局部流向。DiT、MMDiT 与 SANA 的多数结构讨论并不依赖到底预测 noise 还是 velocity。
 
-\begin{importantbox}{潜空间 vs.\ 像素空间}
-当前最先进的扩散模型几乎都在\textbf{潜空间}（Latent Space）而非像素空间中操作，因为像素空间的计算成本过高。这就是为什么输入是``噪声潜变量''而非原始像素。
-\end{importantbox}
+\lecturefigure{slide-13.jpg}{本讲明确把 scheduler math 放到一边，聚焦 network parameterization}{13}
 
-\subsection{训练与推理}
+图中放大的是 $	heta$：网络如何处理 noisy input、如何注入 $t$ 与文本、如何缩放到高分辨率。这个范围限定很重要。若某系统效果更好，可能来自数据、VAE、objective、guidance 或 post-training，而不能全部归功于 backbone。
 
-\textbf{训练}：给定原始图像 $x_0$，从标准高斯分布采样噪声 $\epsilon$，从均匀分布采样时间步 $t$，通过噪声调度器混合得到含噪样本 $x_t$。训练目标是让网络预测噪声（或速度向量）。
+\lecturefigure{slide-14.jpg}{扩散 backbone 的设计自由度：输入空间、网络结构、条件与输出目标}{14}
 
-\textbf{推理}：从纯噪声出发，按时间步序列依次调用网络进行去噪，最终得到生成样本。
+Pixel-space 与 latent-space 决定空间尺寸；U-Net 与 Transformer 决定 token mixing；class、text 或 image conditions 决定控制接口；epsilon、velocity 或 data prediction 决定输出语义。读这张表时应把每一行视为可独立 ablate 的实验轴，而不是一个固定套餐。
 
-\subsection{本章小结}
-
-扩散模型通过迭代去噪实现高质量图像生成，其系统由文本编码器、核心扩散网络和解码器组成。
-
-\section{早期架构：U-Net 时代}
-
-\subsection{U-Net 的主导地位}
-
-在 Transformer 进入之前，扩散模型几乎清一色使用 \textbf{U-Net} 作为核心网络——这是一种具有下采样-上采样结构和跳跃连接的卷积网络，最初为医学图像分割而设计。
-
-U-Net 的局限性包括：
-\begin{itemize}
-    \item 感受野受限于卷积核大小
-    \item 扩展性不如 Transformer（难以利用 Scaling Laws）
-    \item 缺乏成熟的大规模训练基础设施
-\end{itemize}
-
-\subsection{本章小结}
-
-U-Net 虽然在扩散模型早期取得了巨大成功，但其架构特性限制了进一步扩展。
-
-\section{DiT：扩散 Transformer 的诞生}
-
-\subsection{DiT 架构}
-
-\textbf{DiT}（Diffusion Transformer）是将 Transformer 引入扩散模型的里程碑工作。其核心设计：
-
-\begin{enumerate}
-    \item \textbf{Patchify}：将图像分割为 patch 并线性投影为 token 序列
-    \item \textbf{标准 Transformer 编码器}：多头自注意力 + MLP
-    \item \textbf{自适应层归一化}（Adaptive Layer Norm, adaLN）：用于注入条件信息
-    \item \textbf{Unpatchify}：单层解码器将输出 token 重新组装为图像
-\end{enumerate}
-
-\subsection{adaLN：条件注入的核心}
-
-\begin{importantbox}{自适应层归一化优于交叉注意力}
-在 DiT 中，条件信息（时间步嵌入 + 类别嵌入之和）通过 adaLN 注入，而\textbf{不是}通过交叉注意力。实验表明 adaLN 在性能和计算效率上都明显优于交叉注意力。原因是：
-\begin{itemize}
-    \item 当条件信息相对简单（如类别标签）时，交叉注意力是浪费计算
-    \item 在连续模态中，adaLN 对条件依赖的建模更为高效
-\end{itemize}
-\end{importantbox}
-
-通过标准层归一化加上额外的调制参数（从条件空间学习），adaLN 控制了 Transformer 块内部的``风格''信息流。
-
-\subsection{初始化策略}
-
-DiT 使用标准 ViT 初始化，但有两个关键修改：
-\begin{itemize}
-    \item 每个 Transformer 块初始化为恒等映射（类似 ResNet 中将 BatchNorm 的 $\beta$ 初始化为零）
-    \item 这有助于训练稳定性
-\end{itemize}
-
-\subsection{Scaling 特性}
-
-DiT 展示了优雅的扩展性——随着计算量增加，性能持续提升，且所有基于 ViT 的训练技术都可以直接应用。
-
-\subsection{本章小结}
-
-DiT 证明了 Transformer 可以有效替代 U-Net 作为扩散模型的核心网络，adaLN 是高效条件注入的关键。
-
-\section{从类别条件到文本条件}
-
-\subsection{PixArt-$\alpha$：文本条件 DiT 的先驱}
-
-将 DiT 从类别条件扩展到文本条件的关键问题是如何嵌入自然语言提示。PixArt-$\alpha$ 是早期探索这一方向的重要工作。
-
-文本条件的引入需要：
-\begin{itemize}
-    \item 使用预训练文本编码器（如 T5、CLIP）生成文本嵌入
-    \item 在 Transformer 块中引入\textbf{交叉注意力层}来建模文本与视觉 token 的交互
-\end{itemize}
-
-\begin{warningbox}{adaLN 与交叉注意力的适用场景}
-对于简单条件（类别标签、时间步），adaLN 足够且更高效。但对于复杂的文本条件，交叉注意力变得必要——文本序列的可变长度和丰富语义需要更灵活的交互机制。
+\begin{warningbox}{不要把 backbone 排名当作完整生成系统排名}
+同一 denoiser 在不同 VAE、数据、scheduler、采样步数和 guidance 下可产生巨大差异。论文若只报告最终 FID 或人工偏好，应继续追问控制变量、训练算力和推理设置。
 \end{warningbox}
 
-\subsection{adaLN 调制的重要演进}
-
-不同工作探索了如何在 Transformer 各层之间调制条件信息：
-\begin{itemize}
-    \item 共享 adaLN 参数（计算高效但表达力受限）
-    \item 每层独立的 adaLN 参数（表达力更强）
-    \item adaLN-Zero 变体（更高效的调制方式）
-\end{itemize}
-
-\subsection{本章小结}
-
-从类别条件到文本条件的扩展需要引入交叉注意力，而 adaLN 仍然在控制去噪过程的风格化方面发挥重要作用。
-
-\section{MM-DiT 与 Stable Diffusion 3}
-
-\subsection{MM-DiT 架构}
-
-MM-DiT（Multimodal DiT）是 Stable Diffusion 3 使用的架构，其核心创新是将文本 token 和视觉 token 放入同一个注意力计算中：
-
-\begin{itemize}
-    \item 文本和图像各自有独立的 adaLN 和 MLP
-    \item 但在注意力计算中，文本和图像 token 被拼接在一起进行联合自注意力
-    \item 这使得文本和图像之间的信息流动更加自然
-\end{itemize}
+\begin{lstlisting}[language=Python,caption={Text-to-image 扩散系统的一次简化采样流程}]
+text_tokens = text_encoder(prompt)
+latent = sample_gaussian(shape)
+for timestep in scheduler.timesteps:
+    prediction = denoiser(latent, timestep, text_tokens)
+    latent = scheduler.step(prediction, timestep, latent)
+image = vae.decode(latent)
+\end{lstlisting}
 
 \subsection{本章小结}
 
-MM-DiT 通过联合自注意力统一了文本和视觉 token 的交互方式，是当前最先进的文本到图像架构之一。
+扩散生成是一个多组件、迭代运行的系统。Diffusion 与 flow matching 定义路径和监督，denoiser backbone 定义怎样处理状态与条件。后文只替换蓝色网络模块，但会持续检查端到端速度、训练配方和证据边界。
 
-\section{结构化控制与视频生成}
+\section{从巨型 U-Net 到可扩展 DiT}
 
-\subsection{结构化控制}
+Transformer 的兴起并不是因为 U-Net 不能生成好图，而是 U-Net 演化成大量定制卷积、残差、注意力、上下采样和 skip 结构后，难以直接继承主流 Transformer 的缩放与系统优化。DiT 的价值首先是结构统一与生态复用。
 
-除了文本条件外，实际应用中还需要更精细的控制：
-\begin{itemize}
-    \item \textbf{姿态控制}：让生成的图像遵循特定的人体姿态
-    \item \textbf{分割图控制}：基于语义分割图生成图像
-    \item \textbf{深度图控制}：基于深度信息引导生成
-\end{itemize}
+\subsection{U-Net 为什么越来越“巨型”}
 
-实现方式包括：
-\begin{itemize}
-    \item \textbf{ControlNet}：学习辅助网络来编码结构信号并注入基础模型
-    \item \textbf{Flux Control}：增加输入通道以接受额外控制信号
-    \item \textbf{适配器网络}：学习小型网络来建模条件与噪声 token 的依赖关系
-\end{itemize}
+早期 DDPM 与 latent diffusion 主要使用 U-Net。其多尺度归纳偏置适合图像，但现代 text-to-image U-Net 已不再是简单的对称卷积网络，而是混合大量专用组件。本节沿着“一个成熟图像先验为何会变成工程负担”展开：先看多尺度路径带来的能力，再追踪专用 block、条件接口与分辨率配置怎样逐层累积复杂度。
 
-\begin{warningbox}{空间对应性问题}
-结构化控制（如姿态、分割图）具有空间对应性，但其他任务（如主题驱动生成、图像编辑）可能没有直接的空间对应关系。这是一个活跃的研究方向。
+\lecturefigure{slide-15.jpg}{DDPM/LDM 时代由 U-Net 主导，后来逐步混入 Transformer blocks}{15}
+
+U-Net 通过降采样获得大感受野，再通过上采样恢复分辨率，skip connection 保存细节。文本条件通常经 cross-attention 注入中间层。它性能成熟，却让每个分辨率阶段拥有不同通道、block 数和注意力配置。
+
+\lecturefigure{slide-16.jpg}{巨型 U-Net 的组件：卷积 stem、downblocks、midblock、upblocks 与输出头}{16}
+
+输入卷积把 noisy latent 映射到 hidden channels；downblocks 逐步降低空间尺寸；midblock 处理最压缩表示；upblocks 结合 skip features 恢复细节。每个 block 还可能包含 ResNet、normalization、self/cross-attention 与采样算子。
+
+\lecturefigure{slide-17.jpg}{“Giant U-Net” 的工程痛点：配置庞大且难以保持统一}{17}
+
+配置截图的教学重点不是嘲笑参数多，而是显示 architecture surface area：通道数组、block 类型、attention head、cross-attention dimension、层数和采样方式都要协同。实验很容易一次改动多个变量，复现与优化也更困难。
+
+\lecturefigure{slide-18.jpg}{Downblock 内部由多种自定义 ResNet、Transformer 与采样模块组成}{18}
+
+自定义 block 能利用图像先验，但也阻碍标准 fused kernel、FlashAttention、QK-Norm 或 GQA 等优化直接复用。Fused kernel 指把多个 GPU 操作合并为一个 kernel，以减少 HBM（High Bandwidth Memory，高带宽显存）读写和 kernel launch overhead；结构越不规则，融合越难。
+
+\lecturefigure{slide-19.jpg}{完整 U-Net 展开后呈现复杂的多尺度数据流与 skip connections}{19}
+
+这张全景图应该沿分辨率读：左侧下采样、中央 bottleneck、右侧上采样，横向箭头是 skip。复杂度不只来自参数量，还来自 activation memory、不同尺寸 tensor 的调度和条件层分布。系统优化需要逐 block 特化。
+
+\begin{warningbox}{复杂不等于错误，统一也不等于更强}
+U-Net 的多尺度 inductive bias 在有限数据或特定延迟目标下仍可能有价值。DiT 的结构更整齐，但若 token 数巨大，注意力成本会迅速超过卷积。架构选择必须绑定分辨率、数据和硬件。
 \end{warningbox}
 
-\subsection{视频扩散模型}
+\subsection{UViT 是过渡，DiT 是结构重写}
 
-将扩散 Transformer 扩展到视频领域面临的挑战：
-\begin{itemize}
-    \item 注意力计算从 2D 扩展到 3D，计算量急剧增加
-    \item 分解注意力（如空间 + 时间分别处理）效果不佳
-    \item RoPE 位置编码在视频场景中工作良好
-\end{itemize}
+UViT 尝试保留 U-Net 的层级与长 skip，同时把卷积块替换为 Transformer。原始 DiT 更进一步：把 noisy latent patchify 后送进近似标准 ViT encoder，不再维持完整的 U 形多尺度主干。
 
-\subsection{本章小结}
+\lecturefigure{slide-20.jpg}{UViT：用 Transformer/MLP 替换卷积块，并保留跨层长 skip}{20}
 
-从图像到视频，从文本条件到结构化控制，扩散 Transformer 正在向更通用、更可控的方向发展。
+UViT 说明 Transformer 可以承担 denoiser，但结构仍带有 U-Net 痕迹。长 skip 连接编码器与解码器阶段，序列长度和 hidden dimension 也可能随层变化。它是“Transformer 化 U-Net”，而不是“把生成写成标准 token 模型”。
 
-\section{下一代架构：上下文学习与统一生成}
+\lecturefigure{slide-21.jpg}{迁移到 DiT 的理由：缩放、生态复用、实现简洁与生成质量}{21}
 
-\subsection{扩散模型中的上下文学习}
+DiT 可直接吸收并行 MLP、QK-Norm、Grouped Query Attention（GQA）、RoPE 等 Transformer 进展。GQA 让多个 query heads 共享较少 key/value heads，以减少 KV 计算与存储；QK-Norm 则规范化 query/key，改善大模型训练稳定性。迁移的核心是获得持续演化的通用 backbone 生态。
 
-如何在扩散模型中实现类似语言模型的零样本/少样本学习？基本思路是：
-\begin{itemize}
-    \item 从预训练 LLM 出发，添加组件使其具备图像生成能力
-    \item \textbf{Transfusion}：同时在离散 token 上进行自回归生成，在连续 token 上进行扩散生成
-    \item 类似 Bagel、Show-o 等工作探索了统一的理解与生成框架
-\end{itemize}
+\teachervoice{00:14:44--00:21:54，老师把“为什么换 DiT”解释为工程与研究接口的统一：巨型 U-Net 由许多 custom blocks 组成，而 DiT 能直接继承 Transformer 社区的缩放、归一化、注意力和 kernel 进展。}
+
+\begin{knowledgebox}{第一次出现：Inductive bias}
+Inductive bias（归纳偏置）是架构预先编码的假设。U-Net 强调局部卷积与多尺度；DiT 更依赖数据学习 token 间关系。数据和算力增加时，较弱手工偏置可能更易扩展，但并非所有规模都获益。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-下一代架构正在探索将语言理解和视觉生成统一到单一模型中，这将极大扩展扩散模型的能力边界。
+U-Net 的问题不是不能工作，而是现代实现高度定制，难以统一扩展。UViT 保留层级结构，原始 DiT 则把 denoising 转写为接近 ViT 的 token computation。下一章将逐项说明这个“看似小改动”需要哪些条件与初始化机制。
+
+\section{Original DiT：从 ViT 到条件去噪器}
+
+原始 DiT 的力量来自克制：patch embedding、position embedding、self-attention 和 MLP 基本沿用 ViT，新增部分集中在 timestep/class conditioning 与输出解码。理解它不应背图，而应从 tensor shape 和 residual equation 推导。
+
+\subsection{Patchify 与两类条件}
+
+前一节只说明了“把 U-Net 换成 Transformer”的方向，本节进一步把这句话落实为张量变换：二维 latent 怎样变成 token，timestep 与 class label 又怎样进入同一串 encoder blocks。读图时应同时追踪 token 数、embedding 维度与条件路径，因为三者共同决定质量、计算量和模型是否能复用标准 ViT 组件。
+
+设 latent 为 $x_t\in\mathbb R^{B\times C\times H\times W}$，patch size 为 $P$，则 token 数
+\[
+N=\frac{H}{P}\frac{W}{P},
+\]
+每个 token 经线性投影到维度 $D$。$P$ 越大计算越省，但局部细节更难恢复。
+
+\begin{knowledgebox}{Patch size 是生成质量与系统成本的共同旋钮}
+把 $P$ 加倍会让高、宽方向的 token 数各缩小一半，总 token 数约降为四分之一，二次 attention 的主项可降到约十六分之一；代价是每个 token 必须概括更大的空间区域。因而 patch size 不是单纯的预处理参数，而是把细节保真、序列长度和计算预算绑定在一起的架构选择。
+\end{knowledgebox}
+
+\lecturefigure{slide-22.jpg}{经典 ViT forward pass：patchify、位置编码、encoder blocks 与 head}{22}
+
+这张代码页是 baseline：图像 patch 被展平并投影，加入位置编码与 class token，再经过相同结构的 blocks。DiT 去掉分类目标，却保留 tokenization 与 encoder 主干。读代码时先追踪 shape，而不是函数名。
+
+\lecturefigure{slide-23.jpg}{从 ViT 到 class-conditional DiT：主干几乎不变，只替换条件与输出}{23}
+
+DiT 仍对 latent patches 做 embedding；新增 $t$ embedder 与 $y$ embedder；最终 head 不输出类别，而把每个 token 解码为 patch pixels/latents 的预测。生成任务因此可被写成“条件 token sequence regression”。
+
+\lecturefigure{slide-24.jpg}{Original DiT block 与输出头的整体结构}{24}
+
+每个 block 包含 self-attention、MLP 和 adaptive LayerNorm；condition $c$ 同时影响归一化参数与 residual gate。输出层还要反 patchify 回空间 tensor。图中没有 cross-attention，因为 class label 与 timestep 都可压缩成一个条件向量。
+
+\lecturefigure{slide-25.jpg}{Timestep embedding：把标量噪声时间映射为高维连续表示}{25}
+
+常用 sinusoidal embedding 为
+\[
+e_{2k}(t)=\sin(t/\omega_k),\qquad
+e_{2k+1}(t)=\cos(t/\omega_k),
+\]
+再经过 MLP 得到条件。不同时间步对应不同信噪比，网络必须知道当前应恢复大结构还是细节；$t$ 不是普通序号，而是去噪任务的状态变量。
+
+\lecturefigure{slide-26.jpg}{Class embedding：离散类别通过 embedding table 变成条件向量}{26}
+
+类别 $y$ 经 `nn.Embedding` 映射到 $D$ 维。为 classifier-free guidance，训练时会以一定概率丢弃类别，学习 unconditional branch。推理时可组合条件与无条件预测，提高 prompt/class adherence，但过强 guidance 会牺牲多样性。
+
+\lecturefigure{slide-27.jpg}{条件融合：class 与 timestep embedding 相加得到 $c=y+t$}{27}
+
+相加要求两种条件已投影到同一维度，并假设一个向量足以控制整层。这里没有 token-level 对齐问题，因此简单相加高效。后续文本条件更丰富，PixArt 与 MMDiT 会改变这一路径。
+
+\begin{importantbox}{DiT 的最小改造清单}
+相对 ViT，需要四个新增接口：noisy latent patchification、timestep embedding、任务条件 embedding、以及把 token 解码回空间预测的 head。Self-attention/MLP 主干并不因“扩散”而神秘化。
+\end{importantbox}
+
+\subsection{AdaLN-Zero：条件怎样进入每个 block}
+
+Original DiT 不用 cross-attention，而让 condition 生成 LayerNorm 的 scale、shift 和 residual gates。这样条件成本与 token 数无关，特别适合低维 class/timestep 控制。本节的核心问题是：条件既要影响每个 block，又不能在深网络起点破坏稳定性；AdaLN-Zero 用调制参数与零初始化 residual gate 同时回答了“如何注入”和“如何安全启动”。
+
+\lecturefigure{slide-28.jpg}{每个 block 从条件向量回归 AdaLN 的调制参数}{28}
+
+Adaptive LayerNorm 可写为
+\[
+\operatorname{AdaLN}(h;c)=
+(1+s(c))\odot\frac{h-\mu(h)}{\sqrt{\sigma^2(h)+\epsilon}}+b(c),
+\]
+$s(c)$ 与 $b(c)$ 分别是条件生成的 scale 和 shift。加 $1$ 让零初始化时退化为普通归一化。
+
+\lecturefigure{slide-29.jpg}{AdaLN-Zero block：条件同时调制 attention、MLP 与 residual gate}{29}
+
+一层可概括为
+\[
+h'=h+g_{\mathrm{msa}}(c)\odot
+\operatorname{MSA}(\operatorname{AdaLN}_1(h;c)),
+\]
+\[
+h''=h'+g_{\mathrm{mlp}}(c)\odot
+\operatorname{MLP}(\operatorname{AdaLN}_2(h';c)).
+\]
+六组参数控制两个子层的 scale、shift 与 gate。条件因此能在深度方向持续影响计算，而非只在输入拼接一次。
+
+\lecturefigure{slide-30.jpg}{输出层：把 $(B,N,D)$ token 解码成 patch，并 unpatchify 回空间}{30}
+
+若输出通道为 $C_o$，每个 token 需预测 $P^2C_o$ 个值。线性层得到 $(B,N,P^2C_o)$，再 reshape 为 $(B,C_o,H,W)$。输出可包含 noise/velocity，也可能同时预测 variance，取决于训练参数化。
+
+\lecturefigure{slide-31.jpg}{初始化策略：AdaLN 与 final layer 零初始化，使网络起点接近 identity}{31}
+
+深残差网络若一开始每层都大幅改写信号，优化可能不稳。把 gates 与 final projection 初始化为零，使每个 block 初始近似 $h\mapsto h$，模型逐步学会偏离 identity。这是 DiT 训练成功的重要实现细节，不是 cosmetic trick。
+
+\lecturefigure{slide-32.jpg}{AdaLN-Zero 的价值与后续共享参数路线}{32}
+
+AdaLN-Zero 比 cross-attention 便宜，因为条件网络不随 token 数二次增长；后续 PixArt 还共享不同 block 的 AdaLN 参数，进一步降低参数和计算。代价是低维条件压缩可能不适合长文本的细粒度对齐。
+
+\teachervoice{00:24:53--00:32:56，老师强调 Original DiT 没有用自然想到的 cross-attention，而是用条件驱动的 LayerNorm 与 gates；zero init 让每个 block 从 identity 开始，是非常实际的稳定化机制。}
+
+\begin{lstlisting}[language=Python,caption={AdaLN-Zero DiT block 的核心计算}]
+def dit_block(tokens, condition):
+    shift1, scale1, gate1, shift2, scale2, gate2 = modulator(condition)
+    attn_input = layer_norm(tokens) * (1 + scale1) + shift1
+    tokens = tokens + gate1 * self_attention(attn_input)
+    mlp_input = layer_norm(tokens) * (1 + scale2) + shift2
+    return tokens + gate2 * mlp(mlp_input)
+\end{lstlisting}
+
+\subsection{Scaling：更多 compute 是否稳定换来更好质量}
+
+DiT 论文的重要结果不是一张漂亮样例，而是随着模型规模与训练 compute 增加，FID 等指标相对平滑改善。统一 block 使这一缩放实验比高度定制 U-Net 更可控。本节因此不把结果页当排行榜，而把它当缩放证据：先确认横纵轴和控制变量，再区分“观察到的区间趋势”与“可无限外推的定律”。
+
+\lecturefigure{slide-33.jpg}{DiT 结果：模型规模与计算增加时生成质量持续改善}{33}
+
+气泡图通常同时编码模型大小、GFLOPs 与 FID。应先确认横纵轴方向，再比较同一训练设置下的系列。趋势支持 scalability，但不能推出无限缩放；数据质量、VAE bottleneck 和采样算法最终会成为限制。
+
+\lecturefigure{slide-34.jpg}{DiT 的 compute-quality 效率与 class-conditional 局限}{34}
+
+Original DiT 在 class-conditional ImageNet 上展示效率，却不直接解决开放词汇 text-to-image。类别向量很短，适合 AdaLN；自然语言 prompt 是长序列，需要 token-level interaction。下一步 PixArt 不是简单把 class id 换成句向量，而是引入 text encoder 与 cross-attention。
+
+\begin{warningbox}{FID 改善不等于所有维度都改善}
+FID 对 feature distribution 敏感，但不能完整衡量文字、计数、组合关系、人类偏好或安全。读 scaling plot 时还应检查推理步数、guidance、训练数据与分辨率。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Original DiT 把 latent patch 视为 token，用 timestep/class embedding 生成 AdaLN-Zero 参数，并把输出 token 解码回空间。其结构接近 ViT，关键创新集中在条件调制与 identity initialization。Scaling 证据证明结构可扩展，却尚未解决自然语言条件。
+
+\section{PixArt-$\alpha$：让 DiT 理解自然语言}
+
+Text-to-image 把短类别条件升级为长文本 token。架构必须同时完成图像 patch 内部建模与文本--图像对齐。PixArt-$\alpha$ 的路线是保留 DiT self-attention，用 cross-attention 读取文本，并继续用 timestep 调制 AdaLN。
+
+\subsection{文本条件需要哪些新增模块}
+
+把 prompt 编成单个向量会丢失词级关系，因此主流模型保留文本 token sequence。读下面两页时，应分别追踪：文本在哪编码、在哪与图像交互、时间步又如何进入每层。本节从 Original DiT 的低维类别条件过渡到自然语言条件，问题不只是“多接一个 encoder”，而是怎样保留词级结构、控制接口方向并核算完整 pipeline 成本。
+
+\lecturefigure{slide-35.jpg}{从 class-conditional DiT 到 text-to-image：文本编码、cross-attention 与时间调制}{35}
+
+三个问题构成设计清单：用什么 text encoder；图文通过 cross-attention、拼接还是 joint attention 交互；timestep 是否继续使用 AdaLN。它们可独立选择，因此“text DiT”不是单一架构。
+
+\lecturefigure{slide-36.jpg}{PixArt-$\alpha$ block：self-attention、cross-attention、MLP 与 timestep 条件}{36}
+
+Noisy image tokens 先做 self-attention，再以 image tokens 为 query、text tokens 为 key/value 做 cross-attention。时间步条件通过 AdaLN 调制 image stream。这样文本保持序列结构，图像 token 数与文本 token 数可不同。
+
+\lecturefigure{slide-37.jpg}{Flan-T5-XXL 文本编码器提供长 prompt 与丰富语义理解}{37}
+
+大 text encoder 提升语义能力，却也带来显存与延迟。若 encoder 冻结，生成训练不更新语言表示；若联合训练，成本更高且可能破坏语言能力。比较模型大小时必须说明是否包含 text encoder 参数。
+
+\begin{knowledgebox}{Cross-attention 的方向}
+图像 token 作为 query，文本 token 作为 key/value，意味着每个空间位置主动读取相关词义。输出长度仍等于图像 token 数；文本不会被这一层直接更新。MMDiT 会让两种模态共同演化。
+\end{knowledgebox}
+
+\subsection{共享 AdaLN 与紧凑模型结果}
+
+PixArt 保留 timestep modulation，但不必为每个 block 都维护独立参数。共享调制器降低计算与参数，同时把每层差异交给 block 自身表示。本节进一步追问这种紧凑性来自哪里：共享的是条件映射而非全部 Transformer 权重，因此必须分别检查参数量、训练计算和最终质量，不能把“共享”自动等同于端到端更快。
+
+\lecturefigure{slide-38.jpg}{PixArt 的 AdaLN：由 timestep 生成 block 调制参数}{38}
+
+代码页显示 time embedding 经 MLP 后产生 scale/shift。与 Original DiT 相同，AdaLN 负责时间条件；文本走 cross-attention。把两类条件拆开，避免把长文本压缩成一个调制向量。
+
+\lecturefigure{slide-39.jpg}{共享 AdaLN 参数并为不同 block 加轻量偏置}{39}
+
+若所有 block 共享同一调制器，可把每层额外参数从 $O(LD^2)$ 降到更接近 $O(D^2+LD)$，其中 $L$ 是层数。共享节省约束了表达能力，但实验显示可在较小质量损失下显著降成本。
+
+\lecturefigure{slide-40.jpg}{PixArt-$\alpha$：紧凑参数量下仍取得有竞争力的文本到图像结果}{40}
+
+表格与柱状图要同时读参数、训练成本与指标。模型更小不等于训练更简单：数据 caption 质量、分辨率 curriculum、VAE、optimizer 和 dropout 都可能贡献结果。讲者明确把 training recipe 留作另一个主题。
+
+\teachervoice{00:32:56--00:40:45，老师把 PixArt 的增量拆成两条：用大文本编码器与 cross-attention 处理自然语言；继续用 timestep AdaLN，并通过共享参数节省计算。架构简洁不代表训练“轻松”。}
+
+\begin{warningbox}{参数量口径必须一致}
+报告 denoiser 参数时可能不含冻结 text encoder 与 VAE；端到端部署却必须加载它们。比较“模型更小”时，应同时列 denoiser、condition encoders、峰值显存、训练 FLOPs 和采样延迟。
+\end{warningbox}
+
+\subsection{本章小结}
+
+PixArt-$\alpha$ 通过文本 encoder 与 cross-attention 把 DiT 扩展到自然语言，同时保留 timestep AdaLN 并共享调制参数。它展示了紧凑 backbone 的潜力，也提醒我们必须把架构、训练 recipe 与完整 pipeline 成本分开。
+
+\section{高分辨率的二次成本与 SANA}
+
+DiT 结构统一后，最大的系统问题重新变成 token 数。4K 图像即使在 latent 空间仍可能产生数十万位置，vanilla self-attention 的 $N^2$ 时间与内存不可承受。SANA 试图线性化 image self-attention，同时保留文本 cross-attention。
+
+\subsection{为什么 latent space 仍会爆炸}
+
+下采样只把问题推迟。若 4096 图像经 8 倍 VAE 得到 $512\times512$ latent，再以 $P=1$ token 化，则 $N=262{,}144$；attention matrix 有约 $6.9\times10^{10}$ 元素，单层就不可接受。本节从这个数量级出发，比较 FlashAttention 的 I/O 优化与 linear attention 的复杂度重写，核心是判断它们分别消除了什么成本、又保留了哪些二次项或质量风险。
+
+\lecturefigure{slide-41.jpg}{超高分辨率下，latent token 仍让二次 attention 失控}{41}
+
+Vanilla attention 的主要成本为
+\[
+T_{\mathrm{attn}}=O(N^2d),\qquad
+M_{\mathrm{attn}}=O(N^2),
+\]
+$N$ 是 token 数，$d$ 是 head dimension。FlashAttention 可避免显式存完整矩阵并改善 I/O，却不改变二次计算量。
+
+\lecturefigure{slide-42.jpg}{SANA 总体结构：线性 self-attention、cross-attention 与高效 FFN}{42}
+
+SANA 不把所有 attention 都线性化。图像 token 间使用 linear attention，文本条件仍通过 cross-attention 注入；此外用 Mix-FFN、压缩与轻量设计补偿表达力。读图应分别判断 image-image 与 image-text 两条路径。
+
+\lecturefigure{slide-43.jpg}{SANA 细节：重排乘法次序，复用 $K^\top V$ 避免 $N\times N$ 矩阵}{43}
+
+对可分解核 $\phi$，线性 attention 写成
+\[
+\operatorname{LA}(Q,K,V)
+=\phi(Q)\left(\phi(K)^\top V\right).
+\]
+先计算 $\phi(K)^\top V$，复杂度近似 $O(Nd^2)$，不构造 $N^2$ attention map。代价是 softmax attention 的精确归一化与某些 pairwise interaction 被近似。
+
+\begin{warningbox}{Linear attention 不是把二次成本免费删除}
+复杂度下降依赖可分解特征映射、固定 head dimension 与特定实现；当 $d$ 很大、序列较短或 kernel 未充分优化时，理论线性形式未必更快。更重要的是，近似改变了 token 间可表达的交互，因此必须同时报告真实 latency、峰值显存和质量退化，而不能只比较大 $O$ 记号。
+\end{warningbox}
+
+\lecturefigure{slide-44.jpg}{SANA 的质量--速度折中：高分辨率生成显著加速}{44}
+
+性能图应沿 Pareto frontier 读：同等质量谁更快、同等延迟谁更好。不同硬件、batch、分辨率和采样步数会改变排名。线性 attention 的价值不是在所有尺度都更强，而是在超长视觉序列上避免二次瓶颈。
+
+\begin{importantbox}{效率结论必须绑定 workload}
+报告 FLOPs 不足以预测速度。还要测 kernel 实现、HBM 带宽、batch size、序列长度、编译器与硬件。短序列上 vanilla/FlashAttention 可能更快，长序列才显现线性方法优势。
+\end{importantbox}
+
+\teachervoice{00:40:45--00:49:49，老师解释 SANA 并非“删除 attention”：它只线性化 image self-attention，仍保留 text cross-attention，并用 Mix-FFN 等组件补偿质量。}
+
+\subsection{本章小结}
+
+高分辨率使 latent token 数再次成为主导瓶颈。SANA 通过改变乘法顺序把 image self-attention 从二次降到近线性，同时保留文本交互。其结果必须作为 quality--speed Pareto 而非单一指标胜负来理解。
+
+\section{MMDiT：让文本与图像在不同空间共同演化}
+
+PixArt 中图像 token 被 cross-attention 更新，文本 token 通常保持冻结。Stable Diffusion 3 的 MMDiT 认为两种模态处于不同表示空间，需要独立 normalization 与 projections，却可在 joint attention 中交换信息。
+
+\subsection{为什么不直接把模态当成同一种 token}
+
+文本与 noisy image 的统计、序列长度和语义不同。完全共享参数可能强迫一方继承另一方偏差；完全分离又无法交互。MMDiT 选择“独立投影、联合注意力”。本节要辨析的是共享与交互并非同一件事：两种模态可以保留各自 normalization/QKV，却仍在同一 attention map 中交换信息；后面的四页正是沿这条边界逐步展开。
+
+\lecturefigure{slide-45.jpg}{MMDiT 动机：文本与图像 embedding 空间不同，单向 cross-attention 有偏置}{45}
+
+单向交叉注意力只更新图像流，文本表示不会根据当前视觉状态变化。MMDiT 希望两边共同演化，同时保留各自参数化。这个动机合理，却不是“分开一定更优”的理论证明。
+
+\lecturefigure{slide-46.jpg}{MMDiT 为不同模态使用独立 AdaLN 与 QKV projections}{46}
+
+文本与图像分别计算
+\[
+(Q_x,K_x,V_x)=f_x(X,c),\qquad
+(Q_t,K_t,V_t)=f_t(T,c),
+\]
+其中 $f_x,f_t$ 含各自 normalization 与投影。参数翻倍提高表达，也增加内存、FLOPs 与实现复杂度。
+
+\lecturefigure{slide-47.jpg}{MMDiT 完整 block：两路调制、两路投影、联合 token attention}{47}
+
+将 $Q=[Q_t;Q_x]$、$K=[K_t;K_x]$、$V=[V_t;V_x]$ 拼接后计算 joint attention：
+\[
+O=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt d}\right)V.
+\]
+再按模态切分输出。这样 text-text、image-image 与 cross-modal interaction 同时存在，而不是单独堆一层 cross-attention。
+
+\lecturefigure{slide-48.jpg}{MMDiT 的优点：不同模态保持专属参数，又通过拼接发生全局交互}{48}
+
+Separate paths 允许不同模态学习不同 scale、shift 和 projections；concatenation 则让注意力统一选择信息。风险是 token 比例不平衡：大量 image tokens 可能压制短文本，需要 normalization、mask 或 loss 设计。
+
+\begin{knowledgebox}{Joint attention 与 cross-attention 的区别}
+Cross-attention 通常只更新 query stream；joint attention 把两种模态 token 放入同一注意力图，两边都可更新。前者更省算力、接口清晰，后者交互更对称但成本更高。
+\end{knowledgebox}
+
+\subsection{结果、缩放与容易忽略的配套组件}
+
+MMDiT 是否值得必须看 ablation，而不是架构图。讲座给出 loss/quality 曲线、缩放结果，并提醒 SD3 还依赖更好的 sampling/training 组件；不能把全部提升归到 multimodal block。本节因此把三类证据分开读取：受控消融回答局部机制，scaling 曲线回答可扩展性，完整系统样例只回答组合 recipe 的最终表现。
+
+\lecturefigure{slide-49.jpg}{MMDiT ablation：多模态专属参数化对训练与质量曲线的影响}{49}
+
+曲线“强烈暗示”而不是证明 MMDiT 有效。应检查 baseline 是否匹配参数量、FLOPs 与训练时长；若 MMDiT 更大，部分收益可能来自 capacity。最好比较 compute-matched 与 parameter-matched 两组实验。
+
+\lecturefigure{slide-50.jpg}{MMDiT scaling：大模型继续获益，但需要 QK-Norm 稳定训练}{50}
+
+随着 hidden size 与层数增加，attention logits 可能爆炸。QK-Norm 对 query/key 做规范化，控制点积尺度。它是训练稳定性组件，不直接增加表示能力，却可能决定大模型是否能收敛。
+
+\lecturefigure{slide-51.jpg}{SD3 的完整效果还依赖“hippo”所代表的配套训练/采样组件}{51}
+
+这张幽默页用河马提醒：架构论文之外还有 Rectified Flow、数据、caption、VAE、guidance 等配套。读任何“某 block 带来 SD3”叙事时，应主动寻找 omitted components，避免单因果归因。
+
+\teachervoice{00:49:49--00:57:31 与 01:03:04--01:04:45，老师把 MMDiT 的理由描述为模态空间差异与共同演化，但在问答中承认这是 hand-wavy intuition，不是 optimality proof。}
+
+\begin{warningbox}{架构解释不是因果分解}
+一条训练曲线同时受到参数量、optimizer、数据、loss weighting 和数值稳定性影响。若没有匹配实验，就不能说“separate QKV 单独导致全部提升”。
+\end{warningbox}
+
+\subsection{MMDiT 的多种折中}
+
+完整 MMDiT 每层都维护两套 projections，成本很高。实际模型可只在部分层使用 multimodal block，其他层用普通 DiT；也可交替更新模态，或在最后阶段再联合。本节从“是否采用 MMDiT”的二元标签进一步进入 block schedule：需要比较哪些层发生联合、联合多久、两路参数保留多少，以及这些选择怎样改变质量--成本 Pareto frontier。
+
+\lecturefigure{slide-52.jpg}{MMDiT 变体：混合 multimodal blocks 与普通 DiT blocks}{52}
+
+若只有 $k$ 个 MMDiT 层、其余 $L-k$ 个普通层，可在交互能力与 FLOPs 间调节。Flux 等模型采用混合设计。关键问题是早期、中央还是后期融合更值钱，以及哪些层真正需要双路参数。
+
+\lecturefigure{slide-53.jpg}{另一种变体：先分别更新模态，再把表示送入联合阶段}{53}
+
+图中 modality A/B 先独立处理，随后交换或拼接。分阶段设计可降低 joint attention 的 token 长度，却可能延迟跨模态对齐。它类似 early/mid/late fusion 的连续选择。
+
+\lecturefigure{slide-54.jpg}{Lumina-Image 2.0 等模型展示不同 multimodal block 组合}{54}
+
+多种变体说明 MMDiT 不是一个固定配方，而是“模态专属参数 + 何时联合”的设计空间。比较论文时应把 block schedule 写成表，而不是只标记是否使用 MMDiT。
+
+\begin{lstlisting}[language=Python,caption={MMDiT block：独立 QKV，联合 attention，再按模态切分}]
+def mmdit_block(text_tokens, image_tokens, condition):
+    q_t, k_t, v_t = text_projection(text_tokens, condition)
+    q_x, k_x, v_x = image_projection(image_tokens, condition)
+    q = concat(q_t, q_x); k = concat(k_t, k_x); v = concat(v_t, v_x)
+    output = attention(q, k, v)
+    text_out, image_out = split_by_modality(output)
+    return text_tokens + text_out, image_tokens + image_out
+\end{lstlisting}
+
+\subsection{本章小结}
+
+MMDiT 让文本与图像使用独立 AdaLN/QKV，又在 joint attention 中共同演化。它改善表达空间冲突的可能性，也显著增加成本。真实系统通过混合 block、阶段融合与 QK-Norm 在质量、稳定性和 FLOPs 间折中。
+
+\section{DiT-Air：参数共享能走多远}
+
+在 MMDiT 走向更复杂之后，DiT-Air 反向提问：哪些参数真的需要每层、每模态独立？共享这些调制、投影或前馈模块能降低成本，但共享过多会削弱模态专属能力。这个问题比“是否使用 MMDiT”更接近工程 Pareto 优化。
+
+\subsection{从设计问题到共享架构}
+
+参数共享有三个维度：跨层共享、跨模态共享、跨子模块共享。不同维度对容量和运行成本影响不同。下面四页给出从问题、结构到 ablation 的完整链。本节阅读时应始终分开三个口径：权重是否减少、每次前向的 FLOPs 是否减少、真实硬件上的 latency 是否减少；只有三者同时核算，共享架构才具有工程意义。
+
+\lecturefigure{slide-55.jpg}{简化问题：AdaLN、QKVO、MLP 与 attention 形式能共享多少}{55}
+
+PixArt 已证明共享 AdaLN 有效；下一步是共享 Q/K/V/O projections 或 MLP，甚至用统一 joint attention 代替 self+cross stacks。每项共享减少参数，但不一定减少 activation 或 attention FLOPs。
+
+\lecturefigure{slide-56.jpg}{DiT-Air 架构：以统一 block 比较不同参数共享位置}{56}
+
+图中将 baseline、AdaLN sharing、QKVO sharing 与 MLP sharing 并列。统一表示便于做 controlled ablation。设计时要区分“参数少”“FLOPs 少”“壁钟快”：共享权重可能减少存储，却不减少每个 token 的矩阵乘法次数。
+
+\lecturefigure{slide-57.jpg}{DiT-Air 的共享实验：不同组合形成质量--效率曲线}{57}
+
+曲线显示部分共享可在较小质量损失下提升效率。读图时先找 Pareto frontier，再看误差条和计算口径。若共享导致 prompt fidelity 或细粒度文本下降，平均 FID 未必能显示问题。
+
+\lecturefigure{slide-58.jpg}{Ablation 表：共享 QKVO/MLP 的收益与质量折损}{58}
+
+表格把组件级选择变为证据。结论不是“共享越多越好”，而是 AdaLN sharing 往往较安全，QKVO/MLP sharing 更依赖目标与预算。面向低延迟部署可接受小幅质量损失，研究上追求上限则可能保留专属参数。
+
+\teachervoice{01:05:00--01:08:43，老师用 DiT-Air 回答“是否真的需要 MMDiT”：不一定。AdaLN、QKVO 和 MLP 都可以共享，但效率收益必须与质量折损一起看。}
+
+\begin{importantbox}{三种成本不要混为一谈}
+Parameter count 影响权重存储；FLOPs 近似计算量；latency 还受 kernel、并行度和内存带宽影响。共享参数可能显著减小模型文件，却不一定按相同比例降低推理时间。
+\end{importantbox}
+
+\begin{lstlisting}[language=Python,caption={用 Pareto 指标比较共享方案，而不是只排单一质量分数}]
+for design in candidate_architectures:
+    quality = evaluate_prompt_fidelity_and_preference(design)
+    memory = peak_device_memory(design)
+    latency = benchmark_end_to_end_sampling(design)
+    flops = estimate_denoiser_flops(design)
+    report_pareto_point(design, quality, memory, latency, flops)
+\end{lstlisting}
+
+\subsection{本章小结}
+
+DiT-Air 把架构简化转为可测的共享实验。AdaLN、QKVO 与 MLP sharing 分别影响参数、计算和容量；MMDiT 不是默认答案。工程选择应基于端到端 Pareto frontier，并用文本遵循、人类偏好和延迟共同评估。
+
+\section{结构控制、视频与下一代生成架构}
+
+图像生成不止文本条件。Pose、edge、scribble 等结构信号具有空间对应，subject-driven generation 与 editing 则可能没有直接对齐；视频进一步增加时间维度。最后几页把 DiT 从单图 backbone 扩展为更广的 conditional generation 平台。
+
+\subsection{结构控制不是统一问题}
+
+若控制信号与输出像素位置对应，可用 auxiliary encoder 产生多尺度 features 并注入 base model；若条件是主体身份或编辑指令，位置关系不固定，需要 token interaction、adapter 或检索式机制。本节从“条件是否具有空间 correspondence”建立分类，因为这决定条件能否逐位置注入，也决定评估应侧重轮廓遵循、身份保持还是编辑语义。
+
+\lecturefigure{slide-59.jpg}{结构控制示例：edge、depth、pose 与目标图像具有空间对应}{59}
+
+这些信号可视为与 noisy latent 对齐的额外观测。模型应保持主体内容，同时严格遵循轮廓或姿态。评估不能只看美观，还需计算 control accuracy 与 content preservation。
+
+\lecturefigure{slide-60.jpg}{ControlNet/PixArt-$\delta$：辅助网络编码视觉条件并注入 base DiT}{60}
+
+Auxiliary network 复制或适配部分 backbone，把结构 features 通过 zero-initialized residual 注入。这样可冻结大 base model，减少微调成本。对于无空间对应的 subject/edit conditions，直接逐位置相加并不合理。
+
+\teachervoice{01:08:47--01:10:40，老师特别区分结构控制与 subject-driven/editing：前者总有空间 correspondence，后者未必有，因此不能把 ControlNet 注入方式机械推广。}
+
+\begin{warningbox}{控制强度与生成自由度冲突}
+过强结构条件会锁死纹理和构图，过弱又无法遵循控制。应报告不同 control scale 下的 fidelity--diversity 曲线，并检查条件噪声与域外姿态。
+\end{warningbox}
+
+\subsection{视频：从二维 token 到三维时空交互}
+
+视频不仅多了帧数，还要求跨时间保持身份、运动和物理一致。把 $T$ 帧、每帧 $N$ 个 token 全部 joint attention，成本为 $O((TN)^2)$；factorized attention 更省，却可能损失长程时空耦合。本节把单图 DiT 的 token accounting 扩展到时间轴，重点比较 full 3D interaction、空间--时间分解和位置编码分别解决什么问题。
+
+\lecturefigure{slide-61.jpg}{视频 DiT：RoPE、3D attention、factorized attention 与效率挑战}{61}
+
+RoPE（Rotary Position Embedding）通过旋转 query/key 编码相对位置，可扩展到时间与空间轴。Full 3D attention 质量通常更强但成本极高；空间/时间分解 attention 更可控。视频指标还需覆盖 temporal consistency，而非逐帧清晰度。
+
+\teachervoice{00:59:10--01:01:38 与 01:10:40--01:11:44，问答强调视频的困难不是“逐帧多生成几张图”，而是三维注意力成本与时序一致性；老师建议关注 LTX-Video 等效率路线。}
+
+\begin{knowledgebox}{第一次出现：RoPE}
+RoPE 把位置编码为 query/key 的旋转，使点积自然包含相对位置信息。视频可为时间、高度、宽度分配旋转频率，但长度外推和三轴比例仍需设计。
+\end{knowledgebox}
+
+\subsection{In-context generation 与开放方向}
+
+下一代生成模型希望像语言模型一样在上下文中读取示例：给参考图、编辑前后对或多模态序列，模型直接推断任务。现有架构的主要障碍是序列太长、条件类型异构以及训练数据难构造。本节从固定接口的 conditional generation 走向示例驱动任务，阅读后面几页时要区分“统一输入格式”的演示与“真正跨任务泛化”的证据。
+
+\lecturefigure{slide-62.jpg}{下一代问题：如何在扩散模型中实现 in-context learning}{62}
+
+In-context generation 需要把示例与目标放进同一可交互上下文，而不为每个任务微调。若所有图像都展开为 tokens，计算迅速爆炸；若过度压缩，又无法复制细节或关系。架构必须结合高效 attention、分层表示与任务 token。
+
+\lecturefigure{slide-63.jpg}{Playground v3、FuseDiT、OmniGen 等探索统一的上下文生成}{63}
+
+这些模型尝试把 text、reference images 与 target latents 组织成统一序列或分阶段交互。它们展示方向，而非已经解决通用 in-context learning。比较时应检查支持的任务、上下文长度、训练数据与是否需要专用 adapter。
+
+\lecturefigure{slide-64.jpg}{Diffusers 提供多种架构实现，便于复现与 hacking}{64}
+
+实现页强调研究入口：统一库可比较 DiT、PixArt、SANA、MMDiT 等模块，减少隐藏实现差异。但“代码可运行”不等于实验可复现；还需模型权重、数据处理、训练配置、随机种子和评估脚本。
+
+\lecturefigure{slide-65.jpg}{结论与未覆盖方向：MoE、训练、post-training、alignment 与评估}{65}
+
+最后一页主动列出空白：专家混合（MoE）已进入图像生成；训练本身是另一套系统；后训练、偏好对齐与评估仍是独立难题。这个边界阻止我们把 backbone 设计误写成完整生成智能。
+
+\teachervoice{01:11:44--01:14:23，老师把 in-context generation 视为下一代架构问题，并明确承认没有覆盖 MoE、训练、post-training、preference alignment 与 evaluation。}
+
+\begin{importantbox}{架构研究的终点不是一张更漂亮的 sample}
+完整生成系统还要回答：数据是否授权与去重？训练是否稳定？模型如何对齐偏好？自动指标是否可信？视频是否时序一致？部署是否满足延迟与显存预算？Backbone 只是其中一层。
+\end{importantbox}
+
+\subsection{本章小结}
+
+结构控制依赖条件是否空间对齐；视频引入三维 token 与时序一致性；in-context generation 则要求模型统一处理示例与目标。Diffusers 降低实现门槛，但训练、post-training、MoE 和评估仍是开放系统问题。
+
+\section{证据边界与术语消化}
+
+本讲跨越架构、系统与产品结果，容易产生两个误解：一是用单张样例替代全面评估，二是用 FLOPs 替代真实延迟。Q\&A 对 GAN、自动指标、视频成本、AdaLN 与 MMDiT 的追问，提供了必要的工程边界。
+
+\subsection{Q\&A 带来的四条校正}
+
+第一，GAN 没有被彻底淘汰：当 one-shot、超低延迟比最高质量更重要时仍有价值。第二，图像/视频自动指标很弱，必须结合人类偏好与任务指标。第三，视频不是独立帧集合。第四，MMDiT 的直觉不是理论最优证明。
+
+\teachervoice{00:57:31--01:01:38，在线问答讨论 autoregressive 模型、GAN、自动指标与视频挑战。老师没有给“扩散统一胜出”的答案，而是按 latency、quality 与 temporal consistency 区分场景。}
+
+\teachervoice{01:01:45--01:03:00，老师再次解释 AdaLN：LayerNorm 负责稳定特征，adaptive 部分用外部条件改变 scale/shift，从而让同一 block 在不同 timestep 或条件下执行不同计算。}
+
+\begin{warningbox}{Qualitative cherry-picking}
+生成模型可以从大量样本中挑出少数最佳图。可靠报告应固定 prompt set、公开 seed、展示失败样本，并同时测 prompt fidelity、diversity、human preference、latency 与 memory。
+\end{warningbox}
+
+\subsection{术语集中消化}
+
+下面把课程中的高密度术语按“解决的问题”重新组织，避免把模型名当成机制。
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{0.18\textwidth} X X}
+\toprule
+\textbf{术语} & \textbf{解决的问题} & \textbf{核心机制与课程关系} \\
+\midrule
+Scheduler & 如何从一个噪声状态走到下一个 & 定义 timestep、噪声日程和数值更新；不等于 denoiser。 \\
+Denoiser & 每一步应预测什么方向 & U-Net 或 DiT，输出 noise、velocity 或 data parameterization。 \\
+Latent diffusion & 如何降低像素空间成本 & 先用 VAE 压缩，再在低分辨率 latent 上迭代。 \\
+U-Net & 如何利用多尺度图像偏置 & Down/up blocks 与 skip connections 保留局部和全局信息。 \\
+DiT & 如何用标准 Transformer 做去噪 & Patchify latent，用 timestep/condition 调制 encoder blocks。 \\
+AdaLN-Zero & 如何低成本注入条件并稳定深网络 & 条件生成 scale/shift/gates，零初始化使 block 初始近似 identity。 \\
+Cross-attention & 图像 token 如何读取文本 & 图像作 query，文本作 key/value；通常只更新图像流。 \\
+Linear attention & 如何避免 image self-attention 的 $N^2$ & 重排核化 attention 的乘法次序，牺牲部分精确交互。 \\
+MMDiT & 两种模态如何保留专属空间又共同演化 & 分开 AdaLN/QKV，拼接后做 joint attention。 \\
+QK-Norm & 大模型 attention logits 如何稳定 & 规范化 query/key，控制点积尺度。 \\
+GQA & 如何降低 key/value 成本 & 多个 query heads 共享较少 K/V heads。 \\
+RoPE & 如何编码相对空间与时间位置 & 旋转 query/key，可扩展到视频三轴。 \\
+Structural control & 如何遵循 edge/pose/depth & 编码空间对齐条件并注入 base model。 \\
+Parameter sharing & 如何减少权重与部分计算 & 跨层或跨模态共享 AdaLN、QKVO、MLP，形成质量--效率折中。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{本章小结}
+
+生成架构不能脱离目标与 workload 比较。GAN、U-Net、DiT、linear attention 与 MMDiT 各有适用区间；自动指标、参数量与 FLOPs 都只是局部代理。可信结论需要控制变量、端到端测量和失败样本。
 
 \section{总结与延伸}
 
-本讲系统梳理了 Transformer 在扩散模型中的演进历程。核心信息：
+\subsection{一条从 U-Net 到下一代生成系统的主线}
+
+本讲可压缩为七次结构重写：把 diffusion pipeline 与 denoiser 分开；把巨型 U-Net 统一成 token backbone；用 AdaLN-Zero 注入 timestep/class；用 cross-attention 处理文本；用 linear attention 应对高分辨率；用 MMDiT 让模态共同演化；再用参数共享、控制网络与分层表示把成本压回可部署范围。
+
+\begin{importantbox}{核心结论}
+DiT 的真正贡献不是“Transformer 也能画图”，而是把生成 backbone 接入可扩展的 Transformer 设计空间。此后每个新模型都在回答同一组问题：token 怎样形成、条件怎样进入、模态是否共享参数、注意力如何缩放、以及质量收益是否值得系统成本。
+\end{importantbox}
+
+\subsection{工程检查表}
 
 \begin{enumerate}
-    \item \textbf{DiT 是转折点}：证明了 Transformer 可以替代 U-Net 并带来更好的扩展性。
-    \item \textbf{adaLN 是核心技巧}：高效的条件注入机制，在多种架构变体中都不可或缺。
-    \item \textbf{Scaling 有效}：扩散 Transformer 与语言模型一样，随着规模增长性能持续提升。
-    \item \textbf{统一生成是未来}：将语言理解与视觉生成统一到单一 Transformer 中是最具前景的方向。
+  \item \textbf{Pipeline：}是否同时报告 text encoder、VAE、scheduler 与 denoiser？
+  \item \textbf{Conditioning：}低维条件用 AdaLN，长序列条件是否需要 cross/joint attention？
+  \item \textbf{Resolution：}token 数多大，$N^2$ 何时成为瓶颈？
+  \item \textbf{Sharing：}参数共享降低的是权重、FLOPs 还是实际 latency？
+  \item \textbf{Evaluation：}是否有固定 prompt、失败样本、人类偏好与控制遵循指标？
+  \item \textbf{Video：}是否测 temporal consistency，而非只看单帧？
+  \item \textbf{Reproducibility：}数据、配置、权重、seed 和评估脚本是否齐全？
 \end{enumerate}
 
+\subsection{开放问题}
+
+第一，能否让 high-resolution linear attention 保持 softmax attention 的细粒度关系？第二，模态专属参数与共享参数的最优比例是否随层深变化？第三，如何在 video 与 multi-image context 中动态分配 token budget？第四，in-context generation 需要怎样的数据格式与 task curriculum？第五，MoE、post-training 和 preference optimization 怎样与 diffusion backbone 协同？
+
+这些问题说明未来进展不会只来自更大的 denoiser。更可能的突破是 backbone、数据、condition interface、系统 kernel、采样和 alignment 的共同设计。评价一个新 DiT 时，最有价值的问题不是“它用了哪个名字”，而是“它在什么约束下改变了哪条 Pareto frontier”。
+
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Peebles \& Xie, ``Scalable Diffusion Models with Transformers (DiT)'', ICCV 2023
-    \item Chen et al., ``PixArt-$\alpha$: Fast Training of Diffusion Transformer for Photorealistic Text-to-Image Synthesis'', 2023
-    \item Esser et al., ``Scaling Rectified Flow Transformers for High-Resolution Image Synthesis (SD3)'', 2024
-    \item Zhou et al., ``Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model'', 2024
-    \item HuggingFace Diffusers 库：\url{https://github.com/huggingface/diffusers}
+
+\begin{itemize}[itemsep=0.2em,topsep=0.2em]
+  \item 官方 slides：\url{http://bit.ly/dit-cs25}
+  \item 官方录像：\url{https://www.youtube.com/watch?v=vXtapCFctTI}
+  \item 代表路线：DiT、PixArt-$\alpha$、SANA、Stable Diffusion 3/MMDiT、DiT-Air、ControlNet、LTX-Video、FuseDiT 与 OmniGen。
+  \item 读论文时优先寻找 compute-matched ablation、端到端 latency、固定 prompt 评估、失败样本与完整 pipeline 成本。
 \end{itemize}
 
 \end{document}

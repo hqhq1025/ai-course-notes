@@ -1,539 +1,846 @@
 \documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-% Basic packages
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
-\usepackage{enumitem}
-\usepackage{array}
+\renewcommand{\notetitle}{Lecture 30：Near-Shallow Transformers 与 Precision Language Models}
+\renewcommand{\noteauthors}{基于 Jake Williams 课堂讲座、官方录像恢复 slides 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V4 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2024-05-02；上传 2024-05-23}
+\renewcommand{\videoduration}{1:19:56}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=zL9B3eXq0gY}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-% Highlight boxes
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-% Listings
-\lstset{
-    language=Python,
-    basicstyle=\ttfamily\small,
-    keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black},
-    commentstyle=\color{green!60!black},
-    breaklines=true,
-    frame=single,
-    numbers=left,
-    numberstyle=\tiny\color{gray},
-    captionpos=b,
-    extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-% Front-page metadata
-\newcommand{\notetitle}{[CS25] Near-Shallow Architectures — Jake Williams}
-\newcommand{\noteauthors}{基于 Jake Williams 授课内容整理}
-\newcommand{\notedate}{2026年4月3日}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{2025年3月15日}
-\newcommand{\videoduration}{约1小时20分钟}
-\newcommand{\videourl}{https://cs25.stanford.edu/lectures/lecture30}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{讲座定位：这不是“把 Transformer 变浅”那么简单}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+标题里的“近浅层”（near-shallow）容易让人误以为课程只讨论减少 Transformer 层数。讲者实际提出的是一条更具体、也更受条件约束的路线。第一步，把标准 self-attention 中“先投影、再比较”的一部分工作改写成“直接变换向量比较”；第二步，用 generalized co-occurrence（广义共现）为 softmax layer 构造非随机 warm start；第三步，在 embedding 固定时缓存底层向量比较，使一部分计算不再随每次训练或推理重复；第四步，观察这种结构能否支持只用本地应用数据训练的 tiny controller。这里的 near-shallow 指\textbf{可复用的底层计算让有效在线路径更浅}，不是网络只剩一层。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{先修复来源：旧讲义的标题和内容都不可靠}
 
-\tableofcontents
-\newpage
+旧稿把课程日期写成 2026 年，使用不存在的 Stanford lecture URL，并加入 drift gate、attention observability board、fairness dashboard、weekly newsletter、RLHF governance roadmap 等大量内容。这些机制既不在官方课程页和录像中，也不在讲者相关论文里。本讲现以 2024 年 5 月 2 日课堂、Stanford Online 官方录像 \texttt{zL9B3eXq0gY}、官方 \texttt{en-US} 人工字幕和 27 个录像恢复教学 slide states 为唯一课堂主干。
 
-%% --- 正文内容开始 --- %%
+\lecturefigure{slide-01-motivation.jpg}{核心问题：能否直接学习“比较结果到 feature weights”的变换}{Stanford Online 官方录像 00:04:39}
 
-\section{引言：用计量语言学重新审视 Transformer}
+第一张教学 slide 对比两条路径。标准 attention 通过 $W_q,W_k$ 改变表示空间，再用 dot product 产生 score；讲者的替代形式保留原向量比较 $XX^\top$，另用矩阵 $W$ 把这些比较转换成 attention logits。后文所有显式初始化、缓存和 edge 实验都围绕这次改写展开。
 
-\subsection{讲者定位与研究脉络}
-Jake Williams 自 Drexel University 信息科学系出发，本科训练在物理与数学，早期研究聚焦量化语言学（quantitative linguistics）。他在开场 00:00:05--00:01:00 向现场和线上听众重申：SAFU 来自“统计学家看 Transformer”的视角，突出 Zipf 定律与高维流形的稳定性，而不是传统的“更深、更宽”设计。
-
-在一个多模态研究项目中，他发现 embedding 更新频率过高会把注意力 map 推向噪声，因此他说“我们不是要写新的 transformer，而是把比较和变换拆开，让每层的可解释性明显提升”。这种出身让他的演讲更像理论讲义而非启发式工程分享。
-
-\begin{knowledgebox}{跨学科背景形成的研究链路}
-数学/物理背景稳定了 Williams 在符号和统计间的切换：Zipf 的分布告诉他语言背后存在极少数高频 token，统计量在参数空间中形成“锚点”，从而推动 SAFU 的 precomputation 架构。
-\end{knowledgebox}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.75\textwidth]{\videocoverpath}
-\caption{Lecture 30 的封面图与 SAFU 架构示意，提醒我们将 attention 流程可视化。}
-\end{figure}
-
-\subsection{课程结构与目标}
-Williams 将整堂课拆成四个模块：1）统计语言与 SAFU 架构；2）上下游 evaluation；3）工程部署与 drift 应对；4）问答与未来议程。每个模块都围绕“causal loop of attention”展开，讲者甚至在 00:33:00 强调，整个笔记应还原“因果链：架构 → 初始化 → 评估 → 监控”。
-
-\begin{importantbox}{本讲结构也应该模仿因果链}
-将笔记布局成“架构 → 训练/评估 → 工程 → 问答”，可以让 reader 在没有视频的情况下也能追踪 Williams 设计决策，每个 section 最好以本章小结收尾，保持闭环。
-\end{importantbox}
-
-\subsection{本章小结}
-引言交代了讲者的计量语言学出身与课程节奏。后续章节将按 Williams 强调的“一把 attention 框架，配合工程闭环”逐步展开，使我们可以在写作时“先建模再复盘”。
-\newpage
-
-\section{SAFU 架构解构}
-
-\subsection{从语言统计到预计算注意力}
-Williams 在 00:08:00–00:12:40 的部分用 Zipf、频率平衡和统计量稳定性作为前提。他认为：“真正的注意力是在 token 之间做比较，而不是在层之间做变换。”实质上他把传统 transformer 中的 \(QK^\top\) 计算看成一个可预计算的静态过程，而 Feed-forward 网络承担语义变换。
-
-他的主张极像“先构造共享的语言对比图，再让 transform function 处理语义”，因此预计算结构在 near-shallow 架构里成为第一要义。
-
-\begin{knowledgebox}{SAFU 的比较-变换分离原则}
-将“比较”阶段在第一层完成，由后续层共享 cached attention；Feed-forward 网络则只负责“变换”，这样可以避免每层重复 \(QK^\top\) 的 quadratic 计算，并让每层的语义加工更易解释。
-\end{knowledgebox}
-
-\subsection{静态嵌入与预计算注意力}
-Williams 解释 embedding 层的静态性并非完全冻结，而是通过减少更新频率来控制 noise。他说：“Warm-start embedding 让 attention map 初始就有 meaningful 的 geometry，GA optimizer 不会把每个 token 拆的太散。” 讲者还示意了一个 0.5ms 的预计算流程图：embedding → precomputed key/query → cache。
-
-\begin{importantbox}{核心洞察：将注意力“比较”下沉}
-注意力的“比较”只发生一次，所有层共享同一组缓存：这意味着 inference 时只需一次 \(QK^\top\)，FP32 multi-head attention 成为 lookup，而不是实时 compute。
-\end{importantbox}
-
-\subsection{缓存机制与动态读出}
-推理时模型读取缓存，并在每层引入可训练的 gamma/beta 对 attention map 进行微调（00:25:00–00:28:10）。Williams 形容缓存机制为“静态 graph + dynamic gating”，每层会按 residual gating 设计添加 layer-specific offset，而不再重新计算 QK。
-
-\begin{knowledgebox}{缓存带来的可解释收益}
-1）一次计算后 attention map 便可被可视化；2）多个 checkpoint 比较 attention entropy 时无需 recompute；3）部署只需同步 config，而非重新 run full attention。
-\end{knowledgebox}
-
-\subsection{Attention vs Feed-forward 的分布式责任}
-Williams 进一步把前馈网络定位成语义调谐器：每层用一组可控 gate 调整 static embedding，形式上相当于 \(FFN(W_1x+W_2b)\)、\(x\) 仍来自同一个 cached attention map，但每层的 \(W\) 负责 context-aware remapping。
-
-\begin{warningbox}{静态 Attention 的局限}
-如果嵌入完全静态，模型在 long-tail token 上失去 adaptation；SAFU 的折中是保留 attention 的可解释形态，同时允许 Feed-forward 根据 residual gating 轻微调整语义，如 Williams 所说：“我们不是把注意力冻结了，而是让变换更自由。”
-\end{warningbox}
-
-\subsection{本章小结}
-SAFU 架构通过分离“比较”和“变换”两部分，配合静态 embedding + dynamic gating，共享 cached attention 使得 inference 路径明确可视；这种 design 既节省 compute，也方便 audit attention map。
-\newpage
-
-\section{上下文切片与多模态融合}
-
-\subsection{动态块大小与上下文保真}
-在 01:00:30–01:13:20 的段落中，Williams 强调 chunking 应以语义边界为基准，而不是 512-token 机械切割。他推荐：对话/段落切出自然 chunk，再用 sliding window 保留边界 token。
-
-\begin{importantbox}{上下文切片的工程细节}
-\begin{enumerate}[topsep=0pt]
-    \item 依据段落/句子边界确定 chunk，而非固定 token 数；
-    \item 采用 sliding window 并复用 overlap token，减弱 border effect；
-    \item 只拉取相关 chunk 的 cached matrix，无需重新计算 \(QK^\top\)。
+\begin{importantbox}{本讲的三个核心问题}
+\begin{enumerate}
+  \item \textbf{Initialization：}能否不用随机参数起步，而从输入--输出统计量直接得到一个有用的初值？
+  \item \textbf{Reusable computation：}哪些表示或向量比较可以冻结并缓存，从而少做重复计算？
+  \item \textbf{Application-only learning：}一个小模型能否不依赖通用预训练，只从某个本地任务的交互数据学习？
 \end{enumerate}
 \end{importantbox}
 
-\subsection{标准化 chunk 表与 gating 参数}
-为了方便部署，团队制定了 chunk gating 表，规定了不同任务的 token budget 与 overlap 策略，确保 evaluation 时的 chunk 不破坏 semantics。表格如下：
+\teachervoice{00:01:19--00:02:49，Williams 先说明自己的数学、物理与 quantitative linguistics 背景。他刻意从统计结构和显式公式切入，而不是从常见的 scaling recipe 切入。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{4cm}p{4cm}p{4cm}}
+\subsection{证据分层：标准知识、论文推导与课堂实验不能混成一件事}
+
+本讲同时出现标准 Transformer 公式、团队预印本中的推导、课堂 slide 上的实验结果、Le Potato 可行性演示，以及 Q\&A 中的未来设想。为避免把研究原型写成成熟配方，阅读时应保持下列分层。
+
+\begin{knowledgebox}{证据账本}
+\begin{tabularx}{\textwidth}{L{0.17\textwidth} L{0.29\textwidth} X}
 \toprule
-Chunk 类型 & Token 预算 & Overlap & 说明 \\
+层次 & 例子 & 正确读法 \\
 \midrule
-短上下文 & 256 & 32 & 推理速度优先，用于 QA / chat \\
-标准段落 & 512 & 64 & 训练默认策略，保持语义连贯 \\
-长篇文档 & 1024 & 128 & 结合 sliding window，主要用于 retrieval \\
-多模态 & 512+视觉 & 96 & token 与视觉 patch 共享缓存 attention \\
+标准背景 & softmax、dot-product attention、困惑度、padding & 可作为公共技术基础 \\
+论文推导 & generalized co-occurrence 显式解、SAFFU hidden targets & 需遵守论文假设与近似条件 \\
+课堂实验 & warm/cold 曲线、MNIST、BabyLM、switch task & 只支持对应设置下的观测 \\
+讲者判断 & packing 不是正确 context model、PLM 命名 & 作为研究观点，不当作共识 \\
+未来工作 & convolution warm start、multimodal、RLHF、公开实现 & 尚未完成，不能写成已验证能力 \\
 \bottomrule
-\end{tabular}
-\caption{动态 chunk 策略与 gating 参数}
-\end{table}
-
-Williams 还在 01:08:00 提到，chunk gating 表本身也是监控指标：每个 batch 都会记录 chunk 类型、token budget、cache hit rate，并与 attention drift 关联。这样一来，运维团队可以直接把 chunk 选型与 drift threshold 关联起来，当某种 chunk type 触发 drift 告警时，立即降级到更 conservative 的 overlap 策略。
-
-\begin{knowledgebox}{Chunk gating 监控原则}
-1）预先定义 chunk 类型与 token budget，减少 runtime 选择的不确定性；2）把 chunk hit rate 与 attention entropy 绑定，形成 drift trigger；3）发生 drift 时自动 switch 到低 overlap + longer token budget 配置。
+\end{tabularx}
 \end{knowledgebox}
 
-\subsection{Packing 不是 context 模型}
-Williams 在 01:17:51–01:18:50 再次强调 packing 只是为了 stacking batch，而非 semantics。他说：\textit{``Packing speeds up training but destroys content boundaries, so only enable it when throughput is the bottleneck, and never use packed chunks for eval.''}
-
-\begin{warningbox}{Packing 的双刃剑}
-Packing 能减少 batch 数量，但会破坏语义连续性；建议在 throughput 需求高时开启，并在 evaluation 时恢复原始 context 以确保 alignment。
-\end{warningbox}
-
-\subsection{Tokenization 维度的可组合性}
-讲者提到可以把视觉/动作 token 与文本 token 融合：不同 modality 先被映射到同一 embedding space，再由 SAFU 的 cached attention 处理。这种 multi-modal tokenization 让 attention map 直接跨模态交互，无需额外 adapter。
-
-\begin{knowledgebox}{Token 化的统一收益}
-把所有 modality 看作 token，attention map 只需关注 token id；SAFU 通过共享 cached attention，让视觉、动作与文本在同一张注意力图上建立联系，简化 cross-modal 训练。
-\end{knowledgebox}
-
-\subsection{本章小结}
-上下文切片策略与 multi-modal tokenization 让 SAFU 保持语义保真；packing 仍只用于吞吐，chunk gating 表帮助工程团队在不同任务间快速切换参数。
-\newpage
-
-\section{SAFU 的评估与实验表现}
-
-\subsection{小数据/冷启动上的稳定性}
-在 00:34:00–00:52:00 的实验部分，Williams 展示了在 small-dataset 上的 warm-start 过程：embedding 更新频率逐步降低，perplexity 在前 5 个 epoch 下降明显，凸显静态 embedding 在 warm start 中的稳定性。
-
-\begin{importantbox}{初始化的“冷启动”优势}
-在小数据 regime，embedding layer 不频繁更新，模型从稳定 embedding 空间开始训练；attention matrix 自带 structure，缩短 warm-up time，perplexity 从 48 降到 30。
-\end{importantbox}
-
-\subsection{Label noise 与 embedding 监控}
-Williams 提醒：embedding 更新慢意味着 label drift 会在 attention map 中固化，必须结合 human eval 创建 label quality gate 才能及时修正 error attention。
-
-\begin{warningbox}{Label noise 的放大效应}
-静态 embedding 意味着错误 token 间的高 attention 权重会持续存在，需要 human eval spot-check + small-scale quality gate 及时 detect 并重新拟合 attention weights。
-\end{warningbox}
-
-为了让 label quality gate 更具自动化，他让 pipeline 先计算 embedding drift 分数，再在 drift 超过 15\% 时召唤 human rater；如果 human eval 确认 drift，立即回滚到上一版本的 cache matrix。
-
-\subsection{评估与对比}
-他解释传统 GPT-2/GLUE pipeline 无法直接用于 SAFU，因为 attention config 不同。必须重建 evaluation stack，监控 attention entropy、head variance，在 entropy 异常下降时触发 fallback。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{4cm}p{5cm}}
-\toprule
-Metric & 目的 & 观察 \\
-\midrule
-Perplexity & 语言合理性 & warm start 后稳定在 29–32 \\
-Retrieval recall & long-tail token & attention entropy 控制在 0.4–0.6 \\
-Translation accuracy & cross-lingual alignment & 保持在 baseline ±1.5\% \\
-\bottomrule
-\end{tabular}
-\caption{SAFU 多指标评估组合}
-\end{table}
-
-Williams 进一步指出，除了以上指标，还在每个 checkpoint 记录 per-head entropy、attention drift 与 chunk hit rate，用以驱动 gating policy。他引用 \textit{``Three metrics + head-level entropy equals a gate that can triage between stable deployment and emergency rollback''} 的表达来说明 metric 的组合逻辑。
-
-\subsection{Benchmark 组合}
-除了 perplexity，Williams 还在 experiments 中加入 retrieval recall 与 translation accuracy，确保 SAFU 不会因为少数 token 而 collapse。表明 attention drift 需要搭配 entropy gate 与 human eval。
-
-\begin{knowledgebox}{评估闭环的组合策略}
-1）perplexity 检验语言合理性；2）downstream retrieval 确保 attention map 无 long-tail drift；3）human eval spot-check 控制 attention entropy。
-\end{knowledgebox}
-
-\subsection{本章小结}
-评估模块聚焦 small-data 的 warm start，label noise gating 以及 custom pipeline。多指标组合与 entropy-based gate 让 SAFU 的 evaluation 更具可解释性。
-\newpage
-
-\section{工程实践与部署}
-
-\subsection{监控流水线}
-部署时，团队会 dump 关键 head 的 attention map，并在 dashboard 上对比 ±3 token 之间的流量，任何 drift 都会在 5 分钟内触发告警。Williams 认为 attention map 是调试最直接的工具。
-
-\begin{knowledgebox}{部署监控的三步}
-1）记录 head-level attention sum；2）追踪 earliest token 与 latest token 的 attention drift；3）drift 超阈值即启用 fallback safe model。
-\end{knowledgebox}
-
-监控 stack 还包含：drift log、chunk hit rate、perplexity window，以及 human eval gate 的 flag。当某个指标偏离预设阈值时，dashboard 会同时亮起三个灯，便于运维快速判定是否要 rolling back。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{4cm}p{5cm}}
-\toprule
-指标 & 阈值 & 响应 \\
-\midrule
-Attention entropy & < 0.35 & snapshot attention map + warn log \\
-Chunk hit rate & < 85\% & 增加 overlap 并复用 sliding window \\
-Drift log count & > 3/epoch & 启动 fallback CI pipeline \\
-\bottomrule
-\end{tabular}
-\caption{部署监控指标与自动响应}
-\end{table}
-
-\subsection{缓存与版本化}
-Williams 将 attention config 与 checkpoint 解耦：每次只 reload config，就能快速 roll back。这个模式让团队能在几分钟内切换到安全配置，而不用重新加载 entire weights。
-
-\begin{importantbox}{快速回滚策略}
-1）attention config 独立版本；2）数据 pipeline 保持一致；3）新 config nightly rerun，出现 anomaly 立即回滚。
-\end{importantbox}
-
-具体执行包括：
-\begin{itemize}[topsep=0pt]
-    \item 把 attention config 作为 code review 对象，变动必须通过 drift gate 人员审批；
-    \item nightly rerun 得到的 drift log 会自动与监控 dashboard 做对比，若存在 mismatch 则 reject config；
-    \item canary rollout 先在低流量环境跑 1 小时，再逐步放开到 production；
-\end{itemize}
-
-Williams 形容这种流程为“configuration as policy”：模型参数本身不变，控制逻辑写在 config 里，通过监控和审批链保持安全。
-
-\subsection{可持续计算与资源博弈}
-面对资源上限，Williams 用 partial fine-tuning + distillation，保留 hot head 在 TPU，其余 head 留在 CPU；这个 warm/cold 策略让 compute 降低 ~30\%。
-
-\begin{warningbox}{可持续性不仅是节能}
-在 production 中不停训练 1T 参数 attention 非常昂贵；通过热/冷 head 切换可以节省资源，同时保持 fallback 路径。
+\begin{warningbox}{SAFFU 不是现成的标准架构}
+Self-Attentive Feed-Forward Unit（SAFFU，自注意力前馈单元）和 Precision Language Model（PLM，精确语言模型）是讲者团队使用的研究术语。它们不是 PyTorch/Hugging Face 中已经标准化的模块，也不能仅凭这堂课推出“训练 LLM 不再需要 backpropagation”。
 \end{warningbox}
 
 \subsection{本章小结}
-工程实践需要 attention map 可观察、config 可回滚、compute 可持续。SAFU 的 precompute 路径为可视化与回滚提供了天然冗余。
-\newpage
 
-\section{硬件优化与模型压缩}
+真实课程围绕非随机初始化、缓存与本地小模型展开，不是旧稿中的治理流程。本讲义会把每一条结果放回其具体假设：softmax、非负特征、固定 embedding、有限数据与早期 edge prototype。
 
-\subsection{混合精度与稀疏矩阵}
-为了进一步降低 compute，Williams 把 cached attention 与混合精度配合起来：attention precompute 在 FP32，而后续 FFN 采用 bfloat16/FP16，保证 quantization 不破坏统计结构。他指出“只要 cached attention 一致，FFN 部分的精度切换不会导致 drift”。
+\section{从标准 attention 到 SAFFU：到底改了哪一步}
 
-\begin{importantbox}{硬件友好的 mixed-precision 策略}
-Attention cache 保持高精度，FFN、optimizer 则自动降到 bfloat16；如果某个 head 过热，会通过 sparse gating 让该 head 只在 CPU 上运行，同时保留 TPU 上的 warm head。
+要理解替代机制，必须先把标准 self-attention 拆成“表示投影”“相似度”“归一化”“加权聚合”四步。讲者并不否认标准 Q/K projection 的价值，而是问：当输入已经在同一低维空间时，是否能直接对比较矩阵本身做一个可学习变换，以减少额外投影和随机参数？
+
+\subsection{标准形式：先投影，再比较}
+
+设一个序列的 hidden states 为 $X\in\mathbb{R}^{L\times d}$，标准单头 attention 写成
+\[
+Q=XW_q,\qquad K=XW_k,\qquad V=XW_v,
+\]
+\[
+A_{\text{std}}=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_a}}+M\right),
+\qquad H=A_{\text{std}}V.
+\]
+其中 $L$ 是 token 数，$d$ 是输入维度，$d_a$ 是 attention dimension，$M$ 是 causal 或 padding mask。$W_q,W_k$ 的任务不是简单“算相似度”，而是先把输入变换到更适合当前预测任务的比较空间。
+
+\begin{knowledgebox}{为什么投影常常有用}
+当 query 与 key 来自不同模态、不同维度或不同语义角色时，cross-attention 必须先把它们放到可比较空间。即使是 self-attention，投影也能让不同 heads 学到不同的双线性相似度。替代机制的效率收益来自减少这一步，但也同时放弃一部分表示自由度。
+\end{knowledgebox}
+
+\teachervoice{00:02:54--00:05:06，讲者把标准 attention 描述为 re-dimensionalization：Q/K 改变表示空间，使 dot product 能产生对任务有用的权重；替代形式则直接学习如何解释现有向量比较。}
+
+\subsection{SAFFU 定义：直接变换 comparison matrix}
+
+SAFFU 假设输入向量已经处于可比较的同一空间。先计算原始比较矩阵 $C=XX^\top$，再用可学习矩阵 $W$ 变换比较，得到
+\[
+A_{\text{saffu}}=\operatorname{softmax}(XWX^\top+M),
+\qquad H=A_{\text{saffu}}X.
+\]
+这里 $W\in\mathbb{R}^{d\times d}$ 直接定义一个 bilinear form（双线性型）。若 $W=I$，模型退化为原空间 dot product；一般 $W$ 可以旋转、缩放或重新组合各维度的交互，但它不把 query 和 key 分别映射到两个独立空间。
+
+\lecturefigure{slide-02-saffu-definition.jpg}{SAFFU 的定义、假设与表示约束}{Stanford Online 官方录像 00:06:00}
+
+\begin{importantbox}{标准 attention 与 SAFFU 的代数关系}
+因为
+\[
+QK^\top=XW_qW_k^\top X^\top,
+\]
+若记 $W=W_qW_k^\top$，两者在 score 的双线性形式上可以相互对应。差异在参数化：标准形式把 $W$ 分解成两个 projection，SAFFU 直接处理组合矩阵，并围绕它推导显式初始化。直接参数化不自动更强，也不自动更稳定。
 \end{importantbox}
 
-\subsection{边缘设备与缓存调度}
-在 edge 场景，chunk gating 表与 quantized cache 结合；Williams 让数据 pipeline 优先使用 LRU Cache，当命中率下降时自动 prefetch 新 chunk。他称这种调度策略为“cache-aware scheduling”，通过 attention cache 的共享和 quantized FFN 让边缘设备也能复现 SAFU 的推理闭环。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{3.5cm}p{4cm}p{3.5cm}}
-\toprule
-硬件平台 & 量化配置 & 缓存策略 & 备注 \\
-\midrule
-TPU/多卡 GPU & bfloat16 & Attention cache 保持 FP32，FFN 分层量化 & 生产 lighting baseline \\
-单卡 GPU & mixed FP16 & chunk overlap + sliding window prefetch & 测试/调试使用 \\
-边缘设备 (ARM) & INT8 & local LRU cache + remote chunk fetch & 适配低延迟部署 \\
-\bottomrule
-\end{tabular}
-\caption{硬件与缓存调度对照}
-\end{table}
-
-\begin{knowledgebox}{硬件调度的关键实践}
-1）Attention cache 仍维持高精度，FFN 以 quantization 降低 energy；2）Chunk gating 表与 cache hit rate 共同驱动 prefetch；3）边缘设备用远程 chunk fetch 保证语义完整。
-\end{knowledgebox}
-
-\subsection{本章小结}
-硬件优化围绕 cache 高精度保持与 FFN 量化降耗，并结合 chunk gating 表与 scheduling，使 SAFU 在 TPU、GPU 和 edge 上都能维持一致的 attention behavior。
-\newpage
-
-\section{问答亮点与操作建议}
-
-\subsection{为何不用 RNN/Recurrence？}
-Williams 在 Q\&A 中（01:19:05 以下）提到：RNN 的 attention 图太难并行化与可视化，而 SAFU 的 cached attention 可以直接导出可解释的 heatmap。
-
-\begin{knowledgebox}{QA 中的调试建议}
-把 attention map 当作 debug 工具：若某 head 过度关注 hallucinated token，先检查 embedding drift，再校准 label consistency。
-\end{knowledgebox}
-
-\subsection{如何防止 drift？}
-他提出 two-tier threshold：entropy 下降 40\% 时记录 warning log，下降 60\% 时切到 fallback safe model，保证 inference 不会因为 drift 报错。
-
-\begin{warningbox}{drift 告警架构}
-1）监控 attention entropy；2）entropy 跌落 40\% 触发 warning；3）跌落 60\% 则切换 fallback，避免进一步偏移。
+\begin{warningbox}{“没有 Q/K”不等于没有矩阵变换}
+SAFFU 仍有 $W$，仍学习 token 间比较应怎样改变。它省掉的是两个独立 projection 的参数化与中间表示，而不是把 attention 变成无参数平均。
 \end{warningbox}
 
-\subsection{SAFU 实现可用性}
-关于代码开放，他表示需要先完善 evaluation pipeline，再放出 GitHub release；当前评价体系还依赖 standard GPT 模型的函数。
+\teachervoice{00:05:15--00:05:43，Williams 明确说替代机制与传统 projection 可以同时使用；本讲暂时去掉 projection，是为了隔离并研究 comparison-to-weight 机制本身。}
 
-\begin{importantbox}{混合专家策略适用时机}
-只有在 dataset heterogeneity 高且 compute 受限时才启用 sparse expert + gating；否则 single shared transformer 足够。
-\end{importantbox}
+\subsection{General design：从比较、聚合到输出}
 
-\subsection{混合专家策略与治理建议}
-问答中还提到：治理并非只看 metrics，还要建立 fairness dashboard，attention heatmap 是首道防线，可以直接用 head variance 定位 over-attended token。
+架构图用 $W$ 表示 attention comparison transform，用 $U$ 表示对聚合 hidden state 的 decoder/feed-forward 变换，用 $O$ 表示更上层输出映射。读图时不要把三者都叫“attention 参数”：$W$ 决定位置权重，$U$ 改变聚合后的 feature，$O$ 把 hidden state 映射到预测目标。
 
-具体治理链路包括：
-\begin{itemize}[topsep=0pt]
-    \item 每次启用 sparse expert/gating 前先跑 fairness dashboard，检查 over-attended token 列表；
-    \item 把 attention heatmap 导入 governance 工具，与 user feedback 一起触发 human eval；
-    \item 如果混合专家在 low-resource 场景导致 attention bias，立即回滚到 single shared transformer。
-\end{itemize}
+\lecturefigure{slide-03-general-saffu-design.jpg}{General SAFFU encoder-decoder：$W$、$U$ 与输出映射的分工}{Stanford Online 官方录像 00:07:38}
 
-\subsection{本章小结}
-问答强调了 SAFU 更适合可解释需求、drift 是主要风险、混合专家需在治理链路完备后才部署。
-\newpage
+对第 $m$ 个样本，设 context matrix 为 $X_m\in\mathbb{R}^{K\times d}$，选定 query 行 $x_{m,h}$，则可写成
+\[
+a_m=\operatorname{softmax}(x_{m,h}WX_m^\top),
+\]
+\[
+h_m=a_mX_mU,\qquad \hat y_m=\operatorname{softmax}(h_mO).
+\]
+$K$ 是 context 中 feature/token 数，$a_m\in\mathbb{R}^{K}$ 是 attention distribution，$U$ 和 $O$ 分别承担隐藏变换与最终分类/语言建模输出。
 
-\section{未来方向与治理闭环}
-
-\subsection{跨模态 token 化}
-Williams 展望把视觉/动作 token 与文本 token 统一进 SAFU 的 cached attention，使 attention map 自然跨模态互动，而不再依赖 adapter。
-
-\subsection{低资源与 RLHF 组合}
-他提到未来会把 precomputed attention 与 RLHF 结合，在 lower-resource 语言上验证 SAFU，目标是用少量 human feedback 就能稳定 attention map。
-
-\begin{knowledgebox}{治理闭环的三要素}
-1）attention entropy 监控；2）bias heatmap 审计；3）用户反馈 + human eval 形成闭环。
+\begin{knowledgebox}{near-shallow 到底指什么}
+模型仍可以有多层。near-shallow 指底层的一些表示与 pairwise comparisons 可以预先确定、缓存或局部显式初始化，使在线学习主要发生在较少的上层参数中。它描述计算依赖与更新路径，而不是简单的 depth 数字。
 \end{knowledgebox}
 
-\subsection{可解释性与审计}
-治理方向不仅要 debug attention，对 fairness 问题也要用 heatmap 找出 over-attended token，并配合 human review 形成 policy。
-
-他强调建一个 attention observability board：从 head variance、drift log、user feedback 生成治理 score，每周更新一次，并与 RLHF loop 中的 reward model 联系起来。这样的机制能让 attention audit 结果快速反馈到 training pipeline。
-
-\begin{importantbox}{治理 score 的组成}
-1）head variance 统计用来判定是否存在 over-attention；2）drift log 负责记录 entropy 的大幅下降；3）user feedback + human eval 给出最终 governance decision。
-\end{importantbox}
-
-\subsection{总结式未来议程}
-未来议程包括：precomputed attention + RLHF、lower-resource 上的验证、把 packing/dynamic chunk 融入 evaluation pipeline。
+\teachervoice{00:05:43--00:07:10，讲者把减少 projection 与减少随机参数联系到 near-shallow，但同时承认这种设计更依赖输入向量维度一致、组织良好，并不是无条件替换。}
 
 \subsection{本章小结}
-未来研究围绕可解释、治理与低资源展开，SAFU 的 cached attention 让这些议程在实践中可追踪、可控。
-\newpage
 
-\section{实验复现与知识共享}
+SAFFU 的核心改动是直接参数化 $XWX^\top$，并把该形式纳入显式初始化。标准 attention 的 projection 更灵活；SAFFU 的吸引力来自更少的独立随机参数、可推导的初值和潜在可缓存比较。后续收益必须与这些约束一起阅读。
 
-\subsection{实验记录与复现}
-Williams 团队把每次实验的 chunk gating 表、Warm-start seed、dataset split 以及 drift log 都记录在统一的 experiment journal。每次训练结束后会自动生成 artifacts：embedding snapshot、attention cache、entropy curve，放在 `safu-artifacts/` 下，以便后续复现。
+\section{非随机初始化：bit-cipher 为什么先于 attention 出场}
 
-\begin{importantbox}{Repro pipeline 的固定步骤}
-1）确定 seed + chunk gating 表；2）运行 warm start training，记录 entropy/perplexity；3）输出 attention cache snapshot + drift log 上传仓库；4）对比前一次 config 差异，若 drift 超过阈值则中止。
-\end{importantbox}
+显式初始化不能从随机 embedding 开始推导一切。输入向量如果本身随机、符号不受控或每次更新，后续共现统计和缓存都会失去稳定参照。因此课程先讨论 Lottery Ticket 直觉、低维表示的必要性和 bit-cipher，再进入 attention warm start。
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{5cm}p{4cm}}
-\toprule
-Artifact & 内容 & 用途 \\
-\midrule
-Chunk gating journal & chunk 类型、token 预算、cache hit rate & 评估不同 chunk 策略的 stability \\
-Attention cache snapshot & 预计算的 attention matrix + entropy & drift 对比与 human eval 基准 \\
-Drift log pipeline & attention entropy + head variance & 触发 fallback 与 governance \\
-\bottomrule
-\end{tabular}
-\caption{复现实验与知识共享的关键产物}
-\end{table}
+\subsection{Lottery Ticket 是动机，不是反对 multi-head 的证明}
 
-\subsection{知识输出与团队学习}
-团队还维护了 lessons learned 文档、问答摘要与 highlight trackers，把 QA 里的治理灵感录入 wiki。Williams 表示“knowledge output 与 artifact 同样重要，不能只看 metrics”，因此每周都会整理 Q\&A 亮点，输入内部 newsletter。
+多个 attention heads 具有相同结构与训练目标，但随机初始化让它们在优化过程中走向不同角色。讲者把这种不确定性与 Lottery Ticket Hypothesis 联系起来：一个大网络可能包含少数真正有效的子结构，而大量随机参数的训练成本最终没有转化为可用能力。
 
-\begin{knowledgebox}{知识共享的三种载体}
-1）Wiki：记录 chunk gating、drift gate、hardware setup；2）Weekly newsletter：摘录 Q\&A 亮点、治理案例；3）Shared slides + transcripts：把重点引用进 lecture30 的 notes，以便新成员快速上手。
-\end{knowledgebox}
+\lecturefigure{slide-04-no-lottery-tickets.jpg}{Transforming without lottery tickets：减少随机初始化与对称副本}{Stanford Online 官方录像 00:11:04}
 
-\subsection{本章小结}
-复现实验依赖 chunk gating journal 与 drift log pipeline，知识共享通过 wiki/newsletter/slides 让团队保持同步；这样的流程让 SAFU 在多团队、多硬件上都能保持一致。
-\newpage
-
-\section{治理案例回放}
-
-\subsection{Drift gate 的摸索}
-一次 drift gate 触发是在 chunk gating 表刚刚修改 overlap 策略后，entropy 跌落 45\%，dashboard 立即截取了 attention cache snapshot 并标记为 high severity。Williams 团队先在 staging 环境 replay 该 chunk，确认 drift 是由 lower overlap 与 new dataset 交集引发的，随后暂时回滚 chunk gating 并把该 case 送入 human eval。
-
-\begin{knowledgebox}{Drift gate 的操作流程}
-1）Monitor 监控到 entropy 异常下降；2）立即 dump attention cache + chunk gating 记录；3）在 staging replay，若 drift 由 boundary token 引发则 revert；4）更新 chunk gating journal，正式环境再逐步 release。
-\end{knowledgebox}
-
-\subsection{在 lower-resource 语言的治理}
-在 lower-resource 场景，他们启用了 attention observability board：每周汇总 head variance、user feedback 与 fairness dashboard，用于调整 RLHF reward model 的偏置惩罚。Williams 强调，drift gate 不能只靠单一指标，而是要把 entropy、token coverage 与 user report 拼在一起。
-
-\begin{warningbox}{治理 case 中的谨慎点}
-在 low-resource 上用 drift gate 可能把 long-tail token 误标为异常；需要人工 review 和 fairness board 的辅助，才能避免把 rare token 直接屏蔽。
+\begin{warningbox}{不能从 Lottery Ticket 直接推出“多头无用”}
+不同 heads 可以学习互补的关系，也可以通过训练打破对称。slide 提供的是研究动机：若能根据数据统计直接找到好起点，是否可以少依赖随机抽奖？它不是 multi-head attention 的消融结论。
 \end{warningbox}
 
+\teachervoice{00:08:03--00:10:44，Williams 把多个同构 heads 的随机角色分化解释为一种 lottery-ticket 问题，并强调随机初始化可能让昂贵参数最终没有承担稳定功能。}
+
+\subsection{Dimensionality reduction 仍不可避免}
+
+上一节的问题是如何减少同构 heads 的随机“抽奖”，但 attention 之前还有更早的随机源：token embedding。若不先稳定输入坐标系，后面的 generalized co-occurrence 与 comparison cache 都会随着 embedding 更新而漂移。因此本节先说明为什么维度必须压缩，再区分“低维”与“好的非随机低维表示”。设词表大小为 $V$，若直接把 token 表示为 one-hot $y\in\{0,1\}^{V}$，后续权重矩阵的维度会随 $V$ 膨胀。学习 embedding $E\in\mathbb{R}^{V\times d}$ 的通常做法把 $d\ll V$，但随机 embedding 离输出 loss 很远，需要梯度穿过整个网络才能逐步成形。
+
+\lecturefigure{slide-05-dimensionality-reduction.jpg}{低维表示仍然必要，但随机 embedding 难以稳定和解释}{Stanford Online 官方录像 00:11:21}
+
+\begin{importantbox}{表示压缩与初始化是两个问题}
+\textbf{Dimensionality reduction} 决定用多少维表达 token；\textbf{initialization} 决定这些维度一开始表示什么。把维度从 $V$ 降到 $d$ 并不自动得到一个好表示，随机矩阵只是给优化器一个可训练起点。
+\end{importantbox}
+
+\teachervoice{00:11:14--00:12:40，讲者强调低维表示对大词表是计算必需品，但 embedding 离输出 loss 最远，随机起点需要昂贵训练才能稳定。}
+
+\subsection{Bit-cipher：先保证唯一性，再讨论语义}
+
+Bit-cipher 用长度为 $b$ 的 bit vector 编码 token。除全零向量外，理论上最多有
+\[
+N_{\text{codes}}=2^b-1
+\]
+个唯一编码，因此覆盖词表至少需要 $b\ge \lceil\log_2(V+1)\rceil$。团队按 unigram frequency 排序分配 bit pattern，使高频 token 优先获得稀疏、易区分的编码，再做归一化
+\[
+e_i=\frac{\eta_i}{\|\eta_i\|_1},\qquad \eta_i\in\{0,1\}^{b}.
+\]
+
+\lecturefigure{slide-06-bit-cipher.jpg}{Bit-cipher：用频率排序的 bit vectors 扩展 one-hot encoding}{Stanford Online 官方录像 00:15:01}
+
+\begin{knowledgebox}{Bit-cipher 解决什么，又没有解决什么}
+它提供确定、唯一、低维、非负的 token identity，因此便于显式公式和复现实验。它本身不保证语义相近的词向量接近；后续还要利用 co-occurrence 聚合或 radial context statistics 增加相关结构。
+\end{knowledgebox}
+
+\begin{warningbox}{频率排序不是语义定理}
+高频 token 获得更简单编码是一种工程设计。仅凭频率不能推出语义相似性、句法角色或跨语言对齐，必须通过下游任务和相关性分析验证。
+\end{warningbox}
+
+\teachervoice{00:12:53--00:15:45，讲者说明 bit-cipher 的真正价值是 deterministic low dimensionalization。它看似只是中间步骤，却是团队能够继续推导非随机 SAFFU 初始化的实际起点。}
+
+\subsection{术语消化：后文会反复出现的五个词}
+
+这些术语常被压缩成一句“closed-form training”，但它们代表不同阶段和不同强度的主张。
+
+\begin{knowledgebox}{初始化与优化术语表}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth} L{0.27\textwidth} X}
+\toprule
+术语 & 定义 & 本讲中的作用 \\
+\midrule
+Cold start & 参数从随机分布开始 & 作为常规训练 baseline \\
+Warm start & 参数从数据统计得到的非随机值开始 & 降低初始 loss/困惑度，改善后续轨迹 \\
+Explicit solution & 不用迭代梯度、直接由统计量计算的近似参数 & 初始化 softmax layer 与 SAFFU 组件 \\
+Priming number & 显式解中描述输入 norm/feature 数的归一化量 & 调整共现矩阵的 column translation \\
+Label embedding & 预测目标的低维表示 & 为中间层提供可计算的 hidden targets \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
 \subsection{本章小结}
-治理案例回放展示了 drift gate 的执行流程与低资源 governance 的组合，提醒我们在扩展 SAFU 时同步守住 entropy + fairness 的双重边界。
-\newpage
+
+非随机初始化需要稳定、非负、低维的输入。Bit-cipher 先解决可复现 identity encoding，再让 generalized co-occurrence 有固定坐标系。它不是语义表示的终点，而是 SAFFU 显式 warm start 的前提之一。
+
+\section{显式 softmax warm start：从共现矩阵到参数}
+
+这一章是课程的数学核心。目标不是声称所有 neural network 都有精确闭式解，而是说明：对 non-negative features 和 softmax-activated single layer，可以从输入--输出的 outer products 得到一个近似好初值；再把该思路扩展到 SAFFU 的多个组件。
+
+\subsection{Generalized co-occurrence 不限于词窗计数}
+
+设 $M$ 个样本的输入 feature matrix 为 $H\in\mathbb{R}_{\ge 0}^{M\times D}$，目标为 one-hot 或概率分布 $Y\in\mathbb{R}_{\ge 0}^{M\times N}$。广义共现定义为
+\[
+F(H,Y)=\sum_{m=1}^{M}H_{m,:}\otimes Y_{m,:}=H^\top Y,
+\]
+其中 $F_{j,i}$ 累积第 $j$ 个输入 feature 与第 $i$ 个输出 target 同时出现的强度。它可以来自 token context，也可以来自图像像素、隐藏层输出或其他非负 feature，不要求是传统半径窗口的词频表。
+
+\lecturefigure{slide-07-softmax-cooccurrences.jpg}{Softmax 与 generalized co-occurrence：显式初始化公式}{Stanford Online 官方录像 00:19:13}
+
+对 softmax decoder $U\in\mathbb{R}^{D\times N}$，slide 给出的近似形式可写成
+\[
+U_{j,i}\approx \log\!\bigl(F(H,Y)_{j,i}+\epsilon\bigr)
+-\frac{K-1}{K}\log\!\left(\sum_{d=1}^{D}F(H,Y)_{d,i}+\epsilon\right),
+\]
+其中 $K$ 是 priming number，$\epsilon>0$ 防止数值上对零取 logarithm。第一项保留 feature--target 联结，第二项按输出列归一化高频 target。
+
+\begin{importantbox}{公式直觉：log 在近似逆转 softmax}
+Softmax 使用 exponentials 把 logits 变成概率；显式解对共现强度取 log，相当于把概率尺度拉回 logit 尺度。Column translation 不改变 softmax 对同一输出列的相对结构，却能补偿不同 target 的总体频率。
+\end{importantbox}
+
+\begin{warningbox}{这不是任意 layer 的精确最优解}
+关键假设包括：feature 非负、activation 为 softmax、统计量可稳定估计、输入 norm 可由 $K$ 描述。多层 composition、ReLU/GELU、negative features 与 attention hidden targets 都需要额外推导。
+\end{warningbox}
+
+\teachervoice{00:15:55--00:18:09，讲者强调这里的 co-occurrence 是任意 inputs 与 outputs 的 outer-product sum，不限于传统 NLP 窗口；$K$ 相关项近似表达 context/feature 数对条件概率的修正。}
+
+\subsection{Priming number：feature 数量与 norm 的近似}
+
+若每个输入向量严格 $K$-norm，即 $\|H_{m,:}\|_1=K$，$K$ 可以直接进入归一化。实际连续 feature 往往不满足统一 norm，课程和论文使用平均值
+\[
+\widehat K=\frac{1}{M}\sum_{m=1}^{M}\|H_{m,:}\|_1
+\]
+作为近似。这个估计说明显式解仍需 data-dependent calibration；它并不是完全无超参数的万能初始化。
+
+\begin{knowledgebox}{如何验证 priming-number 近似}
+至少报告 $\|H_m\|_1$ 的分布、均值/方差、零值比例、加入 $\epsilon$ 的位置，以及不同 $K$ 对 validation loss 的敏感度。只给一个平均值无法判断 heavy-tail 或 outlier 是否破坏近似。
+\end{knowledgebox}
+
+\teachervoice{00:31:20--00:32:15，Williams 说非单位 feature 的 priming number 可用平均输入 norm 估计，并坦言 slide 缺少对应图，完整证据应回到论文核查。}
+
+\subsection{从单层到 SAFFU：hidden targets 是难点}
+
+Feed-forward decoder 的输入 $H$ 和 target $Y$ 明确，因此 $F(H,Y)$ 可直接计算。Attention 则没有显式标签告诉模型“第几个位置应该被关注”。团队的扩展思路是先推导 hidden target：让 attention 输出的表示尽量接近上层 $U$ 所期望的输入，再逐层从下往上初始化。
+
+若简化记号为
+\[
+X\xrightarrow{W} A\xrightarrow{} Z=AX
+\xrightarrow{U} H\xrightarrow{O}\hat Y,
+\]
+则 warm start 顺序是：稳定 $X$；由上层需求估计 attention targets 并初始化 $W$；用 $Z$ 与 label embeddings 初始化 $U$；最后用 $H$ 与真实 $Y$ 初始化 $O$。
+
+\begin{warningbox}{Local fit 不等于 compositional optimum}
+逐层显式初始化只利用局部 inputs/targets。Backpropagation 能通过 chain rule 传播最终任务对所有层的高阶影响，因此 warm start 后仍可能需要迭代优化。课程的主张是“更好的起点”，不是“composition 已被闭式求解”。
+\end{warningbox}
+
+\teachervoice{00:18:13--00:20:57，讲者把 attention 的难点定义为没有直接 target vector；团队通过分析上层期望来构造 hidden targets，并借助 bit-cipher label embeddings 把中间目标降到可处理维度。}
+
+\subsection{可执行过程：从全零参数开始累积统计量}
+
+Slide 8 把理论压成一个 warm-start procedure。工程上最重要的并不是公式看起来“closed form”，而是它只需要 forward-style accumulation：遍历数据，累计 outer products，再做 normalization 与 log transform。
+
+\lecturefigure{slide-08-nonrandom-feedforward-init.jpg}{Non-random feed-forward initialization 的计算步骤}{Stanford Online 官方录像 00:21:16}
+
+\begin{lstlisting}[caption={Softmax layer 显式 warm start 的 shape-first 伪代码}]
+F = zeros(feature_dim, target_dim)
+for features, targets in dataset:
+    assert all(features >= 0) and all(targets >= 0)
+    F += features.T @ targets
+
+K_hat = mean_l1_norm(dataset.features)
+column_mass = F.sum(axis=0, keepdims=True)
+weights = log(F + eps) - ((K_hat - 1) / K_hat) * log(column_mass + eps)
+return weights
+\end{lstlisting}
+
+\begin{knowledgebox}{为什么它容易并行}
+每个 worker 可独立累计局部 $F_r=H_r^\top Y_r$，最后求和 $F=\sum_rF_r$。这类似 sufficient statistics 聚合，不需要在每个 mini-batch 后同步完整 gradient trajectory。但内存、数值范围与稀疏存储仍需工程设计。
+\end{knowledgebox}
+
+\teachervoice{00:21:15--00:22:43，Williams 用“所有参数从 zero 开始”强调非随机性：遍历数据累积输入--输出 outer products，随后 normalization 和 logarithm 便给出初值。}
+
+\subsection{本章小结}
+
+显式 warm start 的最强可复现结论是：在特定 softmax、非负 feature 条件下，可以用 generalized log-co-occurrence 计算一个 data-informed initialization。扩展到 SAFFU 需要 hidden targets 与逐层 composition，不能把单层公式无条件推广到现代 Transformer 的所有模块。
+
+\section{Warm start 证据：曲线应该怎样读}
+
+课程用两组实验说明初始化可能跨任务有用：单层语言模型的困惑度轨迹，以及 MNIST 的单层/双层分类。图表的重点是起点和优化路径，而不是宣布新架构已经达到大模型质量。
+
+\subsection{单层语言模型：起点更低，轨迹仍继续改善}
+
+前一章只给出了参数计算方法，本节转向最直接的经验问题：这个 data-informed 初值是否真的比随机起点更接近可用模型？读曲线时先比较 epoch 0 的起点，再比较相同 update rule 下的下降轨迹与 early-stopping 位置；不要先看最终一个点，就忽略 warm-start statistics 本身也有计算成本。
+
+Perplexity（困惑度）是平均 cross-entropy 的指数：
+\[
+\operatorname{PPL}=\exp\!\left(-\frac{1}{T}\sum_{t=1}^{T}\log p(x_t\mid x_{<t})\right).
+\]
+它可直观理解为模型每个 token 面对的“有效候选数”，越低通常越好；但不同 tokenization、数据和 context 设置的 PPL 不能直接横比。
+
+\lecturefigure{slide-09-single-layer-warm-starts.jpg}{单层模型中 warm start 与 cold start 的训练轨迹}{Stanford Online 官方录像 00:24:03}
+
+读图先看 epoch 0：cold start 的 PPL 接近 vocabulary size，warm start 已明显降低。再看斜率和终点：在相同 iterative update 规则下，warm-start 曲线继续下降，并在早期停止时保持更低 PPL。它支持“显式初值改善起点和后续优化”，但没有控制所有现代 Transformer 组件。
+
+\begin{knowledgebox}{读图：这张图没有 self-attention}
+Q\&A 明确说明，这是 concatenated one-hot context 的 feed-forward experiment。输入 feature 已分开，几乎不需要 attention 去解除 superposition。它验证的是 single-layer explicit initialization，不是 SAFFU attention 的完整消融。
+\end{knowledgebox}
+
+\begin{warningbox}{同一 learning rate 不等于完全公平}
+Warm start 和 random start 可能适合不同 learning-rate schedule、regularization 或 early-stopping patience。严谨比较应同时报告 tuned cold baseline、多个 seeds、wall-clock、数据读取与显式统计量计算成本。
+\end{warningbox}
+
+\teachervoice{00:22:47--00:24:24，讲者强调 warm start 在训练前就降低 PPL，之后还沿相同 learning rate 继续改善；若使用 early stopping，也会更早在更低 PPL 处触发。}
+
+\teachervoice{01:07:53--01:09:37，Q\&A 纠正了常见误读：这张 warm/cold 图没有 attention，早期工作只是单层 feed-forward，SAFFU attention 的显式解是后来才补上的。}
+
+\subsection{MNIST：说明 layer-level 公式不只适用于文字}
+
+MNIST pixel 非负，因此同一 softmax layer warm start 可以作用于 image classification。图中 warm-start 单层和双层模型更快达到高 accuracy；但模型没有现代视觉网络的 convolution、normalization 或 augmentation pipeline。
+
+\lecturefigure{slide-10-image-classification-warm-starts.jpg}{MNIST 上的 warm-start 分类曲线}{Stanford Online 官方录像 00:30:45}
+
+\begin{importantbox}{MNIST 结果支持的最小结论}
+显式 softmax initialization 可以接受非语言、非负 feature，并改善该分类设置中的起点。它不证明同一公式已经覆盖 convolution、ViT、diffusion 或真实世界视觉数据。
+\end{importantbox}
+
+\teachervoice{00:29:14--00:31:20，讲者用 MNIST 说明公式的 layer-level generality；他没有声称已经构造完整高性能 vision architecture。}
+
+\teachervoice{01:09:42--01:11:46，Q\&A 进一步限制范围：若要处理 convolution 或其他 activation，仍需为那些 layer 单独推导 warm start，否则随机参数会重新引入噪声。}
+
+\subsection{实验应该补哪些 baseline}
+
+对于这种 initialization 研究，单看最终 accuracy/PPL 不够。至少要拆出四类成本：显式统计量计算、随机 baseline 的 tuning、后续 backpropagation、以及固定/更新 embedding 对缓存的影响。
+
+\begin{knowledgebox}{最小实验矩阵}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth} L{0.24\textwidth} X}
+\toprule
+对比 & 固定项 & 需要报告 \\
+\midrule
+Cold vs warm & architecture、data、optimizer & seeds、初始/最终 loss、wall-clock \\
+Warm only vs warm+tune & initialization statistics & 额外梯度成本与泛化增益 \\
+Frozen vs thawed embeddings & warm-start weights & cache 命中、训练速度、最终质量 \\
+Local explicit vs end-to-end & parameter count & compositional gap 与 failure cases \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Warm start 实验显示更好的起点和优化轨迹，并在 MNIST 上展现有限跨域性。它们验证的是特定 layer 和数据条件，不是“所有深度学习都可被共现矩阵替代”。
+
+\section{Context、multi-context 与 near-shallow caching}
+
+前半讲回答“参数怎样起步”，这一章回答“计算怎样少重复”。课程认为固定超长 context、document packing 与可变长度数据之间存在错配；SAFFU 的矩阵形状允许按 context length 选择参数子块，再结合 frozen embedding 缓存底层 pairwise comparisons。
+
+\subsection{长窗口不自动包含更多有用信息}
+
+固定 context window $K_{\max}$ 的 attention cost 近似
+\[
+C_{\text{attn}}=\Theta(BK_{\max}^{2}d),
+\]
+其中 $B$ 是 batch size，$d$ 是 hidden dimension。如果大多数文档长度 $K_m\ll K_{\max}$，padding token 仍会占矩阵位置。更长窗口增加容量，却不保证每个样本真的提供更多相关 context。
+
+\lecturefigure{slide-11-longer-contexts.jpg}{长窗口是任意工程上限，不等于每个样本都需要同样 context}{Stanford Online 官方录像 00:34:22}
+
+\begin{knowledgebox}{Context 至少有三种含义}
+\textbf{Block context} 是模型一次接收的固定 token 数；\textbf{document context} 是同一文档中真实相关的前后文；\textbf{linguistic/radial context} 是围绕目标 token 的统计邻域。把三者都叫 context，会掩盖 padding、packing 和建模假设的差异。
+\end{knowledgebox}
+
+\teachervoice{00:32:20--00:34:55，Williams 认为更长窗口会显著增加成本，却不必然带来更多信息；context complexity 应由数据承载的信息决定，而不是由单一 block size 决定。}
+
+\subsection{Multi-context SAFFU：为不同长度准备参数分支}
+
+上一节已经说明固定最大窗口会让短样本支付无效 quadratic work；multi-context design 的回答不是把所有文档硬塞进同一 block，而是让模型根据样本长度选择最小可容纳分支。读架构图时先比较各 branch 的 context width 和参数共享位置，再看它们如何汇入同一个输出空间。课程为不同 context widths $b\in\mathcal B$ 配置 $W_b,U_b$，最后映射到共享输出。若样本长度为 $K_m$，选择满足 $b\ge K_m$ 的最小分支，可写成
+\[
+b^*(m)=\min\{b\in\mathcal B:b\ge K_m\},
+\]
+\[
+\hat y_m=\operatorname{softmax}\!\left(
+\operatorname{softmax}(x_{m,h}W_{b^*}X_m^\top)X_mU_{b^*}O
+\right).
+\]
+
+\lecturefigure{slide-12-multicontext-design.jpg}{Multi-context SAFFU：按 context width 选择分支}{Stanford Online 官方录像 00:36:29}
+
+\begin{importantbox}{动态分支的收益与代价}
+收益是短样本不必支付最长窗口的完整 quadratic cost；代价是要维护多组参数或可切片参数、构造 length-aware batches，并确保不同分支输出落在兼容表示空间。
+\end{importantbox}
+
+\begin{lstlisting}[caption={Length-aware dynamic context batching 伪代码}]
+lengths = measure_document_lengths(dataset)
+buckets = bucket_by_supported_context(lengths, widths=[128, 256, 512, 1024])
+
+for width, batch in buckets:
+    x = pad_only_to(batch, width)
+    weights = saffu_parameters.for_width(width)
+    loss = language_model_loss(x, weights)
+    update_trainable_layers(loss)
+\end{lstlisting}
+
+\teachervoice{00:34:55--00:37:34，讲者解释 multi-context branch 的关键是 modified attention matrix 可按长度取参数子集；标准低维 Q/K projection 并不自然对应这种切片。}
+
+\subsection{Embedding brittleness：唯一编码不等于相关表示}
+
+Bit-cipher 的唯一性使初始化可复现，但两词共享若干 bits 不一定等价于语义相关。课程提出利用 radial co-occurrence 改善 embedding：围绕 token 的不同半径统计共同出现，再把这些相关性聚合到 deterministic code 上。
+
+\lecturefigure{slide-13-embedding-brittleness.jpg}{从 bit identity 走向 radial co-occurrence embedding}{Stanford Online 官方录像 00:37:34}
+
+可将第 $r$ 个 radius 的共现矩阵记为 $B^{(r)}$，一种抽象聚合形式是
+\[
+E_i=\operatorname{normalize}\!\left(
+\operatorname{concat}_{r\in\mathcal R}
+\sum_j B^{(r)}_{i,j}e_j
+\right).
+\]
+这里 $e_j$ 是 bit-cipher identity vector，$E_i$ 才吸收局部统计关系。实际论文中的 aggregation 与 weighting 需按实现复现，不能由本式替代。
+
+\begin{warningbox}{不要把“可解释 bit”误当成语义轴}
+单个 bit 的开关规则由编码算法决定，不必对应 noun、tense、sentiment 等人类概念。语义是否形成，应通过 probing、nearest neighbors 与下游任务验证。
+\end{warningbox}
+
+\teachervoice{00:37:34--00:39:41，讲者指出 naive bit assignment 虽然稳定，却不能消除 embedding brittleness；需要 radial co-occurrence 等统计把相关性重新注入表示。}
+
+\subsection{Caching comparisons：速度收益的核心条件}
+
+若 embedding matrix $E$ 固定，第一层 context comparisons
+\[
+C_{i,j}=e_i^\top e_j
+\]
+只由 token identities 决定，可以离线预计算到 lookup table。训练或推理时根据 token IDs 直接读取 $C$，再应用 $W$ 和 softmax。这样省去重复 dot products，但不省后续 weighting、aggregation 和上层网络。
+
+\lecturefigure{slide-14-caching-vector-comparisons.jpg}{冻结 embedding 后缓存第一层 vector comparisons}{Stanford Online 官方录像 00:39:41}
+
+\begin{importantbox}{Cache invalidation rule}
+只要 embedding 更新为 $E'\neq E$，旧缓存 $C=EE^\top$ 就不再等于 $E'E'^\top$。因此训练阶段要么冻结 embedding，要么周期性重建 cache，并把重建成本计入总训练时间。
+\end{importantbox}
+
+\begin{knowledgebox}{内存层级不能省略}
+完整 $V\times V$ comparison table 可能远大于 embedding 本身，不能默认全部驻留内存。实现需要稀疏/分块缓存、按 batch gather，或只缓存高频 pair。CPU DRAM（Dynamic Random-Access Memory，主存）容量较大但延迟高；GPU HBM（High Bandwidth Memory，高带宽显存）更快但更昂贵；片上 SRAM（Static Random-Access Memory，缓存/共享存储）最快却最小。
+\end{knowledgebox}
+
+\teachervoice{00:39:41--00:41:48，Williams 把缓存描述为 near-shallow 的主要成本节省：embedding 不更新时，底层 comparisons 可预计算；一旦 vectors thaw 并更新，缓存假设就失效。}
+
+\subsection{Packing 与 dynamic context：效率技术不等于 context model}
+
+Packing 把多个短文档放入同一长 block，并用 mask 防止跨文档 attention。它减少 padding 和 batch 数，但仍构造长度 $K_{\max}$ 的 quadratic matrix。Dynamic context 则让短文档进入更短 branch，近似成本
+\[
+C_{\text{dynamic}}\propto \sum_{m=1}^{B}K_m^2d,
+\qquad
+C_{\text{fixed}}\propto BK_{\max}^2d.
+\]
+
+\lecturefigure{slide-15-packing-contexts.jpg}{Packing、padding 与动态 context 的取舍}{Stanford Online 官方录像 00:42:14}
+
+\begin{warningbox}{课程没有给出 matched packing benchmark}
+Dynamic context 是否更快，取决于 kernel efficiency、bucket fragmentation、batch size、mask implementation 和硬件。讲者在 Q\&A 明确说尚未与大型模型中的 oracle packing 做直接对照，因此这里只能保留机制分析与研究判断。
+\end{warningbox}
+
+\teachervoice{00:42:38--00:45:55，讲者认为 packing 用无关文档填满窗口，是有效率但不忠实的 context 组织；dynamic length batching 让短文档只使用更小参数子集。}
+
+\teachervoice{01:16:20--01:19:00，Q\&A 进一步承认没有进行 matched large-model comparison；packing 与 dynamic blocks 的相对收益仍需要专门实验。}
+
+\subsection{本章小结}
+
+Near-shallow 效率来自两件事：按真实长度减少无效 quadratic work，以及在 embedding 固定时复用底层 comparisons。两者都不是免费优化；动态分支增加模型与 batching 复杂度，缓存则引入容量和失效问题。
+
+\section{Precision Language Models：配置、训练阶段与速度}
+
+课程把使用 SAFFU、显式初始化和少量数据训练的系统称为 Precision Language Models。这里的 precision 强调“对参数起点和任务数据更有针对性”，不是数值精度 FP16/BF16。读配置表时要同时看 vocabulary、embedding、context、parameter count、token budget 与硬件，不能只看模型昵称。
+
+\subsection{Big 与 potato：两个目标完全不同的 reference points}
+
+Big configuration 使用约 16K token vocabulary、约 2K context 与约 50M parameters，在旧 12GB Titan V GPU 上训练；potato configuration 使用约 1K token vocabulary、短 context 与约 150K parameters，在 Le Potato CPU 和 2GB RAM 上实时训练。前者测试语言建模规模，后者测试本地 scratch learning。
+
+\lecturefigure{slide-16-plm-configs.jpg}{Precision language models 的 big 与 potato reference configurations}{Stanford Online 官方录像 00:46:08}
+
+\begin{knowledgebox}{PLM 不是数值 precision}
+本讲的 PLM 是团队给一类模型的名称，不是 mixed precision、FP8 或 quantization。若文档只写“precision model”，必须说明这是 architecture/training label，避免与 numerical precision 混淆。
+\end{knowledgebox}
+
+\begin{warningbox}{“实时训练”必须绑定硬件与任务}
+Potato 的实时指本地 binary switch task，模型、词表、context 和数据都很小；它不能外推为在 2GB RAM 上实时训练通用对话模型。
+\end{warningbox}
+
+\teachervoice{00:46:14--00:49:04，Williams 说团队尚不清楚架构在 trillions of tokens 或 RLHF 下会怎样；potato 的目标是利用小数据稳定性，探索传统大模型不强调的 edge scratch-training 能力。}
+
+\subsection{从 micro 到 mega：表格的真正用途是资源审计}
+
+配置表给出多种 vocabulary、context、embedding/hidden dimensions 和 total parameters。它的价值不是宣称每一行都已充分训练，而是展示参数如何随宽度和 context 增长，并为后续 small/medium stress tests 提供命名。
+
+\lecturefigure{slide-17-saffu-size-table.jpg}{SAFFU/PLM 不同规模的参数与 token 配置}{Stanford Online 官方录像 00:48:22}
+
+若一条 branch 的主要矩阵近似为 $W\in\mathbb{R}^{d\times d}$、$U\in\mathbb{R}^{d\times h}$、$O\in\mathbb{R}^{h\times V}$，总参数可粗略写成
+\[
+P\approx Vd+d^2+dh+hV+P_{\text{other}}.
+\]
+随着 vocabulary $V$ 与 hidden $h$ 增大，embedding/output 往往成为主要项；随着多 context branches 增加，$W_b,U_b$ 也会重复或扩展。
+
+\begin{knowledgebox}{配置表要补的四本账}
+\begin{enumerate}
+  \item 参数量：哪些矩阵共享，哪些按 context branch 复制？
+  \item 训练 token：warm start、frozen stage、thawed stage 各看多少数据？
+  \item 内存：weights、optimizer state、activations、cache 各占多少？
+  \item 时间：统计量构建、backpropagation、cache rebuild 与 evaluation 是否都计入？
+\end{enumerate}
+Optimizer state（优化器状态）指 Adam/AdamW 的一阶矩 $m$ 与二阶矩 $v$ 等额外张量，它们会显著增加训练内存；不能只按参数文件大小估算。
+\end{knowledgebox}
+
+\subsection{Medium PLM：warm、freeze、thaw 三阶段}
+
+Medium experiment 使用约 12M parameters 和 BabyLM 100M-token scale。Slide 的三阶段是：先用部分数据构建 warm start；再冻结 vectors，用大部分数据快速训练其余参数；最后 thaw vectors，以更小 learning rate 联合微调。
+
+\lecturefigure{slide-18-medium-plm-training.jpg}{Medium PLM 的 warm-start、frozen-vector 与 thawed-vector 训练动态}{Stanford Online 官方录像 00:49:09}
+
+可抽象成
+\[
+\theta^{(0)}=\operatorname{ExplicitInit}(D_{\text{warm}}),
+\]
+\[
+\theta^{(1)}=\operatorname{Train}(D_{\text{main}},\theta^{(0)};E\ \text{frozen}),
+\]
+\[
+\theta^{(2)}=\operatorname{FineTune}(D_{\text{tail}},\theta^{(1)};E\ \text{trainable}).
+\]
+
+\begin{importantbox}{Freeze 与 thaw 的系统含义}
+Freeze embedding 不仅减少 gradient/optimizer memory，也保证 comparison cache 有效；thaw 允许表示适应最终任务，却需要重新计算 comparisons，并可能改变前面显式解对应的 feature distribution。
+\end{importantbox}
+
+\teachervoice{00:49:09--00:51:35，讲者把 BabyLM 100M tokens 解释为 developmentally plausible exposure，并说冻结 vectors 同时提高训练速度与缓存稳定性，最后 thaw 则用额外成本换最终质量。}
+
+\subsection{How fast：headline 比较必须拆开条件}
+
+Slide 把 GPT-2 在 8 张 A100 上约 100 小时的粗略数字，与 medium PLM 在旧 Titan V 上约 18 tokens/hour 的进度放在一起。两者 context、vocabulary、implementation、目标质量和数据流程并未严格匹配，因此只能读成 motivation，而非公平 benchmark。
+
+\lecturefigure{slide-19-plm-training-speed.jpg}{PLM 训练速度的课堂粗略参照}{Stanford Online 官方录像 00:53:21}
+
+一个更完整的时间账本应写成
+\[
+T_{\text{total}}=T_{\text{stats}}+T_{\text{cache}}
++T_{\text{backprop}}+T_{\text{rebuild}}+T_{\text{eval}},
+\]
+而不是只报告主训练 loop。若显式统计量和 cache 在数据预处理阶段完成，它们仍是训练系统成本。
+
+\begin{warningbox}{不要传播“32 倍容量所以 32 倍速度”}
+GPU theoretical throughput、model FLOPs utilization、memory bandwidth、batch size 和 kernel maturity 都会改变 wall-clock。课堂 slide 的硬件比例不能替代 profiler 或 matched implementation。
+\end{warningbox}
+
+\teachervoice{00:52:48--00:54:10，讲者用 GPT-2/A100 作为直觉参照；讲义应保留其 rough comparison 身份，而不能把它改写成严格 speedup。}
+
+\subsection{Small PLM 能做什么：先区分 fit 与 transfer}
+
+团队到课堂时主要 stress-test 到约 1B tokens，且很多实验只使用几十万到几千万 tokens。小模型能快速降低训练 loss，说明初始化稳定；但真正关键的问题是能否在 application data 上学到可迁移规则，而不只是记住本地样本。
+
+\lecturefigure{slide-20-small-plm-capabilities.jpg}{Small PLM 的核心研究问题：能否从应用数据直接学习}{Stanford Online 官方录像 00:54:16}
+
+\begin{warningbox}{Small-data fit 不等于 general language ability}
+训练集 PPL 很低可能来自 memorization。至少需要 held-out users、未见表述、噪声 ASR、任务外输入与时间漂移测试，才能判断模型是否学到稳健 directive semantics。
+\end{warningbox}
+
+\teachervoice{00:41:57--00:42:33，Williams 主动区分“很快学会几千 tokens”与“成为广泛会说话的语言模型”；前者是观测，后者没有由小数据结果证明。}
+
+\teachervoice{00:54:16--00:55:21，讲者把 application-only transfer from scratch 作为开放问题，而不是已经解决的能力。}
+
+\subsection{本章小结}
+
+PLM 配置跨越 tiny controller 到中型 language model，但每一档都依赖不同词表、context、数据与硬件。真正可重复的训练叙事是 warm--freeze--thaw；速度 headline 只有在完整计入 statistics、cache 和 evaluation 后才有工程意义。
+
+\section{Application-only edge learning：让本地开关自己收集数据}
+
+课程后半把抽象架构落到一个极小任务：语音控制开关。目标不是做一个通用 assistant，而是验证模型能否在 air-gapped 环境中从零收集本地 user data、学习 binary action，并在 microprocessor 上完成训练与推理。
+
+\subsection{不用通用 pretraining：任务数据从哪里来}
+
+Application-only pipeline 从用户真实交互构造监督数据。系统监听语音、做 automatic speech recognition（ASR，自动语音识别）、在模型不确定时让用户实际操作开关，再把 transcript 与 action 配对。它避免先收集大规模指令语料，但必须处理错误 transcription、label delay 与行为分布极窄的问题。
+
+\lecturefigure{slide-21-application-only-training.jpg}{只用应用交互数据训练 PLM 的整体流程}{Stanford Online 官方录像 00:55:21}
+
+\begin{importantbox}{Air-gapped 的准确含义}
+Air-gapped 指设备训练/推理不依赖网络连接，数据不离开本地环境。它不自动等于安全：麦克风权限、固件更新、物理访问、模型文件和日志仍需威胁建模。
+\end{importantbox}
+
+\teachervoice{00:55:21--00:58:34，讲者把任务拆成 listen、transcribe、operate、learn：没有现成 generic pretraining，label 来自用户在需要时实际拨动开关。}
+
+\subsection{Self-supervised interaction：这里的“self”来自环境反馈}
+
+Slide 使用 self-supervised 一词，但严格说系统仍得到 action labels；只是标签由本地交互自然产生，而非事先人工标注 corpus。设 transcript feature 为 $x_t$，用户动作 $y_t\in\{0,1\}$，可用 binary cross-entropy
+\[
+\mathcal L_t=-y_t\log p_\theta(y_t=1\mid x_t)
+-(1-y_t)\log\bigl(1-p_\theta(y_t=1\mid x_t)\bigr).
+\]
+
+\lecturefigure{slide-22-self-supervised-voice.jpg}{语音交互任务的 listen--transcribe--operate--learn 分解}{Stanford Online 官方录像 00:56:53}
+
+\begin{warningbox}{ASR error 会成为 label noise}
+用户说的是一个句子，模型训练看到的是 ASR transcript。如果转写错了但动作标签正确，数据对会把错误文本绑定到动作。评估必须记录 word error rate、口音/噪声条件，并保留原音频或可审计的对齐信息。
+\end{warningbox}
+
+\subsection{Smart data collection：只在信息不足时请求动作}
+
+上一节只列出 listen、transcribe、operate、learn 四个组件，本节把它们组织成会主动获取标签的闭环。关键问题不是“麦克风怎样录音”，而是何时相信模型预测、何时向用户或物理开关索取监督，以及新样本怎样回流而不放大旧错误。系统不是被动等待固定 dataset，而是在交互中形成一个 local active-learning loop：模型听到指令后给出预测；若 confidence 低或用户纠正，就请求或观察真实动作并加入训练集。
+
+\lecturefigure{slide-23-smart-data-collection.jpg}{用户、麦克风、ASR、模型与开关形成的本地学习闭环}{Stanford Online 官方录像 00:58:34}
+
+\begin{lstlisting}[caption={本地语音开关的交互学习状态机}]
+while device_is_on:
+    audio = microphone.listen()
+    transcript = asr.transcribe(audio)
+    action, confidence = model.predict(transcript)
+
+    if confidence < threshold or user_overrides(action):
+        label = observe_physical_switch()
+        local_dataset.append(transcript, label)
+        model.update(local_dataset.recent_examples())
+    else:
+        controller.execute(action)
+\end{lstlisting}
+
+\begin{knowledgebox}{Online learning 的三个风险}
+\begin{enumerate}
+  \item \textbf{Feedback loop：}模型错误可能影响用户行为，随后又被当作新数据。
+  \item \textbf{Catastrophic forgetting：}只训练近期命令可能忘掉早期表达。
+  \item \textbf{User drift：}说话方式、环境噪声和设备用途会随时间改变。
+\end{enumerate}
+课堂没有给出这些问题的完整解法，因此复现时必须额外设计 replay、holdout 与 rollback。
+\end{knowledgebox}
+
+\teachervoice{00:58:34--01:00:10，Williams 把数据收集描述为交互闭环：系统本地监听和转写，只有需要监督时才让用户操作，从而逐步积累 directive/action pairs。}
+
+\subsection{Dialogue representation：把 binary action 写成语言序列}
+
+交互闭环解决了标签从哪里来，接下来还要决定数据以什么形式进入模型。课程没有为开关单独设计一个完全不同的 classifier，而是把用户命令和设备动作串成 dialogue，让同一 character/token language model 读取 utterance 并预测结构化 action token。读 Slide 24 时应先找输入/输出边界，再判断这种统一格式带来的扩展性是否值得额外序列开销。该表示也可能浪费容量在固定模板文本上。
+
+\lecturefigure{slide-24-dialogue-data.jpg}{开关交互被表示成 user/device dialogue}{Stanford Online 官方录像 01:02:15}
+
+可抽象成序列
+\[
+s_t=[\texttt{USER}:u_t,\ \texttt{DEVICE}:a_t],
+\]
+其中 $u_t$ 是 transcript，$a_t\in\{\texttt{ON},\texttt{OFF},\texttt{NOOP}\}$。若目标只是控制，直接 classifier 更轻；若未来要生成 clarification 或 reply，dialogue formulation 才提供扩展空间。
+
+\begin{warningbox}{Binary switch 不等于 general dialogue}
+模型只需在极窄 action space 中预测 ON/OFF/NOOP。命令表述多样性可以很高，但输出复杂度仍远低于开放式语言生成。
+\end{warningbox}
+
+\subsection{Potato 与 orange：edge 配置仍需完整系统账本}
+
+课堂给出两种小配置。Potato 使用更小 vocabulary/embedding/context，在 Le Potato 上训练；orange 稍大，目标是降低 latency 并提高预测。表中参数量只是 weight count，还需加入 ASR、audio buffering、runtime 与模型更新内存。
+
+\lecturefigure{slide-25-potato-configs.jpg}{Potato 与 orange PLM 的 edge configuration}{Stanford Online 官方录像 01:02:38}
+
+\begin{knowledgebox}{Edge controller 的端到端 latency}
+\[
+T_{\text{interaction}}=T_{\text{audio}}+T_{\text{ASR}}+T_{\text{model}}
++T_{\text{controller}}+T_{\text{actuator}}.
+\]
+只优化 $T_{\text{model}}$ 不一定让用户感觉更快。课堂演示的多秒延迟可能主要来自 transcription、CPU inference 或串行调用，需要 profiler 分解。
+\end{knowledgebox}
+
+\teachervoice{01:00:10--01:02:48，讲者说明最小 character-level potato PLM 大约用 20 分钟交互学会 directives；更大配置能提高预测，却增加资源和响应成本。}
+
+\subsection{Emergent positive performance：样本够了才出现可用预测}
+
+结果表显示早期数据不足时，positive/negative predictions 接近无意义；积累到一定交互量后，正确 action prediction 明显上升。这里的 emergence 是一个小任务的 sample-threshold phenomenon，不是大模型 benchmark 中的跨任务 emergent ability。
+
+\lecturefigure{slide-26-emergent-positive-performance.jpg}{随本地交互样本增加出现的开关预测能力}{Stanford Online 官方录像 01:02:48}
+
+\begin{importantbox}{如何验证不是 class imbalance 假象}
+报告 ON/OFF/NOOP 每类样本数、balanced accuracy、precision/recall、confusion matrix、按用户拆分的 holdout，以及 never-seen paraphrases。若多数时候开关保持不变，单看 accuracy 可能被 majority class 放大。
+\end{importantbox}
+
+\teachervoice{01:02:48--01:04:08，Williams 说一开始没有足够数据时模型几乎无从预测；样本积累后能力会跳升。但 Le Potato 每次交互仍需数秒，prototype 可行却令人等待。}
+
+\subsection{Where next：可行性之后还有很长工程路径}
+
+最后一张教学 slide 把本地 PLM 视为 edge-trainable controller。未来包括设备 talk-back、更一般的 phone actions、传统 attention 与 SAFFU 的 hybrid、改进 bit-cipher、不同 layer warm starts、larger evaluation 和 BabyLM challenge。
+
+\lecturefigure{slide-27-where-next.jpg}{从 binary switch 走向更一般本地控制器的开放议程}{Stanford Online 官方录像 01:04:12}
+
+\begin{warningbox}{课堂结束时仍没有公开实现}
+Q\&A 说代码要等论文和 evaluation infrastructure 完成后再发布。任何复现都不能假设存在成熟 SDK、标准 benchmark adapter 或可直接下载的 checkpoint。
+\end{warningbox}
+
+\teachervoice{01:04:11--01:06:50，讲者把 binary switch 称为起点，不是终点；conversation role、phone actions、hybrid attention、better bit-cipher、larger models 与标准评测都还是 work in progress。}
+
+\teachervoice{01:19:02--01:19:41，最终 Q\&A 说明公开 SAFFU implementation 当时尚不存在，主要阻碍是非标准 architecture 所需的 evaluation functions 还未建设完成。}
+
+\subsection{本章小结}
+
+Le Potato 实验说明极小任务可以在本地从交互数据起步，并在约 20 分钟内出现有用 prediction。它同时暴露了真实限制：ASR noise、窄 action space、class balance、multi-second latency、没有标准 evaluation 和没有公开实现。
+
+\section{Q\&A 延伸：适用范围、数学假设与未完成比较}
+
+Q\&A 没有新增独立 slide，却补齐了正文最容易被夸大的四个边界：warm-start evidence 的 architecture、非 softmax layer 的覆盖、non-negative assumption，以及 packing comparison 的缺失。
+
+\subsection{Mixed modalities 可以想象，但每种 layer 都要满足条件}
+
+若 image features 与 text features 都经过非负处理，并进入 softmax layer，同一 generalized co-occurrence 形式在数学上可以累计 mixed inputs。可写成
+\[
+H_m=\operatorname{concat}(H_m^{\text{image}},H_m^{\text{text}}),
+\qquad F=H^\top Y.
+\]
+但真实 multimodal model 还含 convolution/vision encoder、normalization、projection、cross-attention 等组件，不能只初始化最后一层就声称完整模型被显式优化。
+
+\teachervoice{01:14:33--01:15:25，讲者认为 mixed non-negative features 可共享同一 softmax warm start，因此 image captioning 在概念上可能；这只是可推导方向，不是已完成系统。}
+
+\subsection{Non-negativity 为什么不是实现细节}
+
+公式含 $\log F_{j,i}$。若 feature 有负值，outer-product sums 可能为负，log 不再对应概率或共现强度。可以通过 feature splitting、positive transform 或另行推导处理，但每种选择都会改变统计意义和最优条件。
+
+\begin{importantbox}{非负假设的直接检查}
+在实现显式初始化前，先检查 feature minimum、negative fraction、zero columns 和 column mass。不要在出现负数后静默取 absolute value；那会改变方向信息且不再对应原推导。
+\end{importantbox}
+
+\teachervoice{01:15:29--01:16:14，Williams 用“negative value 进入 logarithm 会发生什么”回答假设来源，并明确说负 feature 需要新的 derivation，而不是小修补。}
+
+\subsection{标准 attention、SAFFU 与 concatenation 的适用场景}
+
+三种机制解决不同问题。Concatenation 保留每个位置的独立 feature slot，几乎不需重新加权，但维度随 context 线性增长；standard attention 把不同位置 superpose 后再学习选择；SAFFU 直接变换 comparison matrix，并围绕该矩阵做显式初始化与缓存。
+
+\begin{knowledgebox}{三种 context 表示对照}
+\begin{tabularx}{\textwidth}{L{0.19\textwidth} L{0.25\textwidth} X}
+\toprule
+方式 & 优点 & 主要代价/限制 \\
+\midrule
+Concatenation & 位置信息完全分离、易做单层实验 & 维度随 context 增长，不适合长序列 \\
+Standard attention & 灵活 projection、多头、适配不同表示 & 随机参数多，quadratic comparisons \\
+SAFFU proposal & 可显式初始化、可缓存固定比较 & 强假设、非标准实现、composition 未完全解决 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Q\&A 把课程从“惊人的效率故事”拉回可验证边界：实验不全是 attention，跨 layer type 需要新推导，negative features 破坏当前 log 公式，packing 比较尚未完成，软件也仍在建设。
 
 \section{总结与延伸}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}p{5cm}}
-\toprule
-主题 & 关键收获 & 延伸行动 \\
-\midrule
-架构拆分 & attention 的“比较”可以预计算，前馈负责语义变换 & 在边缘设备上试 SAFU，重点打通 cached matrix pipeline \\
-效率与训练 & 冷启动 + label drift gate 让小数据也能收敛 & 把 label quality gate 纳入 RLHF 流程，扩大 human eval coverage \\
-评估与治理 & 需要重新搭 evaluation stack，entropy + heatmap 提供可解释性 & 监控 drift threshold，打造落地闭环 dashboard \\
-部署与可持续 & attention map 监控 + config 回滚让上线更安全 & 复制热/冷 head 策略到其他 transformer 项目 \\
-硬件与压缩 & 缓存保持高精度，FFN 量化降低能耗 & 在更多 ARM/edge 环境验证 cache-aware scheduling \\
-复现与知识共享 & chunk gating journal、drift log pipeline 与 newsletter 形成复现链路 & 让新同学通过 wiki/newsletter 快速接替项目 \\
-\bottomrule
-\end{tabular}
-\caption{本讲主要技术模块与下一步行动}
-\end{table}
 
-\subsection{拓展阅读}
-\begin{itemize}
-    \item Williams et al., ``Self-Attentive Feed-forward Units in Near-Shallow Architectures,'' 2024 预印本。
-    \item Zipf, ``Human Behavior and the Principle of Least Effort,'' 1949。
-    \item Vaswani et al., ``Attention Is All You Need,'' NeurIPS 2017。
-    \item Kaplan et al., ``Scaling Laws for Neural Language Models,'' 2020。
-    \item Hoffmann et al., ``Training Language Models to Follow Instructions,'' 2022。
-    \item Brown et al., ``Language Models are Few-Shot Learners,'' 2020。
-    \item Hendrycks et al., ``Aligning AI with Complex Goals,'' 2023。
-\end{itemize}
+这堂课最值得保留的不是某个 speedup headline，而是一套把 architecture、statistics 与 systems 连起来的思考方式：如果能从数据统计得到可解释初值，就可能减少随机训练；如果底层表示固定，就可能缓存重复比较；如果任务极窄且数据本地生成，就可能把训练移到 edge。每一步都带来新约束，不能只取收益、丢掉前提。
 
-\subsection{关键词速记}
-\begin{itemize}
-    \item Chunk gating：预设 chunk 类型、token budget 与 overlap，形成 deterministic scheduling。
-    \item Drift gate：基于 attention entropy 与 head variance，当下降超过阈值即自动切换 fallback。
-    \item Attention cache snapshot：输出 precomputed attention matrix 与 entropy，用于 drift 比对与 human eval。
-    \item Knowledge pipeline：wiki/newsletter/transcripts 形成团队共享的治理与复现知识。
-\end{itemize}
+\subsection{三层压缩：初始化、计算复用与本地数据闭环}
 
-\begin{knowledgebox}{关键词速记的实践意义}
-把 chunk gating、drift gate、cache snapshot 与 knowledge pipeline 作为项目核心术语，可以让新成员快速掌握 SAFU 的 operational playbook。
-\end{knowledgebox}
+第一层是 initialization：bit-cipher 提供 deterministic non-negative representation，generalized co-occurrence 为 softmax layer 提供 warm start。第二层是 computation reuse：frozen embeddings 使 pairwise comparisons 可缓存，dynamic context 避免短样本支付最长窗口成本。第三层是 data loop：edge controller 从真实交互中采集 transcript/action pairs，用窄任务换取少数据可学性。
 
-\subsection{行动路线图}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{5cm}p{3.5cm}p{3.5cm}}
-\toprule
-阶段 & 核心任务 & 负责人 & 目标时长 \\
-\midrule
-短期 (1 个月) & 稳定 chunk gating + drift gate 与 monitoring 模板 & Engineering & 4 周 \\
-中期 (2–3 个月) & 在 lower-resource 语言/edge 上验证 hardware + cache scheduling & Research & 8 周 \\
-长期 (半年) & 把 RLHF + governance pipeline 融入 SAFU，产出治理 score & Governance & 6 个月 \\
-\bottomrule
-\end{tabular}
-\caption{SAFU 项目行动路线图}
-\end{table}
-
-\begin{importantbox}{路线图的执行要点}
-保持 chunk gating journal 与 drift log pipeline 更新，hardware team 负责 cache-aware scheduling，governance team 每月 review attention observability board。
+\begin{importantbox}{课程的最小可信结论}
+\begin{enumerate}
+  \item 对满足假设的 softmax layer，data-derived warm start 可以优于随机起点。
+  \item Warm start 后的 iterative training 仍有价值，尤其对多层 composition 和最终表示适配。
+  \item Fixed representations 让部分比较可缓存，但 cache、内存与 invalidation 必须计入系统成本。
+  \item Tiny local controller 可以从应用交互学习窄 action，但不能据此推出通用对话能力。
+\end{enumerate}
 \end{importantbox}
 
-\subsection{本章小结}
-从计量语言学视角出发，SAFU 展示了“attention 可预计算”的可行性；在 small data、低资源场景中保持可解释与治理闭环，能让这种架构走向“负责任的 Transformer”实践。
+\subsection{复现实验 checklist}
+
+复现这类工作时，最容易遗漏的是假设与额外成本。下面的 checklist 应和结果图一起发布。
+
+\begin{lstlisting}[caption={SAFFU/PLM 复现与发布清单}]
+record_official_architecture_and_parameter_shapes()
+verify_nonnegative_features_and_softmax_activation()
+publish_explicit_initialization_formula_and_epsilon()
+report_priming_number_distribution_and_sensitivity()
+separate_stats_cache_backprop_and_evaluation_time()
+compare_tuned_cold_warm_frozen_and_thawed_baselines()
+document_cache_size_location_hit_rate_and_invalidation()
+evaluate_heldout_users_paraphrases_noise_and_class_balance()
+report_end_to_end_edge_latency_not_model_latency_only()
+publish_code_data_splits_seeds_and_failure_cases()
+\end{lstlisting}
+
+\begin{warningbox}{看到“无需 pretraining/backprop”时立即追问}
+是哪一层无需？显式统计量用了多少数据？后续是否仍做 gradient tuning？Embedding 是否冻结？测试是 training fit 还是 held-out generalization？Unsupported layers 是否随机初始化？若这些问题没有答案，headline 远大于证据。
+\end{warningbox}
+
+\subsection{自测问题}
+
+\begin{multicols}{2}
+\small
+\begin{enumerate}
+  \item 标准 $QK^\top$ attention 与 $XWX^\top$ 在参数化上有什么关系？
+  \item 为什么 SAFFU 仍然是有参数 attention，而不是无参数相似度？
+  \item Near-shallow 描述的是 depth，还是在线更新/计算依赖？
+  \item Bit-cipher 为什么需要 $b\ge\lceil\log_2(V+1)\rceil$？
+  \item Generalized co-occurrence $H^\top Y$ 与传统词窗共现有什么不同？
+  \item 显式 softmax solution 为什么需要 non-negative features？
+  \item Priming number $K$ 在公式中修正什么？
+  \item 为什么 attention 的 hidden targets 比 decoder targets 更难获得？
+  \item Warm-start PPL 图为什么不能直接证明 SAFFU attention 更好？
+  \item MNIST 结果能证明什么，又不能证明什么？
+  \item Frozen embedding 为什么同时影响训练速度和 cache correctness？
+  \item Packing 与 dynamic context 分别减少哪种浪费？
+  \item PLM 的 precision 为什么不是 FP16/BF16？
+  \item Warm--freeze--thaw 三阶段各自优化什么？
+  \item Le Potato 的端到端 latency 包含哪些组件？
+  \item Binary switch accuracy 为什么可能被 class imbalance 误导？
+  \item 哪些结论在课堂结束时仍只是 future work？
+\end{enumerate}
+\end{multicols}
+
+\subsection{拓展阅读}
+
+\begingroup
+\small
+\setlength{\itemsep}{2pt}
+\begin{itemize}
+  \item Williams and Zhao, \href{https://arxiv.org/abs/2311.07510}{\emph{Explicit Foundation Model Optimization with Self-Attentive Feed-Forward Neural Units}}：SAFFU 架构、显式初始化与 ablation 主论文。
+  \item Williams and Zhao, \href{https://arxiv.org/abs/2311.07498}{\emph{Reducing the Need for Backpropagation and Discovering Better Optima With Explicit Optimizations of Neural Networks}}：单层 softmax 显式解、MNIST 与 local multi-layer warm start。
+  \item Zhao and Williams, \href{https://arxiv.org/abs/2311.11012}{\emph{Bit Cipher}}：deterministic bit vectors、co-occurrence aggregation 与 transfer experiments。
+  \item Williams and Heidenreich, \href{https://arxiv.org/abs/2205.00148}{\emph{To Know by the Company Words Keep and What Else Lies in the Vicinity}}：Word2Vec softmax、co-occurrence factorization 与 radial context 动机。
+  \item Frankle and Carbin, \href{https://arxiv.org/abs/1803.03635}{\emph{The Lottery Ticket Hypothesis}}：理解本讲“减少随机抽奖”动机的原始背景，但不要把它当作 SAFFU 的实验结论。
+  \item Warstadt et al., \href{https://arxiv.org/abs/2310.00915}{\emph{Findings of the BabyLM Challenge}}：检查 developmentally plausible data scale 与标准 evaluation 的具体要求。
+\end{itemize}
+\endgroup
 
 \end{document}

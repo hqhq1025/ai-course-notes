@@ -1,786 +1,879 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{%
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners%
-}
-\newtcolorbox{importantbox}[1]{%
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners%
-}
-\newtcolorbox{warningbox}[1]{%
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners%
+\renewcommand{\notetitle}{Lecture 27：从 Scaling Intuition 到 Transformer 架构演化}
+\renewcommand{\noteauthors}{基于 Jason Wei 与 Hyung Won Chung 课堂讲座、两份官方 deck 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V4 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2024-04-11；上传 2024-05-06}
+\renewcommand{\videoduration}{1:17:07}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=3gb-ZkVRemQ}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-\newcommand{\notetitle}{[CS25] Intuitions on LMs + History of Architectures --- Jason Wei + Hyung Won Chung, OpenAI}
-\newcommand{\noteauthors}{基于 Jason Wei 与 Hyung Won Chung 在 Stanford CS25 Transformers United 公开讲座整理}
-\newcommand{\notedate}{2024年04月26日}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{2024年04月26日}
-\newcommand{\videoduration}{约1小时}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=5XkoZDxBSx0}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{两场讲座，一个研究方法：先看数据，再研究变化}
 
-\ifdefempty{\videocoverpath}{
-    {\small 请在生成笔记时加入封面素材。\par}
-}{
-    \includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这节课由两场风格不同、逻辑互补的讲座组成。Jason Wei 从训练数据和行为曲线出发，追问一个简单的 next-token objective 为什么会产生如此多能力；Hyung Won Chung 则从 Transformer 的历史变化出发，追问哪些结构是当前算力条件下的捷径，哪些又会在规模扩大后变成瓶颈。把两场讲座放在一起，得到的不是两组零散观点，而是一套共同方法：\textbf{先接触真实证据，再把观察分解成可检验机制，最后沿着规模或时间轴研究趋势。}
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{Jason 的问题：为什么语言模型会工作得这么好}
 
-\tableofcontents
-\newpage
+本节先建立第一场讲座的研究姿态。标题页没有承诺一个完整理论，而是明确说要给出若干 intuition。这里的 intuition 不是随意猜测，而是从数据、损失曲线和具体 prompt 中压缩出的工作假设；它们必须能指导下一次实验，而不能只在事后解释成功。
 
-\section{引言：讲座定位与结构化复现}
+\lecturefigure{jason-slide-001.jpg}{Jason Wei 的讲座主题：Intuitions on Language Models}{Jason Wei official deck, p.~1}
 
-\subsection{课程概览}
-Lecture 27 由 Jason Wei 与 Hyung Won Chung 联合讲解：前者围绕``为什么语言模型表现如此出色''分享了大量来自预训练数据与 prompt 的直觉，后者围绕架构演化、归纳偏置与 ``苦涩的教训'' 提供了数学与工程视角。两位讲者在 Q\&A 环节共同强调：LLM 的力量源于简单方法 + scale + 数据治理。
-
-\subsection{素材与结构策略}
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.85\textwidth]{cover.jpg}
-\caption{课程封面 / slide（00:00:05--00:00:25）。}\label{fig:lecture27-cover}
-\end{figure}
-\footnotetext{封面来自 Stanford CS25 公开 slides，后续如有其他 slide 图像请放在本目录 `slides-images/` 并保持命名一致。}
-
-\begin{knowledgebox}{复现素材原则}
-优先引用讲者提供的 slides 与关键截图；如无可用图片，则通过表格、流程图与 Box 结构重现讲述顺序，并明确列出时间段与关键词，方便读者在原视频中对照。
-\end{knowledgebox}
-
-\subsection{讲座时间线}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4.5cm}p{9cm}}
-\toprule
-时间段 & 内容概览 \\
-\midrule
-00:00--00:09 & 对 Jason 的介绍、LLM 的 emergent ideas、数据直觉 \\
-00:09--00:24 & Instruction tuning、Chain-of-Thought 与 prompt metrics \\
-00:24--00:38 & Hyung Won 讲述 Bitter Lesson、架构演化与归纳偏置争论 \\
-00:38--00:55 & 自回归/decoder-only 的扩展、训练目标对比 \\
-00:55--01:02 & Q\&A、实践建议、治理与复现 checklist \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 27 的时间线与章节分布。}
-\end{table}
-
-\begin{importantbox}{时间线的使用方式}
-把时间段和主题写入笔记有助于复盘：每次看视频只需跳到本表对应区间即可；若需要深入分析某一个主题，可结合 timecode+table 快速定位 slide/quote。
-\end{importantbox}
-
-\subsection{本章小结}
-本节说明本讲的双轨策略：Jason 负责 data/prompt/performance 的直觉，Hyung Won 则把架构与归纳偏置放到长期 scaling 的历史脉络中；整个笔记按教学逻辑重新拆解，方便后续复现与治理。
-
-\section{数据直觉与 emergent 能力}
-
-\subsection{理解数据即理解模型}
-Jason Wei 强调：LLM 的能力不是来自某个新架构，而是数据里的隐式 ``任务''。他亲手翻阅训练语料，发现其中含有翻译、数学解题、代码片段、对话、百科等多种模式；语言建模的目标驱使模型为每种模式学会不同的技能。
-
-\begin{knowledgebox}{语言建模的多任务隐藏层}
-LLM 的下一个 token 预测需要整合语法、语义、常识推理和 task formatting，因此它从数据中隐式吸收了 ``翻译、推理、编程、对话'' 等任务。如果数据缺失，模型在对应能力上会显著退化。
-\end{knowledgebox}
-
-\subsection{Manual data review 与 emergent cues}
-Jason 详细介绍他在训练前走一遍数据的习惯：把训练语料分成 chunk、人工审阅特殊 tokens、提取 multi-turn 交互。通过这样的工作，他归纳出几点 emergent cue，鼓励团队把相同的流程复制到自己的项目。
-
-\begin{importantbox}{人工数据审查的五个步骤}
+\begin{importantbox}{第一场讲座的四个问题}
 \begin{enumerate}
-    \item 抽样多语言文本、文档、对话
-    \item 统计 token frequency 与 rare token 列表
-    \item 识别长链条的推理与步骤式文本
-    \item 标注 prompt-like 标题（``Step 1/2''）与答案分隔符
-    \item 用轻量脚本生成 attention map（或 heuristics）以发现分布 shift
+  \item next-word prediction 为什么不只是一个任务，而像海量任务的混合？
+  \item 规模扩大为什么能稳定降低总体 loss？
+  \item 总体 loss 平滑时，单个任务为什么会呈现突变？
+  \item 为什么某些精心挑选的任务会出现 inverse 或 U-shaped scaling？
 \end{enumerate}
 \end{importantbox}
 
-\subsection{Emergent phenomena 的 evidence stack}
-Lecture 27 重复出现这个核心句：``Emergence is real when multiple evidence lines all shift at once.'' Jason 建议同时观察（1）loss/perplexity 曲线、（2）prompt trace（是否需要 CoT）、（3）attention entropy 以及（4）抽样输出的 stability；只有多个维度协同跳跃时，才能断言一个能力是真正 emergent。
+\lecturefigure{jason-slide-002.jpg}{基本问题与手工检查训练数据的方法}{Jason Wei official deck, p.~2}
 
-\begin{warningbox}{误判 emergent 的三个陷阱}
-\begin{itemize}
-    \item 只看 accuracy/精确匹配；可能是 metrics 过于敏感
-    \item 单次 trial 的涨幅，很可能是 noise
-    \item 没有控制 prompt/system message 的时候，无法复现
-\end{itemize}
+读这页时要先看右下角的方法，而不是只看标题。``Why do LLMs work?'' 太大，无法直接实验；``manually inspect data'' 则把问题变成可以执行的观察：随机抽样文本、手工做 continuation、标出一个 token 需要调用的知识与规则，再问模型可能从哪些上下文学到这些能力。它把抽象模型研究重新连接到训练分布。
+
+\teachervoice{Jason 在 00:00:55--00:01:27 把“手工看数据”称为一个极其有帮助的工具。这个提醒反对只看 benchmark 聚合分数：如果研究者从未读过训练样本，就很容易把数据中显而易见的监督信号误写成神秘涌现。}
+
+\lecturefigure{jason-slide-003.jpg}{手工看数据是在训练研究者自己的“生物神经网络”}{Jason Wei official deck, p.~3}
+
+这句话的教学含义是：研究者也需要 representation learning。反复阅读样本、预测标签、和领域专家核对错误，会在人的头脑中形成关于噪声、歧义、捷径与长尾的表示。Jason 用肺癌分类经历说明，先学会任务本身让他获得了后来能够提出研究问题的直觉；这并不要求每个研究者成为完整领域专家，却要求至少理解错误意味着什么。
+
+\begin{lstlisting}[caption={Manual data inspection 的最小研究循环}]
+for example in sample(training_corpus):
+    guess = human_predict(example.context)
+    compare(guess, example.next_token)
+    label_required_signal(example)
+    record_noise_shortcut_ambiguity(example)
+summarize_recurring_patterns()
+design_one_testable_experiment()
+\end{lstlisting}
+
+\subsection{Hyung Won 的问题：跟不上最新进展时，研究变化本身}
+
+上一小节从数据建立直觉；现在把时间尺度拉长。Hyung Won 的标题强调 ``from the history of Transformer''，但目的不是做编年史，而是从历史中识别反复出现的驱动力。读下面几页时，应该把 ``history'' 理解为一组自然实验：算力、数据、目标和结构发生变化后，哪些方法被保留，哪些被淘汰，为什么。
+
+\lecturefigure{hyung-slide-001.jpg}{Hyung Won Chung 的讲座主题：从 Transformer 历史塑造 AI 的未来}{Hyung Won Chung official deck, p.~1}
+
+\lecturefigure{hyung-slide-002.jpg}{不要只追最新结果，要研究变化本身}{Hyung Won Chung official deck, p.~2}
+
+第二页把研究焦虑重新定义成方法问题。每周追逐新模型会得到大量事实，却未必得到方向；研究 ``change itself'' 则要求把旧系统与新系统对齐，找出性能变化背后的共同变量。这样做不是为了精确预测某个产品名称，而是为了提高对研究方向的判断概率。
+
+\teachervoice{Hyung Won 在 00:32:29--00:33:22 强调：当变化速度超过人的追踪能力时，更应该回看旧东西，画出“我们怎样走到现在”的路径。课堂重点不是记住 2024 年的模型榜单，而是练习从路径中抽象方向。}
+
+\lecturefigure{hyung-slide-003.jpg}{研究变化的三步法：识别、理解并外推主导力量}{Hyung Won Chung official deck, p.~3}
+
+\begin{importantbox}{Dominant driving force 的工作定义}
+主导驱动力不是系统中唯一的力量，而是在当前问题尺度上解释大部分方向性的力量。研究者可以暂时忽略较小因素，以换取可分析性；但必须公开说明这是近似，并在预测失败时重新检查被忽略的因素。
+\end{importantbox}
+
+\lecturefigure{hyung-slide-004.jpg}{落笔实验：用重力说明如何忽略次要力量}{Hyung Won Chung official deck, p.~4}
+
+对一支从静止释放的笔，若把向下方向记为正，近地面且忽略空气阻力时有
+\[
+y(t)=y_0+v_0t+\frac{1}{2}gt^2.
+\]
+其中 $y(t)$ 表示时刻 $t$ 的位置，$y_0$ 是初始位置，$v_0$ 是初速度，$g$ 是重力加速度。公式之所以可用，不是因为阻力不存在，而是因为在这个演示的精度要求下，重力足够主导且已有可靠模型。
+
+\teachervoice{课堂在 00:35:04--00:36:21 明确提到空气阻力和复杂气动相互作用，但选择忽略它们。这个例子教的不是“现实只有一个变量”，而是“先定义精度需求，再决定哪些变量可以被近似掉”。}
+
+\lecturefigure{hyung-slide-006.jpg}{主导力量越多、相互作用越复杂，轨迹越难预测}{Hyung Won Chung official deck, p.~6}
+
+\begin{knowledgebox}{读图：不要把横轴误读成“变量总数”}
+横轴是\textbf{主导力量的数量}，不是观测字段的数量。一个系统可以有几千个特征，但仍被少数机制支配；反过来，一个看似简单的系统若有多个强耦合反馈，也可能难以外推。这张图支持的是建模策略：先寻找方向性最强的因素，再决定是否需要加入相互作用。
+\end{knowledgebox}
+
+\subsection{共同研究循环}
+
+前两小节分别从数据截面和历史纵轴出发，现在可以把它们合成一个循环。先看真实数据以避免脱离分布，再画曲线或历史轨迹以识别方向；随后提出最小机制解释，并主动寻找会推翻解释的反例。两位讲者的差别只在观察尺度，不在认识论结构。
+
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{L{0.19\textwidth} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+步骤 & Jason 的版本 & Hyung Won 的版本 \\
+\midrule
+接触证据 & 手工阅读训练样本与 prompt & 比较旧架构与当前架构 \\
+寻找结构 & 分解 latent tasks 与 loss mixture & 识别 dominant driving force \\
+建立曲线 & 画 compute/data/performance scaling curve & 沿时间和规模外推驱动力 \\
+检查边界 & 看 metric、数据质量与缺失中间点 & 看被忽略力量、物理瓶颈与 regime change \\
+形成行动 & 设计下一组规模化实验 & 添加或移除归纳偏置 \\
+\bottomrule
+\end{tabularx}
+\caption{两场讲座共享的证据驱动研究循环。}
+\end{table}
+
+\subsection{本章小结}
+
+本章确立了整堂课的阅读方式。Jason 要求研究者训练自己的数据直觉，Hyung Won 要求研究者训练自己的历史直觉；两者都反对从单个结果直接跳到宏大结论。接下来的技术内容将不断重复同一动作：拆解目标、读懂曲线、识别假设、说明证据不能推出什么。
+
+\section{Next-token Prediction：一个目标怎样承载海量任务}
+
+上一章给出方法，本章进入 Jason 的第一个核心直觉。语言模型训练表面上只要求预测下一个 token，但每个 token 的正确概率可能依赖语法、词义、事实、空间关系、翻译、算术甚至文档体裁。关键不是给预训练贴上 ``multi-task'' 标签，而是理解任务边界如何由上下文临时形成。
+
+\subsection{从概率分布到训练损失}
+
+本节先补齐最小数学背景。给定历史 token $x_{<t}=(x_1,\ldots,x_{t-1})$，模型输出词表上每个候选 token 的条件概率；训练时只观察真实 token $x_t$，并提高它的概率。读 slide 时先区分 ``模型输出整个分布'' 与 ``数据只给出一个观测结果''。
+
+\lecturefigure{jason-slide-004.jpg}{语言模型为词表中的每个候选词分配下一个位置的概率}{Jason Wei official deck, p.~4}
+
+自回归语言模型的负对数似然可以写成
+\[
+\mathcal{L}_{\mathrm{NLL}}(\theta)=-\frac{1}{T}\sum_{t=1}^{T}\log p_{\theta}(x_t\mid x_{<t}).
+\]
+其中 $\theta$ 表示模型参数，$T$ 是序列长度，$p_{\theta}(x_t\mid x_{<t})$ 是模型给真实下一个 token 的概率。概率越低，$-\log p$ 惩罚越大；优化器通过梯度更新 $\theta$，使训练分布中的真实 continuation 更可能。
+
+\begin{knowledgebox}{什么是 perplexity}
+Perplexity（困惑度，PPL）是平均交叉熵的指数：
+\[
+\operatorname{PPL}=\exp\!\left(\mathcal{L}_{\mathrm{NLL}}\right).
+\]
+它可粗略理解为模型在每一步面对的“有效候选数”。例如 PPL 为 10 并不表示模型真的在十个词之间均匀选择；它只是对数损失的指数化摘要，也不能直接等同于事实性、推理正确率或人类偏好。
+\end{knowledgebox}
+
+\subsection{Massive multi-task learning 不是比喻}
+
+有了损失定义，下一步是问一个 token 的概率由什么决定。只要语料足够大，模型会在不同上下文中反复遇到语法、语义、事实与任务格式。每一种可预测规律都会对同一个 NLL 贡献梯度，因此统一目标在参数空间中叠加了许多局部学习信号。
+
+\lecturefigure{jason-slide-005.jpg}{直觉一：大规模 next-word prediction 是 massive multi-task learning}{Jason Wei official deck, p.~5}
+
+\begin{importantbox}{Latent task 的定义}
+Latent task（潜在任务）是由上下文临时规定、却没有显式 task ID 的预测子问题。例如 ``The capital of Azerbaijan is'' 触发事实检索，``The movie was'' 可能触发情感补全，``The Spanish word for pretty is'' 触发翻译。它们共享一个词表和一个损失，却需要不同中间计算。
+\end{importantbox}
+
+\lecturefigure{jason-slide-006.jpg}{预训练句子同时教授语法、语义、事实、情感、翻译、空间与算术}{Jason Wei official deck, p.~6}
+
+\begin{knowledgebox}{读图：先比较“监督从哪里来”}
+每一行都没有单独标注任务名称，监督来自真实 continuation。语法例子要求排除不合句法的词；世界知识例子要求把 Baku 排在 London 前；空间例子要求跟踪人物位置；算术例子则要求利用题面关系。图支持的不是“模型一定学会了每项能力”，而是“语料确实向这些能力提供了概率梯度”。
+\end{knowledgebox}
+
+\teachervoice{Jason 在 00:04:59--00:07:03 连续给出多个例子，最后强调这样的任务可以有数百万个。课堂语气很重要：他没有声称预训练数据天然均衡，而是说只要相关句子存在，next-token objective 就可能从中吸收监督。}
+
+\subsection{任务可以任意到难以命名}
+
+上一页列出的任务都很“干净”，容易被人类命名；本节故意看一个难以归类的 continuation。若一句 Wikipedia 文本依次要求预测人名、逗号、冠词和职业词，每个位置调用的规律都不同。任务不是预先列好的 benchmark，而是序列中每个条件分布提出的瞬时问题。
+
+\lecturefigure{jason-slide-007.jpg}{同一句文本中的潜在任务可以从事实跳到标点，再跳到难命名的续写规律}{Jason Wei official deck, p.~7}
+
+设语料中第 $t$ 个 token 隐含任务 $z_t$，则训练目标可概念性地写成
+\[
+\mathcal{L}=\mathbb{E}_{(x,z)\sim\mathcal{D}}\bigl[\ell(x_t,x_{<t};z_t)\bigr].
+\]
+其中 $\mathcal{D}$ 是训练分布，$z_t$ 不是数据中显式提供的标签，而是分析者为了理解所引入的潜变量，$\ell$ 是该位置的预测损失。这个写法提醒我们：同一个 token 可能同时依赖多个规律，因此任务分解只是解释工具，不保证存在唯一正确边界。
+
+\begin{warningbox}{不要把 pretraining corpus 想成自动清洗好的任务仓库}
+同一机制也会学习拼写错误、偏见、伪相关、模板复制与低质量来源。Q\&A 中 Jason 明确说，训练时并不会自动区分好坏数据；研究者仍要审查数据来源、过滤明显不可靠内容，并用独立评估检查学到的是可迁移规律还是数据捷径。
 \end{warningbox}
 
-\subsection{多模态 prompt shift}
-Hyung Won 补充：当把图像、音频转成 token 时，同样可以看到涌现；只是引入新的 attention bias（如 per-modality token embeddings）后，需要稳定 prompt shift（``先识图再问''）。
-
-\begin{knowledgebox}{多模态 emergent 的提示实践}
-\begin{itemize}
-    \item 用不同 token prefix（``[image]'', ``[audio]'') 将模态区分开
-    \item 设定约束（``先描述再回答''）减少 hallucination
-    \item 观察 attention heatmap 是否对齐到 vision token，而不是仅靠 text
-\end{itemize}
-\end{knowledgebox}
-
-\subsection{数据治理与规范化}
-Jason 强调 emergent 研究必须先把 data pipeline 定义清楚：每个 dataset 都要记录采集 source、split 逻辑、dedup 策略与 sensitive content filter，以便后续复现或提供 compliance report。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}}
-\toprule
-字段 & 描述 \\
-\midrule
-Source & 抽样 website / corpus / internal doc \\
-Split & train/validate/test 的 token 分割方式 \\
-Dedup & ngram overlap 或 semantic hash 过滤阈值 \\
-Safety & 黑名单、PII scrub 策略 \\
-\bottomrule
-\end{tabular}
-\caption{数据治理时需记录的关键属性。}
-\end{table}
-
-\begin{importantbox}{数据治理的价值}
-在 emergent 现象触发后，团队需要回溯 ``是哪批数据'' 使模型跳变；如果没有详细治理记录，就无法判定是否引入有问题的样本。
-\end{importantbox}
-
-\subsection{数据可观测性与工具}
-为了让 emergent 现象可追溯，Jason 建议把数据采样、attention map 和 prompt trace 交给统一平台。下表展示了一个轻量级数据观测 pipeline：
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}}
-\toprule
-组件 & 描述 \\
-\midrule
-Sampler & 定期从数据 lake 中抽样多模态 chunk（text/image/code） \\
-Instrumenter & 记录 attention map、CoT trace、token distribution \\
-Dashboard & 显示 loss/perplexity + drift metric，支持 drill-down \\
-\bottomrule
-\end{tabular}
-\caption{简单的数据可观测 pipeline。}
-\end{table}
-
-\begin{importantbox}{数据仪表盘的价值}
-把 instrumentation + dashboard 链接到 prompt log，可以在 emergent drift 发生时立即 trace 到具体数据 batch，而不是仅依赖后验分析。
-\end{importantbox}
+\begin{lstlisting}[caption={把一段文本拆成 latent-task probe 的伪代码}]
+for position in document:
+    context = tokens[:position]
+    target = tokens[position]
+    ask("What knowledge or rule raises target probability?")
+    tag(grammar, fact, format, reasoning, noise, other)
+    store(context, target, tags)
+\end{lstlisting}
 
 \subsection{本章小结}
-本节将 emergent ability 的经验归结为 ``写清数据+prompt+attention+metrics'' 四要素；如果只追求参数量而不排查上述维度，就难以复现 Jason 所描述的现象。
 
-\section{提示工程与 reasoning orchestration}
+Next-token prediction 之所以强，不是因为目标名称复杂，而是因为语料把大量条件预测问题折叠进同一个目标。模型每次只优化真实 token 的概率，却在共享参数中累计了跨任务的表示和计算模式。这个视角为下一章铺路：若总体 loss 是许多潜在任务损失的混合，那么总体曲线与单项能力曲线就不必具有同一种形状。
 
-\subsection{Instruction tuning 是格式化而非新能力}
-Jason 把 Instruction Tuning 描述为 ``让模型把已有知识用新的纸张打印出来''。以 FLAN/PaLM 为例，单纯在多任务指令上 fine-tune，模型在零样本任务上的表现即可立刻提升；说明模型底层已经具备能力，只需要 prompt 来调度。
+\section{Scaling Law 与 Emergence：平滑总损失如何隐藏任务突变}
 
-\begin{warningbox}{Instruction tuning 的常见误区}
-\begin{itemize}
-    \item 误以为 tuning 训练了新能力，其实只是在改变 sampling distribution
-    \item 过度依赖 few-shot 示例，导致 context window 被 prompt 占满
-    \item 忽略 prompt drift，改了 prompt 但不记录版本，就看不到 performance 变化
-\end{itemize}
+前一章把训练目标拆成潜在任务混合；本章研究规模轴。Jason 的第二、第三个直觉并不矛盾：增加计算量时，总体 cross-entropy 可以稳定下降，而某个 benchmark 的 accuracy 仍可能长期为零后突然上升。要理解这种现象，必须同时看连续概率、任务权重和离散评分规则。
+
+\subsection{Scaling 的最小操作定义}
+
+本节先说明横轴。课堂把训练 compute 粗略理解为模型规模与数据量的乘积；真实训练还取决于序列长度、前后向计算、硬件利用率和训练配方，但这个简化足以表达“投入更多有效计算”的方向。重要的是比较同一训练范式下的一系列点，而不是孤立比较两个模型名称。
+
+\lecturefigure{jason-slide-008.jpg}{直觉二：扩大模型与数据所代表的训练计算会可靠降低 loss}{Jason Wei official deck, p.~8}
+
+一个常见近似是
+\[
+C\propto N D,
+\]
+其中 $C$ 表示训练计算量，$N$ 表示非 embedding 参数规模，$D$ 表示训练 token 数；比例常数吸收每个 token 的前向与反向运算。这个式子不是完整成本模型，但能提醒研究者：只增参数而不增数据，或只增数据而模型容量不足，都可能偏离 compute-optimal 区域。
+
+\lecturefigure{jason-slide-009.jpg}{语言模型 loss 随计算量呈可预测的幂律趋势}{Jason Wei official deck, p.~9}
+
+典型 scaling-law 拟合写成
+\[
+L(C)=L_{\infty}+A C^{-\alpha},\qquad A>0,\ \alpha>0.
+\]
+其中 $L(C)$ 是给定 compute 下的验证损失，$L_{\infty}$ 是不可约或暂未消除的损失下界，$A$ 控制曲线高度，$\alpha$ 控制随 compute 改善的斜率。对数坐标下，幂律区间接近直线，因此可以用较小实验估计更大训练的预期 loss。
+
+\begin{knowledgebox}{读图：先确认坐标、范围与是否饱和}
+横轴跨越多个数量级，纵轴是越低越好的 loss。最关键的视觉证据不是某个点领先，而是趋势在很大范围内没有明显向水平线弯折。它支持“在观察区间内继续扩大计算仍有收益”，却不证明趋势永远持续，也不说明收益足以抵消训练成本。
+\end{knowledgebox}
+
+\teachervoice{Jason 在 00:09:36--00:10:44 提醒，这条关系被称为 ``law''，是因为它跨越约七个数量级仍保持可预测，而不是因为它像物理定律一样永不失效。研究报告应同时给拟合区间和外推不确定性。}
+
+\subsection{为什么 scaling 有效：证据与猜测要分开}
+
+上一节是经验关系，本节讨论可能机制。课堂给出的两种解释都被明确称为 hand-wavy：更大的模型能记住更多长尾事实，也能在一次 forward pass 中表示更复杂的函数。它们是有用假设，但不能仅凭 loss 曲线得到确认。
+
+\lecturefigure{jason-slide-010.jpg}{小模型选择性记忆，大模型容纳长尾并执行更复杂计算的直觉}{Jason Wei official deck, p.~10}
+
+\begin{warningbox}{读图时容易犯的因果错误}
+“更大模型 loss 更低”不能单独证明“下降全部来自 memorization”，也不能证明“深度负责推理、宽度负责事实”。参数量、数据覆盖、优化稳定性和训练时间同步变化。要检验机制，需要控制变量、构造反事实数据，或直接测量不同频率事实和不同计算深度任务的变化。
 \end{warningbox}
 
-\subsection{Chain-of-Thought 与 Self-Consistency}
-CoT 的本质是 ``prompt 里先给出思路，再让模型重演''。Self-Consistency 进一步通过采样多个 CoT 路径并投票来减少偶发错误。
+\teachervoice{在 00:11:13--00:12:55，Jason 两次说这些只是 hand-wavy answers。保留这层不确定性比给出一个听起来完整的机制更重要：课程事实是 scaling 关系稳健；“长尾记忆 + 更复杂函数”是解释候选。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{5cm}p{4cm}}
-\toprule
-方法 & 核心机制 & 典型收益 \\
-\midrule
-Chain-of-Thought & 给出 step-by-step & 解题准确率 +15\% \\
-Self-Consistency & 多路径 majority vote & 抑制 single path failure \\
-Least-to-Most & 分层 prompts & 适合长链任务 \\
-\bottomrule
-\end{tabular}
-\caption{讲者提及的三种推理提示策略。}
-\end{table}
+\subsection{总体 loss 是任务损失的加权混合}
 
-\begin{knowledgebox}{提示工程的治理建议}
-把每次 prompt/CoT pattern 写进 prompt log（格式：Prompt ID、Role description、Examples、Sampling parameters、Metric diffs），并与 evaluation dashboard 里的 drift metric 关联；一旦 accuracy 指标下降，可以凭 log 快速回滚。
+现在回到前一章的 massive multi-task 视角。若语料中不同 token 分别需要语法、事实、情感或数学，那么总体 loss 就像这些子分布损失的加权平均。容易任务可以接近饱和，难任务仍在快速改善；因此总体曲线的平滑并不会强迫每个组成部分都平滑。
+
+\lecturefigure{jason-slide-011.jpg}{直觉三：总体 loss 平滑下降，单个下游任务仍可能呈 emergent pattern}{Jason Wei official deck, p.~11}
+
+\lecturefigure{jason-slide-012.jpg}{把总体 loss 分解成 grammar、world knowledge、math 等任务损失}{Jason Wei official deck, p.~12}
+
+概念性地写，
+\[
+L_{\mathrm{all}}(C)=\sum_{k=1}^{K} w_k L_k(C),
+\qquad w_k\ge 0,\quad \sum_{k=1}^{K}w_k=1.
+\]
+其中 $K$ 是潜在任务族数量，$w_k$ 是该任务在评估 token 中的权重，$L_k(C)$ 是 compute 为 $C$ 时的任务损失。即使某个困难任务 $L_j$ 在一个窄区间快速下降，只要 $w_j$ 很小，总体曲线仍可能看起来平滑。
+
+\begin{knowledgebox}{什么是 emergent ability}
+本讲采用行为层定义：小模型在某任务上接近随机或零分，而较大模型达到明显更好成绩。这个定义描述\textbf{评测曲线形状}，不自动说明模型内部突然产生了全新模块。若评分函数有阈值、exact match 或多步全对要求，连续概率改善也会被映射成表面突变。
 \end{knowledgebox}
 
-\subsection{Prompt 仪表盘}
-Jason 进一步建议在 prompt log 上挂上 \texttt{self\_consistency\_score}、\texttt{hallucination\_rate}、\texttt{token\_budget} 和 \texttt{sampling\_temperature} 等字段，方便分析 prompt drift。
+\subsection{容易任务饱和，困难任务晚启动}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{6cm}}
-\toprule
-字段 & 说明 \\
-\midrule
-Prompt ID & Git tag/hash，便于复现 \\
-Role + Examples & CoT 模板与 role-play \\
-Sampling params & temperature / top\_p / candidate count \\
-Metric diffs & 前后 accuracy/self-consistency 对比 \\
-\bottomrule
-\end{tabular}
-\caption{Prompt 仪表盘中需要记录的关键字段。}
-\end{table}
+上一小节给出混合公式，本节用图读出组成曲线。语法在较小规模可能已足够好，继续扩大模型只带来微小改进；数学等困难任务则可能在更大规模才跨过可用区间。读图时要比较斜率和饱和位置，而不是把每条线都理解成独立模块。
 
-\subsection{Prompt Stress Testing}
-讲者强调：每次 prompt 改动都应经历 ``stress testing'' —— 选取 hardest-case prompts、insert adversarial tokens、vary temperature/backoff 以观察 performance drop。对于 prompt drift，应提前设定 rollback plan。
+\lecturefigure{jason-slide-013.jpg}{总体 loss、已饱和任务与困难任务的不同 scaling 形状}{Jason Wei official deck, p.~13}
 
-\begin{warningbox}{Prompt stress testing checklist}
-\begin{itemize}
-    \item Run CoT prompts under different seeds/temperature; check self-consistency variance
-    \item Inject adversarial tokens or hallucination triggers; confirm no uncontrolled behavior
-    \item Monitor token budget + latency to prevent prompt size blow-up
-\end{itemize}
+若任务得分由连续置信度 $q(C)$ 经阈值 $\tau$ 转换，
+\[
+S(C)=\mathbf{1}\{q(C)\ge \tau\},
+\]
+其中 $S(C)$ 是离散得分，$q(C)$ 是随 compute 平滑变化的成功置信度，$\tau$ 是评分阈值。即使 $q(C)$ 平滑上升，$S(C)$ 也会在跨越 $\tau$ 时从 0 跳到 1。这是 emergence 的一种来源，但不是唯一来源。
+
+\lecturefigure{jason-slide-014.jpg}{BIG-Bench 任务包含 smooth、flat、inverse、noisy 与 emergent-looking 曲线}{Jason Wei official deck, p.~14}
+
+\begin{knowledgebox}{读图：任务分布比“是否涌现”二分法更有信息}
+图中约 29\% 任务平滑改善，22\% 在观测范围内近乎平坦，2\% 呈 inverse scaling，13\% 与规模关系不清，33\% 呈 emergent-looking。百分比依赖模型集合、任务和 metric；最稳健的结论是任务曲线具有多种形状，不能用总体 loss 的单一趋势替代逐任务测量。
+\end{knowledgebox}
+
+\teachervoice{Jason 在 00:16:54--00:19:24 强调：若只训练到突变点之前，研究者会错误预测该能力永远不会出现。Q\&A 又补充，缺少密集的中间模型点使“突变前是否已有信号”很难判断。}
+
+\subsection{Prompting 中的 emergence 与 metric caveat}
+
+任务曲线之外，prompt 本身也能暴露尺度差异。小模型可能无法从几个演示中抽取映射规则，大模型则能利用上下文完成新输入；但观察到 exact-match 跃迁后，仍应检查 token-level probability、连续 metric 与 prompt 稳健性，避免把评分函数的几何形状误写成内部机制。
+
+\lecturefigure{jason-slide-015.jpg}{Prompt 中的输入输出示例可触发规模相关的 in-context behavior}{Jason Wei official deck, p.~15}
+
+\begin{warningbox}{“Emergence 是 mirage”与“能力是假的”不是同一句话}
+Q\&A 中 Jason 认可：改变 metric 会让曲线形状不同；但他仍认为大模型展示的有用行为是真实的。严谨表述应分三层：模型输出分布是否连续变化、评测分数是否突然变化、用户可完成的任务是否出现质变。三层可以同时成立而不矛盾。
 \end{warningbox}
 
-\begin{importantbox}{Prompt regression guardrail}
-把 stress testing 的结果记录在 prompt log，对比前后 accuracy/self-consistency；若发现 degradation > threshold，即刻回滚到先前的 prompt 版本。
-\end{importantbox}
+\teachervoice{00:29:53--00:30:21 的回答没有给出简单阵营标签，而是建议读论文并自己判断。讲义因此不把 emergence 处理成信仰问题，而把 metric sensitivity 当作实验设计的一部分。}
 
 \subsection{本章小结}
-Prompt 不是一次性输入，而是人与模型之间的 orchestration：只有把 instruction tuning、CoT、dashboard 与 metric drift 结合，才能把 emergent ability 稳固下来。
 
-\section{架构演化与归纳偏置}
+Scaling law 描述总体损失在观测区间内随计算量稳定改善；emergent-looking curve 描述特定任务经过 metric 映射后的行为。两者可由任务混合、难度差异、阈值评分和稀疏采样共同产生。研究者应同时报告连续损失、任务分数、模型规模点与误差条，并把机制解释标明为证据、假设还是个人直觉。
 
-\subsection{The Bitter Lesson 与计算优先}
-Hyung Won 引用了 Sutton 的 ``The Bitter Lesson''，说明 ``用计算而不是手工归纳'' 是达成长期 scaling 的唯一路径。工程师需要问自己：``我正在往模型里注入多少归纳偏置？是否可以通过 scale + data + compute 达成同样效果？''
+\section{Inverse 与 U-shaped Scaling：隐藏子任务如何互相干扰}
 
-\begin{importantbox}{Sutton 的三条启示}
-\begin{itemize}
-    \item 人类知识在有限 compute 下有效，但不具备 scaling
-    \item 更泛化的模型往往是 compute-intensive 而非 architecture-heavy
-    \item 归纳偏置想增加但也要有退出策略（revert to simpler architecture when compute grows）
-\end{itemize}
-\end{importantbox}
+前一章讨论“晚出现”，本章讨论“先变差再变好”。这类曲线最容易被误解为训练失败；Jason 的例子表明，整体任务可能由多个能力竞争决定。一个中等模型学会了纠正名言，却还没学会服从 ``repeat after me''，于是比更小模型表现更差；更大模型同时具备两者后又恢复正确。
 
-\subsection{从 encoder-decoder 到 decoder-only}
-Hyung Won 沿着历史讲述了 Encoder-Decoder（2017）、BERT（2018）、GPT（2018+）的演化。Decoder-only 架构的核心好处在于 KV cache，可让多轮对话快速复用之前的 key/value，从而拉低推理 FLOPs。
+\subsection{一条曲线背后可能有多个策略}
 
-\begin{warningbox}{双向注意力的伸缩问题}
-BERT 等编码器架构需要重新计算全部 attention，因此在长 context 中开销爆炸；decoder-only 通过因果 mask + KV cache，令训练和推理都具备线性扩展性。
+本节先看现象。Inverse scaling 指规模增加时任务分数下降；U-shaped scaling 指分数先下降、后回升。曲线形状本身不能告诉我们是优化退化、数据冲突还是子任务竞争，因此需要构造可解释 prompt，把可能的策略逐一拆开。
+
+\lecturefigure{jason-slide-016.jpg}{直觉四：精心选择任务会得到 inverse 或 U-shaped scaling}{Jason Wei official deck, p.~16}
+
+\begin{knowledgebox}{术语消化：inverse 与 U-shaped}
+\begin{tabularx}{\textwidth}{L{0.23\textwidth} X}
+\toprule
+术语 & 课程中的含义 \\
+\midrule
+Inverse scaling & 增加模型规模或计算后，某个定义好的任务 metric 反而下降。 \\
+U-shaped scaling & 同一 metric 随规模先下降再上升，说明不同能力或策略在不同区间占主导。 \\
+Task selection & 选择能区分竞争策略的 prompt，而不是只挑平均性能最高的 benchmark。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\lecturefigure{jason-slide-017.jpg}{小模型复述错误词，中等模型擅自修正名言，大模型重新遵循指令}{Jason Wei official deck, p.~17}
+
+读图时先把 ``glib'' 与 ``gold'' 分开。目标不是补全著名名言，而是服从用户要求、重复故意写错的句子。小模型因为不知道名言而“误打误撞”复述；中等模型知道名言却忽略 instruction；大模型既识别名言又能把 instruction 置于默认补全倾向之上。
+
+\subsection{把总任务拆成 repeat、repair 与 instruction following}
+
+上一页给出三种行为，本节把它们显式写成子任务。只有当模型能复述文本、识别名言错误、并判断当前指令优先级时，才会稳定输出 ``glib''。这说明最终 accuracy 是能力组合的函数，而不是单一“聪明程度”的单调测量。
+
+\lecturefigure{jason-slide-018.jpg}{三个隐藏子任务的 scaling curve 解释总体 U 形}{Jason Wei official deck, p.~18}
+
+可把最终行为简化为
+\[
+\hat{y}=f\bigl(R(C),Q(C),I(C)\bigr),
+\]
+其中 $R(C)$ 表示复述能力，$Q(C)$ 表示修复熟悉名言的倾向，$I(C)$ 表示遵循显式指令的能力，$f$ 是三者的决策组合。小模型可能有高 $R$、低 $Q$、低 $I$；中等模型高 $R$、高 $Q$、低 $I$；大模型三者都高，并由 $I$ 决定不修正用户文本。
+
+\begin{warningbox}{不要把 U 形自动解释成“模型先学坏再学好”}
+分数下降可能是一个新能力压过旧策略，而不是底层表示整体退化。正确诊断需要对子能力分别评测，并检查 prompt 中哪个目标应该优先。单一 accuracy 会把“知道名言但不听指令”和“完全不知道名言”压成同一个错/对标签。
 \end{warningbox}
 
-\subsection{训练目标的变化}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{5cm}p{4cm}}
-\toprule
-目标 & 架构 & 主要假设 \\
-\midrule
-Masked LM & Encoder & 需要双向上下文 \\
-Prefix LM & Encoder-Decoder & encoded prefix + causal decode \\
-Autoregressive LM & Decoder-only & 只看过去，易 scale \\
-\bottomrule
-\end{tabular}
-\caption{几种主流训练目标与对应架构的区别。}
-\end{table}
+\teachervoice{Jason 在 00:21:21--00:23:56 逐个画出三个子任务的曲线，再回到总任务解释 U 形。这是整场讲座最可复用的分析动作：遇到怪曲线时，先问 metric 混合了哪些策略。}
 
-\subsection{Scale Law 与优化器选择}
-Hyung Won 指出，scale law 表示 loss 与 compute 之间呈幂律关系，因此进入 scaling regime 时必须重新调优 optimizer + lr schedule。典型流程是：先用 AdamW + cosine decay 进行 warmup，再根据 attention scale 观察是否需要进一步减小 lr 或增加 batch。
+\subsection{研究实践：永远不要只画一个点}
 
-\begin{knowledgebox}{Scale law 经验值}
-\begin{itemize}
-    \item loss \(\approx\) constant \(\times\) \(\mathrm{compute}^{-0.05}\)，compute = params \(\times\) tokens \(\times\) 6
-    \item batch 太小无法进入 regime，需 gradient accumulation
-    \item 监控 attention scale，有助于判断是否需要 LR warmup/stretch
-\end{itemize}
-\end{knowledgebox}
+有了子任务分解，最后一步是把实验干预也放到规模轴上。某种 fine-tuning、数据过滤或 prompt 方法在一个预算点领先 baseline，并不说明继续增加数据仍有效。至少需要多个点判断曲线是在饱和、保持斜率还是加速分离；还要在相同数据定义和评测协议下重复实验，避免把随机初始化或样本选择造成的单点波动误认成方法优势。
 
-\begin{importantbox}{优化器与 warmup 策略}
-\begin{itemize}
-    \item AdamW + cosine decay 是 transformer scaling 的常用组合
-    \item warmup 阶段要缓慢把 lr 提升到 target，避免 early loss 爆炸
-    \item 遵循 linear scaling rule：batch \(\times\) lr \(\approx\) 常数，便于增加 batch 时同步调参
-\end{itemize}
+\lecturefigure{jason-slide-019.jpg}{一般研究建议：画 scaling curves，而不是只报告单点改进}{Jason Wei official deck, p.~19}
+
+\begin{lstlisting}[caption={比较研究干预与 baseline 的 scaling curve}]
+budgets = [0.25, 0.5, 1.0, 2.0]
+for budget in budgets:
+    baseline = train(config="baseline", budget=budget)
+    method = train(config="intervention", budget=budget)
+    log(budget, evaluate(baseline), evaluate(method))
+fit_curve_and_report_uncertainty()
+\end{lstlisting}
+
+\begin{importantbox}{一张 scaling curve 至少回答三件事}
+\begin{enumerate}
+  \item \textbf{Data efficiency}：方法是否只把同样性能提前到更小预算？
+  \item \textbf{Asymptote}：优势是否很快饱和，继续投入也不再扩大？
+  \item \textbf{Slope}：方法是否改变增长斜率，使更大规模的收益更强？
+\end{enumerate}
+单点结果无法区分这三种情况。
 \end{importantbox}
 
-\begin{knowledgebox}{归纳偏置的判断准则}
-如果一种结构需要 ``人为指定 how to attend''，可能正在引入归纳偏置；若它只是提供更少的假设（如 decoder-only），就更容易 scale。
-\end{knowledgebox}
+\teachervoice{00:23:59--00:25:51 的结论非常朴素：``just plot scaling curves''。它不是要求每个学生训练 frontier model，而是要求在自己可承受的预算区间内做分层实验，避免把偶然点当成趋势。}
 
 \subsection{本章小结}
-架构演化是一条 ``减少人为假设 + 增加 compute'' 的路径：讲者用实证与经验告诉我们，在面向 scaling 的时候，最可靠的策略是先移除结构，再投放计算。
 
-\section{评估、监控与治理}
+Inverse 与 U-shaped scaling 往往提示 metric 背后存在竞争策略。通过可解释 prompt、子能力评测和多预算曲线，研究者能把“奇怪现象”改写成可检验假设。Jason 的第一场讲座到这里形成完整闭环：看数据、识别潜在任务、拆解 loss、画 scaling curve，并明确标注 metric 与证据边界。
 
-\subsection{多维度评估矩阵}
-为了避免 emergent drift，Jason 设计了一个评估矩阵：准确率/任务表现、prompt drift、hallucination rate、token budget、CoT fidelity 等需要同时追踪。
+\section{Compute、Bitter Lesson 与归纳偏置的生命周期}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{5cm}p{4cm}}
-\toprule
-维度 & 指标举例 & 工具 \\
-\midrule
-准确率 & BLEU/F1/custom & Eval harness \\
-鲁棒性 & Adversarial prompt & adversarial suite \\
-Hallucination & Fabrication rate & human annotator + knowledge graph check \\
-Prompt drift & Self-consistency drop & versioned dashboard \\
-\bottomrule
-\end{tabular}
-\caption{智能体/LLM 的评估矩阵。}
-\end{table}
+现在进入 Hyung Won 的主线。前半场沿模型规模画曲线，后半场沿历史时间画曲线；共同横轴仍是可用计算与算法能力。Hyung Won 的核心判断是，计算成本长期下降和 associated scaling 构成 AI 研究的主导力量，因此结构设计不能只看今天是否更准，还要看它是否会限制明天继续扩大规模。
 
-\subsection{评估数据管道与报警}
-讲者建议把评估 pipeline 分成 instrumentation、aggregation、alerting 三段：先采集 prompt+tool调用+attention snapshot，再把 metrics 送入 dashboard，最后设定阈值 triggers 及时通知。
+\subsection{为什么把 compute per dollar 当作主导力量}
 
-\begin{knowledgebox}{评估 data pipeline 的三步}
-\begin{itemize}
-    \item Instrumentation：每次 infer 记录 prompt、tool、attention map
-    \item Aggregation：定期刷新 metrics 看是否 drift，并与 compute budget 对齐
-    \item Alerting：Accuracy or hallucination 超阈值时发起 rollback
-\end{itemize}
+本节先读证据。图的纵轴不是晶体管数量，而是固定资金可以买到的计算能力；横轴覆盖超过一个世纪。Hyung Won 由这条长期趋势得出研究策略：不要和强大、持续的外生趋势竞争，应设计能利用它的方法。同时必须把硬件、算法、精度和软件效率都纳入“有效计算”，否则会把某个器件指标错当成整条研究轨迹。
+
+\lecturefigure{hyung-slide-007.jpg}{固定成本可获得的计算能力长期增长，约每五年提高十倍}{Hyung Won Chung official deck, p.~7}
+
+若每五年计算能力约增长十倍，可写成
+\[
+C(t)=C_0\,10^{t/5},
+\]
+其中 $C(t)$ 是相对起点经过 $t$ 年后固定预算可购买的计算量，$C_0$ 是起点计算量。这个表达只是在课堂图上的近似，不保证未来继续保持同一指数；能源、制造、互连、资本与算法都可能改变有效增长率。
+
+\begin{knowledgebox}{读图：compute availability 不等于 Moore's law}
+Q\&A 中讲者明确区分晶体管密度与可用计算。GPU、低精度、专用加速器、软件栈和硬件协同都能继续改善训练吞吐，即使传统晶体管缩放变慢。真正相关的问题是“给定成本能完成多少有效训练计算”，而不是某一个器件指标。
 \end{knowledgebox}
 
-\subsection{Hallucination taxonomy}
-为了治理 hallucination，Jason 建议把 hallucination 分为 three classes：fact-unsupported、failure to recall context、and prompt-induced hallucination。每种类型都需要不同的反馈 loop，例如 fact-unsupported 需要 knowledge graph check，prompt-induced 需要 prompt stress testing。
+\teachervoice{00:38:24--00:39:27 的措辞是“不要与这条趋势竞争，尽量利用它”。这是一条研究选择启发式，不是对无限指数增长的保证；01:15:17 之后的 Q\&A 又主动提到能源和物理可能成为新瓶颈。}
 
-\begin{importantbox}{Hallucination 分类与 대응}
-\begin{itemize}
-    \item fact-unsupported：vs knowledge graph + web verification
-    \item context loss：增加 context window \& caching
-    \item prompt-induced：锁定 role + CoT template
-\end{itemize}
+\subsection{Bitter Lesson：少替机器规定我们自以为懂的思考方式}
+
+上一节说明 scale 是强趋势，本节解释为什么过多人工结构会冲突。研究者常把自己对人类思维的解释编码成模型；这些结构在低算力时可能像捷径，却限制模型探索其他表示。Bitter Lesson 的课堂版本是：长期进展反复来自更一般、假设更弱的方法，再加更多数据与计算。
+
+\lecturefigure{hyung-slide-008.jpg}{“教机器按我们以为自己在思考的方式思考”可能施加错误结构}{Hyung Won Chung official deck, p.~8}
+
+\lecturefigure{hyung-slide-009.jpg}{Bitter Lesson：更一般的方法、更弱的建模假设与更多规模}{Hyung Won Chung official deck, p.~9}
+
+\begin{importantbox}{什么是 inductive bias}
+Inductive bias（归纳偏置）是模型在有限数据下偏好某类函数、表示或交互方式的结构性假设。卷积的局部性、encoder/decoder 参数分离、双向 attention、特定不变性都属于偏置。偏置能提高样本效率，但也排除了部分解；它的价值取决于当前数据、算力、任务和部署约束。
 \end{importantbox}
 
-\subsection{本章小结}
-评估不是单一指标，而是可审计、可回溯的闭环；数据 pipeline + dashboard + alerting 才能在 emergent world 里保持可控。
+\teachervoice{Hyung Won 在 00:39:41--00:41:43 说，研究者往往试图建模“我们以为自己如何思考”，但并不真正理解低层认知机制。课堂观点故意强烈；讲义把它保留为一种设计警告，而不是证明所有先验结构都错误。}
 
-\section{部署、复现与团队实践}
+\subsection{结构越少越 scalable，但今天不一定更好}
 
-\subsection{部署准备 checklist}
-Jason 和 Hyung Won 共同强调：部署前必须校验 prompt stability、token budget、fallback 策略与监控 hook。
+若把结构多寡放到横向比较，结构较多的方法通常在低计算区间起点更高，却可能较早饱和；结构较少的方法早期训练困难，但给模型更大自由度，随规模增长可能超过前者。这里的 ``scalable'' 指增长曲线能继续改善，不只是能在更多 GPU 上运行。
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{5cm}p{3cm}}
-\toprule
-项目 & 核心检查 & 状态 \\
-\midrule
-Prompt 稳定性 & 不同输入的 Self-consistency & 已就绪 \\
-Token 预算 & 每次请求 FLOPs 对齐 compute cap & 已就绪 \\
-Fallback & API / 缓存降级方案 & 待完善 \\
-Monitoring hook & latency/loss/attention & 已就绪 \\
-\bottomrule
-\end{tabular}
-\caption{部署前必须校验的关键指标。}
-\end{table}
+\lecturefigure{hyung-slide-010.jpg}{更多结构提高低算力性能，却可能降低长期可扩展性}{Hyung Won Chung official deck, p.~10}
 
-\subsection{SLI/SLO 与成本控制}
-\begin{importantbox}{SLI/SLO 参考}
-\begin{itemize}
-    \item Latency SLO：99% 请求 < 1s
-    \item Accuracy SLI：Self-Consistency+CoT 精度达标
-    \item Token budget：每月消耗不超预留
-\end{itemize}
-\end{importantbox}
-
-\subsection{Incident Response 与 grade-book}
-Hyung Won 提到：治理 emergent drift 需要 ``incident grade-book''，记录 Alarm、Root cause、Resolution。每次 incident 都要归档 prompt log、evaluation snapshot 与 fix script，避免重复 error。
-
-\begin{knowledgebox}{Incident grade-book 示例字段}
-\begin{itemize}
-    \item Alarm trigger：self-consistency drop / hallucination ratio spike
-    \item Root cause：prompt drift / data shift / compute overload
-    \item Resolution：rollback prompt / retrain / add guardrail
-\end{itemize}
+\begin{knowledgebox}{读图：比较交叉点，而不是给结构贴好坏标签}
+蓝色方法在当前预算左侧可能明显更好；红色方法要到更大 compute 才超越。研究决策取决于部署点在哪里、能否承受探索成本，以及未来是否真的能到达交叉点。图支持的是 regime-dependent choice，而不是“永远选择最少结构”。
 \end{knowledgebox}
 
-\subsection{Tooling stack 与 observability}
-部署 pipeline 应覆盖 prompt log、attention heatmap、latency/failure metrics，再加上 tool call trace（doc search、python 执行）。
+\lecturefigure{hyung-slide-013.jpg}{当前 compute regime 应选择可工作的偏置，同时记住未来移除它}{Hyung Won Chung official deck, p.~13}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}}
-\toprule
-层级 & 工具/实践 \\
-\midrule
-Prompt & Prompt log + versioned dashboard \\
-Inference & Monitoring hook + latency/failure metrics \\
-Tooling & API call trace + sandbox constraints \\
-Observability & Attention/Config snapshot + drift alert \\
-\bottomrule
-\end{tabular}
-\caption{部署时的 tooling stack。}
-\end{table}
+\lecturefigure{hyung-slide-014.jpg}{给定计算、数据、算法和架构时存在暂时最优的 inductive bias}{Hyung Won Chung official deck, p.~14}
 
-\subsection{复现 pipeline 与知识管理}
-\begin{knowledgebox}{复现实践的沉淀机制}
-\begin{itemize}
-    \item 把 prompt log + config + sample output 写入 `notes/` 目录
-    \item 用 `git tag` 记录 stable prompt/config，并排期 review
-    \item 维护 `slides-images/` 与 `frames/`，让团队新人快速上手
-\end{itemize}
-\end{knowledgebox}
+可以把结构强度记为 $b$，当前资源状态记为 $r$，性能写成
+\[
+b^{\star}(r)=\arg\max_b\; P(b;r).
+\]
+其中 $P(b;r)$ 是偏置 $b$ 在资源状态 $r$ 下的性能，$b^{\star}(r)$ 是当前最优结构。随着 $r$ 包含的 compute、data 与 algorithm 改变，$b^{\star}$ 也会移动；所以一个曾经正确的架构决定不应永久冻结。
 
-\subsection{智能体典型案例}
-讲者以“自动研究助理”为例：输入需求后拆成子任务，依次调用 doc search、python executor、web fetch，再由 human review + self-consistency 检查结果，完成报告。每个工具调用前插入 reasoning trace 以防 hallucination。
+\teachervoice{00:42:28--00:43:51 的关键限定是：不能从一开始就等待最一般的方法，因为它可能在当前预算完全不工作。正确动作是“现在加入有用偏置，并明确记录将来何时复查和移除”。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{7cm}}
-\toprule
-阶段 & 人机协作 \\
-\midrule
-需求理解 & Prompt 拆分任务、assign role \\
-工具调用 & Doc search + code executor + web search \\
-结果验证 & Human review + self-consistency votes \\
-\bottomrule
-\end{tabular}
-\caption{自动研究助理的工作流。}
-\end{table}
+\subsection{研究激励为什么更擅长加结构，不擅长删结构}
 
-\subsection{团队角色与知识共享}
-部署和复现需要跨角色协作：Jason 指出一个典型团队包括 data engineer、model engineer、prompt engineer 与 evaluator。每次 run 都必须写入 `prompt log`, `attention snapshot`, `grid search summary`，以便后续 replicate。
+结构生命周期还有社会层原因。新增模块、损失项或机制容易形成论文贡献；证明一个复杂模块在更大规模下可以删除，往往看起来不够新颖。因此社区会积累为旧 regime 设计的假设，却缺少系统性减法。本节把研究激励也视为架构演化的一部分，因为哪些实验得到资源、哪些负结果被发表，会直接影响旧偏置被保留多久。
 
-\begin{knowledgebox}{团队协作的 artifact}
-\begin{itemize}
-    \item data engineer：dedup log、tokenizer config
-    \item model engineer：training log、attention heatmap、scale law plots
-    \item prompt engineer：prompt versions、CoT templates、stress testing reports
-    \item evaluator：hallucination annotation + drift alert summary
-\end{itemize}
-\end{knowledgebox}
+\lecturefigure{hyung-slide-015.jpg}{长期更好的方法在当前往往更差}{Hyung Won Chung official deck, p.~15}
 
-\subsection{本章小结}
-部署与复现不是补充，而是主线：从 SLI/SLO 到 prompt log 再到自动化案例，每一步都要写实并可追踪。
-
-\section{案例驱动演练}
-
-\subsection{Emergent detection drill}
-设计 emergent drill 时要把 ``baseline metric + prompt guardrail'' 视为 control group，再定义 ``emergent metric''（如 multi-step accuracy × CoT fidelity）作为 treatment。Jason 建议每周开展一次 drill，把 emergent jump、hallucination sample 以及 prompt drift log 一起分析。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{6cm}}
-\toprule
-组件 & 操作 \\
-\midrule
-Control metrics & loss/perplexity + token budget \\
-Treatment metric & multi-step accuracy × self-consistency \\
-Drill cadence & 每周一次，包含 prompt log + attention snapshot \\
-\bottomrule
-\end{tabular}
-\caption{Emergent detection drill 的结构化流程。}
-\end{table}
-
-\begin{knowledgebox}{Drill 的目的}
-通过 structured drill 快速判断 emergence 是否真实：若 multi-step accuracy 与 CoT fidelity 同步提升且 hallucination rate 不升高，则可认为 emergent 已经稳定。
-\end{knowledgebox}
-
-\subsection{Agent safety drill}
-Hyung Won 建议把 agent safety 训练成 ``prompt + tool + fallbacks'' 的组合：每次施加 adversarial instruction（例如 `delete all files`），观察 guardrail 是否及时触发；若没有，必须更新 reasoning trace 的 `stop tokens`。
-
-\begin{warningbox}{安全演练清单}
-\begin{itemize}
-    \item 针对 high-risk commands 触发 multi-factor confirmation
-    \item 检查 tool call 是否在 sandbox 执行，防止 data leak
-    \item 记录 reasoning trace 和 human review log 以备审计
-\end{itemize}
+\begin{warningbox}{短期 leaderboard 优势不等于长期研究价值}
+如果一个方法只在小模型、小数据或特定 benchmark 上领先，需要继续问：优势是否来自更强先验？规模扩大后是否饱和？实现复杂度是否妨碍更大训练？这些问题不能由当前单点排名回答。
 \end{warningbox}
 
+\teachervoice{Hyung Won 在 00:43:51--00:44:47 直言，论文激励鼓励添加结构，却很少奖励删除结构。他还说长期更好的方法几乎必然在今天看起来更差，因为更自由的学习系统在低资源区间更混乱。}
+
+\lecturefigure{hyung-slide-016.jpg}{阶段总结：主导力量是更便宜的计算与 associated scaling}{Hyung Won Chung official deck, p.~16}
+
+这张总结页不是把其他力量全部否定，而是宣布接下来的分析坐标系：把 Transformer 架构中的额外结构逐项解释为某个历史条件下的 inductive bias，再问当前规模是否仍需要它。这样，架构图不再是静态分类，而变成可以沿 scale trajectory 推理的对象。
+
 \subsection{本章小结}
-案例演练让 emergent ability 与 agent safety 不再是 abstract theory，而是每周 checklist；通过 structured drill，团队可以把 observed drift 及时转化为 governance action。
 
-\section{Q\&A 与实践提醒}
+本章建立了 Hyung Won 的判断框架：计算成本长期下降使一般方法具有强大后劲；归纳偏置在低资源下提高效率，却可能限制后续规模化。正确结论既不是“结构越多越好”，也不是“结构越少越好”，而是持续估计当前 regime 的最优偏置，并为未来的减法实验保留路径。
 
-\subsection{现场问答精华}
-在 Q\&A 环节，Jason 重申 ``emergent ability 需要 multi-metric evidence''，Hyung Won 回答 ``reduce structure, ramp compute''. 他们还强调 prompt log 要包含 `role`、`CoT template`、`version hash`、`mixture of few-shot + zero-shot` 化的配比。
+\section{三类 Transformer：从 sequence model 的共同底座出发}
 
-\begin{importantbox}{实践提醒}
-\begin{itemize}
-    \item 记录 prompt version 及 sampling 时的 seed/temperature
-    \item 每次 major drift 都要有 artifact（prompt + dataset + attention map）
-    \item 让 evaluator 直接在 dashboard 点出 drift case 并发起 alert
-\end{itemize}
-\end{importantbox}
+上一章讨论为什么要研究结构，本章先把结构讲清楚。Encoder-decoder、encoder-only 与 decoder-only 不是三个完全无关的发明；它们都把离散输入变成向量序列，再用 attention 建模元素间交互。差异主要来自参数是否共享、attention mask 如何限制可见范围，以及输出如何被训练和使用。
 
-\subsection{课堂 takeaways}
-讲者最后建议：把 emergent/agent research 做成 ``observation → instrumentation → governance'' 的闭环，并让整支 team 每周 review 一次 incident grade-book。
+\subsection{三类架构的任务接口}
 
-\begin{knowledgebox}{Takeaway checklist}
-\begin{itemize}
-    \item Oberserve emergent jump across metrics before declaring success
-    \item Instrument prompt/data/code artifacts with per-run metadata
-    \item Govern via prompt log, incident grade-book, evaluation dashboard
-\end{itemize}
+本节先看全景，再逐步进入图。Encoder-decoder 为输入与输出设置两套 stack；encoder-only 把输入压成表征，通常需要 task-specific head；decoder-only 把输入与目标串接，在一个 causal stack 中逐 token 生成。不同接口隐含了不同任务假设。
+
+\lecturefigure{hyung-slide-017.jpg}{Transformer 的三类架构：encoder-decoder、encoder-only、decoder-only}{Hyung Won Chung official deck, p.~17}
+
+\begin{knowledgebox}{术语表：三类架构解决什么问题}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth} X}
+\toprule
+架构 & 核心机制与课程关系 \\
+\midrule
+Encoder-decoder & 输入由 encoder 双向编码，decoder 通过 causal self-attention 与 cross-attention 生成目标；适合显式 sequence-to-sequence。 \\
+Encoder-only & 全序列双向交互，输出通常用于分类、检索或 token labeling；若要生成序列，需要额外生成机制。 \\
+Decoder-only & 输入与历史输出位于同一 causal 序列，参数共享、接口统一，天然适合 autoregressive generation 与多轮续写。 \\
+\bottomrule
+\end{tabularx}
 \end{knowledgebox}
 
-\subsection{本章小结}
-Q\&A 的重点在于把上文提到的 artifacts 串成闭环：观察 → 记录 → 治理，让 emergent/agent 研究能在可控范围内不断迭代。
+\subsection{从字符到向量序列，再到 interaction}
 
-\section{术语与指标速查}
+架构分类之前需要理解共同 pipeline。文本先被 tokenizer 映射成 token ID；embedding table 再把每个 ID 映射到 $d_{\text{model}}$ 维向量；sequence model 根据 attention pattern 让不同位置交换信息。模型处理的是向量序列，而不是直接处理“词义”。
 
-\subsection{关键术语}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{7cm}}
-\toprule
-术语 & 释义 \\
-\midrule
-CoT & Chain-of-thought，向模型展示完整推理步骤 \\
-Self-consistency & 多路径采样后取众数，减少偶发错误 \\
-Governance loop & Prompt log + dashboard + incident grade-book \\
-KV cache & Key/value 缓存，用于 decoder-only 多轮对话加速 \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 27 重复出现的几个关键术语。}
-\end{table}
+\lecturefigure{hyung-slide-018.jpg}{原始字符序列是 Transformer pipeline 的起点}{Hyung Won Chung official deck, p.~18}
 
-\subsection{常用指标速查}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}}
-\toprule
-指标 & 用途 \\
-\midrule
-Self-consistency score & 评估 prompt/draft 是否一致 \\
-Hallucination rate & 记录 fabrication 事件占比 \\
-Token budget & 每次请求的 token/compute 限额 \\
-Attention entropy & 判断模型是否跳到不同模式 \\
-\bottomrule
-\end{tabular}
-\caption{治理与调试时常用的指标。}
-\end{table}
+\lecturefigure{hyung-slide-021.jpg}{完整 pipeline：tokenization、embedding 与 sequence model}{Hyung Won Chung official deck, p.~21}
 
-\subsection{本章小结}
-把术语与指标写下来，便于新成员快速理解讲座用语，也可以在 incident review 中快速定位 key term。
+若 token ID 为 $i_t$，embedding matrix 为 $E\in\mathbb{R}^{V\times d}$，则
+\[
+h_t^{(0)}=E[i_t]+p_t.
+\]
+其中 $V$ 是词表大小，$d$ 是 hidden dimension，$E[i_t]$ 是第 $i_t$ 个 token 的向量，$p_t$ 是位置表示，$h_t^{(0)}$ 是送入第一层的状态。Tokenization 决定序列长度和切分边界，embedding 决定初始连续表示，两者都会影响后续计算成本。
 
-\section{行动与落地检查清单}
+\teachervoice{Hyung Won 在 00:46:35--00:47:50 把 Transformer 先定义成 sequence model：输入元素可以是词、图像或其他对象，核心是对元素之间的 interaction 建模。这个顺序避免把 attention 公式脱离数据接口。}
 
-\subsection{短期行动}
-Jason 建议把 emergent/agent 研究拆成短期行动：4 周内完成 data review + prompt stress testing；8 周内搭建 evaluation dashboard；12 周内形成 incident grade-book。
+\subsection{Encoder-decoder：三种 attention role}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}}
-\toprule
-时间 & 任务 \\
-\midrule
-Week 1-4 & Finish data review + set prompt stress test suite \\
-Week 4-8 & Launch evaluation dashboard + drift alerts \\
-Week 8-12 & Establish incident grade-book + governance review \\
-\bottomrule
-\end{tabular}
-\caption{短期行动计划。}
-\end{table}
+现在进入原始 Transformer。读图时先把三条信息流分开：encoder 内的双向 self-attention、decoder 内的因果 self-attention，以及 decoder 查询 encoder 表示的 cross-attention。每一条边都对应“哪个位置可以读取哪个位置”的权限。
 
-\begin{importantbox}{短期行动的关键提醒}
-\begin{itemize}
-    \item 每次 prompt change 都要关联 version + drift metric
-    \item Drift alert 触发后立即记录 `incident grade-book`
-    \item 让 evaluator 跟 data engineer 同框 review 结果，增加 cross-check
-\end{itemize}
+\lecturefigure{hyung-slide-022.jpg}{完整 encoder-decoder 架构与三种 attention role}{Hyung Won Chung official deck, p.~22}
+
+\begin{importantbox}{Self-attention 与 cross-attention}
+给定 query $Q$、key $K$、value $V$，scaled dot-product attention 为
+\[
+\operatorname{Attn}(Q,K,V)=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}+M\right)V.
+\]
+其中 $d_k$ 是 key 维度，$M$ 是可见性 mask。Self-attention 的 $Q,K,V$ 来自同一序列；cross-attention 的 $Q$ 来自 decoder，$K,V$ 来自 encoder 输出。
 \end{importantbox}
 
-\subsection{长期研究议程}
-Hyung Won 鼓励团队关注 ``reduce inductive bias''、``scale law mapping''、``attention interpretability'' 三件长期项目。这些研究最好以 quarterly thesis 形式展开，每个项目都放在 README/notes 中。
+\lecturefigure{hyung-slide-023.jpg}{Encoder 使用 bidirectional self-attention 建模完整输入}{Hyung Won Chung official deck, p.~23}
 
-\begin{knowledgebox}{长期议程示例}
-\begin{itemize}
-    \item Project Alpha：实验不同注意力结构，验证是否能保持 performance 且 reduce bias
-    \item Project Beta：把 scale law 曲线映射到 optimizer setting，为 large-scale training 预先设定 lr schedule
-    \item Project Gamma：构建 attention interpretability demo，帮助 evaluator 解释 emergent jump
-\end{itemize}
+Bidirectional attention（双向注意力）允许输入中任一位置读取任一其他位置。若序列长度为 $n$，可见性 mask 可写为 $M_{ij}=0$；没有未来屏蔽。它适合一次性给定的输入，因为所有 token 在编码时都已知，但也意味着输入末尾变化会影响前面所有位置的表示。
+
+\lecturefigure{hyung-slide-025.jpg}{Decoder 使用 causal self-attention，只读取当前位置及其左侧历史}{Hyung Won Chung official deck, p.~25}
+
+Causal attention（因果注意力）用上三角 mask 阻止读取未来：
+\[
+M_{ij}=\begin{cases}
+0,&j\le i,\\
+-\infty,&j>i.
+\end{cases}
+\]
+其中 $i$ 是当前 query 位置，$j$ 是被读取的 key 位置。Softmax 后，未来位置权重变为零，因此训练时可以并行计算所有位置，推理时又保持 autoregressive 条件。
+
+\lecturefigure{hyung-slide-027.jpg}{Cross-attention 把 decoder 目标位置连接到 encoder 输入表示}{Hyung Won Chung official deck, p.~27}
+
+\lecturefigure{hyung-slide-028.jpg}{Encoder-decoder 的最终构造：输入双向编码，目标因果生成}{Hyung Won Chung official deck, p.~28}
+
+\begin{knowledgebox}{读图：一条机器翻译路径怎样流动}
+输入 ``That is good'' 先在 encoder 内双向交互，形成每个源 token 的上下文化表示；decoder 在生成 ``Das ist gut'' 时，只能读取已生成的目标前缀，同时通过 cross-attention 访问 encoder 最终层。图支持的是信息权限结构，不表示 attention 权重天然等同于对齐解释。
 \end{knowledgebox}
 
+\subsection{Encoder-only 与 decoder-only 的关键差异}
+
+前一节使用两个 stack；本节看两个极端。Encoder-only 产生全局双向表征，分类时常读取特殊 token 并加 task-specific layer；decoder-only 则把输入和输出统一成一个序列，用同一套参数和 causal self-attention 承担上下文理解与生成。
+
+\lecturefigure{hyung-slide-032.jpg}{Encoder-only 的完整形态：双向表征、特殊 token 与任务头}{Hyung Won Chung official deck, p.~32}
+
+\begin{warningbox}{Encoder-only 不是“不能输出任何序列”}
+这页说的是默认接口：单个 encoder stack 不自带 autoregressive generation path。可以在其上增加 decoder、span head、迭代填空或其他生成机制；代价是系统不再是图中这个最简 encoder-only 结构。课程比较的是内建假设，而不是逻辑上的绝对能力。
+\end{warningbox}
+
+\lecturefigure{hyung-slide-037.jpg}{Decoder-only 的完整形态：串接输入目标、共享参数与 causal attention}{Hyung Won Chung official deck, p.~37}
+
+Decoder-only 的统一接口可写成
+\[
+p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{<t}).
+\]
+其中 $x$ 是输入 token 序列，$y$ 是目标序列，$y_{<t}$ 是已生成目标前缀。输入和目标使用同一个 stack，但 loss 通常可以只在目标位置计算；“参数共享”不等于模型无法区分角色，因为位置、分隔 token 和上下文本身仍提供条件。
+
 \subsection{本章小结}
-行动清单把讲座中的 abstract idea 变成 timeline + deliverable：短期行动确保 governance quickly, 长期项目则把 insights 变成 publishable knowledge。
 
-\section{Emergent 能力记分板}
+三类 Transformer 共享 tokenization、embedding、attention 和 MLP 底座；主要差异是信息可见性、参数分组和任务接口。理解这些差异后，下一章不再把 encoder-decoder 与 decoder-only 当成不可通约的类别，而是通过四步操作把前者连续变换为后者，从而暴露真正的归纳偏置。
 
-\subsection{任务追踪面板}
-建立 emergent capability scoreboard，可视化多个任务的 emergent jump。以下表列出了三个常见任务及其触发条件：
+\section{四步变换：把 Encoder-decoder 连续改写成 Decoder-only}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{5cm}p{4cm}}
-\toprule
-任务 & Trigger condition & Metrics to watch \\
-\midrule
-数学推理 & CoT prompt + longer tokens & Step accuracy + self-consistency \\
-代码生成 & Multi-language prompt + doc search & Syntax error rate + hallucination \\
-对话记忆 & Extended context window & Memory retention + token budget \\
-\bottomrule
-\end{tabular}
-\caption{Emergent 能力的任务追踪。}
-\end{table}
+上一章给出静态架构图，本章执行 Hyung Won 的核心推导。起点是标准 encoder-decoder，终点是 decoder-only；每一步只消除一个差异，并更新比较表。推导的教学价值不在于推荐某个具体实现，而在于把“架构不同”改写成四个可单独实验的假设。
 
-\begin{importantbox}{Scoreboard 的操作说明}
-\begin{itemize}
-    \item 每个任务用不同颜色的 line 探测 emergent jump
-    \item 如果 multi-task jump 同时出现，说明 architecture/data 组合成功
-    \item 失真时立刻回到 prompt log + data cadence
-\end{itemize}
+\subsection{起点：四类差异}
+
+本节先固定比较维度：额外 cross-attention、encoder/decoder 参数是否分离、target-to-input 在哪一层连接，以及输入 self-attention 是否双向。后续每一步都只改变其中一项，避免把多个变化混在一次 ablation 中。
+
+\lecturefigure{hyung-slide-040.jpg}{变换起点：标准 encoder-decoder 与 decoder-only 并排比较}{Hyung Won Chung official deck, p.~40}
+
+\begin{importantbox}{四个可检验假设}
+\begin{enumerate}
+  \item 输入与目标是否需要独立 attention role？
+  \item 输入与目标是否需要独立参数？
+  \item decoder 每层是否只能读取 encoder 最终层？
+  \item 输入是否必须使用 bidirectional attention？
+\end{enumerate}
+把它们分开，才能知道性能差异来自哪一项结构。
 \end{importantbox}
 
-\subsection{指标联动与 drift analysis}
-Emergent score 需要同时监听 multiple metrics：accuracy/self-consistency/hallucination/token budget。Jason 展示的 drift analysis 由 4 条曲线组成，可以快速定位 drift origin。
+\subsection{步骤一：共享 cross-attention 与 self-attention 参数}
 
-\begin{knowledgebox}{Drift analysis 曲线}
-\begin{itemize}
-    \item Accuracy curve：观测 emergent jump
-    \item Self-consistency：衡量 prompt 稳定性
-    \item Hallucination rate：看是否 sacrifice factuality
-    \item Token budget：控制 compute overhead
-\end{itemize}
+Cross-attention 和 self-attention 都使用 query、key、value 与 output projection；差别主要是输入张量来自哪里。因此第一步不删除连接，而是让两种 role 共享投影参数，使一个 attention module 同时承担序列内与跨序列交互。
+
+\lecturefigure{hyung-slide-041.jpg}{步骤一：共享 cross-attention 与 self-attention 参数}{Hyung Won Chung official deck, p.~41}
+
+若原先有 $W_Q^{\mathrm{self}},W_K^{\mathrm{self}},W_V^{\mathrm{self}}$ 与 $W_Q^{\mathrm{cross}},W_K^{\mathrm{cross}},W_V^{\mathrm{cross}}$，参数共享就是施加约束
+\[
+W_{\bullet}^{\mathrm{self}}=W_{\bullet}^{\mathrm{cross}},
+\quad \bullet\in\{Q,K,V,O\}.
+\]
+其中 $Q,K,V,O$ 分别表示 query、key、value 与 output projection。连接来源仍可不同，但模型不能为两种 role 保留完全独立的线性映射。
+
+\lecturefigure{hyung-slide-042.jpg}{步骤一后的比较：独立 cross-attention 变成 self-attention 兼任两种 role}{Hyung Won Chung official deck, p.~42}
+
+\begin{knowledgebox}{读图：共享参数不等于共享输入}
+表格改变的是 module identity，而不是可见性。Decoder 仍可以对自己的历史和 encoder 表示使用不同 mask；只是投影矩阵相同。实验时若同时改变 mask 和参数，很难判断收益来自表示共享还是连接模式。
 \end{knowledgebox}
+
+\subsection{步骤二：共享 encoder 与 decoder 参数}
+
+第一步统一 attention role，第二步统一两套 stack。若输入与目标都只是 token sequence，使用完全独立参数相当于假设两类序列需要不同表示空间。共享参数则要求同一组 layer 处理两者，把差异交给上下文和 mask 表达。本节因此不仅比较参数数量，还比较“角色差异应写进权重，还是应由序列条件动态表达”这两种建模选择。
+
+\lecturefigure{hyung-slide-044.jpg}{步骤二：共享 encoder 与 decoder 的 layer 参数}{Hyung Won Chung official deck, p.~44}
+
+\lecturefigure{hyung-slide-045.jpg}{步骤二后的比较：separate parameters 变成 shared parameters}{Hyung Won Chung official deck, p.~45}
+
+\begin{warningbox}{参数共享是一种更弱任务先验，也可能造成干扰}
+共享能减少参数并促进跨语言、跨角色知识复用，但当输入与目标分布差异很大时，也可能产生容量竞争。正确问题不是“共享必然更先进”，而是当前任务是否仍需要专门化，以及增加总容量后这种专门化收益是否保留。
+\end{warningbox}
+
+\teachervoice{00:55:17--00:55:41 的讲解非常直接：decoder-only 只有一个 stack，所以自然共享参数。Hyung Won 借这个对比追问 encoder-decoder 的分离是否仍有必要，而不是声称共享本身没有代价。}
+
+\subsection{步骤三：让 decoder 与 encoder 的同层表示对齐}
+
+标准 cross-attention 通常让每个 decoder layer 读取 encoder 最终层。Decoder-only 的同层 self-attention 则让第 $\ell$ 层读取前缀 token 在同一层的表示。第三步把连接改成 layer-aligned，使表示粒度更接近单 stack。
+
+\lecturefigure{hyung-slide-047.jpg}{步骤三：decoder layer $\ell$ attends to encoder layer $\ell$}{Hyung Won Chung official deck, p.~47}
+
+\lecturefigure{hyung-slide-048.jpg}{步骤三后的比较：final-layer cross-attention 变成同层连接}{Hyung Won Chung official deck, p.~48}
+
+\begin{knowledgebox}{读图：为什么 layer index 可能代表 granularity}
+深层网络常呈层级表示：底层偏局部形式，高层偏抽象语义。若 decoder 第一层只能读取 encoder 最终层，它必须从高度抽象表示中恢复低层信息；同层连接允许每个阶段读取相近粒度的输入。这个解释是设计直觉，是否真的形成瓶颈仍需随深度做 ablation。
+\end{knowledgebox}
+
+\subsection{步骤四：把 encoder self-attention 改成 causal}
+
+前三步已统一 module、参数和层间连接，剩下的主要差异是输入序列内部是否双向可见。将 encoder mask 改为 causal 后，前面 token 不再读取后面 token；把输入与目标串接起来，两个 stack 的计算图便接近单个 decoder-only stack。
+
+\lecturefigure{hyung-slide-050.jpg}{步骤四：将 encoder 的 bidirectional self-attention 改成 causal}{Hyung Won Chung official deck, p.~50}
+
+\lecturefigure{hyung-slide-051.jpg}{四步完成后的差异表：两类架构只剩很小实现差别}{Hyung Won Chung official deck, p.~51}
+
+\begin{lstlisting}[caption={四步 architecture transformation 的概念伪代码}]
+model = encoder_decoder()
+share(model.cross_attention, model.self_attention)
+share(model.encoder_layers, model.decoder_layers)
+connect_decoder_layer_to_matching_encoder_layer(model)
+set_encoder_mask(model, mode="causal")
+concatenate_input_and_target(model)
+\end{lstlisting}
+
+\teachervoice{00:56:45--00:57:09，Hyung Won 认为完成四步后，两种架构在同任务同数据下的差异可能小于重复训练噪声。这是经验判断，不是课程给出的正式定理；真正验证仍需要控制参数量、初始化、训练预算和数据顺序。}
 
 \subsection{本章小结}
-把 emergent events 变成 scoreboard + drift analysis，可以把“感觉似乎好的”现象具体化：每次 jump 都要经过 panel review，结合 multiple metrics 判断是否值得推向 production。
 
-\section{Observation daybook 记录}
+四步变换把架构标签还原成四个局部假设：attention role、参数分离、层间连接和输入方向性。它们都能单独实验，也都可能随规模改变价值。下一章将逐项解释这些结构为什么在机器翻译和早期任务中合理，以及为什么在通用语言模型、多轮对话和更深网络中需要重新审视。
 
-\subsection{关键事件记录模板}
-Hyung Won 分享的 daybook 模板包含：trigger description、metrics snapshot、guardrail update、next action。每次 emergent drift 或 safety incident 都需填写本模板并归档。
+\section{结构为何曾经有效：翻译与 Instruction Tuning 的自然实验}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{6cm}}
-\toprule
-字段 & 内容 \\
-\midrule
-Trigger & self-consistency drop / hallucination spike \\
-Metrics & accuracy, hallucination rate, token budget snapshot \\
-Guardrail update & prompt change / tool constraint \\
-Next action & retrain / rollback / new drill \\
-\bottomrule
-\end{tabular}
-\caption{Observation daybook 的模板字段。}
-\end{table}
+上一章完成形式变换，本章问历史动机。Encoder-decoder 的额外结构并非任意复杂化：2017 年的核心任务是机器翻译，输入和目标来自不同语言；后来的学术 instruction-tuning 数据又常呈长输入、短答案。结构与数据分布吻合时，归纳偏置会显著提高有限预算下的效率。
 
-\begin{knowledgebox}{事件记录的价值}
-把每个 incident 写进 daybook，有助于 periodic review：团队可以在 retro 会议上快速复盘 trigger → guardrail → action 的闭环，避免重复犯错。
-\end{knowledgebox}
+\subsection{三项额外结构}
 
-\subsection{Lessons learned 速查}
-建立 `lessons.md` 保存 emergent drift 的教训；Jason 推荐每次 incident 后写一段 ``why/what/next''，并按 tag 分类（data/prompt/tool）。
+本节先看完整清单，再聚焦第一项。相对 decoder-only，encoder-decoder 假设输入与目标足够不同，目标应读取已经完全编码的输入，并且输入 token 之间适合全双向交互。三项假设分别对应参数、层间连接和 attention mask。
 
-\begin{importantbox}{Lessons learned 模板}
-\begin{itemize}
-    \item Why：是什么 trigger 让 metrics 异常
-    \item What：我们做了什么（prompt rollback / data filter）
-    \item Next：下次如何避免（security guard / prompt stress testing）
-\end{itemize}
+\lecturefigure{hyung-slide-052.jpg}{Encoder-decoder 相对 decoder-only 的三项额外结构}{Hyung Won Chung official deck, p.~52}
+
+\lecturefigure{hyung-slide-053.jpg}{第一项假设：输入与目标不同到值得使用独立参数}{Hyung Won Chung official deck, p.~53}
+
+\begin{importantbox}{判断一个 inductive bias 是否仍有效的三问}
+\begin{enumerate}
+  \item 它最初匹配了什么数据分布或任务约束？
+  \item 当前数据、目标和交互方式是否仍满足这个约束？
+  \item 若移除结构并增加规模，性能曲线在哪个预算点交叉？
+\end{enumerate}
+只回答第一问会把历史合理性误当成永久正确性。
 \end{importantbox}
 
-\subsection{本章小结}
-记录 daybook + lesson，把 emergent/agent 的观察经过 formalization，便于 incident review 也便于新成员快速 catch up。
+\subsection{机器翻译：独立参数曾经很自然}
 
-\section{团队承诺与治理约定}
+2017 年 Transformer 面向 source-to-target translation。输入是源语言句子，目标是另一种语言的输出，二者词表、语序和生成角色不同。在只优化翻译的设定下，让 encoder 专注源语言、decoder 专注目标语言是一种高效先验。本节先承认这一历史合理性，再比较通用预训练改变了哪些条件，避免用今天的任务接口倒推旧设计“从一开始就错误”。
 
-\subsection{治理角色 RACI}
-建议把 emergent/agent 管理工作分派到 RACI：谁负责 prompt log（Responsible）、谁支持 evaluation dashboard（Accountable）、谁提供 consult（Consulted）、谁需要 informed（Informed）。
+\lecturefigure{hyung-slide-054.jpg}{机器翻译中的 source/target 分布差异支持独立参数}{Hyung Won Chung official deck, p.~54}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{5cm}}
-\toprule
-角色 & 主要职责 \\
-\midrule
-Prompt engineer & 维护 prompt versions + stress testing reports \\
-Model engineer & 保持 training log + attention monitor \\
-Evaluator & 监控 hallucination + accuracy drift \\
-Data engineer & 管理 dedup log + dataset snapshot \\
-\bottomrule
-\end{tabular}
-\caption{RACI Framework 的简版分工。}
-\end{table}
+\lecturefigure{hyung-slide-055.jpg}{通用语言模型要融合跨语言知识，独立参数的动机减弱}{Hyung Won Chung official deck, p.~55}
 
-\begin{warningbox}{治理约定建议}
-\begin{itemize}
-    \item 每次 incident 后 24 小时内通知 governance channel
-    \item Prompt log 需要 `version/hash + metric diff + guardrail change`
-    \item 对所有 high-risk tool call 做 human-in-the-loop audit
-\end{itemize}
+读第二页时要注意任务已经改变。现代 pretraining 不只学习英德翻译，而要在多语言文本中形成共享世界知识；同一事实可能用不同语言表达。若把输入与目标永久隔离，模型可能更难复用表示。另一方面，多语专门化仍可能有价值，因此这页提出的是 scale-era counterargument，不是独立参数绝对无用。
+
+\teachervoice{00:57:51--00:59:09 的历史对比非常具体：当目标只是翻译时，给不同语言分开参数“很自然”；当目标变成一般知识学习时，讲者更希望把跨语言知识合并。Inductive bias 的评价随着 objective 改变。}
+
+\subsection{FLAN：长输入、短目标让 encoder-decoder 意外占优}
+
+Instruction tuning 提供了更细的自然实验。同一团队在 PaLM（decoder-only）与 T5（encoder-decoder）上做 fine-tuning；虽然大部分时间用于优化 PaLM，T5 的增益却更大。讲者没有把结果归因于架构普遍优越，而是回到数据长度分布寻找匹配关系。
+
+\lecturefigure{hyung-slide-056.jpg}{Instruction finetuning 把大量学术任务统一成自然语言指令}{Hyung Won Chung official deck, p.~56}
+
+\lecturefigure{hyung-slide-057.jpg}{FLAN 实验中 encoder-decoder 的 fine-tuning 增益更大}{Hyung Won Chung official deck, p.~57}
+
+\begin{knowledgebox}{读图：比较的是增益，不是绝对模型胜负}
+表格强调 instruction tuning 前后的 improvement。不能只看红框就得出 T5 在所有任务、所有规模上优于 PaLM；课堂结论是 encoder-decoder 的结构与该批学术数据特别匹配，因此 fine-tuning 信号利用率更高。
+\end{knowledgebox}
+
+\lecturefigure{hyung-slide-058.jpg}{学术数据常有长输入、短目标的长度分布}{Hyung Won Chung official deck, p.~58}
+
+若输入长度随机变量为 $L_x$、目标长度为 $L_y$，该数据集大致满足
+\[
+\mathbb{E}[L_x]\gg \mathbb{E}[L_y].
+\]
+其中 $\mathbb{E}[L_x]$ 与 $\mathbb{E}[L_y]$ 分别是输入和目标平均长度。长题面、短标签使两侧分布明显不同，独立 encoder/decoder 参数就能专门化；但长文本生成和多轮聊天会缩小甚至反转这种不对称。
+
+\teachervoice{00:59:46--01:01:10，Hyung Won 说团队花了 99\% 时间优化 PaLM，T5 却在几天内得到更大增益；他的解释是数据长度偏置与架构“意外对上了”。这段 teacher voice 把结果从品牌比较变成分布匹配分析。}
+
+\begin{warningbox}{Academic benchmark 的可评分性会塑造训练分布}
+长目标难以人工标注和自动评分，因此学术数据偏向长输入、短答案。可评分性不是用户价值的同义词：创作、代码、分析与对话往往需要长输出。若模型架构只对 benchmark 分布优化，部署任务改变后原有结构优势可能消失。
 \end{warningbox}
 
 \subsection{本章小结}
-团队承诺让 governance 有人负责、有流程、有记录，而不是某个人“记在脑子里”。
+
+机器翻译和 FLAN 说明归纳偏置为什么能在特定时代产生真实收益：它把有限容量投向数据分布最需要的方向。但通用预训练、长生成和多轮对话改变了输入/目标关系，迫使研究者重新测试参数分离。历史不是为了嘲笑旧设计，而是为了识别设计成立的条件。
+
+\section{表示粒度、Bidirectionality 与多轮缓存}
+
+前一章分析参数分离，本章处理剩余两项结构：decoder 只读取 encoder 最终层，以及 encoder 使用 bidirectional attention。两项都曾提高任务质量，但随着网络更深、对话更长，信息粒度和重复计算问题会变得突出。这里第一次把 architecture choice 与 serving cost 放到同一张图中。
+
+\subsection{只读最终 encoder layer 会不会形成信息瓶颈}
+
+本节关注 cross-attention 的读取位置。深层网络往往在不同层表示不同粒度的信息；若 decoder 的第一层也只能访问 encoder 最终层，低层形式信息可能经过过度压缩。当前几十层模型上影响也许很小，但极深网络可能放大这种不匹配。
+
+\lecturefigure{hyung-slide-059.jpg}{第二项假设：目标只需读取已经完全编码的输入}{Hyung Won Chung official deck, p.~59}
+
+\lecturefigure{hyung-slide-060.jpg}{标准 cross-attention 只读取 encoder 最终层激活}{Hyung Won Chung official deck, p.~60}
+
+\lecturefigure{hyung-slide-061.jpg}{深层网络的底层与顶层通常编码不同粒度的信息}{Hyung Won Chung official deck, p.~61}
+
+\begin{knowledgebox}{读图：representation hierarchy 是启发式，不是固定语义表}
+视觉网络常用“底层边缘、顶层物体”说明层级表示；语言模型中也可能出现局部形式到抽象语义的趋势。但层含义会随训练目标、残差连接与深度变化。图真正支持的是：不同层可能提供互补信息，因此只暴露最终层是一项需要检验的结构选择。
+\end{knowledgebox}
+
+\teachervoice{01:02:43--01:03:25，Hyung Won 说在自己用过的 24 层左右 T5 上，layer 1 读取 layer 24 似乎没问题；但若未来有十倍或千倍深度，他“不太舒服”。这是 scale extrapolation 的典型提问，而不是已观察到的失败。}
+
+\subsection{Layer-aligned connection 是怎样的反事实}
+
+上一节指出粒度问题，本节构造最小替代方案：让 decoder 第 $\ell$ 层读取 encoder 第 $\ell$ 层。这样每个阶段得到相近深度的输入表示，也更接近 decoder-only 同层 token interaction。反事实的价值在于可做受控实验，即使最终不采用它。
+
+\lecturefigure{hyung-slide-062.jpg}{第三项假设：输入内部需要 all-to-all bidirectional interaction}{Hyung Won Chung official deck, p.~62}
+
+\lecturefigure{hyung-slide-063.jpg}{Layer-aligned connection 与 causal input 的替代架构}{Hyung Won Chung official deck, p.~63}
+
+\begin{importantbox}{结构分析的正确产物是 ablation axis}
+从 H059--H063 可以得到两个独立实验轴：final-layer versus layer-aligned cross-attention，以及 bidirectional versus causal input mask。若一次同时改变两者，性能差异无法归因；课程的四步推导正是为了生成可单独缩放的 ablation。
+\end{importantbox}
+
+\subsection{Bidirectionality 的质量收益与系统成本}
+
+Bidirectional encoder 在 BERT 时代对困难理解任务非常重要，因为每个 token 能同时利用左右上下文。但在大规模 instruction tuning 中，讲者的 anecdotal experience 是双向与单向差异不大；与此同时，多轮聊天暴露了明显系统成本：新消息改变了旧输入的“未来”，双向表示必须重新编码。
+
+\lecturefigure{hyung-slide-064.jpg}{在足够规模下 bidirectionality 可能收益变小，却增加多轮对话成本}{Hyung Won Chung official deck, p.~64}
+
+\teachervoice{01:03:35--01:04:23，Hyung Won 明确把结论标成 highly anecdotal：Flan-2 中双向和单向 fine-tuning 差异不大。讲义保留这个证据等级，不能把它改写成“bidirectional attention 已被证明无用”。}
+
+\subsection{为什么 causal attention 可以复用 KV cache}
+
+本节把图转成计算账。Causal model 中旧 token 的表示不依赖未来新 token，因此它们在前一轮计算出的 key/value 可以缓存；追加消息时只计算新增部分。Bidirectional encoder 中旧 token 可以读取新 token，追加后旧表示失效，通常需要重新编码整个输入。
+
+\lecturefigure{hyung-slide-066.jpg}{多轮对话中 bidirectional 重编码与 unidirectional cache reuse 的对比}{Hyung Won Chung official deck, p.~66}
+
+设已有上下文长度为 $n$，新增长度为 $m$。忽略常数与 MLP，重新做 full attention 的代价近似
+\[
+O\bigl((n+m)^2\bigr),
+\]
+而 causal KV cache（key-value cache，保存旧 token 每层的 key/value 张量）只需为新增 query 计算对旧缓存和新增 token 的 attention，增量代价近似
+\[
+O(nm+m^2).
+\]
+其中 $n$ 是旧上下文长度，$m$ 是新增 token 数。缓存降低重复计算，却增加显存占用；长上下文服务仍需管理 cache placement、batching 与 eviction。
+
+\begin{knowledgebox}{读图：蓝色可复用区域对应因果不变性}
+Unidirectional 情况下，旧 token 不能看未来，因此新消息到来不会改变旧 key/value；bidirectional 情况下，``How are you?'' 的表示会因为后续 ``Bad'' 出现而改变。系统效率优势来自计算图的依赖方向，而不是 decoder-only 名称本身。
+\end{knowledgebox}
+
+\teachervoice{01:04:31--01:05:36 的课堂解释把模型质量与 serving 连接起来：一个在 2018 年提高 benchmark 的结构，可能在多轮产品形态中制造重编码成本。Architecture trajectory 不只由 accuracy 决定，也由交互模式决定。}
+
+\subsection{结论与 Q\&A：下一处结构瓶颈可能是 objective}
+
+架构分析结束后，讲者把方法推回一般研究。历史结构不是无关旧物；反复做这种分析，会训练研究者识别当前问题中的隐含假设，并追问能否用更一般的方法配合规模替代它。Q\&A 进一步提出，当前更强的瓶颈也许不在 Transformer block，而在学习目标。
+
+\lecturefigure{hyung-slide-067.jpg}{结论：识别主导力量，并用 scaling 视角分析额外结构}{Hyung Won Chung official deck, p.~67}
+
+\teachervoice{01:06:06--01:06:42 的结尾要求学生回到自己的问题，问“哪些假设需要复查、为什么、能否换成更一般的机制并 scale up”。这比记住 decoder-only 胜出更重要，因为同一方法还可用于 MoE、multimodality、memory 与 learning objective。}
+
+最大似然训练（maximum-likelihood estimation, MLE）把观察到的目标当作训练样本中的正确 continuation：
+\[
+\theta^{\star}=\arg\max_{\theta}\sum_{(x,y)\in\mathcal{D}}\log p_{\theta}(y\mid x).
+\]
+其中 $\mathcal{D}$ 是输入目标数据集，$x$ 是条件，$y$ 是观测目标，$\theta$ 是模型参数。对于翻译或分类，一个参考答案常能提供有效监督；对于“写一首诗”等开放任务，把单个 $y$ 当成唯一正向信号会造成很强结构假设。
+
+\begin{knowledgebox}{RLHF 在这里扮演什么角色}
+RLHF（reinforcement learning from human feedback）先从人类偏好训练 reward model，再用该奖励优化策略。Hyung Won 把它视为“学习 objective function”的一个例子：不再只复制单个目标，而让模型学习多个回答的相对质量。他同时强调 RLHF 本身也不够 scalable，因此这只是方向证明，不是终局方案。
+\end{knowledgebox}
+
+\teachervoice{01:12:39--01:14:34，Hyung Won 说自己不认为 architecture 是当前主要 bottleneck；他更不安于 MLE 对开放任务施加“只有这个 target 正确”的教学信号。这个 Q\&A 扩展了整堂课：需要被移除的 inductive bias 也可能藏在 objective 中。}
+
+\begin{warningbox}{Compute trajectory 不是无条件承诺}
+01:15:17 之后，讲者把 Moore's law 称为 red herring，强调真正变量是 compute availability；他列出 GPU、低精度与硬件专用化，也承认能源和物理可能成为瓶颈。研究计划应做多情景分析，而不是把过去指数趋势机械外推成未来保证。
+\end{warningbox}
+
+\subsection{本章小结}
+
+表示层级提醒我们检查 final-layer bottleneck；多轮对话提醒我们把 attention direction 与缓存成本一起考虑；Q\&A 又把结构分析推广到 MLE 与 RLHF。共同方法仍是：找出当前系统中被默认接受的假设，说明它在旧 regime 中为何有用，再用规模、数据和交互变化测试它是否仍然值得保留。
 
 \section{总结与延伸}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{8cm}}
-\toprule
-维度 & 核心复盘 \\
-\midrule
-数据/能力 & Emergent 需要 multi-metric evidence + manual data review \\
-Prompt & Instruction tuning+CoT+dashboard 组成 governance loop \\
-架构/评估 & 减少归纳偏置，搭配 SLI/SLO 驱动的 evaluation pipeline \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 27 三条主线回顾。}
-\end{table}
+两场讲座最终汇合成一套研究纪律：不要把能力、架构或趋势神秘化；先读数据和图，拆出隐藏任务与假设，再沿规模轴寻找交叉点。Jason 提供模型行为的微观分解，Hyung Won 提供架构演化的宏观分解；二者都要求研究者区分观察、解释与外推。
+
+\subsection{十二条核心结论}
+
+本节把长讲义压缩成可复用检查表。每条结论都保留适用条件，避免把 2024 年课堂判断升级成没有边界的 2026 年事实。
+
+\begin{enumerate}
+  \item 手工检查数据是在训练研究者自己的任务表示，不能被 benchmark dashboard 完全替代。
+  \item Next-token prediction 通过真实 continuation 汇聚海量 latent-task supervision。
+  \item 总体 cross-entropy 是不同 token 分布与任务难度的加权混合。
+  \item 总体 loss 平滑不要求每个 benchmark metric 平滑。
+  \item Emergent-looking curve 可能同时包含真实能力变化、阈值评分与稀疏采样。
+  \item Inverse/U-shaped scaling 常提示竞争策略，应拆成子任务测量。
+  \item 单点改进不能说明方法是否饱和、平移曲线还是改变斜率。
+  \item 更便宜的有效计算是强大历史趋势，但不是无限保证。
+  \item Inductive bias 在当前 regime 提高效率，也可能在更大规模成为瓶颈。
+  \item Encoder-decoder 与 decoder-only 的差异可拆成四个局部、可消融假设。
+  \item Translation 与长输入短目标解释了某些结构为什么曾经有效。
+  \item 下一处需要重新审视的结构可能位于 objective、数据接口或系统交互，而不只在 architecture block。
+\end{enumerate}
+
+\subsection{一张表串起两位讲者}
+
+为了把微观行为与宏观架构放在同一框架中，下面按“观察对象、分解单元、规模轴、风险与行动”对齐两场讲座。表格不是新结论，而是帮助读者迁移方法。
 
 \begin{table}[H]
 \centering
-\begin{tabular}{p{3.5cm}p{8cm}}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth} X X}
 \toprule
-维度 & 风险与控制 \\
+维度 & Jason Wei & Hyung Won Chung \\
 \midrule
-Hallucination & taxonomy + prompt stress testing + knowledge graph check \\
-Deployment & incident grade-book + tool stack + prompt/drift observability \\
-Reproducibility & prompt log + incident artifact + team knowledge handoff \\
+观察对象 & token、prompt、task metric、loss curve & 架构、历史任务、compute trend、system cost \\
+分解单元 & latent task、subskill、metric threshold & parameter sharing、layer connection、attention mask、objective \\
+规模轴 & model/data/compute budget & compute availability、network depth、interaction length \\
+主要风险 & 把聚合分数当机制，把突变当神秘能力 & 把历史捷径永久化，把旧 benchmark 当未来任务 \\
+推荐行动 & 看数据、拆任务、画多点 scaling curve & 找主导力量、记录偏置、做减法 ablation \\
 \bottomrule
-\end{tabular}
-\caption{风险与治理的补充视角。}
+\end{tabularx}
+\caption{两场讲座在同一证据驱动框架中的对应关系。}
 \end{table}
+
+\subsection{实践用研究模板}
+
+读者可以把课程方法直接用于一个新想法。先明确哪一项观察是事实，再写出至少两个竞争解释；随后选择能区分解释的预算点、子任务或架构消融。若结果只在单点成立，就不应声称改变了 scaling trajectory。
+
+\begin{importantbox}{从课堂到实验的七步模板}
+\begin{enumerate}
+  \item 抽样并人工检查真实训练或评估数据；
+  \item 定义连续 metric 与离散用户任务，避免只保留一个分数；
+  \item 列出潜在任务、策略和结构假设；
+  \item 在多个预算点运行 baseline 与 intervention；
+  \item 对关键结构做单变量 ablation；
+  \item 报告拟合区间、误差、失败案例和数据分布；
+  \item 写清结论是观察、机制假设、个人判断还是外推。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{自测问题}
+
+这些问题用于检查是否真正掌握讲座的推理，而不是只记住结论。回答时应引用公式、图中变量或反事实实验。
+
+\begin{enumerate}
+  \item 为什么 next-token objective 可以看成 massive multi-task learning？它又为什么不能保证均衡学会所有任务？
+  \item 总体 loss 平滑下降时，exact-match accuracy 为什么可能突然上升？
+  \item 如何用 repeat、quote repair 与 instruction following 解释 U-shaped scaling？
+  \item 为什么一个研究方法在单个预算点领先，仍不足以声称更 scalable？
+  \item Inductive bias 在什么条件下是帮助，在什么条件下会成为瓶颈？
+  \item Encoder-decoder 到 decoder-only 的四步变换分别消除了什么假设？
+  \item 为什么 long-input/short-target 数据可能特别适合 encoder-decoder？
+  \item Bidirectional attention 为什么会增加多轮对话的重复计算？
+  \item MLE 对开放式生成施加了什么结构假设？RLHF 又没有解决什么问题？
+  \item 如果未来 compute trend 因能源约束改变，Hyung Won 的分析方法应怎样更新？
+\end{enumerate}
 
 \subsection{拓展阅读}
+
+本节只列与课堂论证直接相关的原始材料。阅读时建议复现图的坐标和假设，而不是只摘结论。
+
 \begin{itemize}
-    \item Wei et al., ``Emergent Abilities of Large Language Models,'' 2022
-    \item Sutton, ``The Bitter Lesson,'' 2019
-    \item Chung et al., ``Scaling Instruction-Finetuned Language Models'' (Flan-T5), 2022
-    \item Wei et al., ``Chain-of-thought Prompting Elicits Reasoning in Large Language Models,'' 2022
-\item Lee et al., ``ReAct: Synergizing Reasoning and Acting in Language Models,'' 2022
-\item Brown et al., ``Language Models are Few-Shot Learners,'' 2020
+  \item Kaplan et al., \emph{Scaling Laws for Neural Language Models}：总体 loss 的幂律经验关系。
+  \item Wei et al., \emph{Emergent Abilities of Large Language Models}：任务级曲线与 emergent behavior。
+  \item Schaeffer et al., \emph{Are Emergent Abilities of Large Language Models a Mirage?}：metric choice 对曲线形状的影响。
+  \item Sutton, \emph{The Bitter Lesson}：一般方法、计算与人工结构的长期关系。
+  \item Vaswani et al., \emph{Attention Is All You Need}：原始 encoder-decoder Transformer。
+  \item Chung et al., \emph{Scaling Instruction-Finetuned Language Models}：FLAN 系列的 instruction tuning 证据。
 \end{itemize}
 
 \end{document}

@@ -1,941 +1,672 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 05：Switch Transformer——用稀疏路由扩展参数，而不是扩展每个 token 的计算}
+\renewcommand{\noteauthors}{基于 Barret Zoph、Irwan Bello 讲座，官方手动字幕与 Switch Transformer / GShard / V-MoE 原始论文整理}
+\renewcommand{\notedate}{CS25 V1 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-14}
+\renewcommand{\videoduration}{1:05:44}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=U8J32Z3qV8s}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Mixture of Experts / Switch Transformer — Barret Zoph, Google}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2021年9月}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2021}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=Q5baLehv5So}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与核心问题：稀疏性究竟扩展了什么}
 
-\section{引言：通过稀疏性扩展 Transformer}
+本讲的标题很容易诱导出一个错误印象：仿佛只要把模型参数写成“万亿”，就等于让每个 token 都经过万亿参数计算。讲座真正讨论的是另一件事：让模型拥有很大的\textbf{可选参数池}，但每个 token 只激活其中少量专家，从而把总参数量与单 token 计算量部分解耦。理解这一点，是读懂后续所有速度、质量和硬件图表的前提。
 
-Barret Zoph（与 Erwin 联合演讲）介绍了通过\textbf{稀疏性（Sparsity）}来扩展 Transformer 的研究。核心动机来自缩放定律（Scaling Laws）——模型性能随规模（计算、数据、参数）的增长而可预测地提升。
+本次重写使用 Stanford Online 官方录像、官方手动英文字幕、38 张从 1080p 录像中恢复并人工筛选的完整教学页，以及 Switch Transformer、GShard、T5、mT5 与 V-MoE 原始论文。录像没有公开独立 slide PDF，因此每张图都标注视频时间；重复动画、片头和 Q\&A 中反复跳回的同一页不重复插入，但口头解释保留在正文中。
 
-\subsection{本章小结}
-本节说明稀疏性背后的 scaling logic：通过选择性激活降低 per-token FLOPs 但提升模型容量。讲者直接把密集模型和 MoE 模型的计算曲线进行了对比——引导我们带着 ``参数 vs FLOPs'' 的问题进入后续讲解。
+\lecturefigure{slide-01-title.jpg}{讲座主题：Scaling Transformers through Sparsity。}{Stanford Online 官方视频 00:00:06--00:01:41。}
 
-\begin{importantbox}{稀疏模型的核心思想}
-传统密集模型对每个输入使用所有参数。稀疏模型（Mixture of Experts, MoE）让\textbf{不同的输入激活不同的参数子集}，从而在不成比例增加计算量的情况下大幅增加模型参数量。
+这张标题页之后，讲者没有直接进入路由公式，而是先回到 dense scaling 的经验事实：语言模型的 loss 随参数、数据和计算预算呈现可预测的幂律趋势。MoE 的研究问题并不是否认 dense scaling，而是问：能否在保持每个样本计算近似不变的情况下，再增加一个“条件使用参数”的扩展维度？
+
+\lecturefigure{slide-02-neural-scaling-laws.jpg}{Dense neural scaling laws：更大的模型具有更高样本效率，并存在随预算平滑变化的最优规模。}{Stanford Online 官方视频 00:01:42--00:02:35。}
+
+可以用一个简化式表达 dense scaling 的经验形状：
+
+\[
+\mathcal{L}(N)=\mathcal{L}_{\infty}+aN^{-\alpha},\qquad a>0,\ \alpha>0.
+\]
+
+其中，$\mathcal{L}(N)$ 表示参数规模为 $N$ 时的验证损失；$\mathcal{L}_{\infty}$ 是在该数据分布与建模假设下的不可约下界；$a$ 控制纵向尺度；$\alpha$ 决定扩大模型带来的边际收益衰减速度。这个式子描述的是经验趋势，不是保证任意架构、数据或硬件上都沿同一曲线外推。
+
+\teachervoice{老师先强调 scaling law 的意义：它给研究者一种“扩大规模仍可能获得收益”的信心，但原论文主要研究 dense model。于是本讲把 sparsity 作为新的结构轴，而不是把 MoE 讲成与 scaling 无关的局部模块。}
+
+\lecturefigure{slide-03-new-axis-sparsity.jpg}{新的扩展轴：增加稀疏使用的参数，并尝试与每个样本的计算量解耦。}{Stanford Online 官方视频 00:02:36--00:03:05。}
+
+\begin{importantbox}{资源核算的中心不变量}
+讨论 sparse model 时必须同时报告至少五个量：\textbf{总参数量}、\textbf{每 token 激活参数量}、\textbf{每 token FLOPs}、\textbf{跨设备通信量}与\textbf{wall-clock 时间}。只说“参数更多但计算不变”是不完整的，因为未激活参数仍占设备或主存，路由还会产生 all-to-all 通信与负载不均。
 \end{importantbox}
 
-\section{Mixture of Experts（MoE）基础}
-
-\subsection{MoE 架构}
-
-MoE 层替换 Transformer 中的标准 FFN 层：
-\begin{itemize}
-    \item 包含 $N$ 个独立的``专家''（每个是一个 FFN）
-    \item 一个\textbf{路由网络（Router/Gate）}决定每个 token 发送给哪些专家
-    \item 标准方案：Top-$k$ 路由——每个 token 选择得分最高的 $k$ 个专家
-\end{itemize}
-
-$$y = \sum_{i=1}^{N} g_i(x) \cdot E_i(x), \quad g(x) = \text{TopK}(\text{softmax}(W_g \cdot x))$$
-
-\begin{knowledgebox}{MoE 的历史}
-MoE 的思想可以追溯到 1991 年 Jacobs 等人的工作。在深度学习时代，Shazeer et al. (2017) 首次将 MoE 成功应用于大规模 LSTM 语言模型。Switch Transformer 进一步简化了 MoE 并将其应用于 Transformer。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-MoE 通过条件计算实现了参数量和计算量的解耦——模型可以拥有万亿参数，但每个 token 只使用其中一小部分。
-
-\section{MoE 发展脉络}
-
-\subsection{从早期混合专家到深度学习 MoE}
-
-\begin{itemize}
-    \item 1991 年 Jacobs 等人提出 ``experts + gating''，初步探索局部模型的组合
-    \item 2017 年 Shazeer et al. 在 LSTM 上展示 Sparsely-Gated MoE，开启工程化大规模 MoE 的时代
-    \item 2021 年 GShard 将 MoE 与 Transformer 结合，利用设备感知分片提高吞吐
-    \item Switch Transformer 进一步简化路由，成为稀疏 Transformer 的开山之作
-\end{itemize}
-
-\begin{knowledgebox}{稀疏模型的关键判据}
-从历史上看，直到 routers 能维持较低的 expert skew，MoE 才具备可训练性。每一次迭代都在 router、load balancing 和 expert-count 三个维度做技术积累。Switch Transformer 的贡献在于把这些维度封装在一套可控流水线。
-\end{knowledgebox}
-
-\subsection{以 timeline 观察进化}
-
-\begin{itemize}
-    \item 2021 年早春：GShard 在多个 data-center 上训练 600B 模型，展示 MoE 的规模能力
-    \item 同年末：Switch Transformer 带来 Top-1 router 以降低通信复杂度
-    \item 2022-2024：GLaM、Grok、Mixtral 等模型把 mixture of sizes + distillation 实践到生产线
-    \item 2025 年：Barret 在 CS25 提到 ``稀疏性要软着陆，需要监控 + governance''，暗示下一阶段是闭环工程
-\end{itemize}
+\begin{warningbox}{万亿参数不等于万亿参数都被执行}
+Switch-C 的 1.6T 是可用参数池的总规模，不是每个 token 的 active path。反过来，active FLOPs 较小也不代表系统免费：存储、通信、容量缓冲、编译形状和低吞吐推理都会暴露额外成本。
+\end{warningbox}
 
 \begin{table}[H]
 \centering
-\caption{MoE 重要里程碑及其工程亮点}
-\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\small
+\caption{读 sparse scaling 时必须分开的资源量。}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
 \toprule
-时期 & 里程碑 & 工程聚焦 \\
+量 & 它回答的问题 & 常见误读 \\
 \midrule
-1991--2015 & 专家组合与 gating 理论 & 理论分析、EM 训练、局部专家 \\
-2017 & Sparsely-Gated MoE (Shazeer et al.) & 扩展到大规模 LSTM、引入 router logits \\
-2021 & GShard/Switch (Transformer) & device-aware routing、Top-1 路由、load loss \\
-2022--2024 & GLaM、Mixtral、Grok & size mix、distillation pipeline、multi-tier routing \\
-2025 & 工程治理闭环 & Token overflow monitoring、expert health logging \\
+总参数量 & 模型一共存储多少可学习权重？ & 把它当作每 token 计算量。 \\
+激活参数量 & 一个 token 实际经过哪些 expert 权重？ & 忽略不同 token 的路径不同。 \\
+FLOPs & 理论算术工作量是多少？ & 用 FLOPs 直接替代真实延迟。 \\
+通信量 & token dispatch 与结果汇聚传输多少数据？ & 忽略 all-to-all 成为瓶颈。 \\
+wall-clock & 在指定硬件、batch 与实现下多久达到目标质量？ & 脱离硬件和吞吐场景泛化。 \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
-
-\begin{knowledgebox}{演化的治理信号}
-每次 MoE 升级都会引入新的 observability：从 early gating statistics 到 GShard 的 per-device routing map，再到 Barret 所说的 ``router health audit''。治理的成熟度决定了稀疏模型能否在 production 里长时间跑通。
-\end{knowledgebox}
-
-Barret 在 2025 CS25 中反复提到 ``monitoring surfaces''——这些 surface 其实对应表中每一行的工程聚焦。我们也因此把 timeline 和训练/服务堆栈图结合起来，为后续治理章节提供背景。
 
 \subsection{本章小结}
 
-MoE 发展历程是由路由→通信→治理三条线构成。每一代模型都在让稀疏计算更可控、更容易监测，这也是 Switch Transformer 能大放异彩的根本原因。
+本讲扩展的是\textbf{条件可用参数}，不是无条件增加每个 token 的计算。后文所有结果都应在总参数、激活参数、FLOPs、通信和时间这五个坐标中解释。
 
-\section{Switch Transformer：简化 MoE}
+\section{MoE 基础：专家、路由器与条件参数}
 
-\subsection{核心创新：Top-1 路由}
+明确资源边界后，才能定义 Mixture of Experts（MoE，专家混合）。这里的“专家”不是人工指定的语言学角色，而是若干可学习的子网络；“混合”也不意味着每次都平均执行全部子网络，而是由 router 根据输入选择少量路径。这个思想早于 Transformer，1991 年的 Adaptive Mixtures of Local Experts 已经提出由 gating network 学习分工。
 
-\begin{importantbox}{Switch Transformer 的简化}
-Switch Transformer 将路由简化为 \textbf{Top-1}——每个 token 只路由到一个专家。这带来了：
-\begin{itemize}
-    \item 更低的计算开销（每个 token 只经过一个专家 FFN）
-    \item 更简单的实现和通信模式
-    \item 在保持质量的同时获得更高的训练吞吐量
-\end{itemize}
+\lecturefigure{slide-04-adaptive-mixtures-history.jpg}{从 Adaptive Mixtures of Local Experts 到稀疏神经语言模型的历史线索。}{Stanford Online 官方视频 00:03:06--00:04:01。}
+
+\begin{knowledgebox}{术语表：先把路由语言说清楚}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X}
+\toprule
+术语 & 本讲中的精确定义 \\
+\midrule
+MoE & 一组 expert 加一个 router；输入只激活少量 expert，因此参数条件使用。 \\
+expert & 通常是独立的 feed-forward network（FFN）参数块，不等于人工可解释职业。 \\
+router / gating & 从 token 表示计算 expert 分数或概率，并决定 dispatch 路径的轻量网络。 \\
+top-1 / top-2 & 每个 token 分别选择一个或两个最高分 expert；后者通常增加计算与通信。 \\
+sparse activation & 大部分 expert 对当前 token 不执行；它不同于把权重永久剪枝为零。 \\
+load balance & 让各 expert 接收的 token 数接近，便于形成规则的批量矩阵乘法。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+设 token 表示为 $x\in\mathbb{R}^{d}$，有 $E$ 个 experts，router 参数为 $W_r$。标准 gating 可以写为：
+
+\[
+p_i(x)=\operatorname{softmax}(W_rx)_i,
+\qquad
+y(x)=\sum_{i\in\mathcal{S}(x)} g_i(x)E_i(x).
+\]
+
+其中，$p_i(x)$ 是 token 被分给第 $i$ 个 expert 的 router 概率；$\mathcal{S}(x)$ 是 top-$k$ 选出的 expert 集合；$g_i(x)$ 是选中后用于缩放输出的权重；$E_i(x)$ 是第 $i$ 个 expert 的 FFN 输出；$y(x)$ 是稀疏层输出。只有 $\mathcal{S}(x)$ 中的 experts 被执行。
+
+\lecturefigure{slide-05-moe-gating-equations.jpg}{MoE 的 gating 概率、expert 选择与加权输出。}{Stanford Online 官方视频 00:04:02--00:04:25。}
+
+\begin{importantbox}{MoE 的本质}
+MoE 不是“把多个完整模型投票平均”，而是对每个 token 运行一个很小的 router，再调用少量 FFN 参数块。它让不同 token 使用不同权重，却可以保持相近的 active compute。
 \end{importantbox}
 
-\subsection{容量因子（Capacity Factor）}
+\teachervoice{Irwan Bello 的口头定义很重要：每个输入大致接受相似数量的计算，但被应用的是不同权重。这个表述把 sparsity 与“简单减少计算步骤”区分开，也为后面的 adaptive computation 讨论埋下伏笔。}
 
-每个专家有一个固定大小的缓冲区来接收 token：
-$$\text{专家缓冲区大小} = \text{Capacity Factor} \times \frac{\text{总 token 数}}{\text{专家数}}$$
+早期稀疏 MoE 在机器翻译上取得明显成功，但实际使用需要解决三个系统问题。第一，路由让 token 数量随 expert 动态变化；第二，expert 跨设备放置时会产生通信；第三，router、低精度和负载波动会放大训练不稳定。Switch Transformer 的贡献不是首先提出 MoE，而是把这些障碍压缩成更简单、可训练、可扩展的方案。
 
-\begin{itemize}
-    \item Capacity Factor = 1.0：理想均匀分配
-    \item Capacity Factor > 1.0：允许负载不均衡，减少 token 溢出
-    \item 溢出的 token 跳过 MoE 层，仅通过残差连接
-\end{itemize}
+\lecturefigure{slide-06-moe-success-and-challenges.jpg}{早期 MoE 的成功及其复杂度、通信与稳定性障碍。}{Stanford Online 官方视频 00:04:26--00:05:37。}
 
-\subsection{负载均衡损失}
-
-\begin{warningbox}{专家坍缩问题}
-如果没有额外约束，路由器可能将所有 token 都发送给少数几个专家，导致其余专家未被训练——这就是\textbf{专家坍缩}。Switch Transformer 使用辅助负载均衡损失来鼓励均匀分配：
-$$L_{\text{balance}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i$$
-其中 $f_i$ 是分配给专家 $i$ 的 token 比例，$P_i$ 是路由器对专家 $i$ 的平均概率。
+\begin{warningbox}{不要把 expert specialization 当作先验事实}
+router 可能形成主题、语言或句法上的分工，也可能只是学习到更难解释的数值分区。专家名字通常是分析结果，不是训练前约束；看到某个 token 更常去某 expert，也不能直接推出该 expert 具有稳定、因果的“技能”。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Switch Transformer 通过 Top-1 路由大幅简化了 MoE 的训练和推理，同时保持了稀疏模型的扩展优势。
+MoE 由 expert 参数块和 router 组成，核心是按 token 条件选择参数。它扩大可用容量，却引入动态形状、通信、稳定性与负载均衡问题。
 
-\section{关键帧与幻灯片图解}
+\section{Switch Layer：为什么把 top-2 简化成 top-1}
 
-\subsection{路由关键帧}
+有了通用 MoE 定义，本节转向 Switch Transformer 的具体约束。它没有把所有 Transformer 操作都替换成专家，而是保留 self-attention，只在部分 FFN 位置插入 Switch layer。这样可以利用 FFN 在大模型中占据大量参数的特点，同时避免让注意力结构、残差路径和每一层都动态化。
 
-本讲没有公开 slides，因此这里将字幕与讲者描绘的思路整理成两张关键“幻灯片”：第一张重点突出了 token 到 router 的 flow，第二张梳理训练与服务堆栈。下面的图是根据字幕关键帧重建的视觉总结。
+\lecturefigure{slide-07-switch-transformer-layer.jpg}{Switch layer：router 为每个 token 选择一个 FFN expert。}{Stanford Online 官方视频 00:05:38--00:07:21。}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{router-stack.png}
-\caption{MoE 核心路由流程（重建自 video frame 描述）}
-\label{fig:router-flow}
-\end{figure}
+Switch 的 top-1 规则为：
 
-\subsection{训练与推理堆栈}
+\[
+i^*(x)=\arg\max_{i\in\{1,\ldots,E\}}p_i(x),
+\qquad
+y(x)=p_{i^*}(x)E_{i^*}(x).
+\]
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{stack-timeline.png}
-\caption{Training/Serving stack：从 optimizer 到 inference backup 的全链路}
-\label{fig:stack-timeline}
-\end{figure}
+其中，$i^*(x)$ 是 router 概率最高的 expert 索引；$p_{i^*}(x)$ 是保留的 gate 权重；$E_{i^*}(x)$ 是唯一被执行的 expert；$y(x)$ 是该层输出。与 top-2 相比，top-1 将每个 token 的 expert FFN 次数从两个降到一个，并减少 dispatch 数据量。
 
-制作这类图可以让团队在没有正式 slides 的情况下，仍能在文档中获得“幻灯片级别”的概览，特别适合分享给不了破视频的人。
+\begin{lstlisting}[caption={Switch top-1 路由的概念性伪代码。}]
+def switch_layer(tokens, router, experts):
+    logits = router(tokens)
+    probs = softmax(logits, axis=-1)
+    expert_id = argmax(probs, axis=-1)
+    gate = gather(probs, expert_id)
+    output = dispatch_to_one_expert(tokens, expert_id, experts)
+    return gate * output
+\end{lstlisting}
 
-\subsection{本章小结}
-
-用关键帧图解补充 voicing 叙述，把复杂流程视觉化，有助于跨团队 review 和快速 onboarding。
-
-\section{专家负载与调度治理}
-
-\subsection{负载均衡信号}
-
-Barret 在讲解中反复强调 router 作为 ``traffic controller''，需要同时观察专家负载、routing entropy 与 capacity overflow。以下信号构成负载均衡的三大支柱：
-
-\begin{itemize}
-    \item \textbf{Expert utilization}：目标在 80\%--95\%，低于该范围说明部分专家完全休眠
-    \item \textbf{Routing entropy}：过低表示 Top-1 决策集中，容易产生 expert collapse；理想值在 0.6~1.0 nat
-    \item \textbf{Capacity overflow rate}：阈值设在 0.1\% 以下，以避免大量 token 跳过 MoE 层
-\end{itemize}
-
-\begin{table}[H]
-\centering
-\caption{负载均衡指标与工程阈值}
-\begin{tabular}{p{0.25\textwidth} p{0.25\textwidth} p{0.35\textwidth}}
-\toprule
-指标 & 目标范围 & 工程应对 \\
-\midrule
-Expert utilization & 0.80--0.95 & 加强 load loss 或 temperature annealing \\
-Routing entropy & 0.6--1.0 nat & 增加 softmax temperature 或 router dropout \\
-Overflow rate & <0.1\% & 提升 \texttt{capacity\_factor}, 限制 batch size \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{动态调整 load loss}
-Switch Transformer 团队会在 warmup 期使用更高的 load loss weight，并随着 router 逐渐收敛逐步降低该项。这个 schedule 相当于一个“负载守恒”控制环，防止早期 expert domination。
-\end{knowledgebox}
-
-\subsection{失败模式演练}
-
-对抗性演练是验证负载均衡的另一条主线。常见演练包括：
-
-\begin{enumerate}
-    \item \textbf{Expert drop simulation}：随机禁用 10\% experts，观察 routing entropy 与 downstream loss 的上升
-    \item \textbf{Capacity step}：在训练中临时将 \texttt{capacity\_factor} 拉到 1.8，确保 overflow rate 下降并观测恢复曲线
-    \item \textbf{Latency tail injection}：故意让某个 GPU 负载增加，确认调度系统能 reroute 任务
-\end{enumerate}
-
-\begin{warningbox}{忽视 overflow 日志会加剧 collapse}
-如果 overflow token 数量上升但没有开报警，router 会逐渐依赖少数 experts。Overflow 本质上切断了 load loss 的 gradient，后果是稀疏层退化为 residual-only。
-\end{warningbox}
-
-\subsection{本章小结}
-
-这部分把专家负载的日常信号、监控范围与演练闭环串在一起：有了指标、有了演练、有了 schedule，稀疏路由才能在训练和服务中维持平衡。
-
-\section{逐段精读：Barret 现场讲解}
-
-\subsection{开场（00:04--05:00）：为什么要加稀疏性}
-
-Barret 和 Erwin 在前五分钟就抛出问题：`dense transformer` 越训练越慢，按 Scaling Law 需要更大算力。使用 MoE, 可以用“选择性激活”获得同样规模的 `parameter count`，但每步运行的 `FLOPs` 仍然可控。这个开场定义了整节课的对比基调。
-
-\begin{importantbox}{放大参数 vs 放大计算}
-关键对比：dense 模型想要更高 quality 需要线性增加 FLOPs，MoE 则是增加参数量但保持每条 token 的计算量近似不变。（Barret: \textit{``We add more experts, not more FLOPs for each token.''})
+\begin{importantbox}{top-1 是系统设计，不只是数学删项}
+减少一个 expert 路径会同时改变 FFN FLOPs、token 通信、capacity buffer、router 训练和溢出行为。因此 top-1 的价值应通过 time-to-quality 与硬件效率评估，而不能只比较同一步数下的 loss。
 \end{importantbox}
 
-\subsection{路由细节（05:00--25:00）：Router 的挑战}
+\teachervoice{Barret Zoph 特别说明，实际模型通常每两层或每四层才放一个 sparse layer。router 的 float32 计算也只占极小比例。换句话说，“Switch Transformer”仍然有大量普通 dense Transformer 结构。}
 
-中段 Barret 逐步介绍 router 的构建：先算 `router logits`，再做 `Top-k`，最后输出 `weighted sum`。他强调 `load balancing loss` 的作用，并用 10 秒的时间对比 `Top-1` 和 `Top-2` 的训练曲线。监听字幕可以发现：在 7 分钟处他讲到 “Capacity factor beyond 1 lets us absorb bursts,” 说明 `\texttt{capacity\_factor}` 要略大于 1 才能避免 overflow。
+仅把 top-2 改为 top-1 还不够。讲座把可用系统总结为四个控制件：router selective precision、较小初始化尺度、expert 层更强的 fine-tuning regularization，以及可微负载均衡。这些控制件分别处理数值误差、初始激活幅度、下游过拟合和硬件利用率。
 
-\begin{table}[H]
-\centering
-\caption{路由器失败模式与应对}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth}}
-\toprule
-失败模式 & 工程应对 \\
-\midrule
-Expert collapse & 加重 load loss + expert dropout \\
-Token overflow & 提升 capacity factor，流控 router input \\
-Latency tail & 监控 per-expert latency，降频/重分布 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\lecturefigure{slide-08-improved-training-methodology.jpg}{Switch Transformer 的四类训练改进。}{Stanford Online 官方视频 00:07:22--00:08:49。}
 
-\subsection{部署与结尾（45:00--60:00）：案例与未来}
-
-最后 15 分钟 Barret 提到 GShard 在 600B 参数模型训练过程中的 `router heatmap` monitoring，还展示了 `knowledge distillation` pipeline 让 dense student 保持 90% 表现。他强调：“稀疏模型的工程不能只看 accuracy，也要看 monitoring surfaces。” 这一段是部署章节的精髓。
-
-\begin{warningbox}{故障演练的重点}
-Barret 建议在部署前每个 expert 运行 `load check`：模拟某些 expert 突然失效，观察 router 是否迅速将 token 路由到备用专家。这种演练帮助发现专家 collapse 前的先兆。
-\end{warningbox}
-
-\subsection{本章小结}
-
-逐段精读揭示了 lecture 中的三条主线：从 scaling motivation 到 router 构建，再到实际部署监控。每个部分都提供了可操作的工程 insight。
-
-\section{实验结果}
-
-\subsection{预训练加速}
-
-Switch Transformer 在相同计算预算下的训练速度提升显著：
-\begin{itemize}
-    \item 与同等计算量的密集 T5 模型相比，Switch-Base 达到相同质量的\textbf{速度快 7 倍}
-    \item 在 101 种语言上的多语言实验中，91\% 的语言获得超过 4 倍加速
-\end{itemize}
-
-\subsection{Top-1 vs. Top-2 路由对比}
-
-\begin{itemize}
-    \item 在相同 FLOPS 下，Top-1（Switch）与 Top-2（传统 MoE）质量相当
-    \item Top-1 的训练速度更快（通信和计算更简单）
-    \item 综合考虑速度和质量，Top-1 是更好的选择
-\end{itemize}
-
-\subsection{知识蒸馏}
-
-稀疏模型的一个挑战是参数量巨大，部署困难。通过将稀疏模型蒸馏回密集模型，可以在保留大部分性能的同时缩小模型：
-\begin{itemize}
-    \item Switch-Base 蒸馏到 T5-Base：保留约 30\% 的质量提升
-    \item 这证明稀疏预训练可以作为更好的``教师''来提升密集模型
-\end{itemize}
-
-\subsection{本章小结}
-
-Switch Transformer 在预训练速度和多语言任务上表现出色，知识蒸馏为实际部署提供了可行路径。
-
-\section{路由器与调度实践}
-
-\subsection{Router 训练：信号与负载}
-
-Barret 在开场说：\textit{``The router is the gatekeeper—if the signals collapse, the entire MoE layer collapses.''} 因此 Switch Transformer 引入了三个工程信号：
-
-\begin{itemize}
-    \item \textbf{Capacity factor}：用来控制每个专家接收 token 的缓冲区大小
-    \item \textbf{Load loss}：附加损失项鼓励 router 均匀分配，防止专家坍缩
-    \item \textbf{Expert usage history}：给低频专家更高梯度权重，使其不至于永久沉睡
-\end{itemize}
-
-\begin{table}[H]
-\centering
-\caption{Router 训练关注的指标}
-\begin{tabular}{l l l}
-\toprule
-指标 & 说明 & 工程应对 \\
-\midrule
-Token utilization & 每个 token 可用专家数 & Top-1/Top-k + softmax temperature \\
-Expert load variance & 负载不均衡程度 & Load loss + capacity tuning \\
-Routing entropy & Router 决策确定性 & Temperature annealing \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{Router 更像优化器而非分类器}
-与标准分类任务不同，router 既要根据语义做出判断，还必须统计层面保持平衡。这让它更像一个带有正则化项的优化器，需要反复调参。
-\end{knowledgebox}
-
-\subsection{调度与推理吞吐}
-
-Switch Transformer 通过 Top-1 路由减轻通信负担，但调度仍需监控：
-
-\begin{itemize}
-    \item \textbf{Expert switching frequency}：频繁切换说明 router 不稳定
-    \item \textbf{Expert idle ratio}：高比例空闲专家表示负载不均衡
-    \item \textbf{Batch size sensitivity}：小 batch 下 router 更易坍缩，需要更强正则
-\end{itemize}
-
-\begin{warningbox}{高吞吐靠的不只是稀疏性}
-Switch Transformer 的高吞吐度还依赖于优秀的调度系统、加速器拓扑感知与混合精度管理。单靠 Top-1 路由并不能自动获得 7 倍速度，外围系统要对专家分配、通信与内存都做优化。
-\end{warningbox}
-
-\subsection{本章小结}
-
-路由器训练和调度成为 MoE 成败的关键。Capacity factor、load loss 和调度监控构成了一套稳定稀疏路由的工程方法。
-
-\section{Switch Transformer 操作手册}
-
-\subsection{训练配置 checklist}
-
-Barret 反复强调，稳定训练离不开一套固定的 checklist：
-
-\begin{itemize}
-    \item 逐层插入 MoE block 时先验证每层 router 对 load loss 的响应
-    \item 合理设置 `\texttt{capacity\_factor}` 与 `\texttt{router\_dropout}`
-    \item 观察 router logit distribution，不让 softmax 变得过于锋利
-    \item 提前准备 expert state dropout checkpoint，避免某些专家过早坍缩
-\end{itemize}
-
-\begin{warningbox}{一旦失衡就难恢复}
-如果某个专家过早接收到大量 token，即便后续 load loss 变重，它也可能已经主导 router 的梯度，这种 ``expert domination'' 无法轻易逆转。Barret 的经验是：在训练前期加大 load loss，与 `\texttt{expert\_dropout}` 共同作用，可有效避免这种噪声。
-\end{warningbox}
-
-\subsection{指标与监控 playbook}
-
-Switch Transformer 的工程团队在监控平台中显示如下关键 dashboard：
-
-\begin{itemize}
-    \item 每层 router 的 expert usage heatmap
-    \item Token overflow rate（capacity overflow 表示 scheduler 需扩容）
-    \item Router gradient norm（保持稳定收敛）
-    \item Inference latency tail per expert（看是否有 expert 产生尾延迟）
-\end{itemize}
-
-\begin{knowledgebox}{监控系统的反馈闭环}
-监控结果会自动反馈给 `\texttt{capacity\_factor}` 与 `\texttt{load\_loss\_weight}`，形成实时调节。Barret 说：\textit{``We treat expert drops like CPU throttling—when the signal says we're overheating, we slow down token admission.''}
+\begin{knowledgebox}{读图：四个改进分别管什么}
+Selective precision 管 router 的数值稳定；reduced initialization scale 管训练初期的激活和梯度幅度；higher regularization 管高参数容量在小数据上的过拟合；load-balancing loss 管 token 是否能形成近似等大的 expert batch。它们不是四个同义技巧，而是覆盖数值、优化、泛化与系统四个层面。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-Switch Transformer 的训练与部署需要明确的 checklist 与监控 playbook，将 router、expert、latency 视为可观测信号才能长期稳定。
+Switch layer 只替换部分 FFN，并采用 top-1 routing。真正可用的方案是“简单路由加四类控制件”，而不是一个孤立的 argmax。
 
-\section{音频/字幕补充}
+\section{稳定训练：精度、初始化、正则化与负载均衡}
 
-\subsection{Transcription replay}
+上一节列出了稳定性栈，本节逐一解释它们为什么必要。稀疏模型的不稳定并不只来自参数多，还来自一串离散路由决策：router logits 的微小数值变化可能改变 argmax，随后 token 会进入完全不同的 expert，误差因此不只是输出值轻微偏移，而是计算路径跳变。
 
-Lecture SRT 文件包含开场（``We’re going to talk scaling''）到结尾（``Thank you Google''）的完整 speaker path。下面选段来自 42 分钟 mark，Barret 解释 ``load loss equals routing variance penalty''，与前述 table 对应。
+\subsection{Selective precision：只把敏感的小部分升到 float32}
 
-\subsection{本章小结}
+训练大模型通常使用 bfloat16 来降低显存和加速矩阵乘法，但 router 内部的 softmax 依赖指数函数。若 logits 的舍入改变概率排序，top-1 路径就会切换。Switch 的选择不是让整网回到 float32，而是仅把 router 的局部计算升精度，再把结果返回低精度主干。
 
-音频对比帮助理解字幕中的关键词与 router 描述，便于后续制作 timeline 事件 log。
+\lecturefigure{slide-09-selective-precision.jpg}{Selective precision：router 使用 float32，主体仍保留 bfloat16 吞吐。}{Stanford Online 官方视频 00:08:50--00:10:21。}
 
-\section{时间线与故障演练}
+\[
+\operatorname{softmax}(z)_i=\frac{e^{z_i}}{\sum_j e^{z_j}}.
+\]
 
-\subsection{完整时间线}
+其中，$z_i$ 是第 $i$ 个 expert 的 router logit；指数 $e^{z_i}$ 会放大输入差异；分母把所有 expert 分数归一化。低精度误差若改变最大的 $z_i$，就会改变离散 expert 选择，因此 router 比普通连续残差分支更需要局部精度保护。
 
-\begin{itemize}
-    \item 00:00--05:00：介绍 scaling motivation，提出 MoE vs dense tradeoff
-    \item 05:00--25:00：深入 router 设计，解释 capacity factor、load loss、expert collapse
-    \item 25:00--35:00：展示 benchmark WMT、LM 上的加速实验，并引入 distillation
-    \item 35:00--45:00：部署监控说明（expert heatmap、overflow rate）
-    \item 45:00--60:00：总结、case study 与未来方向
-\end{itemize}
+\teachervoice{讲者给出的工程判断是：router float32 几乎是免费操作。它没有跨设备通信，计算量相对 FFN 矩阵乘极小，而且 sparse layer 并非每层都出现；因此表中吞吐差异落在测量噪声内。}
 
-\begin{knowledgebox}{时间线帮助定位讲义对应章节}
-制作笔记时把时间戳嵌入章节标题（如 05:00--25:00 router 细节）可以帮助 future readers 快速跳到特定内容，尤其在 video + PDF 组合的环境中。
+\begin{warningbox}{Selective precision 不是“混合精度自动安全”}
+低精度训练是否稳定取决于敏感操作。对 softmax、归一化、累加和路由排序，应检查溢出、下溢、tie 与 argmax 翻转；不能因为大矩阵乘适合 bfloat16，就假设所有控制路径也适合。
+\end{warningbox}
+
+\subsection{更小初始化：先控制路由与 expert 的动态范围}
+
+训练早期，expert 尚未形成稳定分工，router 也在快速变化。如果初始化让激活和 logits 过大，softmax 会过早饱和，少数 expert 获得更多 token 与梯度，进一步强化失衡。降低初始化尺度让网络从更平缓的区域开始，给负载均衡和主任务 loss 共同塑形的机会。
+
+\lecturefigure{slide-10-reduced-initialization-scale.jpg}{降低初始化尺度可改善 sparse expert 模型的稳定性与质量。}{Stanford Online 官方视频 00:10:22--00:10:51。}
+
+\teachervoice{这页保留了一个很有价值的实践经验：复杂系统的根因不一定需要复杂修复。作者观察到标准初始化对 sparse expert 更敏感，简单缩小尺度就显著改善质量；应先做幅度、饱和度和梯度分布诊断，再堆叠新算法。}
+
+\begin{knowledgebox}{什么是“初始化尺度”}
+初始化尺度决定训练开始时权重的典型幅度，进而影响激活、router logits 与梯度。过小可能让信号弱，过大可能导致饱和、路径集中或梯度爆炸。这里的结论是对该架构与训练设置的经验校准，不是所有 MoE 都应无条件采用同一个缩放常数。
 \end{knowledgebox}
 
-\subsection{故障演练流程}
+\subsection{Expert dropout：参数容量越大，下游越容易过拟合}
 
-Barret 建议在训练/部署阶段安排 3 类演练：
+预训练数据巨大，但 SuperGLUE 等下游任务可能只有数万样本。Sparse model 的总参数池很大，即使每个 token 只走一个 expert，也可能在 fine-tuning 时快速记住小数据。讲座因此提高 expert 层 dropout，而不是简单把 dense T5 的正则化原样搬过来。
 
-\begin{enumerate}
-    \item \textbf{Expert failover}：随机禁用 10\% experts，观察 router 能否迅速 reroute
-    \item \textbf{Capacity step increase}：上下调 capacity factor，分析 overflow vs throughput
-    \item \textbf{Latency spike}：人为加入 GPU busy-wait，验证 latency tail 监控报警
-\end{enumerate}
+\lecturefigure{slide-11-higher-regularization-fine-tuning.jpg}{提高 expert 层 dropout，缓解 sparse model 在小下游数据上的过拟合。}{Stanford Online 官方视频 00:10:52--00:12:47。}
 
-\begin{warningbox}{演练要写入 runbook}
-演练结果应记录在 runbook 中，并自动触发 post-mortem；不记录的演练不具备制度效力。
+\begin{knowledgebox}{读图：不要只找一个“全局最佳 dropout”}
+表格比较多个下游任务，它们的数据规模与噪声不同。应先看 sparse model 相对 dense baseline 是否更需要正则，再看不同任务的最优点是否一致。若最优 dropout 随任务变化，结论应是“需要更强且需调参”，而不是宣布一个通用常数。
+\end{knowledgebox}
+
+\subsection{Load-balancing loss：把概率质量与真实 token 数对齐}
+
+只优化语言建模 loss 时，router 可能把大量 token 送入少数 experts。这样不仅降低分工，还会使某些设备过载、其他设备空闲。Switch 使用辅助 loss，让“实际送入比例”和“平均 router 概率”在 experts 间更均匀。
+
+\[
+\mathcal{L}_{\text{aux}}=\alpha E\sum_{i=1}^{E} f_iP_i.
+\]
+
+其中，$\alpha$ 是辅助 loss 权重；$E$ 是 expert 数；$f_i$ 是 batch 中实际路由到第 $i$ 个 expert 的 token 比例；$P_i$ 是该 expert 的平均 router 概率。若流量与概率都集中在同一少数 experts，内积变大；联合优化会推动更均衡的使用。
+
+\lecturefigure{slide-12-load-balance-loss.jpg}{可微负载均衡：同时约束离散 token 比例与平均 router 概率。}{Stanford Online 官方视频 00:12:48--00:13:29。}
+
+\begin{importantbox}{负载均衡不是装饰性正则项}
+它连接了学习目标与硬件执行。均衡后，每个 expert 可以接收大小相近的 token batch，便于使用高效 dense matrix multiplication；失衡则会造成 overflow、padding、等待和设备利用率下降。
+\end{importantbox}
+
+\begin{warningbox}{均衡不等于所有 experts 必须学成一样}
+目标是负载近似均匀，不是输出相同。过强的均衡权重可能压制有意义的 specialization；过弱又会导致热点 expert。实践中应同时监控主 loss、aux loss、expert token histogram、overflow rate 与 router entropy。
 \end{warningbox}
 
 \subsection{本章小结}
 
-时间线与故障演练协助将 talk 内容转换为可执行 engineering steps，关键在于将现实的 alarm 事件映射到 router/overflow 指标上。
+Selective precision 保护离散路由，较小初始化避免早期饱和，更强 expert dropout 处理下游过拟合，load-balancing loss 将可学习路由约束成硬件可执行的近均衡批次。
 
-\section{MoE 策略与控制要点}
+\section{静态编译遇上动态路由：Capacity Factor 与 Token Dropping}
 
-\subsection{Control loop overview}
+到目前为止，router 看起来可以任意决定每个 expert 接收多少 token；但 XLA、Mesh TensorFlow 与加速器内核偏好静态 tensor shape。系统必须在执行前为每个 expert 预留固定槽位，这就把动态路由转化为一个容量规划问题。
 
-Switch Transformer 架构包含多个 control loop：
+\lecturefigure{slide-13-static-graph-dynamic-architecture.jpg}{矛盾：静态编译图需要固定形状，而 router 产生动态 token 分配。}{Stanford Online 官方视频 00:13:30--00:14:37。}
 
-\begin{itemize}
-    \item Router softmax temperature annealing → controls gate sharpness
-    \item Load loss weight update → maintains expert balance
-    \item Capacity factor tuning → gates overflow tolerance
-    \item Expert dropout scheduling → periodically resets overgiven experts
-\end{itemize}
+若一个 routing group 有 $T$ 个 tokens、$E$ 个 experts，capacity factor 为 $\gamma$，常用容量可写为：
 
-\begin{knowledgebox}{控制循环示意}
-每一项控制信号都有指标映射：temperature 对应 routing entropy，load loss 与 expert utilization，capacity 直接影响 overflow 率。保持这些指标在阈值内是稀疏训练稳定的条件。
+\[
+C=\left\lceil \gamma\frac{T}{E}\right\rceil.
+\]
+
+其中，$C$ 是每个 expert 预留的 token 槽位；$T/E$ 是完全均衡时的平均 token 数；$\gamma$ 是容量因子。$\gamma=1$ 几乎没有额外缓冲；$\gamma>1$ 降低 overflow，却增加 buffer、通信与可能的 padding 计算。
+
+\begin{importantbox}{Capacity factor 的三方权衡}
+提高 $\gamma$：token dropping 通常下降，但跨设备传输上限、接收缓冲和 FFN 批次上限上升。降低 $\gamma$：系统更便宜，却要求 router 更均衡，并接受部分 token 跳过 expert 计算。
+\end{importantbox}
+
+\lecturefigure{slide-14-expert-capacity-factor.jpg}{Capacity factor 1.0 与 1.5：额外槽位降低 overflow，但提高系统成本。}{Stanford Online 官方视频 00:14:38--00:15:55。}
+
+\begin{knowledgebox}{读图：先数 token，再数槽位}
+左图每个 expert 的槽位只覆盖理想均分，热门 expert 超出的 token 被丢弃；右图增加约 50\% 缓冲，更多 token 得到处理。比较时不要只看“是否丢 token”，还要问：为这些空槽位分配了多少显存、通信带宽和矩阵乘上限？
 \end{knowledgebox}
 
-\subsection{治理与保护层}
+概念性的 capacity-aware dispatch 如下。真实实现会把 token 按设备重排并通过 collective communication 交换；这里仅显示容量控制逻辑。
 
-建立 governance matrix，其中列出 allowed actions (e.g., expert update, router weight change) 与 required approvals（SRE review）。稀疏模型的 governance 通常包含：
+\begin{lstlisting}[caption={带 expert capacity 的 top-1 dispatch 伪代码。}]
+def capacity_dispatch(tokens, expert_id, expert_count, capacity):
+    slots = [[] for _ in range(expert_count)]
+    residual = zeros_like(tokens)
+    for token, target in zip(tokens, expert_id):
+        if len(slots[target]) < capacity:
+            slots[target].append(token)
+        else:
+            residual[token.index] = token  # expert path is skipped
+    expert_outputs = run_batched_experts(slots)
+    return combine(expert_outputs) + residual
+\end{lstlisting}
 
-\begin{itemize}
-    \item Expert state audit: compare new experts vs baseline
-    \item Router drift detection: monitor KL divergence between gate distributions
-    \item Incident logging: record feature inputs that triggered expert reassignments
-\end{itemize}
+\subsection{“No Token Left Behind”为何没有成功}
 
-\begin{warningbox}{可解释性来自 observability}
-治理依赖于 visibility：没有 clear fractional routing logs，无法解释 expert drift。Switch Transformer 团队在 production 部署时要求 routers emit per-token gate logs。
+直觉上，丢 token 似乎一定伤害质量。作者尝试多阶段路由：若 top-1 expert 已满，就把 token 送到第二、第三选择，直到获得槽位。实验却没有提升，甚至可能变差。一个解释是，router 已经表达了“这个 token 最想去哪里”；强行使用低排名 expert 不一定比跳过该 expert 子层更好，因为残差路径仍然保留 token 表示。
+
+\lecturefigure{slide-15-no-token-left-behind.jpg}{No Token Left Behind：把 overflow token 继续路由到次优 experts 的多阶段方案。}{Stanford Online 官方视频 00:15:56--00:18:18。}
+
+\teachervoice{讲者明确把它称为令人意外的负结果：团队原本很乐观，以为“保证不丢 token”会更好，结果模型对 token dropping 相当稳健，次优 expert 的错误计算反而可能有害。高质量讲义应保留这种被实验否定的直觉，而不是只留下最终成功配方。}
+
+\begin{warningbox}{Dropped token 不是从网络中消失}
+在 Switch block 中，overflow token 通常跳过 expert FFN，但仍可沿 residual connection 继续传播。把 dropping 理解成“删除输入 token”会严重误读实验；真正缺失的是该层的 expert 变换。
 \end{warningbox}
 
-\subsection{本章小结}
+\subsection{Sparsity 与 adaptive computation 不同}
 
-MoE control loop 通过 temperature, load loss, capacity, expert dropout 四个 levers 维持稳定；治理层则需要审计、drift detection 和 incident logging。
+Q\&A 中学生追问：既然不同 token 走不同 expert，这是否等于不同 token 使用不同计算量？两位讲者给出的区分是：本讲主要研究\textbf{不同参数、相近计算量}；adaptive computation 更强调不同 token 使用不同步数或不同 FLOPs。后者在 SPMD（Single Program Multiple Data）加速器上更难，因为设备希望批内样本执行规则相同的程序。
 
-\section{Extended Transcript Narrative}
+\teachervoice{Irwan Bello 说，sparsity 与 adaptive computation 相关但分离：前者主要是每个样本使用不同参数，后者是每个样本使用不同计算量。Barret Zoph 的研究策略则是先把已有 LSTM MoE 迁移到 Transformer 并做稳，再逐步走向更一般的动态计算。}
 
-\subsection{00:00--10:00：Scaling Motivation}
+最终配方把 top-1、selective precision、较小初始化、expert dropout、load balance 与 capacity control 合并。任何只复现其中一个组件的实现，都不应声称复现了 Switch Transformer 的训练行为。
 
-Barret 开场说：“今天我们要从 parameter scaling law 出发，解释为什么 dense model 已经接近天花板。” He draws the diagram where loss vs compute remains linear until you add more parameters. The takeaway is simple: to keep scaling, we must scale parameters without scaling FLOPs.
+\lecturefigure{slide-16-putting-it-all-together.jpg}{完整 Switch 配方：top-1 routing 加稳定性、正则化与负载控制。}{Stanford Online 官方视频 00:25:32--00:27:07。}
 
-\subsection{10:00--20:00：Router Designs}
-
-At 12:45 he writes down gate logits formula and emphasizes Top-k decisions. He then explains capacity factor through both formula and narrative: once capacity limited, overflow tokens resemble backoff in networking—they must skip MoE and only pass through residual connection.
-
-\subsection{20:00--40:00：Training Infrastructure}
-
-He transitions to training, describing gradient accumulation, expert state, optimizer momentum. He repeats: “expert collapse happens when router loses entropy; we raise temperature to spread tokens.” At 30:12 the transcript notes “we treat load loss like regularization”.
-
-\subsection{40:00--60:00：Deployment stories}
-
-He closes with monitoring dashboards: expert heatmaps, overflow counts, latency tail. At 45:20 he mentions GShard's 600B experiment and compares to Mixtral distillation. The final advice: “If you can't monitor routers, don't launch”.
-
-\begin{importantbox}{Transcribed insights stay valuable}
-Embedding transcript summaries into notes ensures future readers can map lecture timestamps to the textual story, which is especially helpful when the video becomes unavailable and only slides/annotations remain.
+\begin{importantbox}{实现审计清单}
+记录 sparse layer 频率、expert 数、capacity factor、overflow rate、aux-loss 权重、router precision、初始化缩放、expert dropout、dispatch 通信与每步耗时。缺少这些字段，单凭“top-1 MoE”无法解释结果差异。
 \end{importantbox}
 
 \subsection{本章小结}
 
-Extended transcript sections connect talk minutes to engineering decisions, providing a replayable narrative for debugging or teaching others.
+静态编译要求预先分配 expert capacity。Capacity factor 用系统成本换取更少 overflow；实验表明，合理 dropping 可能优于把 token 强制送往次优 expert。Sparsity 仍主要改变参数路径，不等于完全解决 adaptive computation。
 
-\section{Implementation QA Checklist}
+\section{如何读实验：Top-1、Top-2、步数、时间与 Scaling Law}
 
-\subsection{Pre-training stage}
+架构和系统约束明确后，实验的关键不是寻找一张“Switch 胜利图”，而是按顺序区分 quality per step、quality per wall-clock、固定 FLOPs 下的参数收益，以及通信带来的边际递减。讲座中的部分纵轴是 negative log perplexity；普通 perplexity（PPL）是交叉熵的指数，越小越好，而 negative log PPL 越大越好。
 
-\begin{itemize}
-    \item Ensure capacity factor warmup: start at 0.8, ramp to target over first 10k steps.
-    \item Monitor router entropy daily; if it drops below 0.4 nat per example, increase temperature.
-    \item Maintain expert dropout schedule: every 100k steps rotate which experts are disabled for a few steps, preventing domination.
-\end{itemize}
+若 token 平均交叉熵为 $H$，则：
 
-\subsection{Fine-tuning / distillation stage}
+\[
+\operatorname{PPL}=e^{H},\qquad -\log(\operatorname{PPL})=-H.
+\]
 
-\begin{itemize}
-    \item Use knowledge distillation with teacher predictions stored in matched format.
-    \item Validate student model on translation \& LM benchmarks to ensure 90% of teacher performance.
-    \item Verify offline logs for capacity overflow spikes after each checkpoint.
-\end{itemize}
+其中，$H$ 是每 token 平均负对数似然；PPL 可粗略理解为模型面对的“有效选择数”，但它不直接等价于事实性、推理能力或下游任务质量；$-\log(\operatorname{PPL})$ 只是符号翻转，因此越大代表 loss 越低。
 
-\subsection{Serving stage}
+\subsection{Top-1 与 Top-2：容量因子改变 Pareto 前沿}
 
-\begin{itemize}
-    \item Track per-expert latency histograms; flag any expert whose p95 > 1.2x baseline.
-    \item Rotate experts if a single expert handles >30% of traffic for longer than 5 minutes.
-    \item Maintain changelog linking router updates to commit hashes for governance review.
-\end{itemize}
+Top-2 在高 capacity 下每个 token 使用两个 experts，单步质量可能更好；但它也增加 FFN 计算和通信。当 capacity factor 降低时，Switch top-1 能以更低成本达到目标质量。正确结论不是“top-1 数学上更强”，而是它在讲座的硬件与容量设置中形成更好的 time-to-quality Pareto 点。
 
-\subsection{本章小结}
+\lecturefigure{slide-17-comparison-moe-switch.jpg}{MoE top-2 与 Switch top-1 在不同 capacity factor 下的质量、速度与 time-to-quality。}{Stanford Online 官方视频 00:27:08--00:28:57。}
 
-QA checklist divides the MoE lifecycle into pre-training, fine-tuning, and serving, supplying concrete monitoring \& governance actions for each stage.
-
-\section{Glossary Deep Dive}
-
-\begin{description}
-    \item[Capacity factor] Ratio controlling token buffer size per expert. Engineers typically set 1.0--1.5 depending on dataset skew.
-    \item[Load loss] Auxiliary penalty $\alpha N \sum f_i P_i$ to avoid imbalanced routing.
-    \item[Expert fusion] Strategy merging selected experts into a single dense module at inference time to reduce memory pressure.
-    \item[Router temperature] Softmax temperature controlling gate entropy; annealed schedule avoids collapse.
-    \item[Distillation pipeline] Process training dense student using MoE teacher logits plus auxiliary loss to match behaviors.
-    \item[Routing drift detection] Comparing day-over-day gate probability distributions to detect whether router is drifting toward certain experts.
-    \item[Temperature annealing] Gradually reducing softmax temperature to make gating decisions sharper once utilization stabilizes.
-    \item[Expert dominance threshold] Alerting rule that triggers when one expert handles more than a preset fraction of traffic for consecutive intervals.
-\end{description}
-
-\begin{knowledgebox}{Glossary for cross-team conversation}
-Documenting terms in Markdown-format ensures SRE, research, and governance teams converge on the same definitions, removing ambiguity during on-call handoffs.
+\begin{knowledgebox}{读图：比较顺序决定结论}
+先看 capacity factor 是否相同，再看每步质量；随后看 speed 与达到同一质量阈值的时间。若 top-2 在 step 轴更好、top-1 在 time 轴更快，两者并不矛盾。最后检查低 capacity 是否造成更多 dropping，以及作者是否把省下的计算重新分配到 dense 层。
 \end{knowledgebox}
 
-\subsection{本章小结}
+\teachervoice{讲者将结论表述为 Pareto efficiency：高 capacity 的 top-2 可能有更好 step quality，但低 capacity top-1 减少通信、计算和内存，因此更快到达质量阈值。这个限定比一句“Switch beats MoE”准确得多。}
 
-Glossary items crystallize why capacity factor, load loss, router temperature, and distillation pipelines dominate MoE discussions.
-
-\section{案例与治理}
-
-\subsection{Case Study: Switch Transformer vs GShard}
-
-\begin{table}[H]
-\centering
-\caption{工程层面对比}
-\begin{tabular}{p{0.25\textwidth} p{0.25\textwidth} p{0.25\textwidth}}
-\toprule
-维度 & Switch Transformer & GShard \\
-\midrule
-Routing & Top-1 & Top-2 / multi-device groups \\
-Deployment complexity & 单专家/低通信 & 跨 device 分片 \\
-Gating loss & load loss + balancing & load balancing + expert dropout \\
-Use case & high throughput training & multi-device mega-model \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{同一思路在不同尺度}
-Switch Transformer 通过简化 gating 得以在单个设备组内高效训练，GShard 则展示了跨数据中心 shard 的 viability。两者的核心共享点是：精细监控、负载调节、expert state dump 机制。
-\end{knowledgebox}
-
-\subsection{MoE Governance Checklist}
-
-MoE 模型部署必须预设治理流程，以下检查项来自讲者建议与 industry practice：
-
-\begin{itemize}
-    \item 确认 router log history 是否具有 audit log
-    \item 设定 expert dominance threshold，超过则自动降载
-    \item 记录 capacity overflow episodes 供治理团队审查
-    \item 建立 failure replay（expert failure replay）战后复盘
-\end{itemize}
-
-\begin{warningbox}{治理是防止稀疏模型 drift 的最后防线}
-如果 router 定期进入 skew 状态但没有人察觉，MoE 的 behavior 可能 drift 到非预期 distribution。治理要做好浏览、告警与人工审查。
+\begin{warningbox}{不要跨硬件照搬 Pareto 结论}
+不同互连、batch size、expert placement、kernel 与编译器会改变通信占比。论文中的 time-to-quality 是特定系统的测量；迁移到 GPU 集群或低吞吐服务时必须重新 benchmark。
 \end{warningbox}
 
-\subsection{Case Study: Mixtral \& Mistral}
+\subsection{增加 experts：先看训练步，再看真实时间}
 
-Mixtral 8x7B 在 2024 年大规模公开，使用 sparse experts for encoder-decoder stack，并在 French/German translation 上取得 artifact-free translation。团队采用 multi-tier router + distillation pipeline，把稀疏 feature 用于 teacher training，再 distill 到 smaller dense models for deployment.
+本节把同一组扩展实验放到两个横轴上阅读。固定每 token 只激活少量 experts 时，增加 expert 数会增加总参数与可分配容量。按训练步看，更多 experts 通常更快降低 loss，并获得更好渐近值；但曲线逐渐靠近，说明参数扩展存在边际递减。
 
-\begin{itemize}
-    \item 多层 router 允许不同语言 token 落在不同 expert pool，保证低资源语言的 expert 不被高频语言挤占
-    \item Distillation pipeline 先用 MoE teacher 生成 logits，再用 smaller dense student 在 edge device 测试 latency tail
-    \item Observability 依赖 expert dominance threshold，一旦某 expert 连续 3 次处理 >40\% token，就触发 reroute experiment
-\end{itemize}
+\lecturefigure{slide-18-scaling-experts-per-training-step.jpg}{按训练步比较：expert 数增加带来质量提升，但收益逐渐递减。}{Stanford Online 官方视频 00:28:58--00:29:43。}
 
-\begin{table}[H]
-\centering
-\caption{Mixtral / Mistral 与 dense baseline 的部署对比}
-\begin{tabular}{p{0.3\textwidth} p{0.25\textwidth} p{0.25\textwidth}}
-\toprule
-指标 & Mixtral / Mistral & Dense baseline \\
-\midrule
-Parameters & 56B (sparse) & 7B--13B \\
-Inference strategy & Top-1 + distillation fallback & Dense only \\
-Deployment targets & Cloud GPU clusters + distill to mobile & Dense GPU clusters \\
-Governance & Router dominance alerts + expert audit & Standard training logs \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{本章小结}
-
-通过对比 Switch/GShard/Mixtral 等案例可以看到：稀疏模型的核心工程问题始终是路由、调度、监控与治理；治理 checklist 是防止 drift 的常见做法。
-
-\section{术语与概念速查}
-
-\subsection{Glossary}
-
-\begin{description}
-    \item[Router entropy] 控制 router 输出多样性的指标，entropy 过低表示 collapse。
-    \item[Capacity factor] 控制每个专家缓冲大小的倍数，决定 overflow 率。
-    \item[Expert fusion] 将多个专家的 weights 合并到 single module 以减少 inference load。
-    \item[Load loss] 附加损失衡量专家之间 token 分布偏差。
-    \item[Distillation pipeline] 稀疏模型到 dense student 的训练流程。
-    \item[Token overflow] 当专家缓冲区满后被迫跳过 MoE 层的 token；
-    \item[Load balancing log] 专家 token count 与 gate probabilities 的历史记录，用于 drift 分析。
-    \item[Expert readiness] 判断专家是否有足够梯度或 warmup 机会的 flag。
-    \item[Distillation supervision] 使用 MoE logits + additional loss 来指导 dense student。
-\end{description}
-
-\begin{importantbox}{Glossary 的工程价值}
-在大型团队中，把这些 term 写进 runbook，有助于 on-call 时快速判断 router 状态。
-\end{importantbox}
-
-\subsection{本章小结}
-
-定义清楚 router entropy、capacity factor、expert fusion 等术语有助于跨团队协作，尤其在 on-call 和 release review 场景。
-
-\section{部署与成本视角}
-
-\subsection{推理策略与 Expert fusion}
-
-Switch Transformer 虽然只激活一个专家，但在部署时仍需要处理数十亿参数。行业实践通常采用以下策略：
-
-\begin{enumerate}
-    \item \textbf{Expert fusion}：将活跃专家的 LoRA/adapter 合并，以减少 runtime 加载
-    \item \textbf{Hybrid routing}：训练阶段用 Top-1，推理阶段可回退到 Top-2 以提高鲁棒性
-    \item \textbf{Distillation}：稀疏模型作为教师，蒸馏出低延迟密集模型用于端侧部署
-\end{enumerate}
-
-\begin{knowledgebox}{稀疏模型的成本折中}
-稀疏模型参数多但 FLOPs 低，适合有充足显存的服务器。蒸馏后的模型则更适合边缘部署，形成一种“训练端稀疏、推理端密集”的混合策略。
+\begin{knowledgebox}{读图：训练步不是统一成本单位}
+横轴每一步可能包含不同通信与 padding 开销。曲线向左或向上说明优化步效率更高，但不能直接推出训练更快。还应关注不同 expert 数下是否保持相同 batch、active FLOPs、capacity factor 与 sparse layer 频率。
 \end{knowledgebox}
 
-\subsection{运维与监控}
+把横轴换成 wall-clock 后，通信成本进入图中。若更多 experts 跨越更多设备，dispatch 与 combine 会拖慢每一步；因此“每步收益”必须足以覆盖“每步更慢”，才会变成真实时间收益。
 
-部署 MoE 还需要关注监控指标：
+\lecturefigure{slide-19-scaling-experts-per-time.jpg}{按 wall-clock 比较：通信成本进入后，专家数的收益重新排序。}{Stanford Online 官方视频 00:29:44--00:30:51。}
 
-\begin{itemize}
-    \item Router 负载曲线（每天每个专家的 token 数）
-    \item Token overflow 计数（表示 capacity 不够）
-    \item Inference latency distribution（确保 Top-1 路由不引入尾延迟）
-\end{itemize}
+\begin{importantbox}{实验报告的最小二联图}
+至少同时报告 quality-versus-step 与 quality-versus-time。前者诊断优化和样本效率，后者回答系统是否真的更快。若再加 quality-versus-FLOPs 与成本，就能区分算法收益、硬件收益和资源转移。
+\end{importantbox}
 
-\subsection{本章小结}
+\subsection{Sparse scaling law：固定 FLOPs 增加参数仍有收益}
 
-部署 MoE 需要在吞吐、鲁棒与成本之间做平衡。Expert fusion、hybrid routing 与 distillation 是主流实践，充分监控 router 和专家负载是必要保障。
+讲座进一步将 dense scaling law 扩展到 sparse setting：在每 token FLOPs 近似固定时，增加 sparsely activated parameters 仍可改善 loss。图中曲线不是无限线性下降；随着 experts 增加，收益逐渐变小，说明可用容量、数据覆盖、路由学习和通信共同限制扩展。
 
-\section{路由数学与失败模式}
+\lecturefigure{slide-20-sparse-scaling-laws.jpg}{固定每 token FLOPs 时，增加稀疏参数的经验 scaling 曲线。}{Stanford Online 官方视频 00:30:52--00:31:29。}
 
-\subsection{Router 数学细节}
+\begin{knowledgebox}{读图：固定 FLOPs 不等于固定总成本}
+纵轴改善支持“条件参数有独立价值”，但横轴未完全包含参数存储、checkpoint、optimizer state、设备数量和通信。该图证明的是实验设置中的预测 loss 趋势，不证明无限加 experts 都具成本效益。
+\end{knowledgebox}
 
-Switch Transformer 的 router 输出是
-$$
-\text{router}(x) = \text{softmax}(x W_g + b_g)
-$$
-其中 $W_g \in \mathbb{R}^{d \times N}$, $N$ 是专家数。Top-1 路由选择 $\arg\max$，$g_i$ 是 one-hot gate。训练时引入负载损失：
-$$
-L_{\text{load}} = \alpha \cdot N \sum_{i=1}^N f_i P_i,\quad f_i=\frac{\text{tokens to }E_i}{\sum_j\text{tokens to }E_j},\quad P_i=\frac{1}{B}\sum_{b=1}^B g_i(x_b)
-$$
-该损失等价于鼓励 token 分布与 gate 概率保持一致，避免少数专家垄断。
+\subsection{Expert parallelism、model parallelism 与小规模收益}
 
-\subsection{失败模式与可观测信号}
+Expert parallelism 将不同 experts 放到不同设备；model parallelism 则切分同一 dense 权重或张量维度。二者可以互补：前者扩展条件参数池，后者让单个 dense block 也能跨设备。图中对比说明，组合后仍可继续改善，而不是只能二选一。
 
-常见失败包括：Expert Collapse、Capacity Overflow、Router/Tail Latency。主要指标有 expert utilization、overflow rate、routing entropy。设置 dashboard 监控这些变量可在 failure 发生前提醒工程师。
+这里的 sharding（分片）是指把参数或张量沿某个维度切到不同设备，使每张设备只保存或计算其中一部分，而不再完整复制全部权重。Expert parallelism 可以视为以 expert 为天然分片单元的一种特殊布局。
 
-\begin{table}[H]
-\centering
-\caption{Switch Transformer 路由 failure 模式}
-\begin{tabular}{l l l}
-\toprule
-Failure & Signal & Mitigation \\
-\midrule
-Expert collapse & utilization drop, skewed gradient & lower temperature, increase load loss \\
-Capacity overflow & overflow > 0.1\% & raise \texttt{capacity\_factor}, throttle tokens \\
-Latency tail & per-expert latency spike & fuse similar experts, cache router decisions \\
-\bottomrule
-\end{tabular}
-\end{table}
+\lecturefigure{slide-21-expert-vs-model-parallelism.jpg}{Expert parallelism 与 model parallelism 的质量对比及互补关系。}{Stanford Online 官方视频 00:31:30--00:32:57。}
 
-\begin{warningbox}{忽视 overflow 会削弱正则效果}
-一旦 token overflow 频繁发生，excess tokens bypass MoE，导致 router 更新弱化，负载损失失效。解决办法是让 router 较早进入稳定区，cap factor 设置略高于 1。
+\begin{knowledgebox}{概念解释：parallelism 不是一个词}
+\textbf{Data parallelism} 复制模型、切分样本并同步梯度；\textbf{model parallelism} 切分同一层的参数或张量；\textbf{expert parallelism} 让不同设备拥有不同 experts，并通过 token all-to-all 调度。三者解决的内存和计算瓶颈不同。
+\end{knowledgebox}
+
+稀疏性也不只在超大规模才有效。讲座展示较小模型上仍有一致收益，这意味着研究者可以先在可承受规模验证 router、capacity 与系统实现，而不必把“训练万亿模型”作为使用 MoE 的先决条件。
+
+\lecturefigure{slide-22-effective-at-small-scale.jpg}{Switch Transformer 在较小规模与不同 expert 数下仍显示收益。}{Stanford Online 官方视频 00:32:58--00:34:03。}
+
+\teachervoice{老师强调小规模结果的意义：如果方法只在极端规模有效，就很难迭代和复现；在较小模型上观察一致趋势，允许团队先验证实现与训练稳定，再扩大设备数。}
+
+最后一张曲线提醒：固定计算预算不断增加参数，最终会出现明显边际递减。原因可能包括每个 expert 接收的有效训练样本变少、router 难以学习可靠分区、参数存储与通信上升，以及数据本身不足以训练更多自由度。
+
+\lecturefigure{slide-23-parameters-fixed-compute-diminishing-returns.jpg}{固定计算预算只增加参数，最终出现边际收益递减。}{Stanford Online 官方视频 00:34:04--00:36:25。}
+
+\begin{warningbox}{“更多参数更样本高效”也有条件}
+总数据固定时，专家越多，每个 expert 实际看到的 token 可能越少。若 router 分配极不均、某些专家长期冷启动，额外参数会变成未训练容量。应报告 expert utilization、每 expert token 数与长尾使用分布。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Switch Transformer 依赖负载损失维护 gate balance，失败模式可通过 utilization、overflow、latency 等指标监控。及时响应这些 signal 是稳定稀疏训练的根基。
+读 MoE 实验必须区分 step、time、FLOPs 与总系统成本。Top-1 的优势来自特定 capacity 和硬件上的 Pareto 权衡；更多 experts 提升质量，但通信、数据覆盖与路由学习带来边际递减。
 
-\section{训练与服务堆栈}
+\section{分布式执行：Data、Model 与 Expert Parallelism 如何组合}
 
-\subsection{训练堆栈：从 optimizer 到 checkpoint}
+前面的曲线说明 expert parallelism 有效，本节进一步回答“权重究竟放在哪里”。MoE 的可扩展性来自把专家分散到设备，同时让 token 根据路由跨设备移动；这与 data parallel 的样本复制、model parallel 的张量切分可以叠加。真正的设计对象不是单个层，而是设备网格上的数据、权重和 token movement。
 
-MoE 模型批量训练需要处理大规模参数和专家状态。典型 stack 包括：
+\lecturefigure{slide-24-contextualizing-parallelism.jpg}{Data、model 与 expert parallelism 在设备网格中的权重放置方式。}{Stanford Online 官方视频 00:36:26--00:41:35。}
 
-\begin{itemize}
-    \item \textbf{Optimizer}: AdamW + learning rate warmup + gradient clipping
-    \item \textbf{Expert state}: 保存每个专家的 optimizer momentum 及 gating stats
-    \item \textbf{Checkpoint}: 需 serializes router weights、expert states、capacity history
-    \item \textbf{Gradient accumulation}: 提供 effective batch size 32k+，避免每 step 过小
-\end{itemize}
-
-\begin{knowledgebox}{Expert checkpoint 越早越重要}
-由于 experts 数量巨大，恢复时必须保证 router、expert states、load loss coeff 一致，否则模型容易出现“warm-start collapse”。因此工程团队每次 checkpoint 都存完整 MoE state。
+\begin{knowledgebox}{读图：先问“复制什么、切开什么、移动什么”}
+Data parallelism 复制权重并移动梯度统计；model parallelism 切分同一权重并移动中间激活或部分和；expert parallelism 让每卡持有不同 experts，并移动 token 到其目标设备。图中的方格颜色表示权重归属，不表示 token 永远留在原卡。
 \end{knowledgebox}
-
-如图\ref{fig:stack-timeline}上半部所示，上述组件形成了一个与 router、capacity factor 和 load loss 直接耦合的训练洪流。训练堆栈不仅要存 optimizer momentum，也必须把 expert usage log 传给 serving 层的 load balancer，以便 inference 端可以快速感知专家热度。
 
 \begin{table}[H]
 \centering
-\caption{训练堆栈主要职责与可观测信号}
-\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
+\small
+\caption{三类并行的资源与通信模式。}
+\begin{tabularx}{\textwidth}{L{0.19\textwidth}L{0.23\textwidth}X X}
 \toprule
-组成 & 主要任务 & 观测信号 \\
+方式 & 被切分或复制的对象 & 主要通信 & 主要目标 \\
 \midrule
-Optimizer + warmup & 学习 rate 计划、gradient clipping & Learning rate curve, gradient norm \\
-Expert state checkpoint & 保存 momentum 与 gating stats & Checkpoint diffs, expert utilization logs \\
-Gradient accumulation & 提供 large batch & Effective batch size, gradient variance \\
-Monitoring + QA & 自动 reroute & Overflow logs, router entropy \\
+Data parallel & 模型复制，batch 切分 & 梯度 all-reduce / reduce-scatter & 扩大吞吐与全局 batch \\
+Model parallel & 单层参数或张量维度切分 & all-gather、reduce-scatter 或点对点激活 & 放下单个 dense 模型 \\
+Expert parallel & experts 切分，token 动态 dispatch & token all-to-all 与结果 combine & 扩大条件参数池 \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
-\subsection{Serving 堆栈：Inference 设备分布}
+\begin{importantbox}{什么是 collectives}
+Collectives 是多设备集合通信原语，例如 all-reduce、reduce-scatter、all-gather 与 all-to-all。MoE 的关键通常是 all-to-all：每个设备把本地 token 按 expert 目的地发送给其他设备，执行 expert 后再把结果送回原序列位置。
+\end{importantbox}
 
-在 inference 端，常见 stack 包括：
+\subsection{从 T5-Base 到 Switch-C：设计旋钮不只有 expert 数}
 
-\begin{itemize}
-    \item Router module on CPU for fast decision making
-    \item Expert shards on GPU, each contains subset of experts
-    \item Load balancer tracks token distribution and reassigns workloads
-    \item Distillation result (dense student) as backup for latency-critical tasks
-\end{itemize}
+模型设计表同时改变 dense hidden size、层数、heads、expert 数、sparse layer 频率与并行布局。总参数可以增长到万亿，但 active path 仍只包含被选 expert。比较模型时必须对齐 per-token FLOPs 和训练硬件，否则“同计算”可能只是理论算术相近，真实通信并不相同。
 
-Serving stack 还要搭配 retry logic：当某个 expert 的 latency tail 突然上升，load balancer 会先把 token reroute 到邻近 experts，再把旧的 gate logits 写入 incident log。图\ref{fig:stack-timeline}下半部用颜色区分了 inference 层的组件，有助于理解为什么训练和服务需要共享 logging pipelines。
+\lecturefigure{slide-25-design-choices-switch-models.jpg}{Switch 模型族的 dense 维度、expert 数、参数量与计算设计。}{Stanford Online 官方视频 00:41:36--00:43:21。}
 
-\begin{warningbox}{Serving stack 不能忽略 routing drift}
-即便训练阶段的 load loss 达标，推理部署中依然可能出现 router drift。把 routing log 作为可观测指标并与 training log 交叉比对，是察觉 drift 的唯一办法。
+可以用一个简化核算表达总参数与 active 参数的差异：
+
+\[
+P_{\text{total}}=P_{\text{shared}}+E\,P_{\text{expert}},
+\qquad
+P_{\text{active/token}}\approx P_{\text{shared}}+kP_{\text{expert}}.
+\]
+
+其中，$P_{\text{shared}}$ 是 attention、embedding 与 dense 层等共享参数；$P_{\text{expert}}$ 是单个 expert 参数；$E$ 是 expert 总数；$k$ 是每 token 选择的 expert 数，Switch 中通常为 1。增大 $E$ 会快速增加总参数，但 active expert 部分只随 $k$ 增长。
+
+\begin{warningbox}{Optimizer state 仍随总参数增长}
+Adam/AdamW 为每个参数维护一阶动量 $m$ 与二阶动量 $v$，这些 optimizer state 连同权重、梯度和 checkpoint 都与总参数相关。即使每 token 只激活一个 expert，训练时仍要存储并更新被访问的庞大参数池。
+\end{warningbox}
+
+\subsection{“参数存知识、FLOPs 做推理”只是待检验假设}
+
+讲者提出一个直觉：更多参数可能更适合存储 knowledge，而更多 active compute 可能更适合 reasoning。关键是他立刻称其为“mostly unsubstantiated theory”。这句话应转化为实验问题：固定 upstream quality、active FLOPs 或数据后，额外稀疏参数是否独立改善事实型、组合型与推理型任务？
+
+\lecturefigure{slide-26-parameters-knowledge-compute-reasoning.jpg}{讲者的限定性假设：参数可能更偏向知识容量，FLOPs 可能更偏向推理。}{Stanford Online 官方视频 00:43:22--00:43:57。}
+
+\teachervoice{这里最值得保留的 teacher voice 不是口号，而是“不确定性标签”。讲者主动说这是 mostly unsubstantiated theory；因此讲义不能把它升级为已证实规律，更不能据此断言稀疏模型天然更会记忆、dense 模型天然更会推理。}
+
+\begin{importantbox}{可证伪的实验设计}
+选择一组 knowledge-heavy、reasoning-heavy 与混合任务，分别控制 upstream loss、active FLOPs、总参数、训练 token 和检索增强；再比较 dense 与 sparse。只有在这些混杂因素被控制后，才可能讨论参数容量与计算深度的独立作用。
+\end{importantbox}
+
+\subsection{本章小结}
+
+MoE 通过 expert parallelism 分散条件参数，并与 data/model parallelism 组合。总参数与 active 参数必须分开核算；“参数用于知识、计算用于推理”在本讲中是研究假设，不是结论。
+
+\section{证据链：Upstream Quality 能否转化为 Downstream Quality}
+
+本节从系统设计转向证据。若 sparse model 只是用更多总参数获得更低 pretraining loss，那么下游提升可能只是 upstream quality 的结果，而非参数形式本身。讲者因此提出控制问题：在相同 upstream quality 下，额外 sparse parameters 是否仍能独立改善 downstream task？
+
+\lecturefigure{slide-27-upstream-quality-research-question.jpg}{研究问题：固定 upstream pretraining quality 后，总参数形式是否仍影响下游？}{Stanford Online 官方视频 00:43:58--00:44:17。}
+
+\begin{knowledgebox}{背景概念：upstream 与 downstream}
+Upstream task 是大规模预训练目标，例如 C4 上的 text-to-text denoising；downstream task 是 SuperGLUE、TriviaQA 等迁移评估。二者相关不意味着完全等价：同样 pretraining loss 的模型可能有不同表示、容量分配与 fine-tuning 行为。
+\end{knowledgebox}
+
+\subsection{SuperGLUE：相关性明显，但不是参数因果证明}
+
+图中 dense 与 Switch 模型的 upstream quality 均与 SuperGLUE 提升相关。若两类点大体落在同一趋势附近，说明大量 downstream 收益可由更好的 pretraining quality 解释；若 sparse 点在同一 upstream 水平系统性更高，才支持参数形式有额外贡献。
+
+\lecturefigure{slide-28-upstream-vs-superglue.jpg}{Dense 与 Switch 的 upstream quality 对 SuperGLUE quality 关系。}{Stanford Online 官方视频 00:44:18--00:45:19。}
+
+\begin{knowledgebox}{读图：横向比较，不要只沿曲线看}
+先在相近 upstream quality 的横坐标处比较 dense 与 sparse 点，再观察误差与模型规模。只看到两者都随 upstream 提升而上升，能说明相关性，却不能证明“更多稀疏参数在同质量下独立有效”。
+\end{knowledgebox}
+
+\begin{warningbox}{Correlation 不是机制识别}
+模型族同时改变参数数、训练时间、正则化、路由与优化稳定性。散点趋势无法单独识别哪一项造成下游差异；需要 matched-quality、matched-compute 和多随机种子实验。
+\end{warningbox}
+
+Switch-C 将总参数推到约 1.6T，并在图中作为新的极端点。它的重要性是展示系统可训练性与 scaling 延续，而不是宣告所有任务都因“万亿”这个数字获得同比提升。极端点也可能对回归趋势产生很强杠杆作用，应与中等规模结果一起看。
+
+\lecturefigure{slide-29-switch-c-trillion-parameter.jpg}{加入约 1.6T 参数的 Switch-C 后，观察 upstream 与 SuperGLUE 的扩展趋势。}{Stanford Online 官方视频 00:45:20--00:46:01。}
+
+\teachervoice{讲者没有把 Switch-C 当作唯一卖点，而是用它测试趋势是否继续。工程上更重要的问题是：在相同设备时间、active compute 与服务约束下，它是否比更小的 sparse 或 dense 配置值得。}
+
+\subsection{TriviaQA：knowledge-heavy 任务提供另一种观察}
+
+TriviaQA 更偏向知识问答，因此适合检验“更多参数可能承载知识”的直觉。图中 upstream quality 与 TriviaQA 分数仍呈正相关，但一张相关图不足以把提升归因于存储容量；训练语料覆盖、tokenization、fine-tuning 与答案匹配规则都会影响结果。
+
+\lecturefigure{slide-30-upstream-vs-triviaqa.jpg}{Upstream quality 与 TriviaQA 质量的关系。}{Stanford Online 官方视频 00:46:02--00:46:27。}
+
+\begin{knowledgebox}{读图：这张图支持什么、不支持什么}
+它支持“更好的预训练通常伴随更好的 TriviaQA”，并为 sparse capacity 值得继续研究提供证据；它不证明模型在内部以可定位方式存储事实，也不证明参数量比数据覆盖、检索或 active compute 更重要。
+\end{knowledgebox}
+
+\subsection{Base/Large fine-tuning 与 101 语言训练}
+
+本节把证据从最大模型移回更常用规模与多语言分布。如果 sparse 方法只在最大模型上有效，它的工程价值会很窄。讲座展示 Base 与 Large 级别的 fine-tuning 结果，说明在更常见规模上也能获得收益；同时，多语言实验以 mT5 为 dense baseline，在 101 种语言上观察到整体优势。
+
+\lecturefigure{slide-31-fine-tuning-base-and-large.jpg}{Base 与 Large 规模下的 fine-tuning 结果。}{Stanford Online 官方视频 00:46:28--00:47:07。}
+
+\begin{knowledgebox}{读表：平均分之外还要找失败任务}
+先比较同规模 dense 与 sparse 的平均质量和 FLOPs，再检查是否存在某些任务退化。平均提升可能掩盖对小数据、长序列或类别不平衡任务的敏感性；部署时应保留 per-task 结果，而不是只报 aggregate score。
+\end{knowledgebox}
+
+多语言环境天然具有异质输入，router 可能按语言、词形或主题形成路径分工；但这不意味着每种语言自动获得独立 expert。真正应检查的是高低资源语言的分布、tokenizer 覆盖、expert utilization 与是否出现某些语言被 overflow 系统性丢弃。
+
+\lecturefigure{slide-32-multilingual-training.jpg}{以 mT5 为基线的 101 语言训练与质量趋势。}{Stanford Online 官方视频 00:47:08--00:47:41。}
+
+\teachervoice{讲者把“所有 101 种语言都有改善”作为重要结果，但工程复现仍应分语言报告。宏平均改善不等于低资源语言、公平性和路由覆盖都已解决。}
+
+\begin{warningbox}{语言分工可能制造新的长尾}
+若 router 把高资源语言集中到稳定 experts，低资源语言可能得到更少训练或更高 dropping。应按语言统计 expert entropy、overflow、token 数和 downstream quality，避免总体吞吐掩盖局部退化。
 \end{warningbox}
 
 \subsection{本章小结}
 
-训练堆栈侧重 checkpoint/optimizer/gradient accumulation，而 serving 堆栈关注 router latency 与 expert placement。两者必须在工程层面协调才能完成从训练到产品的闭环。
+Upstream quality 是 downstream quality 的重要解释变量，但相关图不自动证明额外稀疏参数的独立因果作用。Base/Large 与多语言结果扩大了适用范围，同时要求更细粒度的任务和语言审计。
 
-\section{推理成本与基准解释}
+\section{蒸馏：把稀疏 teacher 转换为更易部署的 student}
 
-\subsection{FLOPs vs latency tradeoffs}
+MoE 的训练优势不等于所有部署都适合保留专家分布。低 batch、边缘设备或参数存储受限场景可能更需要一个较小 dense student。Distillation（知识蒸馏）让 student 学习 teacher 的软分布、隐藏表示或任务输出，但它会把“巨大条件参数池”压缩回更小容量，因此必然是质量、参数、延迟与实现复杂度之间的转换。
 
-稀疏模型增加参数但不平均增加 FLOPs。Barret 指出 Switch-Base 每 token FLOPs 接近 dense，但吞吐提升 6x。若用户只看 latency，有以下指标组合：
+\lecturefigure{slide-33-distillation-techniques.jpg}{Switch Transformer 的蒸馏技术与 DistilBERT 风格基线。}{Stanford Online 官方视频 00:47:42--00:48:23。}
 
-\begin{itemize}
-    \item \textbf{Per-token FLOPs}: 近似 dense，每 token 只访问一个 expert
-    \item \textbf{Total parameter count}: 倍数级，允许更丰富语义
-    \item \textbf{Latency tail}: 需要监控 expert switching 和 GPU synchronization
-\end{itemize}
+一个常见蒸馏目标可写为：
 
-\begin{table}[H]
-\centering
-\caption{推理成本维度及其监控}
-\begin{tabular}{p{0.2\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-维度 & 体现形式 & 工程关注 \\
-\midrule
-Parameter count & MoE 模型 parameters 为 dense 的数十倍 & 确保 expert shards 有足够显存，distillation 提供 fallback \\
-Memory footprint & Expert weights + optimizer state & 缓存/streaming expert，使用 offloading + quantization \\
-Routing complexity & Top-1 gating + per-token routing log & Router latency、logging overhead \\
-Monitoring surface & Overflow + latency tail + load loss & 通过 dashboards 进行 threshold alerting \\
-\bottomrule
-\end{tabular}
-\end{table}
+\[
+\mathcal{L}=\lambda\mathcal{L}_{\text{hard}}+(1-\lambda)\tau^2
+\operatorname{KL}\!\left(p_T^{(\tau)}\,\|\,p_S^{(\tau)}\right).
+\]
 
-为了控制这些成本，平台团队把 routing log、overflow rate 与 GPU power draw 等指标写入统一 dashboard，并根据数据自动调整 \texttt{capacity\_factor}、router temperature 或 distillation frequency。
+其中，$\mathcal{L}_{\text{hard}}$ 是 student 对真实标签或原始预训练目标的 loss；$p_T^{(\tau)}$ 与 $p_S^{(\tau)}$ 分别是 teacher 和 student 在温度 $\tau$ 下的软分布；KL 是分布差异；$\lambda$ 平衡硬目标与 teacher 信号。不同蒸馏方案还可加入 hidden-state matching 或仅使用 teacher 生成数据。
 
-\begin{importantbox}{真正的成本是 engineering complexity}
-尽管 raw FLOPs 不变，MoE 的成本在于 routing/monitoring/serving complexity。需要更多工程状态、调度脚本、监控系统。
-\end{importantbox}
-
-\subsection{Benchmark 解释}
-
-Barret 提供 WMT、LM、language modeling benchmarks:
-
-\begin{itemize}
-    \item Sparse model 在 WMT translation 上优于同 FLOPs dense
-    \item Switch-Base 在 LM perplexity 上接近 T5-Base, 但吞吐更高
-    \item 多语言 benchmark 显示稀疏模型更容易 scale to low-resource languages
-\end{itemize}
-
-\begin{table}[H]
-\centering
-\caption{Benchmark 指标与解读维度}
-\begin{tabular}{p{0.25\textwidth} p{0.3\textwidth} p{0.35\textwidth}}
-\toprule
-Benchmark & 指标 & 解读 \\
-\midrule
-WMT translation & BLEU + latency & 在 low-resource 语言上 BLEU 提升，latency 受 router drift 影响 \\
-LM perplexity & Perplexity + Tokens/s & Switch-Base 与 T5-Base perplexity 接近，但 tokens/s 提高 6x \\
-Multi-language & Accuracy + fairness & 稀疏模型更容易覆盖低资源语言，监控 fairness 关键 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-把 throughput、perplexity 与 latency tail 放在同一个表中，避免只比较 FLOPs 的“错觉优势”。这样才能让 benchmark 成为部署决策的参考，而不是仅仅为了 headline 数字。
-
-\begin{knowledgebox}{Benchmark 设计要警惕 compute mismatch}
-不要仅看 FLOPs，而要比较 compute‐matched dense baseline + inference latency，避免“稀疏模型看起来更好”但代价是更多 engineering overhead。
+\begin{knowledgebox}{术语消化：蒸馏不是量化}
+Distillation 训练一个新 student 去逼近 teacher 行为；quantization 则降低同一模型权重或激活的数值位宽。前者改变参数结构和容量，后者主要改变表示精度。两者可以组合，但失败模式不同。
 \end{knowledgebox}
 
+\subsection{蒸馏预训练模型：压缩参数，也压缩条件容量}
+
+预训练蒸馏比较 dense、sparse teacher 与不同 student。读表时应同时看参数、训练或推理 FLOPs、上游质量和恢复比例。若 student 参数大幅下降但只保留部分 teacher 质量，这不是蒸馏失败，而是明确的 Pareto 交易；真正问题是它是否比直接训练同规模 dense model 更好。
+
+\lecturefigure{slide-34-distilling-pretrained-model.jpg}{预训练阶段的 sparse teacher 蒸馏与参数/质量权衡。}{Stanford Online 官方视频 00:48:24--00:50:58。}
+
+\begin{knowledgebox}{读表：必须加入“直接训练同规模 student”基线}
+只比较 teacher 与 distilled student，会把“容量变小后的必然下降”误当作蒸馏结论。应加入从头训练的同结构 student，判断 teacher 信号究竟恢复了多少质量，以及额外蒸馏成本是否值得。
+\end{knowledgebox}
+
+\teachervoice{Q\&A 中的实质问题是部署目标：若最终必须得到小 dense model，为什么不一开始就训练它？蒸馏只有在 sparse teacher 能提供更好的软目标、数据扩增或表示监督，并且这些收益超过 teacher 训练成本时才成立。}
+
+\subsection{蒸馏 fine-tuned SuperGLUE 模型}
+
+另一条路线是先让 Switch teacher 在 SuperGLUE 上完成 fine-tuning，再蒸馏任务行为。它更贴近特定产品，但泛化范围更窄：student 可能保留任务分数，却不再拥有 teacher 的通用预训练能力。部署前应决定需要“通用 student”还是“任务专用 student”。
+
+\lecturefigure{slide-35-distilling-finetuned-superglue.jpg}{蒸馏已 fine-tune 的 SuperGLUE teacher：任务质量与模型规模的转换。}{Stanford Online 官方视频 00:50:59--00:57:07。}
+
+\begin{importantbox}{蒸馏验收的四个维度}
+同时报告：相对 teacher 的质量保留、相对同规模 scratch baseline 的增益、端到端训练成本、以及目标硬件上的延迟/吞吐。若只报告参数压缩比，就无法判断部署是否真的更优。
+\end{importantbox}
+
+\begin{warningbox}{蒸馏不能消除 teacher 的偏差}
+Student 会学习 teacher 的分布与错误。若 sparse router 对语言、主题或群体存在不均衡，蒸馏可能把这种行为固化进 dense student，而不是自动平均掉。
+\end{warningbox}
+
 \subsection{本章小结}
 
-稀疏模型最核心的成本优势是 parameter-per-FLOP ratio，而基准理解要同时考虑吞吐、perplexity 与 multi-language fairness。
+蒸馏是从高容量 sparse teacher 到小型部署模型的有损转换。正确基线是同规模直接训练 student，正确指标同时包含质量、训练成本和真实硬件性能。
 
-\section{展望与讨论}
+\section{收束与扩展：从语言 MoE 到 Vision MoE}
 
-\subsection{稀疏性的未来}
+讲座最后先总结 Switch 的语言建模结果，再展示视觉领域的新工作。两部分共同说明：稀疏专家的核心接口可以跨模态复用，但 token 的含义、冗余结构和重要性排序会改变 routing 策略。文本通常希望每个 token 接受类似计算；图像 patch 则可能允许更激进的选择性处理。
 
-讲者认为稀疏性将在以下方面发挥作用：
-\begin{itemize}
-    \item \textbf{自适应计算}：不同难度的输入使用不同的计算量
-    \item \textbf{与线性注意力等效率方法结合}
-    \item \textbf{新的预训练目标}
-\end{itemize}
+\lecturefigure{slide-36-wrapping-up.jpg}{讲座总结：简单路由、稳定训练、预训练加速、多语言与万亿参数规模。}{Stanford Online 官方视频 00:57:08--01:00:43。}
 
-\subsection{案例研究：GShard 与 GLaM}
+\begin{knowledgebox}{读图：把“结果”还原成条件句}
+Switch 简化了 MoE，并在给定 T5 基线、C4/mT5 数据、TPU 与 Mesh TensorFlow 实现中取得速度和质量收益；它训练了万亿参数模型，但每 token 只激活少量 experts；它改善多语言平均表现，但仍需检查 per-language 路由与部署成本。
+\end{knowledgebox}
 
-Switch Transformer 并不是唯一的 MoE 路线。Barret 指出：\textit{``GShard gave us the blueprint of shard+router, GLaM showed us how to mix sizes.''} 两个模型的实战焦点如下：
+视觉 MoE 将 image patches 当作 tokens，在 Transformer 中插入 sparse expert layers。图像存在大量局部冗余，因此 router 不仅可以决定“使用哪个 expert”，还可能决定“哪些 patches 值得占用有限 capacity”。这使 sparsity 开始接近 adaptive computation。
+
+\lecturefigure{slide-37-sparse-models-computer-vision.jpg}{V-MoE：将 sparse expert scaling 扩展到图像分类。}{Stanford Online 官方视频 01:00:44--01:01:15。}
+
+\begin{knowledgebox}{什么是视觉 token}
+Vision Transformer 将图像切成 patches，并把每个 patch 投影为 token。V-MoE 的 expert 处理对象是 patch 表示；它不是为每张完整图片只选一个 expert。不同 patch 可被路由到不同 experts。
+\end{knowledgebox}
+
+Priority routing 在 capacity factor 小于 1 时先为 token 估计重要性，再让高优先级 patches 获得 expert 槽位。若 $\gamma=0.5$，容量只够处理理想均分的一半 token；这不再只是意外 overflow，而是有意进行计算预算分配。图像背景或重复区域可能被跳过，关键物体 patch 获得更多稀疏层计算。
+
+\lecturefigure{slide-38-priority-routing-vision-moe.jpg}{Vision MoE 的 priority routing：在容量不足时优先处理重要 patches。}{Stanford Online 官方视频 01:01:16--01:02:10。}
+
+\teachervoice{讲者把 capacity factor 降到 1 以下视为很有前景的方向：在图像中，甚至只让约十分之一 patch 经过 sparse layer 仍可能保持良好质量。这时 sparsity 开始同时改变“参数选择”和“计算量分配”。}
+
+\begin{warningbox}{Priority score 也是一个学习到的假设}
+被跳过的 patch 不一定真的“不重要”。若 priority router 对小物体、文字、边缘区域或少数类产生系统性低分，平均准确率可能掩盖脆弱性。应做遮挡、分群、校准与分布外测试。
+\end{warningbox}
+
+\subsection{Q\&A 给出的部署边界}
+
+结尾 Q\&A 补充了三条 slide 上没有完整写出的边界。第一，在当时的 C4、SuperGLUE 和常见序列长度下，attention map 不是主要内存成本，权重更突出，因此线性 attention 不一定先解决瓶颈。第二，继续扩大 experts 的直接限制之一是参数必须存放在某处。第三，sparse model 每个存储参数的效率通常低于 dense model，因此它更适合预训练和中高吞吐服务，不一定适合最小设备上的单请求低延迟。
 
 \begin{table}[H]
 \centering
-\caption{Switch vs GShard vs GLaM 概览}
-\begin{tabular}{llll}
+\small
+\caption{课堂 Q\&A 中的场景化判断。}
+\begin{tabularx}{\textwidth}{L{0.28\textwidth}X X}
 \toprule
-模型 & 参数量 & 路由 & 工程亮点 \\
+场景 & 可能收益 & 主要风险 \\
 \midrule
-Switch-Base & 1.6B & Top-1 & 简化路由 + load loss \\
-GShard-600B & 600B & Top-2 & Device-aware sharding \\
-GLaM-2.6B & 2.6B & Top-2 & Mixture of sizes + distillation \\
+大规模预训练 & 条件参数扩大容量，data/expert parallel 吞吐高 & all-to-all、存储、checkpoint 与稳定性 \\
+中高吞吐服务 & batch 能聚合 expert token，摊薄通信 & 热点 expert、路由漂移与跨机延迟 \\
+单请求低延迟/边缘设备 & 可能减少 active FLOPs & 总权重难放下，低 batch 无法形成高效 expert GEMM \\
+超长上下文 & MoE 扩大 FFN 容量 & attention/KV 成本可能成为另一独立瓶颈 \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
-开源实现（DeepSpeed-MoE, SwitchTransformer repo）让团队能在本地实验，而商业团队（Google, DeepMind）则在 production 里验证稳定性。Mixtral、Llama 4 等最新模型也纷纷借鉴稀疏模块。
-
-\subsection{MoE 部署成熟度}
-
-工程团队通常遵循一个三阶段流程：
-
-\begin{enumerate}
-    \item \textbf{实验验证}：在小 batch 上验证 router 是可控的
-    \item \textbf{推理雷达}：监控 expert load, token overflow, latency tail
-    \item \textbf{闭环治理}：将监控结果反馈到 load loss、capacity factor 与 distillation pipeline
-\end{enumerate}
-
-\begin{importantbox}{稀疏部署的真相}
-稀疏模型的优势不在于“参数多”，而在于“平均每个 token 用的参数更少”。部署时自动记录 router 决策和 expert usage，是防止 drift 的关键。
-\end{importantbox}
+\teachervoice{Barret Zoph 的最终判断很克制：如果目标是“在尽可能小的设备上放下最强模型”，dense model 的 per-weight efficiency 可能更好；如果是大量预训练和中高吞吐服务，sparsity 更可能成为大收益。应用场景决定结论。}
 
 \subsection{本章小结}
 
-MoE 的未来在于把稀疏 signal 与工程指标闭环：GShard、GLaM、Mixtral 等 case study 提供了不同的实践，而监控+治理则决定了稀疏模型能否在 production 持久运行。
+Switch 的语言结果说明条件参数可以规模化；V-MoE 进一步用 priority routing 分配有限计算。Q\&A 则提醒，存储、batch、互连、上下文长度和每权重效率决定 sparse deployment 是否真正占优。
 
 \section{总结与延伸}
 
-MoE 和 Switch Transformer 展示了一条通过稀疏激活获取千万级参数容量的路径，路由、调度与部署策略共同构成工程闭环。它们的核心优势在于把计算预算投入到真正重要的 token 上，同时依赖治理机制维持稳定。
+Switch Transformer 的核心不是“用一个 router 魔法般获得万亿模型”，而是把条件参数扩展写成一套端到端系统：router 决定路径，capacity 把动态路径约束成静态批次，load balance 提高硬件利用率，selective precision 与初始化保护训练，expert dropout 处理下游过拟合，expert parallelism 承担参数分布，实验则必须把 step、time、FLOPs 与总成本分开。
 
-\subsection{总结表}
+\begin{enumerate}
+  \item \textbf{稀疏扩展的是可选参数池}：总参数可随 expert 数增长，每 token active experts 仍由 top-$k$ 控制；
+  \item \textbf{Top-1 是 Pareto 选择}：它减少 expert FFN、通信与容量需求，但是否胜出取决于硬件和目标质量；
+  \item \textbf{Router 是数值控制路径}：softmax 与 argmax 对舍入敏感，局部 float32 可以用极小成本避免路径翻转；
+  \item \textbf{Load balance 是算法与系统的接口}：辅助 loss 把可学习概率变成近似规则的 expert batch；
+  \item \textbf{Capacity factor 是显式成本旋钮}：更高容量减少 dropping，却扩大 buffer、通信和潜在计算；
+  \item \textbf{负结果同样重要}：把 overflow token 送往次优 experts 并不必然优于跳过 expert 子层；
+  \item \textbf{Scaling 必须按多个横轴验证}：step、wall-clock、FLOPs、参数存储与成本回答不同问题；
+  \item \textbf{Parallelism 可以组合}：data、model 与 expert parallelism 分别切分样本、张量与条件参数；
+  \item \textbf{下游相关性不等于机制证明}：upstream loss、总参数、active compute 与数据覆盖需要匹配控制；
+  \item \textbf{蒸馏是有损部署转换}：应比较同规模 scratch student，并核算 teacher 训练成本；
+  \item \textbf{Vision priority routing 走向自适应计算}：capacity 小于 1 时，模型主动决定哪些 patches 获得 expert 计算；
+  \item \textbf{适用场景决定价值}：MoE 更偏向大规模训练与中高吞吐，不自动适合低 batch、边缘设备或极长上下文。
+\end{enumerate}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{0.18\textwidth} p{0.26\textwidth} p{0.26\textwidth} p{0.22\textwidth}}
-\toprule
-主题 & 技术 & 工程价值 & 持续关注 \\
-\midrule
-MoE 架构 & 多专家 + router & 参数与计算解耦 & Router 均衡、专家坍缩 \\
-Switch Transformer & Top-1 路由 + load loss & 简化调度与通信 & Expert fusion、hybrid routing \\
-Router 工程 & Capacity factor + load loss & 稳定 trainer & Monitoring + scheduling \\
-部署成本 & Expert fusion + distillation & 兼顾吞吐与延迟 & Token overflow、latency tail \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 5 的收敛框架：技术→价值→待解问题}
-\end{table}
+\begin{importantbox}{课程作业：做一次 matched-resource MoE 审计}
+实现一个小型 dense Transformer 与 top-1 MoE，匹配训练 token、active FLOPs 与总 wall-clock。至少扫描 expert 数、capacity factor 和 aux-loss 权重；报告 PPL、time-to-quality、overflow、expert entropy、all-to-all 时间、峰值显存与 per-task fine-tuning。再加入一个同参数量 dense baseline 和一个同 active-FLOPs dense baseline，回答收益来自容量、计算、正则还是系统实现。
+\end{importantbox}
 
-\begin{table}[H]
-\centering
-\caption{部署闭环要点：信号→指标→行动}
-\begin{tabular}{p{0.25\textwidth} p{0.25\textwidth} p{0.35\textwidth}}
-\toprule
-信号 & 推荐指标 & 应对策略 \\
-\midrule
-Expert utilization & 0.80--0.95 & 动态调整 load loss、重新分配 token \\
-Capacity overflow & <0.1\% & 提升 \texttt{capacity\_factor}、增加 routing capacity \\
-Routing entropy & >0.6 nat & 温度 annealing、router dropout \\
-Inference latency tail & p95 < 1.2x baseline & Distillation fallback、expert fusion \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{warningbox}{最终自检：六个不能混为一谈的概念}
+\textbf{总参数}不等于\textbf{激活参数}；\textbf{FLOPs}不等于\textbf{延迟}；\textbf{负载均衡}不等于\textbf{专家相同}；\textbf{token dropping}不等于\textbf{删除 token}；\textbf{upstream correlation}不等于\textbf{参数因果作用}；\textbf{sparsity}不等于\textbf{任意 adaptive computation}。
+\end{warningbox}
 
-\subsection{延伸阅读}
-\begin{itemize}
-    \item Fedus et al., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity,'' JMLR 2022
-    \item Lepikhin et al., ``GShard: Scaling Giant Models with Conditional Computation,'' ICLR 2021
-    \item Muralidhar et al., ``Model Parallelism based on Mixture-of-Experts,'' 2020
-    \item OpenAI blog, ``Routing MoE Layers for Efficiency'' (2021)
+\subsection{拓展阅读}
+
+建议按“历史机制—系统扩展—Switch 配方—多语言/视觉扩展”的顺序阅读原始材料：
+
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://doi.org/10.1162/neco.1991.3.1.79}{\textbf{Adaptive Mixtures of Local Experts}}：gating 与局部专家的早期形式化。
+  \item \href{https://arxiv.org/abs/1701.06538}{\textbf{Sparsely-Gated MoE}}：大规模条件计算、路由与负载均衡的关键前身。
+  \item \href{https://arxiv.org/abs/2001.08361}{\textbf{Scaling Laws for Neural Language Models}}：dense scaling 的经验背景。
+  \item \href{https://arxiv.org/abs/2006.16668}{\textbf{GShard}}：自动 sharding 与大规模条件计算系统。
+  \item \href{https://arxiv.org/abs/2101.03961}{\textbf{Switch Transformers}}：top-1 routing、selective precision、capacity、实验与蒸馏主来源。
+  \item \href{https://arxiv.org/abs/1910.10683}{\textbf{T5}} 与 \href{https://arxiv.org/abs/2010.11934}{\textbf{mT5}}：dense text-to-text 与 101 语言基线。
+  \item \href{https://arxiv.org/abs/2106.05974}{\textbf{V-MoE}}：视觉 sparse experts、priority routing 与容量小于 1 的自适应分配。
+  \item \href{https://github.com/tensorflow/mesh}{\textbf{Mesh TensorFlow}}：原始工作所处的分布式实现与 sharding 代码背景。
 \end{itemize}
+}
 
 \end{document}

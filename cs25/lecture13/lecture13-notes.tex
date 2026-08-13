@@ -1,221 +1,669 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 13：大语言模型的涌现能力与 Scaling}
+\renewcommand{\noteauthors}{基于 Jason Wei 讲座、官方课件、人工字幕与一手论文整理}
+\renewcommand{\notedate}{CS25 V2 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-01-24；上传 2023-05-21}
+\renewcommand{\videoduration}{1:07:48}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=tVtOevLrt5U}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
-\newcommand{\notetitle}{[CS25] Emergent Abilities and Scaling — Jason Wei, Google}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2023}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2023}
-\newcommand{\videoduration}{约55分钟}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\videofigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth]{images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与阅读地图：这堂课到底在回答什么}
 
-\section{引言：缩放定律与涌现能力}
+本讲录制于 2023 年 1 月 24 日，Jason Wei 用一条连续的教学链连接两个当时刚形成的研究主题：第一，为什么 language-model loss 可以随规模平滑下降，而某些任务能力却像跨过阈值一样突然出现；第二，为什么 chain-of-thought（CoT，思维链）并不是对所有模型都有效，而要等模型具有足够基础能力后才产生显著增益。重写时以官方 37 页 Google Slides 为视觉主轴，其中第 1--36 页含教学内容，第 37 页仅为致谢；现场 OpenAI Playground 的无 CoT / 有 CoT 对照则从官方录像精确抽帧补回。
 
-Jason Wei 来自 Google，介绍了大语言模型中的\textbf{涌现能力}（Emergent Abilities）和缩放（Scaling）研究。这项工作联合了 Google、DeepMind 和 Stanford 的研究者。
+\lecturefigure{slide-01.jpg}{课程主题：Scaling unlocks emergent abilities in language models}{官方课件第 1 页}
 
-\begin{knowledgebox}{缩放定律回顾}
-Kaplan et al. (2020) 发现，语言模型的测试损失随计算量、数据量和参数量的增加而\textbf{可预测地}下降，呈现幂律关系。但下游任务的性能并不总是平滑提升。
-\end{knowledgebox}
+标题中的 ``unlock'' 很重要。它没有声称参数量本身创造了一个神秘模块，而是说：当模型、数据、训练计算和使用方法共同跨入某个区域后，原先在任务指标上看不见的能力开始可测。读者应把本讲当成一门“如何解释曲线”的课，而不是把 ``emergence'' 当作营销词。
 
-\section{涌现能力的定义与观察}
+\lecturefigure{slide-02.jpg}{课程路线：涌现能力、U-shaped scaling、CoT、BIG-Bench、跨语言推理与 self-consistency}{官方课件第 2 页}
 
-\subsection{什么是涌现能力？}
+整套课件先讨论预训练规模与任务能力，再转向 prompting-time 的推理干预。两部分并非并列综述：CoT 恰好构成一个关键案例，说明一种方法在小模型上可能无效甚至有害，在大模型上却打开新的任务区域；self-consistency 又进一步说明，推理时增加采样预算也存在规模门槛。
 
-\begin{importantbox}{涌现能力的定义}
-一种能力被称为``涌现的''（emergent），当且仅当：
-\begin{itemize}
-    \item 在\textbf{小模型}中完全不存在（接近随机水平）
-    \item 在模型规模达到某个\textbf{临界点}后突然出现
-    \item 无法通过观察小模型的趋势来预测其出现
-\end{itemize}
-这与缩放定律中的平滑改进形成鲜明对比——涌现是\textbf{非线性的、阶跃式的}。
+\begin{importantbox}{本讲的核心问题}
+给定一条模型规模--性能曲线，我们怎样区分平滑改进、测量阈值、真正的机制变化和提示方法带来的增益？更进一步，当数据、后训练、metric 与 inference compute 都会移动曲线时，应该把哪一个量放在横轴上？
 \end{importantbox}
 
-\subsection{典型的涌现能力}
+\teachervoice{讲者开场强调，这项工作的重要性之一，是 Google、DeepMind 与 Stanford 的研究者形成了共同的观察框架。它首先是一套让不同模型、任务和团队可以对话的语言，而不是关于某个固定参数阈值的自然定律。}
 
-Jason 展示了多个涌现能力的例子：
-\begin{itemize}
-    \item \textbf{多步算术}：小模型完全无法做，大模型突然可以
-    \item \textbf{逻辑推理}：类似的阶跃跳变
-    \item \textbf{代码执行追踪}
-    \item \textbf{多语言翻译}中的某些语言对
-\end{itemize}
+\subsection{证据边界与重写原则}
 
-\begin{warningbox}{涌现的不可预测性}
-涌现能力的关键特征是\textbf{不可预测性}——你无法通过训练小模型来判断某个能力需要多大的模型才能涌现。这意味着：
-\begin{itemize}
-    \item 当前模型可能``差一点''就能解决某些任务
-    \item 也可能还需要几个数量级的规模增长
-    \item 这对资源规划和安全评估都构成挑战
-\end{itemize}
+这份讲义严格恢复课堂日期前的论证。官方课程页推荐 Emergent Abilities、Chain-of-Thought Prompting 与 Scaling Instruction-Finetuned Language Models 三篇论文；课件还直接使用 scaling laws、BIG-Bench、BIG-Bench Hard、multilingual CoT 与 self-consistency 等一手结果。2023 年稍后出现的“涌现是否是 metric artifact”争论具有研究价值，但它不属于 1 月 24 日课堂内容，因此不会被倒灌成讲者当时的结论。
+
+\begin{warningbox}{历史材料不能被后见之明改写}
+本讲中的 ``emergent'' 是操作性术语：小模型在所选 metric 上接近随机，大模型明显超过随机。它不自动等价于内部出现了一个离散新电路，也不证明阈值与模型参数之间存在唯一因果关系。讲义会保留课堂提出的证据，同时明确 metric、数据和模型家族带来的限制。
 \end{warningbox}
 
 \subsection{本章小结}
 
-涌现能力是大语言模型最令人惊讶的特性之一，挑战了``平滑缩放''的直觉。
+阅读后续图表时，需要始终携带三个问题：横轴究竟是什么；纵轴是否有随机或人类 baseline；曲线的拐点来自模型能力、数据质量、后训练、prompt，还是 metric 的共同作用。后文所有“涌现”判断都应回到这三问。
 
-\section{Chain-of-Thought Prompting}
+\section{平滑 Scaling Laws 与不平滑任务能力}
 
-\subsection{思维链的核心思想}
+前一章确定了证据边界，本章建立最基本的对照。语言模型的 held-out loss 往往随计算、数据和参数呈平滑 power law；但用户真正关心的任务指标可能在很长区间里维持 chance level，然后才快速上升。两条曲线可以同时成立，因为它们测量的对象、尺度和阈值化方式不同。
 
-\begin{importantbox}{Chain-of-Thought (CoT) Prompting}
-在提示中展示\textbf{逐步推理过程}，而不仅是最终答案。例如：
+\subsection{先看论文地图，再看单条曲线}
 
-\textbf{标准提示}：``Roger 有 5 个网球，他又买了 2 筒，每筒 3 个。他现在有多少？答：11''
+课件先展示论文首页与任务清单，是为了提醒读者：``emergence'' 不是从一个漂亮案例概括出来的，而是跨多个模型家族、few-shot tasks 和 prompting techniques 汇总得到的现象目录。目录本身不能证明统一机制，却能提出可复用的比较问题。
 
-\textbf{CoT 提示}：``Roger 有 5 个网球，他又买了 2 筒，每筒 3 个。所以他买了 2 $\times$ 3 = 6 个。5 + 6 = 11。答：11''
+\lecturefigure{slide-03.jpg}{Emergent Abilities of Large Language Models：论文与能力目录}{官方课件第 3 页；Wei et al., TMLR 2022}
 
-关键发现：CoT 只在\textbf{大模型}中有效——这本身就是一种涌现能力。
-\end{importantbox}
+读这张图时先区分“catalog”与“theory”。论文整理了 arithmetic、symbolic manipulation、language understanding 等任务的阈值现象，也整理了某些只在较大模型上有效的 prompting 技术；它并未给出一个能从参数、数据组成直接预测全部阈值的封闭理论。
 
-\subsection{CoT 的变体}
+\subsection{Scaling law：可预测的是平均 loss}
 
-\begin{itemize}
-    \item \textbf{Zero-shot CoT}：只需在提示末尾加``Let's think step by step''
-    \item \textbf{Self-consistency}：多次采样 CoT 推理，取多数投票
-    \item \textbf{Least-to-most prompting}：将复杂问题分解为子问题
-\end{itemize}
+Scaling laws 的典型结论是：当其他条件受控时，test loss 会随模型参数 $N$、训练 token 数 $D$ 或训练计算 $C$ 近似按幂律下降。课堂用 Kaplan et al. 的三组图建立“平滑且可外推”的基线，再把涌现定义为小模型曲线无法直接揭示的任务级变化。这里先理解平均预测误差如何变化，才能避免把后续某个 benchmark 的 abrupt-looking score 误读为与 loss scaling 相矛盾。
 
-\subsection{本章小结}
+\lecturefigure{slide-04.jpg}{模型、数据和计算增长带来的可预测 loss 改进}{官方课件第 4 页；Kaplan et al., 2020}
 
-CoT 是释放大模型推理能力的关键技术，但它本身也是涌现的——小模型无法从中受益。
-
-\section{指令微调（Instruction Tuning）}
-
-\subsection{FLAN 与指令微调}
-
-\begin{importantbox}{指令微调的效果}
-在大量不同任务的指令-输出对上微调模型：
-\begin{itemize}
-    \item 显著提升模型在\textbf{未见过}的任务上的 zero-shot 表现
-    \item 本质上是教会模型``遵循指令''这个\textbf{元能力}
-    \item 与 CoT 结合（Flan-PaLM）效果更佳
-\end{itemize}
-\end{importantbox}
-
-\subsection{与 fine-tuning 的区别}
-
-\begin{knowledgebox}{指令微调 vs. 任务微调}
-\begin{itemize}
-    \item \textbf{任务微调}：在特定任务上训练，提升该任务的性能
-    \item \textbf{指令微调}：在多样化的指令上训练，提升所有任务的 zero-shot 性能
-    \item 关键区别：指令微调的目标是\textbf{泛化到新指令}，而非记住特定任务
-\end{itemize}
+\begin{knowledgebox}{读图：三张 scaling 曲线在说什么}
+横轴分别代表 compute、dataset size 与 parameter count，纵轴是 held-out language-model loss。首先比较 log--log 坐标上的整体直线趋势，而不是某个单点；其次注意这些是分布平均的 next-token prediction 误差，不是某项离散任务的准确率；最后，低 loss 说明模型对数据分布的预测更好，却不直接告诉我们它是否跨过某个任务的 random baseline。
 \end{knowledgebox}
 
-\subsection{本章小结}
+训练计算常用一个粗略关系表达：
+\[
+C \propto N D,
+\]
+其中 $C$ 是预训练 floating-point operations（FLOPs），$N$ 是参与前向和反向计算的参数规模，$D$ 是训练 token 数。比例常数取决于 Transformer 结构、序列长度、是否重复训练数据以及实现细节，因此这不是精确账本，只是解释为什么固定 $D$ 的模型家族中，参数量与训练 FLOPs 可能给出相似横轴。
 
-指令微调使模型从``能做任务''变为``听得懂指令''，是 ChatGPT 等产品背后的关键技术。
+\teachervoice{课堂一开始因屏幕共享问题重复了三次同一结论：loss 的改善是可预测的，而本讲所说的 emergence 恰恰是只看小模型时难以预测的任务变化。这段小插曲反而把两类证据的差别说得非常清楚。}
 
-\section{如何判断涌现是真现象还是度量伪影}
+\subsection{从物理直觉到可测定义}
 
-\subsection{阈值效应与离散指标}
+``More is Different'' 的科学直觉帮助理解为什么量变可能带来质变，但语言模型研究仍需要可复验的 operational definition。否则，任何令人惊讶的输出都可以被事后称为涌现，概念就失去比较价值。
 
-涌现能力之所以引发争议，一个重要原因是很多基准使用\textbf{离散阈值式指标}。例如，模型从 49\% 提升到 51\% 时，可能在图上看起来像``突然学会了''；但如果改用连续指标或更细粒度评测，这种跃迁可能只是平滑曲线的一段。
+\lecturefigure{slide-05.jpg}{科学中的 emergence：定量变化引出定性变化}{官方课件第 5 页；Anderson 1972 与 Jacob Steinhardt 2022}
 
-\begin{warningbox}{看到``拐点''时先问评测怎么定义}
-判断能力是否真的涌现，第一步不是讨论哲学，而是检查指标设计：是否存在 hard threshold、是否存在 few-shot prompt 对小模型极不友好、是否存在数据污染或 benchmark 饱和。如果这些问题没排除，所谓``相变''很可能只是度量方式放大了曲线变化。
+课堂用两个直觉例子说明“规模改变可达状态”：少量 uranium 与足够密集的 uranium 处在不同反应区域；小分子与 DNA 在信息编码能力上也不是简单线性差别。类比只负责建立直觉，不能替代语言模型中的控制实验，因为参数、数据与算法不像物理质量那样是单一标量。
+
+\lecturefigure{slide-06.jpg}{大语言模型涌现能力的操作性定义与三种 scale 轴}{官方课件第 6 页；Wei et al., 2022}
+
+\begin{importantbox}{操作性定义}
+若某项 ability 在较小模型上未被测得、在较大模型上被测得，则称其为 emergent ability。对 few-shot classification，课堂进一步把“未被测得”具体化为接近 random accuracy，把“被测得”具体化为显著超过 random accuracy。这个定义依赖任务、prompt、metric、baseline 与被比较的模型族。
+\end{importantbox}
+
+\begin{warningbox}{不要把横轴偷换成“智能”}
+Training FLOPs、参数量和训练数据量是三个不同资源轴。即使它们在同一模型家族中高度相关，也不能把其中任意一个直接命名为 intelligence。数据质量、token mixture、architecture、optimizer 与 post-training 都可能改变同一参数量模型的有效能力。
 \end{warningbox}
 
-\subsection{为什么研究者仍然重视它}
+\subsection{本章小结}
 
-即便存在度量争议，涌现讨论依然有价值，因为它提醒研究者：能力增长并不总是线性可预测。对于产品团队而言，这意味着模型一旦跨过某个能力门槛，prompt、工具、检索和微调策略都可能突然变得更有效。
+平滑 scaling law 描述分布平均的预测误差；emergent-ability plot 描述特定任务在特定 metric 上是否超过 baseline。前者可以连续改进而后者长期不动，因为任务准确率可能要等多个子技能都达到最低可靠度后才显现。
+
+\section{Few-shot 阈值、Inverse Scaling 与 U-shaped Scaling}
+
+有了操作性定义，下一步不是立即寻找神秘机制，而是学会读图。Few-shot prompting 把若干 input--output exemplar 放入上下文，让 frozen language model 继续预测答案；如果小模型只会猜、大模型能利用 exemplar 完成任务，便构成课堂所说的 few-shot emergence。
+
+\subsection{Few-shot prompting 如何变成可测实验}
+
+实验需要明确 prompt、未见 input、target label 和 chance baseline。若二分类任务的随机准确率为 $0.5$，小模型在 $0.5$ 左右并不证明它“一点也不懂”，但至少说明当前 interface 没有把知识转化为可用性能；大模型持续超过 baseline 才说明这套 interface 下的能力可测。换言之，能力判断不是读一段模型输出后的主观印象，而是把同一种 elicitation procedure 放到一系列 scale checkpoints 上比较，并检查改进是否超过抽样噪声、类别不平衡和偶然 prompt 选择能够解释的范围。
+
+\lecturefigure{slide-07.jpg}{Few-shot prompted task 的涌现定义}{官方课件第 7 页；Wei et al., 2022}
+
+对 $K$ 类平衡分类，可用 chance-normalized gain 辅助比较：
+\[
+G_{\mathrm{chance}}=\frac{a-1/K}{1-1/K},
+\]
+其中 $a$ 是准确率，$1/K$ 是随机基线。$G_{\mathrm{chance}}=0$ 表示没有超过随机，$G_{\mathrm{chance}}=1$ 表示满分。它便于跨不同类别数的任务观察“超过 chance 的程度”，但仍不消除 prompt sensitivity 与样本方差。
+
+\lecturefigure{slide-08.jpg}{多个任务上的 few-shot emergence 曲线}{官方课件第 8 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：先看 baseline，再看拐点}
+每个小图的横轴是训练 FLOPs 或模型规模，纵轴是某个任务 metric。第一步找 random baseline；第二步看小模型点是否围绕 baseline 波动；第三步判断大模型是否连续多个点超过 baseline，而不是只挑一个噪声点；第四步比较不同模型家族的拐点是否一致。所谓“突然”，描述的是稀疏采样下的任务曲线，不代表内部表示在相邻两个 checkpoint 之间瞬间生成。
+\end{knowledgebox}
+
+\teachervoice{讲者逐轴解释这些图：横轴是规模，纵轴是性能，虚线或已知数值是随机水平。课堂强调的不是“肉眼看到弯曲”，而是小模型未超过随机、大模型开始稳定超过随机的判据。}
+
+\subsection{两个具体任务：知识测验与语音转写}
+
+抽象小图容易让读者忽略 task mechanics，因此课件接着给出两个更具体的例子。一个是多学科选择题，另一个是把英语句子转为 International Phonetic Alphabet（IPA，国际音标）；二者都要求模型把上下文示例转成新的输出格式。
+
+\lecturefigure{slide-09.jpg}{多任务选择题中的 few-shot 阈值现象}{官方课件第 9 页；Hendrycks et al., 2020 数据}
+
+这类 benchmark 的 raw accuracy 混合了知识、读题、选项比较和输出格式。若小模型无法稳定执行其中任一环节，总分会贴近随机；规模提升可能让多个环节同时变得“足够可靠”，从而在 aggregate metric 上形成明显拐点。图不能单独告诉我们究竟是哪一环先改善。
+
+\lecturefigure{slide-10.jpg}{英语到 IPA 转写任务中的涌现表现}{官方课件第 10 页；BIG-Bench}
+
+IPA 例子展示了一个低频输出空间：输入是普通英语句子，目标却包含模型很少被要求按规则生成的音标序列。读图时应把“能否识别任务意图”“是否掌握音素映射”“能否稳定输出特殊字符”分开；任务准确率跨阈值只说明整条链终于可用，不等价于每个子能力同时诞生。
+
+\subsection{Inverse scaling 为什么可能只是曲线前半段}
+
+如果只看到 small model 优于 medium model，很容易得出“继续扩大会越来越差”的结论。课堂用一个 deliberately provocative 的词选择例子说明：模型变大后可能更忠实地复现训练分布中的常见关联，从而先偏离任务目标；再继续扩大后，更强的 instruction/context understanding 又可能把趋势拉回。
+
+\lecturefigure{slide-11.jpg}{Inverse scaling can become U-shaped}{官方课件第 11 页；Wei, Tay, and Le, 2022}
+
+\begin{knowledgebox}{读图：U-shape 的三段解释}
+图中的 small model、medium model 与 large model 不应只被贴上“好/坏”标签。第一段可能是模型尚未学到强 prior；第二段是 prior 变强但任务控制不足；第三段是 context sensitivity、instruction following 或更高层组合能力追上 prior。真正的教学结论是：在曲线没有覆盖更大规模前，不要把局部负斜率外推成永久规律。
+\end{knowledgebox}
+
+\begin{warningbox}{稀疏 checkpoint 会制造视觉戏剧性}
+如果横轴只有三四个模型，U-shape 的最低点和“阈值”都只能粗略定位。不同 prompt、seed、metric 或数据切分也可能移动曲线。正确表述应是“在被测试的模型族和设置中观察到趋势反转”，而不是“所有 inverse scaling 最终都会被规模解决”。
+\end{warningbox}
+
+\subsection{Emergent prompting technique：方法本身也有门槛}
+
+前面讨论的是 task ability，课件随后把视角转向 intervention：同一个 RLHF 或 prompting 方法，在小模型上可能没有正收益，在大模型上才显示 delta。方法是否有效因此不能只在便宜的小模型上验证后直接外推。
+
+\lecturefigure{slide-12.jpg}{一种干预可在小模型上有负收益、在大模型上转为正收益}{官方课件第 12 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：比较的是同规模内的 delta}
+先在每个规模上比较 baseline 与 intervention，而不是只比较最左和最右的绝对分数。小模型处橙线低于蓝线，说明干预占用了模型尚不具备的表示或优化能力；大模型处橙线超过蓝线，说明相同干预终于能利用更强 base capability。这个例子也提醒我们区分 pretraining scale、prompting 与 weight-changing post-training。
+\end{knowledgebox}
+
+\teachervoice{学生问这些模型是否都经过 instruction fine-tuning，讲者明确回答这组 base-model emergence 图没有做 instruction fine-tuning。随后他用 RLHF 说明：只在小模型上试验一个方法并观察失败，并不足以证明它在更大模型上也无效。}
 
 \subsection{本章小结}
 
-讨论涌现时，既不能把所有拐点都神秘化，也不能忽视规模增长带来的真实能力重组。
+Few-shot emergence 是相对 chance baseline 的任务级现象；inverse scaling 的局部负趋势可能在更大规模反转；prompting 或 post-training intervention 也可能有自己的能力门槛。三者共同反对一种常见错误：用有限小模型实验对整个规模区间作线性外推。
 
-\section{从研究结论到产品策略}
+\section{阈值为什么会移动：数据、后训练与度量轴}
 
-\subsection{CoT 与 Instruction Tuning 的组合价值}
+若把 emergence 理解成固定参数量触发器，就无法解释为什么不同模型家族在相同任务上跨阈值的时间不同。本章沿课件顺序拆解三种移动机制：更好的数据可让能力更早出现；针对性 fine-tuning 可把已发现行为压到更小模型；换用 loss 或 perplexity（困惑度，即 held-out cross-entropy 交叉熵的指数）作为横轴，则可能把“不同大小”重新解释为“不同有效质量”。
 
-Jason Wei 的工作可以被压缩成一个非常实用的产品结论：\textbf{基础模型规模决定能力上限，CoT 决定是否能调用推理，Instruction Tuning 决定用户是否能稳定触发这些能力}。三者缺一不可。
+\subsection{能力前沿不是一条固定竖线}
 
-\begin{importantbox}{一个实用的系统设计顺序}
+课件用手绘能力前沿把任务空间想象成随模型规模扩大的区域。图中的虚线只是某个观察位置，深色区域表示较小模型做不到而较大模型做得到的任务，白色区域则表示当前模型仍未解决的任务；它不是宇宙规定的 100B boundary。这个概念图要回答的是“能力集合怎样扩张”，不是为每项任务宣布一个不可移动的参数门槛，因此必须与后面的 data、fine-tuning 和 model-quality 证据一起阅读。
+
+\lecturefigure{slide-13.jpg}{语言模型规模与可达任务区域的手绘框架}{官方课件第 13 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：颜色与白区的课堂解释}
+深蓝区域代表小模型已经能完成的任务，新增色带代表跨过当前规模后才可达的 emergent abilities；右上白区不是“理论上不可解”，而是尚未被当前模型解决。学生追问白区是否必须依赖 100B 参数，讲者明确回答：阈值只是已有模型上的观察，更好的 data、architecture 与 algorithm 完全可能向左移动边界。
+\end{knowledgebox}
+
+\begin{importantbox}{发现能力与压缩能力是两个问题}
+大模型常被用作 capability discovery engine：它揭示哪些行为在足够通用的系统中可能存在。一旦行为被明确描述，研究者可以收集或生成针对性数据，再用 fine-tuning、distillation 或工具化方法让更小模型学会它。前者面对 unknown unknowns，后者面对已知目标。
+\end{importantbox}
+
+\subsection{Better data：相关性证据与受控证据}
+
+课堂首先比较 LaMDA、GPT-3 与 PaLM，观察到 PaLM 在更小参数量就出现某项能力。讲者的 running hypothesis 是 PaLM 数据更好，但他立即承认大型预训练成本使模型间差异无法被完全消融。因此，模型家族比较提供线索，不能单独证明数据是唯一原因。
+
+\lecturefigure{slide-14.jpg}{更好的训练数据可让能力在更小模型上出现}{官方课件第 14 页；Wei et al., 2022}
+
+\begin{warningbox}{不能把跨模型家族比较写成数据因果证明}
+PaLM 与 LaMDA/GPT-3 同时在 data mixture、architecture、tokenizer、optimization 和 compute allocation 上不同。讲者把数据质量称为主要假设，但没有声称完成受控 ablation。高质量读图必须同时写出 observed shift 与 causal uncertainty。
+\end{warningbox}
+
+为了得到更强的因果证据，下一张图转向小型可控实验：固定模型规模和大部分训练语料，只改变某些 verb 在训练集中的出现频率，然后观察 subject--verb agreement error。此时横轴更接近真正被操纵的变量。
+
+\lecturefigure{slide-15.jpg}{受控实验：in-domain verb frequency 降低语法错误}{官方课件第 15 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：大模型相关性与小模型消融互补}
+横轴是目标 verb 在训练数据中的频率，纵轴是 error rate；随着 in-domain exposure 增加，错误下降。这个 toy result 不足以解释 PaLM 的全部 emergence，却证明“在 compute、model size 和其余数据近似固定时，任务相关数据能移动能力曲线”。它为大型模型比较提供了机制上可信的支撑。
+\end{knowledgebox}
+
+\teachervoice{课堂问答中，有学生追问 PaLM 的差异究竟来自数据还是架构。讲者没有虚构一个干净答案，而是说明大型预训练无法经济地完成全套消融；随后用较小、可控的 verb-frequency 实验展示能被证明的那一部分。}
+
+\subsection{Fine-tuning：把已知 desired behavior 压到小模型}
+
+当研究者已经知道目标是 instruction following、step-by-step reasoning 或某种风格时，可以直接优化这个行为。课件借助 RLHF / instruction-following 结果说明，小模型经针对性后训练后可以在目标分布上优于更大的弱后训练模型。
+
+\lecturefigure{slide-16.jpg}{针对 desired behavior 的 fine-tuning 可让小模型超过更大 base model}{官方课件第 16 页；InstructGPT 相关结果}
+
+\begin{knowledgebox}{读图：模型大小不是唯一排序键}
+先比较同一种 training recipe 下的模型规模，再比较同一模型规模下的 post-training 方法。绿色标记的小型 RLHF/instruction-tuned model 在人类偏好指标上超过更大 base model，说明目标行为可以通过高信息密度监督被提前诱导；但它不代表小模型在所有未知任务上获得了大模型的完整能力集合。
+\end{knowledgebox}
+
+学生问能否把 emergent ability distill 到小模型，讲者的回答是肯定的：大模型可以生成数据，小模型再在这些数据上 fine-tune。限制在于研究者必须先知道要生成什么行为；未被发现的能力无法被逐项列入训练目标。
+
+\subsection{横轴应该是参数、FLOPs，还是 perplexity}
+
+参数量和训练 FLOPs 便于公开比较，却只是 model quality 的代理。若数据与算法显著改善，一个更小模型可能有更低 held-out loss，并在 downstream task 上更接近较大旧模型。因此，课堂提出把 perplexity 或 dev-set loss 放到横轴，观察任务能力是否更一致地随有效预测质量变化。
+
+\lecturefigure{slide-17.jpg}{不同 scale 轴：参数、训练 FLOPs、loss 与 perplexity}{官方课件第 17 页；Wei et al., 2022}
+
+\begin{knowledgebox}{背景概念：cross-entropy 与 perplexity}
+令真实 token 为 $x_t$，模型给出的条件概率为 $p_\theta(x_t\mid x_{<t})$。平均 cross-entropy 为
+\[
+H=-\frac{1}{T}\sum_{t=1}^{T}\log p_\theta(x_t\mid x_{<t}),
+\]
+perplexity 定义为
+\[
+\mathrm{PPL}=\exp(H).
+\]
+直觉上，PPL 可理解为模型在每一步面对的“有效等概率选项数”；越低通常越好。但它受 tokenizer、evaluation corpus 与 domain mismatch 影响，不能跨任意设置无条件比较，也不能替代任务正确率。
+\end{knowledgebox}
+
+\begin{warningbox}{Perplexity 不是理解力总分}
+在 WikiText-103 上更会预测下一个 token，不保证在医学、代码或多步推理上更可靠。把 PPL 放到横轴的价值，是减少“同参数量但训练质量不同”的混淆；它仍是特定 held-out distribution 上的平均 proxy。
+\end{warningbox}
+
+\teachervoice{讲者在课堂上把 perplexity 解释为 held-out 文本上的 next-word prediction 能力，并承认未来若小模型用更好数据和算法达到更低 perplexity，按参数量和按模型质量画出的 emergence 图可能明显不同。}
+
+\subsection{Few-shot 超越 fine-tuning 的社会学变化}
+
+当一个通用 pretrained model 只靠上下文中的几个 exemplar，就能超过某些为单任务训练的 state-of-the-art system，研究工作流也随之改变：团队不必先为每个任务收集数千 labels，而可以先测试统一模型的 interface。这是课件称为 ``surprising finetuning'' 的含义。
+
+\lecturefigure{slide-18.jpg}{规模扩大后，few-shot prompting 在若干任务上超过先前 fine-tuned baseline}{官方课件第 18 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：跨越绿色 baseline 意味着什么}
+绿色线是先前 task-specific fine-tuned result，蓝色点是随规模变化的 few-shot pretrained model。跨越只证明在该 benchmark、该 prompt 和该成本定义下，通用模型的 accuracy 超过旧 baseline；它不证明 fine-tuning 失去价值，因为生产系统还要考虑 latency、serving cost、privacy、稳定性和大量 in-domain labels。
+\end{knowledgebox}
+
+课堂把这一点与产品工程作了清晰区分。面向未知任务的 general model 追求一套权重覆盖广泛能力，允许昂贵计算；Google Translate 这类已知任务拥有大量平行数据和严格 latency 约束，往往更适合小型专用模型。``更通用'' 与 ``更适合部署'' 不是同一排序。
+
+\subsection{本章小结}
+
+能力阈值可以被 better data、targeted fine-tuning、distillation、architecture 和 metric choice 移动。参数量只是最醒目的坐标，不是唯一原因。研究上最重要的区分是：跨模型家族的相关性提供现象，小规模受控 ablation 提供因果线索，生产约束决定最终选择。
+
+\section{Emergence 的证据边界与工程含义}
+
+到这里，课件暂停增加案例，转而总结 emergence 能支持什么、不能支持什么。它能说明继续扩展模型可能打开小模型实验无法预测的任务区域，也能提醒安全研究关注潜在 undesirable capabilities；但它尚不能给出精确阈值预测、无限规模极限或最佳架构配比。
+
+\lecturefigure{slide-19.jpg}{Emergence 总结：尺度、数据、fine-tuning 与开放问题}{官方课件第 19 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：把总结拆成观察、推论与开放问题}
+观察是：多项 few-shot abilities 和 prompting techniques 在被测试的模型家族中呈阈值行为。工程推论是：不要只用小模型判定方法上限，同时应探索数据与后训练把边界左移。开放问题则包括如何预测新能力、如何选择正确横轴、如何在大型预训练成本下做可信消融，以及 undesirable abilities 是否也会以类似方式出现。
+\end{knowledgebox}
+
+\teachervoice{讲者把 emergence 称为继续 scaling 的一个 implicit argument，因为昂贵扩展可能带来事先难以枚举的能力；但他也明确说预测未来涌现仍然很难，自己没有看到足够通用的方法。这不是“规模万能论”，而是关于未知收益与未知风险的研究理由。}
+
+\subsection{大型预训练为什么难以形成干净理论}
+
+学生追问应该怎样在 depth、attention heads、embedding width 之间分配新增参数。讲者回答，当时没有 principled recipe，很多选择受 TPU 容量和工程经验约束；更关键的是，完整 pretraining ablation 极其昂贵。因而我们常看到少量 model family 的 curve，却缺少实验设计中理想的单变量控制。
+
+\begin{warningbox}{“没有做消融”不是“小问题”}
+如果 data、tokenizer、architecture 与 optimizer 同时变化，某个阈值移动只能被解释为整个 recipe 的结果。把它简化成“参数更多导致能力出现”会过度归因。讲义、论文评审和产品声明都应把可观测关系与未经验证的机制分开。
+\end{warningbox}
+
+\subsection{Benchmark 也会老化}
+
+BIG-Bench 的某些任务最初对 GPT-3/LaMDA 保持 flat，PaLM 出现后又有几十项超过 baseline。课堂甚至现场发现一个列表中的任务可能已被 ChatGPT 解决。Benchmark 因此不是静态难度尺：模型改进、prompting 方法和数据污染都可能让“hard”迅速失效。
+
+\begin{importantbox}{一个可复用的 emergence 审计表}
 \begin{enumerate}
-    \item 先确认基础模型是否已经跨过目标任务的能力门槛。
-    \item 再用 prompt / CoT / self-consistency 挖掘推理性能。
-    \item 最后用 instruction tuning 或 preference tuning 固化交互体验。
+  \item 是否给出 chance、human 或 prior-system baseline？
+  \item 是否覆盖足够密的 model scales，并报告误差条或多 seed？
+  \item 模型族之间是否同时改变 data、architecture 与 post-training？
+  \item metric 是否连续，还是把连续质量阈值化成 exact match？
+  \item 结果能否在新的 prompt、task split 和独立模型族上复现？
 \end{enumerate}
 \end{importantbox}
 
-\subsection{不应忽视的数据问题}
+\subsection{本章小结}
 
-很多团队在看到 CoT 和 instruction tuning 的成功后，会立即增加更多人工模板或更长的推理示例。但真正决定长期收益的，往往是训练数据是否覆盖了\textbf{任务多样性、错误示例和边界案例}。如果数据过于单一，模型只是学会了某种回答腔调，而非真正提升泛化。
+Emergence 是值得测量的 empirical pattern，却不是完整因果理论。它最有价值的用途是暴露外推失败：小模型上无效的方法可能在大模型上有效，小模型上看似稳定的负趋势可能反转，旧 benchmark 也会被快速穿透。
 
-\textit{``Scale gives you the possibility of reasoning; the rest of the pipeline decides whether users can actually reach it.''}
+\section{Chain-of-Thought：把答案 Token 变成推理轨迹}
+
+课件后半从“模型能做什么”转向“怎样让已有能力变得可用”。标准 few-shot prompt 只示范 question--answer；CoT prompt 则示范 question--intermediate reasoning--answer，让模型在生成最终答案前产生一串可组合的中间 token。它既是 interface design，也增加了 sequential inference computation。
+
+\subsection{研究动机：复杂任务不能只给半秒}
+
+容易任务可能只需一个 label，复杂 arithmetic、symbolic reasoning 或 commonsense task 则需要保存中间状态。课堂的直觉是：如果人类解题会写步骤，那么要求 autoregressive model 立即输出一个 final token，相当于不给它展开计算的时间。
+
+\lecturefigure{slide-20.jpg}{Chain-of-Thought Prompting 论文与公开演示背景}{官方课件第 20 页；Wei et al., NeurIPS 2022}
+
+这张过渡页把论文、团队与 Google I/O 展示放在一起，说明 CoT 当时已从研究原型进入公众视野。对讲义而言，重要的不是发布场景，而是下一张图中非常小的 interface change：是否把 reasoning path 放进 exemplar。
+
+\lecturefigure{slide-21.jpg}{Standard prompting 与 chain-of-thought prompting 的结构差异}{官方课件第 21 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：唯一新增的是可模仿的中间过程}
+左侧 standard prompt 只展示 question 与 final answer，模型面对新题时直接猜结果；右侧 CoT prompt 在示例答案中写出计算步骤，模型于是继续生成类似 reasoning path，再给 final answer。它没有更新 weights，也没有调用外部 calculator；变化发生在 context 与生成长度上。
+\end{knowledgebox}
+
+从概率分解看，标准答案生成可写为 $p(a\mid q,e)$，其中 $q$ 是问题、$e$ 是 exemplars。CoT 引入中间 token 序列 $z=(z_1,\ldots,z_m)$：
+\[
+p(a,z\mid q,e)=\prod_{i=1}^{m}p(z_i\mid q,e,z_{<i})\;p(a\mid q,e,z).
+\]
+中间序列让模型把乘法、状态更新和子结论逐步写入 context；这是一种机制直觉，不保证文本步骤忠实对应内部计算，也不保证每个步骤都正确。
+
+\begin{lstlisting}[caption={标准 few-shot 与 CoT prompt 的最小差别}]
+standard = """Q: There are 15 trees and later 21. How many added?
+A: 6
+Q: 23 apples, use 20, buy 6. How many remain?
+A:"""
+
+cot = """Q: There are 15 trees and later 21. How many added?
+A: 21 - 15 = 6. The answer is 6.
+Q: 23 apples, use 20, buy 6. How many remain?
+A:"""
+\end{lstlisting}
+
+\teachervoice{讲者把 CoT 比作老师要求学生 ``show your work''。他后面又补充：给人一道难题却要求半秒内报答案并不公平；中间 token 为模型提供了展开顺序计算的空间，但为什么自然语言步骤如此有效，在 2023 年仍是开放问题。}
+
+\subsection{现场 Demo：同一题从 33 变成 9}
+
+官方 deck 的 ``CoT demo'' 页只是一张标题，因此必须回到录像。现场使用同一个 arithmetic task：食堂有 23 个 apples，用掉 20 个，又买入 6 个。无 CoT exemplars 时，text-davinci-001 直接输出 33；切换到带中间推导的 preset 后，模型写出 $23-20=3$、$3+6=9$ 并得到正确答案。
+
+\lecturefigure{slide-22.jpg}{课堂从课件切换到 OpenAI Playground 的 CoT demo}{官方课件第 22 页}
+
+这张稀疏过渡页本身没有结果，却标记了证据来源的变化：接下来的两张图不是论文插图，而是同一场课堂中的 live system state。对比必须保留 model、temperature、task 与 prompt preset，不能只截一张成功画面。
+
+\videofigure{demo-no-cot-math-wrong.jpg}{无 CoT：模型直接回答 33，未正确组合“用掉 20、买入 6”}{官方视频 00:39:54}
+
+\begin{knowledgebox}{读图：失败不是简单算错一个加法}
+上方三个 exemplar 都是 question--short answer，模型对新题也沿用“直接给数字”的模式。33 很可能来自把 23 与部分变化量做了错误组合；由于没有可见中间状态，我们无法定位错误发生在 subtraction、addition 还是题意解析。这正是 only-final-answer interface 的诊断盲区。
+\end{knowledgebox}
+
+\videofigure{demo-cot-math-correct.jpg}{有 CoT：模型先算剩余 3，再加新买的 6，最终得到 9}{官方视频 00:40:17}
+
+\begin{knowledgebox}{读图：成功来自可检查的状态更新}
+CoT preset 的 exemplars 先把每个数量变化写成算式。新题输出依次保留初始数量、消耗量、剩余量和新增量，因此读者能检查 $23-20=3$ 与 $3+6=9$ 两个局部步骤。图支持“这次 prompt 让该模型答对并暴露步骤”，却不证明步骤一定忠实反映模型内部因果过程。
+\end{knowledgebox}
+
+课堂还演示 last-letter concatenation：standard prompt 对 ``Elon Musk'' 输出 `sk`，CoT 先取 Elon 的末字母 `n`、Musk 的末字母 `k`，再输出 `nk`。这说明作用对象不局限于 arithmetic，而是任何可以拆为可生成中间状态的 task。
+
+\subsection{CoT 的收益为什么也随规模涌现}
+
+有中间步骤并不保证小模型受益。小模型可能在更长输出中累计错误，或者根本无法从 exemplar 抽象出 decomposition rule；大模型则更可能正确生成每一步，因此 CoT 与 standard prompting 的 delta 会随规模扩大。
+
+\lecturefigure{slide-23.jpg}{GSM8K 与 StrategyQA：CoT 增益在足够大模型上出现}{官方课件第 23 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：比较同一规模下的 standard 与 CoT}
+横轴是模型规模，纵轴分别是 grade-school math 与 commonsense reasoning performance。小模型处两种 prompt 都低，甚至 CoT 不占优势；进入更大模型区域后，CoT 曲线明显上升并超过当时 fine-tuned state of the art。关键证据是随规模增长的 interaction effect，而不只是最大模型的单一高分。
+\end{knowledgebox}
+
+\begin{warningbox}{CoT 文本不是自动可信的解释}
+模型可以得到正确答案却写出错误步骤，也可以写出流畅步骤但最终错误。CoT 提高了可观察性与任务性能，却不能直接当作 mechanistic interpretability。需要用 step verification、answer checking、counterfactual prompts 或外部 tools 进一步验证。
+\end{warningbox}
 
 \subsection{本章小结}
 
-从工程视角看，涌现、CoT 和指令微调并不是三个独立话题，而是一条完整的能力释放链条。
+CoT 的本质是让 frozen model 在回答前生成可组合的中间 token。现场 demo 展示了同题对照，GSM8K/StrategyQA 曲线展示了 scale interaction。它是 inference interface，不是 weight update；它增加 sequential computation，却不能保证 reasoning trace 忠实或正确。
+
+\section{BIG-Bench Hard：从平均分到任务级异质性}
+
+单个 arithmetic demo 可能只是 cherry-pick，因此课件转向 BIG-Bench Hard（BBH）：从 BIG-Bench 中选出当时模型低于 average human rater 的困难任务，再系统比较 answer-only 与 CoT。这个设计把“是否能做复杂推理”拆成导航、排序、逻辑和状态追踪等多种 task mechanics。
+
+\subsection{Benchmark 怎样定义“hard”}
+
+BBH 的难度来自构造条件，而不是永久属性：被选任务在原 BIG-Bench 结果中没有模型超过 average human。Prompt 包含 task description、worked examples、options 和 reasoning trace；因此评估的是模型能否从自然语言描述与 exemplars 中推断 algorithm。
+
+\lecturefigure{slide-24.jpg}{BIG-Bench Hard 的任务选择与 CoT prompt 结构}{官方课件第 24 页；Suzgun et al., 2022}
+
+\begin{knowledgebox}{读图：两个例子测量不同的中间状态}
+Navigation 要连续更新方向与坐标，最后判断是否回到原点；word sorting 要比较首字母、处理相同前缀并维护输出顺序。两项任务对人类都不神秘，却要求模型在多个 token 之间保持一致状态。CoT 的价值是把状态更新显式写出来，而不是只在最后猜 yes/no 或单个列表。
+\end{knowledgebox}
+
+\subsection{平均分之外，还要看多少任务跨过人类线}
+
+若只报告 aggregate accuracy，少数高收益任务可能掩盖大量失败。课件同时报告平均 performance 和“超过 average human rater 的任务比例”，并用红蓝任务图展示异质性。两种 metric 分别回答“总体提高多少”和“能力覆盖面扩大多少”。
+
+\lecturefigure{slide-25.jpg}{BBH 结果总览：平均性能、超过人类的任务数与任务级地图}{官方课件第 25 页；Suzgun et al., 2022}
+
+\begin{knowledgebox}{读图：先理解 subset bias，再理解增益}
+BBH 本来就选择旧模型低于人类的任务，所以 answer-only baseline 较低是 by construction。加入 CoT 后，davinci-002 的平均分和超过 average-human 的任务数都上升；下方红蓝图说明增益并不均匀。结论应是 CoT 解锁了多数但非全部困难任务，而不是“模型全面超过人类”。
+\end{knowledgebox}
+
+\teachervoice{课堂逐项解释两个 metric，并指出 average human 约为 67、best human 更高。讲者没有把“多数任务超过 average human”写成通用人类水平，而是把它限定在 BBH 的题集、prompt 与评分方式内。}
+
+\subsection{Scaling：CoT 的正 delta 有自己的阈值}
+
+下一张图把最大模型结果拆回多个 scale。若 CoT 只是在 prompt 中增加信息，所有模型都应得到类似相对收益；实际曲线却显示，小模型不一定获得正 delta，直到 davinci-002 / PaLM 62B 附近才在 aggregate 上稳定受益。这个 scale sweep 是方法论上的关键，因为它把“最大模型上的成功案例”升级为对 intervention 与 base capability 交互作用的检验。
+
+\lecturefigure{slide-26.jpg}{BBH 上的 CoT scaling：正收益需要足够模型规模}{官方课件第 26 页；Suzgun et al., 2022}
+
+\begin{knowledgebox}{读图：delta 比绝对分更能识别方法门槛}
+每个 panel 中比较同一模型的 no-CoT 与 CoT，而不是只比较不同模型绝对分数。小模型的 reasoning trace 可能引入额外错误；大模型能利用 trace 分解任务，才出现稳定正差。图中的阈值是特定 model family 与 task aggregate 的经验位置，不应被写成所有 CoT 系统的固定 62B 规则。
+\end{knowledgebox}
+
+\subsection{Emergence：No-CoT 仍平，CoT 曲线开始上升}
+
+最强的课堂叙事来自对照：answer-only performance 在被测规模中仍近乎 flat，CoT 却让较大模型显著上升。这里“解锁”指的是 interface 让已有但不可直接调用的组合能力进入 metric，而不是证明 pretraining 后模型内部完全没有相关知识。
+
+\lecturefigure{slide-27.jpg}{BBH 上的 CoT emergence：answer-only 平坦，CoT 打开性能增长}{官方课件第 27 页；Suzgun et al., 2022}
+
+\begin{knowledgebox}{读图：Prompt 可以改变我们看到的能力边界}
+若只测试 no-CoT，研究者可能得出“继续扩大也没有进展”；加入 reasoning exemplars 后，同一模型族出现规模相关增益。这说明 capability evaluation 不能与 elicitation method 分离。图支持“CoT 在此设置中提升可测能力”，但不证明所有 flat curve 都能被更好 prompt 解锁。
+\end{knowledgebox}
+
+\begin{importantbox}{评估模型能力时要同时报告 elicitation budget}
+模型、prompt、few-shot examples、generated-token budget、sampling strategy 和 external tools 共同定义一次能力测试。只报告 parameter count 与 final accuracy，会把 interface failure 误写成 capability absence，也会把昂贵 inference-time search 隐藏成“模型本身更聪明”。
+\end{importantbox}
+
+\subsection{本章小结}
+
+BBH 将 CoT 从单例扩展到困难任务集合。平均分、跨人类任务比例和任务级地图共同显示异质收益；scale sweep 又说明 CoT 本身是 emergent prompting technique。能力曲线因此必须与 elicitation method 一起解释。
+
+\section{跨语言组合性与 Scaling 的错误修复}
+
+CoT 若只是记住英语数学模板，就不应在低频语言中保持强表现。课件接着用 MGSM 展示 multilingual reasoning，再用 error analysis 与 task-spectrum diagram 讨论为什么 scaling 可能同时修复 semantic understanding、missing steps 和 arithmetic mistakes。
+
+\subsection{Multilingual CoT：低频语言为何是强测试}
+
+MGSM 把 250 道 GSM8K 题人工翻译为十种 typologically diverse languages，并要求模型在相应语言中读题和推理。Bengali 在预训练数据中的比例很低，因此如果模型仍能完成任务，至少说明语言理解与数学推理可以在某种程度上组合，而不只是复现大量相同语言模板。
+
+\lecturefigure{slide-28.jpg}{Multilingual CoT：十种语言、低频 Bengali 与组合性证据}{官方课件第 28 页；Shi et al., ICLR 2023}
+
+\begin{knowledgebox}{读图：不要只看平均柱高}
+先看 benchmark 构造：相同数学问题跨语言翻译，尽量固定 reasoning difficulty；再比较 language frequency 与 accuracy 的关系。低资源语言表现好于简单频率预期，是 compositionality 的证据。它不意味着所有语言公平，也不排除翻译风格、tokenization 和共享数字符号带来的帮助。
+\end{knowledgebox}
+
+\teachervoice{讲者特别强调 Bengali 约占极少预训练数据，却出现 surprisingly good result。他把这解释为模型能组合“理解 Bengali”与“做数学”两种技能；同时在问答中承认，语言之间的推理究竟共享多少内部机制仍没有答案。}
+
+\subsection{Scaling 修复哪些错误}
+
+“大模型更好”过于粗糙。课件比较 PaLM 62B 与 540B 的 CoT 输出，把改进分为 semantic understanding、one-step missing 与 arithmetic 等错误类别。多类错误同时下降，说明规模并非只修复某个窄算术模块，而是在任务链的多个环节提高可靠度。
+
+\lecturefigure{slide-29.jpg}{从 PaLM 62B 到 540B：多类 CoT 错误同时减少}{官方课件第 29 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：Error taxonomy 是诊断，不是完整机制}
+条形图按人工分类统计较小模型的失败，以及更大模型修复了多少。若 semantic、missing step 与 arithmetic 都改善，最保守结论是 scaling 对多种 observable failure modes 有广泛作用；不能由此断言所有内部原因相同，也不能排除分类边界重叠。
+\end{knowledgebox}
+
+\subsection{任务复杂度与模型规模的二维前沿}
+
+前面的能力前沿只画 model scale；这里再加入 task complexity。Standard prompting 覆盖容易、短路径任务，CoT 把边界推向 math word problems、symbolic reasoning 和 hard commonsense；继续增大模型又扩大可用区域。
+
+\lecturefigure{slide-30.jpg}{Language-model scale 与 task complexity 的 CoT 能力前沿}{官方课件第 30 页；Wei et al., 2022}
+
+\begin{knowledgebox}{读图：边界会被多个工程杠杆共同推动}
+横轴是模型规模，纵轴可理解为任务所需组合步骤或难度；蓝区是 standard prompt 可做，粉区是 CoT 新增。边界并非只随参数右移：better data、fine-tuning、tools、verification 与更多 inference compute 都可能扩大区域。图是组织研究问题的概念模型，不是可直接拟合的物理相图。
+\end{knowledgebox}
+
+\begin{warningbox}{“输出更多 token”不等于“任何 filler 都有效”}
+课堂问答提到 equal-length `x x x ...` 控制并不能复制 CoT 增益，先给答案再解释也通常更差。额外计算是部分直觉，但中间 token 必须携带与问题结构相关的语言信息；否则只是延长输出。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Multilingual CoT 支持技能组合而非单纯英语模板记忆，error analysis 显示 scaling 同时修复多种可观察失败，task-spectrum diagram 则把模型规模与任务复杂度放进同一框架。三者仍是行为证据，不应被夸大为内部推理机制的最终解释。
+
+\section{Self-Consistency：用采样预算换可靠性}
+
+单条 CoT 仍可能在早期走错方向。Self-consistency 不要求模型修改同一条 reasoning path，而是在非零 temperature 下采样多条路径，再对 final answer 投票。若正确答案能由多种有效路径到达，而错误路径较分散，majority vote 就能提升可靠度。
+
+\subsection{从一条路径到答案边缘化}
+
+设 $z$ 是 reasoning path、$a$ 是 final answer。理想上希望比较
+\[
+p(a\mid q)=\sum_z p(a,z\mid q),
+\]
+但无法枚举所有 $z$。Self-consistency 从模型采样 $M$ 条路径 $z^{(1)},\ldots,z^{(M)}$，提取对应答案 $a^{(m)}$，用经验票数近似最可能答案：
+\[
+\hat a=\arg\max_a \sum_{m=1}^{M}\mathbf{1}\!\left[a^{(m)}=a\right].
+\]
+它更接近对答案做 marginalization，而不是选择单条最高概率文本。
+
+\lecturefigure{slide-31.jpg}{Self-consistency：采样多条 CoT 路径并对最终答案多数投票}{官方课件第 31 页；Wang et al., ICLR 2023}
+
+\begin{knowledgebox}{读图：路径多样性与答案一致性要同时存在}
+图中同一题产生多条自然语言推导，其中部分路径错误，但正确答案在不同有效推导中重复出现。若 temperature 太低，所有样本几乎相同，投票没有新增信息；若太高，路径失去任务约束，答案噪声上升。Self-consistency 的收益来自相关但不完全相同的样本集合。
+\end{knowledgebox}
+
+Temperature $T$ 调整 next-token distribution：
+\[
+p_T(x_i)=\frac{\exp(\ell_i/T)}{\sum_j\exp(\ell_j/T)},
+\]
+其中 $\ell_i$ 是 token logit。$T\to 0$ 接近 greedy decoding，较大 $T$ 提高低概率 token 的机会并增加路径 diversity；它不是简单的“正确度旋钮”，需要与 sample count、answer extraction 和 task difficulty 联合调节。
+
+\begin{lstlisting}[caption={Self-consistency 的最小实现框架}]
+from collections import Counter
+
+def self_consistent_answer(model, prompt, samples=16, temperature=0.7):
+    answers = []
+    for _ in range(samples):
+        trace = model.generate(prompt, temperature=temperature)
+        answers.append(extract_final_answer(trace))
+    return Counter(answers).most_common(1)[0][0]
+\end{lstlisting}
+
+\subsection{结果：简单技巧为何有大增益}
+
+课件展示多个 reasoning benchmarks 的 greedy CoT 与 self-consistency 对比。课堂特别举 GSM8K 约从 56 提高到 74 的例子，说明 inference-time sampling 可以获得与训练改进同量级的收益；代价是每道题需要生成多条长 reasoning traces。
+
+\lecturefigure{slide-32.jpg}{Self-consistency 在多个 benchmark 上提升 CoT 性能}{官方课件第 32 页；Wang et al., 2022}
+
+\begin{knowledgebox}{读图：Accuracy 提升背后是成倍 inference cost}
+每组柱形比较 greedy CoT 与 self-consistency。纵轴提高说明投票过滤了一部分路径级错误，但横向比较还应加入 generated tokens、latency 与 API cost。课堂展示的设置可能采样约 40 条，讲者同时指出不少 dataset 用约 16 条已能获得良好收益，最佳预算依任务而变。
+\end{knowledgebox}
+
+\begin{warningbox}{多数票要求“错误不要高度相关”}
+若模型在某类题上系统性误解概念，采样 100 条也可能得到 100 条相似错答。Self-consistency 更适合路径级 stochastic errors，而不是缺失知识、错误问题定义或被污染的 answer extractor。部署时应画 accuracy--cost curve，而不是只报最高样本数结果。
+\end{warningbox}
+
+\teachervoice{学生询问需要多少条 chain，讲者回答取决于 dataset，约 16 条常能看到收益；随后他把 temperature 解释为从 learned distribution 中随机选择下一个 token，而不是总取最高概率 token。课堂同时明确，这种方法增加 inference-time compute。}
+
+\subsection{Self-consistency 也可能涌现}
+
+如果 base model 尚不能生成有意义的 CoT，多采样只会得到许多不稳定或一致错误的路径。因此 self-consistency 与 greedy CoT 的差距本身也随规模增大：先要有足够强的 path generator，投票才有可利用的正确信号。
+
+\lecturefigure{slide-33.jpg}{Self-consistency 的收益随模型规模扩大而出现}{官方课件第 33 页；Wang et al., 2022}
+
+\begin{knowledgebox}{读图：两层门槛叠加}
+第一层门槛是模型能否通过 CoT 生成偶尔正确的完整路径；第二层门槛是正确答案的概率质量是否足以在多样样本中形成 plurality。小模型两层都未满足时，self-consistency delta 接近零；大模型跨过后，采样预算才转化为性能。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Self-consistency 用多路径采样近似答案边缘化，以 inference cost 换 accuracy。Temperature 提供 diversity，majority vote 聚合 final answer；方法成功依赖 base model、任务结构、错误相关性和 sample budget，因此它同样具有 scale-dependent 有效区间。
+
+\section{讨论、结论与研究议程}
+
+最后三张课件把结果拉回研究方法。讲者没有宣称 CoT 已被解释，也没有说 prompt engineering 会永久存在；他列出的是当时能从实验得到的结论、仍需回答的机制问题，以及对学生可参与方向的个人判断。
+
+\subsection{Prompt engineering 会不会消失}
+
+课堂问答区分 easy, well-specified tasks 与 increasingly hard, underspecified tasks。更大模型可能让简单 multiple-choice 对措辞更 robust，但模型越强，人们也会把它用于更复杂目标；此时如何描述约束、提供 evidence、指定 decomposition 与 verification，仍然是 interface design。
+
+\lecturefigure{slide-34.jpg}{Chain-of-thought discussion：prompting 的持久性与开放问题}{官方课件第 34 页}
+
+\begin{knowledgebox}{读图：把已知结论与未知机制分开}
+课堂证据支持 CoT 在多个 benchmark、语言和模型上有效，并显示规模门槛；尚未解决的是 pretraining 中哪些经验使模型学会使用 reasoning traces、这些 traces 与内部计算有何关系、哪些任务会从 few-shot CoT 泛化。Discussion 页的价值正是把成功结果后面的 unknowns 留在视野中。
+\end{knowledgebox}
+
+\teachervoice{有人问 CoT 是否只是额外 token 带来的 compute。讲者提到 equal-length filler 控制无效，并判断语言在引导 reasoning 中很重要；有人问先给答案再解释，他说通常更差。这些是重要 negative controls，但他仍把 ``why CoT works'' 明确称为开放问题。}
+
+\subsection{整堂课的结论}
+
+课件将前后两部分压成三层：能力可以随规模在任务 metric 上呈现阈值；prompting、fine-tuning 和 data quality 会移动可测边界；CoT 与 self-consistency 说明 inference-time method 也必须与 base-model capability 匹配。
+
+\lecturefigure{slide-35.jpg}{课程结论：Scaling、CoT 与 self-consistency 的统一视角}{官方课件第 35 页}
+
+\begin{importantbox}{整堂课最值得带走的六点}
+\begin{enumerate}
+  \item Smooth loss scaling 与 thresholded task performance 可以同时成立。
+  \item Emergence 的判断依赖 model family、prompt、metric 与 baseline。
+  \item Better data、architecture 与 post-training 能把经验阈值向小模型移动。
+  \item CoT 通过中间 token 提供 decomposition 与 sequential computation，但不保证解释忠实。
+  \item BBH 与 multilingual CoT 显示收益跨任务、跨语言，却仍具有明显异质性。
+  \item Self-consistency 把 inference samples 变成 accuracy，必须显式报告 cost 与 error correlation。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{讲者给出的研究方向}
+
+2023 年 1 月的现实是，纯粹扩大 foundation model 主要由少数工业实验室承担。讲者因此把学生可进入的方向放在 better prompting、capability characterization、applications、benchmarks 和 compute-efficient methods 上：这些工作既能更好利用现有模型，也能检验 scaling narrative 的边界。
+
+\lecturefigure{slide-36.jpg}{Looking forward：讲者的个人研究兴趣}{官方课件第 36 页}
+
+\begin{knowledgebox}{读图：五个方向分别解决哪一层问题}
+Scaling 研究扩大 base capability；better prompting 改善 elicitation；characterization 建立能力地图；applied work 把模型放入真实 workflow；benchmarks 提供不会迅速饱和的测量；compute-efficient methods 则降低训练与推理门槛。它们不是相互替代，而是从能力、接口、测量、应用和资源五层共同推进。
+\end{knowledgebox}
+
+\teachervoice{讲者收尾时说，现有 benchmark 被解决得很快，需要更难的新评测；同时应研究更 compute-efficient 的方法，让并非只有工业界才能使用更强模型。这一结尾把 scaling 的收益与访问成本放在同一张研究议程中。}
+
+\subsection{本章小结}
+
+Prompt engineering 的形式可能变化，但明确目标、分解任务与验证结果不会自动消失。课程的成熟之处在于：行为结果很强，机制解释仍谨慎；扩展模型值得研究，数据、评测和效率同样决定能力能否被发现、复现与部署。
 
 \section{总结与延伸}
 
-Jason Wei 的演讲串联了大语言模型研究中的三个核心主题：缩放带来涌现能力、CoT 释放推理能力、指令微调实现通用遵从。这三者共同构成了现代 LLM 的能力基础。
+本讲可以被压缩为一条“曲线解释链”。第一，language-model loss 随 compute、data 与 parameters 平滑改善；第二，task metric 由于 chance baseline、exact match 和多子技能瓶颈，可能长时间平坦后上升；第三，这个阈值会被 model family、data quality、architecture、fine-tuning 与 measurement axis 移动；第四，CoT 改变 elicitation interface，让较大模型用中间 token 展开组合计算；第五，self-consistency 再用多路径 inference budget 聚合答案；第六，所有结论都必须与成本、benchmark construction 和历史设置一起报告。
 
-\subsection{开放问题}
+\subsection{一张术语消化表}
 
-\begin{itemize}
-    \item 涌现能力是真实的相变还是度量的伪影？
-    \item 如何降低获得涌现能力所需的计算成本？
-    \item 需要更多更好的基准来评估新涌现的能力
-\end{itemize}
+下面的术语经常在一句话里被混用。把它们拆开，才能判断某篇论文究竟增加了训练资源、模型能力、提示信息还是推理时搜索。
+
+\begin{longtable}{L{0.19\textwidth}L{0.32\textwidth}L{0.40\textwidth}}
+\toprule
+\textbf{术语} & \textbf{解决的问题} & \textbf{核心机制与课程关系} \\
+\midrule
+\endhead
+Scaling law & 预测平均 loss 怎样随资源变化 & 在受控模型族上拟合 compute、data、parameters 与 loss 的平滑关系，是 emergence 的对照基线。 \\
+Emergent ability & 描述小模型 metric 不可见、大模型可见的任务能力 & 依赖 chance/human baseline、prompt、metric 与 model family，不等于已证明离散内部模块。 \\
+Few-shot prompting & 不更新权重地告诉模型任务格式 & 把 exemplar 放入 context，让 next-token model 归纳输入输出映射。 \\
+Instruction fine-tuning & 让模型更稳定遵循自然语言任务 & 更新 weights，可将已知 desired behavior 提前诱导到更小模型。 \\
+RLHF & 让输出更符合人类 preference & 使用 comparison/reward signal 更新模型；与仅改变 context 的 CoT 不同。 \\
+Chain-of-thought & 为多步任务提供可生成的中间状态 & 在示例中写 reasoning trace，让模型按 token 顺序展开 decomposition。 \\
+Perplexity & 衡量 held-out next-token prediction & $\exp(\text{cross-entropy})$；可作有效模型质量 proxy，但不是下游能力总分。 \\
+Self-consistency & 降低单条 CoT 偶然走错的风险 & 采样多条 reasoning paths，对 final answer 投票，以 inference cost 换 accuracy。 \\
+Temperature & 控制 next-token sampling 的随机性 & 改变 logit softmax 的平滑程度，为 self-consistency 提供 path diversity。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{如何用本讲框架评审新的 Scaling 声明}
+
+面对新的 ``emergent'' 图，先要求原作者公开每个 checkpoint、prompt、baseline、seed 与 confidence interval，再检查 metric 是否把连续质量变成硬阈值；面对新的 reasoning method，要求同时报告 base model、generated tokens、sample count、latency 与 external tools；面对跨模型家族结论，则必须询问 data 和 post-training 是否也改变。这样才能把“看起来突然”转化为可重复的工程事实。
+
+\begin{warningbox}{三种最常见的过度结论}
+第一，从几个稀疏 checkpoint 推断精确 phase transition；第二，把参数量与数据、架构、post-training 的共同变化全归因于参数；第三，把可读 CoT 当作模型内部真实思维。三者都比课堂证据更强，应在写作和评审中主动降级。
+\end{warningbox}
 
 \subsection{拓展阅读}
+
+以下资料均为课堂日期前已经公开、且直接构成本讲证据链的一手来源。阅读时建议先复现一张曲线的 axes、baseline 与 prompt，再比较论文作者对机制的表述强度。
+
 \begin{itemize}
-    \item Wei et al., ``Emergent Abilities of Large Language Models,'' TMLR 2022
-    \item Wei et al., ``Chain-of-Thought Prompting Elicits Reasoning in Large Language Models,'' NeurIPS 2022
-    \item Chung et al., ``Scaling Instruction-Finetuned Language Models (Flan-PaLM),'' 2022
-    \item Schaeffer et al., ``Are Emergent Abilities of LLMs a Mirage?'' NeurIPS 2023
+  \item \href{https://arxiv.org/abs/2001.08361}{Kaplan et al., Scaling Laws for Neural Language Models}：平滑 loss scaling 的经典对照。
+  \item \href{https://arxiv.org/abs/2206.07682}{Wei et al., Emergent Abilities of Large Language Models}：任务与 prompting-technique 的涌现目录。
+  \item \href{https://arxiv.org/abs/2211.02011}{Wei, Tay, and Le, Inverse Scaling Can Become U-Shaped}：局部负趋势为何可能反转。
+  \item \href{https://arxiv.org/abs/2201.11903}{Wei et al., Chain-of-Thought Prompting Elicits Reasoning in Large Language Models}：CoT 主论文。
+  \item \href{https://arxiv.org/abs/2210.09261}{Suzgun et al., Challenging BIG-Bench Tasks and Whether Chain-of-Thought Can Solve Them}：BBH、任务异质性与 scale threshold。
+  \item \href{https://arxiv.org/abs/2210.03057}{Shi et al., Language Models are Multilingual Chain-of-Thought Reasoners}：MGSM 与跨语言组合性。
+  \item \href{https://arxiv.org/abs/2203.11171}{Wang et al., Self-Consistency Improves Chain of Thought Reasoning in Language Models}：多路径采样与多数投票。
+  \item \href{https://arxiv.org/abs/2210.11416}{Chung et al., Scaling Instruction-Finetuned Language Models}：task、model 与 CoT data scaling 的后训练证据。
 \end{itemize}
+
+最终，本讲最重要的训练不是记住某个参数阈值，而是养成一种曲线纪律：先问测量什么，再问改变什么，最后才问能否外推。Scaling 让模型进入新的可达区域，数据和后训练移动边界，CoT 与 self-consistency 改变我们探索区域的方式；真正可靠的结论，必须同时说明能力、接口、成本与不确定性。
+
+\subsection{课后自检}
+
+读完本讲后，读者应能不依赖“bigger is better”口号，独立拆解一项新的能力声明。下面的问题可作为论文阅读、实验设计和产品评估的最低检查表。
+
+\begin{importantbox}{六个自检问题}
+\begin{enumerate}
+  \item 为什么 smooth cross-entropy 改善可以与 exact-match accuracy 的突然上升同时发生？
+  \item 参数量、训练 FLOPs、数据量与 perplexity 分别混入了哪些假设？
+  \item 怎样用 controlled ablation 区分 better data 与 model-family confounder？
+  \item CoT 改变了 weights、context、generated-token budget 中的哪一项？
+  \item Self-consistency 在什么错误相关结构下会失败，即使 sample count 很大？
+  \item 一张 emergence 图还缺哪些 baseline、scale points 或 cost information 才足以支持工程决策？
+\end{enumerate}
+\end{importantbox}
 
 \end{document}

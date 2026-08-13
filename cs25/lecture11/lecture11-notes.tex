@@ -1,659 +1,771 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 11：Transformer 从 Attention 到通用序列计算}
+\renewcommand{\noteauthors}{基于 Andrej Karpathy 讲座、官方人工字幕与一手论文整理}
+\renewcommand{\notedate}{CS25 V2 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-01-10；上传 2023-05-19}
+\renewcommand{\videoduration}{1:11:40}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=XfpMkf4rD6E}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Introduction to Transformers — Andrej Karpathy}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2023年2月23日}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2023年2月23日}
-\newcommand{\videoduration}{约64分钟}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=XfpMkf4rD6E}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与课堂边界：这是一堂 2023 年的导论课}
 
-\section{引言：课程定位与讲者承诺}
+本讲最需要先处理的不是公式，而是证据边界。视频前 10 分钟由 CS25 课程团队介绍系列目标，10:14 之后才进入 Andrej Karpathy 的主体讲座；课堂日期是 2023 年 1 月 10 日，Stanford Online 的上传日期则是 2023 年 5 月 19 日。旧稿把上传日期写成 2023 年 2 月 23 日，并加入大量课堂没有讲到的 RLHF 治理、生产部署、drift detection 与团队流程，因此本次不是增量润色，而是按官方视频、人工字幕和一手论文完整重写。
 
-\subsection{Karpathy 的宣言}
-Andrej Karpathy 从 Tesla AI 团队转入 OpenAI 时，带着 ``Transformers United'' 的理念来到 CS25 的第十一讲。开场他强调，本课程不是讲变形金刚机器人，而是讲\textbf{能够从自然语言进化出来的深度学习架构}。基于这一背景，整堂课的节奏按照构建模块 $\rightarrow$ 规模 $\rightarrow$ 应用 的链路展开，核心动力是让“Transformer 作为通用文本计算器”的能力变得可感知。
+\lecturefigure{slide-01-course-title.jpg}{CS25 Transformers United V2：课程系列的正式开场。}{Stanford Online 官方视频 00:00:05--00:00:52。}
 
-\subsection{封面与滑动画面}
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{cover.jpg}
-\caption{Lecture 11 的正式封面 / slide 画面。}
-\end{figure}
-\footnotetext{视频画面时间区间：00:00:05--00:00:20，以课程开场幻灯片为素材，遵守 slides/frames 引导将关键 slide 纳入 PDF。}
+这张标题页只承担课程身份识别，却也给出一个重要阅读提示：这里的 ``Transformers'' 不是单一 NLP 模型，而是一个跨领域 speaker series 的共同语言。讲义后面会把这种跨领域能力拆成三层：输入如何被表示成元素序列、元素之间如何通过 attention 通信，以及残差网络如何把通信结果转化为可训练的计算。
 
-\begin{knowledgebox}{教学目标与约束}
-Karpathy 设定的三条主线：理解 Transformer 的图模型本质、把握其训练稳定性的技巧、以及透过 scaling + prompt 设计让它成为 ``文本通用计算器''。这种教学逻辑帮助我们从高层抽象下来，再逐步展开放大细节。
-\end{knowledgebox}
+\lecturefigure{slide-02-course-content-logistics.jpg}{课程内容与组织说明：以跨领域嘉宾讲座理解 Transformer。}{Stanford Online 官方视频 00:00:52--00:02:53。}
 
-\subsection{课程结构与观众期待}
-CS25 的听众包含对 Transformer 有初步接触的研究生与希望快速掌握前沿架构的工程师。讲者借助引人注目的视觉（如开场幻灯片）、模拟对话（``this is not about robots''），以及随堂问答，用 \textbf{讲义 + slides} 的组合将复杂概念渐进式拆解。
+课程团队并没有承诺一堂课覆盖全部细节，而是用本讲建立共同词汇，再让后续嘉宾展示 Transformer 在不同领域如何被改造。读这页时应把 ``共同架构'' 与 ``相同系统'' 分开：不同课程讲座会共享 attention、residual、token/element representation 等骨架，但数据接口、目标函数、mask 和 inductive bias 仍然高度领域化。
 
-\begin{importantbox}{观众的实时期待}
-\begin{itemize}
-    \item 初始阶段要清楚 Transformer 在 token 之间建立了怎样的动态图
-    \item 中段期待看到 scaling 后的实证成果（从 GPT, Whisper 到 RLHF）
-    \item 末段希望掌握能够复现的 minGPT/nanoGPT 示例，确认理论可落地
-\end{itemize}
+\begin{importantbox}{本讲的证据合同}
+课堂中的历史回忆、工程直觉和未来判断会标成“课堂提示”或“讲者判断”；论文中的机制会给出公式；2023 年之后的事实不会倒灌进讲者当时的叙述。没有公开独立 slide PDF，因此正文中的 61 张图均是从官方 1080p 视频人工复核出的教学状态，不冒充官方 deck 页码。
 \end{importantbox}
 
+\subsection{课程希望读者带走什么}
 
-\subsection{本章小结}
-本节强调 Karpathy 对建模、训练、部署三段流水线的承诺，并通过封面 slide 的视觉符号提前告诉读者：本笔记将同时包含讲义、关键截图与时间戳引用。
+本节先把目标压缩成三个问题：Transformer 怎样工作，为什么能走出 NLP，以及哪些性质使它成为一个可持续扩展的研究平台。后文每个技术细节都应服务于至少一个问题；如果一个概念不能说明通信、计算、优化或输入接口，它就不应成为孤立名词。
 
-\section{Transformer 架构解构}
+\lecturefigure{slide-03-learning-goals.jpg}{三项目标：机制、跨领域应用与研究前沿。}{Stanford Online 官方视频 00:02:54--00:03:17。}
 
-\subsection{自注意力即图上的消息传递}
-Karpathy 将自注意力的操作描述为 ``communication phase''，也就是\textit{``a data dependent message passing on directed graphs''}。序列中的每个 token 相当于图中的节点，注意力权重决定了边的强度，这个图本质上在前向传播时动态建立。
-
-\begin{knowledgebox}{自注意力的图论视角}
-每个位置都维护一个向量（图节点），注意力机制在每层完成三件事：收集邻居表示（消息）、根据 query/k/v 重新计算边权（调度），然后用 softmax 门控并更新节点。Sub-token 之间的 bidirectional（编码器）或 causal（解码器）约束可以直接映射到图的连通模式。
+\begin{knowledgebox}{读图：三项目标不是三门互不相干的课}
+第一项“how Transformers work”提供可执行机制；第二项“beyond NLP”检验机制是否可迁移；第三项“new directions”追问现有机制在哪里失效。正确学习顺序是先理解一个最小 decoder，再观察输入与 connectivity 如何变化，最后讨论 context、memory、cost 与 controllability 等边界，而不是先背应用名单。
 \end{knowledgebox}
 
-\subsection{Attention 头与可解释性}
-讲者进一步用 ``attention head 就像不同角度观察图'' 的比喻，说明 Transformer 通过多个 head 并行估算多种关系：有的 head 学习实体相似度、有的 head 捕捉位置偏移，而 residual + LayerNorm 则汇总这些视图。
+\lecturefigure{slide-04-transformers-introduction.jpg}{导论主题：从 attention 时间线进入 Transformer。}{Stanford Online 官方视频 00:03:17--00:03:35。}
 
-\begin{knowledgebox}{Head specialization}
-\begin{itemize}
-    \item Head 1: 关注 token 之间的词汇相似性（例如名词与其修饰的形容词）
-    \item Head 2: 担任 Position Bias（主动关注远距离 token）
-    \item Head 3: 相当于 ``copy'' 操作，帮助生成时穿插上下文
-\end{itemize}
+这页看似只是章节标题，实际把后面的叙事定为“问题链”而非“组件表”。Attention 不是突然出现的模块：它先解决 encoder 把整句压进一个向量的瓶颈，随后被提升为主要通信机制，再与位置、残差、归一化和 MLP 组成完整架构。理解这条链，才能知道每个组件为何存在。
+
+\lecturefigure{slide-05-attention-timeline.jpg}{Attention 时间线：从早期序列模型到 2017 年 Transformer。}{Stanford Online 官方视频 00:03:35--00:05:01。}
+
+\begin{knowledgebox}{读图：时间线应按“瓶颈被怎样消除”阅读}
+早期 RNN/LSTM 通过 recurrent state 处理变长序列，却要求信息沿时间逐步传递；seq2seq 又把源句压到固定 context vector；Bahdanau attention 让 decoder 每一步回看全部 encoder states；Transformer 进一步去掉 recurrent path，让任意允许连接的 token 在一层内直接交换信息。时间越往后，信息路径越短、并行度越高，但显式 connectivity 与位置表示也越重要。
 \end{knowledgebox}
 
-\subsection{Transformers Block 与归一化}
-一个典型的 Transformer block 包含两套 LayerNorm（Pre-Norm 架构）、多头自注意力、残差连接、以及 2 层 MLP。Karpathy 特别指出“Transformer 是一个浅而宽的 graph，supervision 到 input 的 hop 数非常少”，因此\textit{``gradients flow very easily''}。
+\lecturefigure{slide-06-prehistoric-rnns.jpg}{“史前时代”：RNN/LSTM 主导序列建模，但受串行路径约束。}{Stanford Online 官方视频 00:05:01--00:06:10。}
 
-在 self-attention 中：
-\begin{itemize}
-    \item Query 表示当前 token 的状态，其余 token 提供 Key 与 Value
-    \item 通过 scaled dot-product 计算 attention score，经过 softmax 调味
-    \item Multi-head 并行计算不同子空间的注意力，并在最后线性投影融合结果
-\end{itemize}
+\term{RNN}（Recurrent Neural Network，循环神经网络）在每个时间步用上一状态与当前输入更新隐藏状态；\term{LSTM}（Long Short-Term Memory）通过门结构改善长期依赖与梯度传播。它们能表示变长序列，却把训练计算图拉成长而细的链：第 $t$ 个位置依赖前 $t-1$ 步，GPU 很难把时间维完全并行化，监督信号回到早期输入也要经过许多跳。
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3cm}p{7cm}p{3cm}}
-\toprule
-组件 & 作用 & 数据流 \\
-\midrule
-LayerNorm & 规范化输入，促使梯度更平滑 & 每次 residual 前后都进行 affine 归一化 \\
-Multi-head & 并行估算多种关系 & 每个 head 生成 Q/K/V，softmax 后加权并拼接 \\
-MLP & 提供非线性变换 & 2 层 Dense + GeLU，引入 cross-token coupling \\
-\bottomrule
-\end{tabular}
-\caption{Transformer block 中关键组件的角色与数据流。}
-\end{table}
+\lecturefigure{slide-07-where-we-were-2021.jpg}{2021 年的课程视角：长序列、AlphaFold、offline RL、few-shot 与多模态开始汇合。}{Stanford Online 官方视频 00:06:10--00:06:51。}
 
-\begin{importantbox}{Block 中的稳定配方}
-\begin{itemize}
-    \item Pre-Norm 让梯度从监督端迅速穿过 self-attn 与 MLP，而不用担心梯度消失
-    \item 残差连接与多头 attention 形成的跳跃路径降低了局部最小值
-    \item LayerNorm 控制所有激活尺度，避免因 scale 过大而发散
-\end{itemize}
-\end{importantbox}
+这页是历史快照，不是 2026 年能力清单。课程团队强调的转折是：Transformer 已经从文本生成扩展到蛋白质、离线强化学习和图文生成，并显露 zero-shot/few-shot generalization。读者应比较的不是今天的绝对性能，而是研究者当时已经看见“一种骨架覆盖多种数据结构”的趋势。
 
-\subsection{位置编码与尺度控制}
-位置编码负责补位自注意力固有的置换不变性。Karpathy 在讲解时提到，除了传统的正弦/可学习编码，旋转位置编码（RoPE）、ALiBi 等都在控制“attention 中的加权 bias”，帮助模型在 \textbf{高频变化}与 \textbf{长序列依赖} 间取得平衡。无论何种位置编码，LayerNorm 依然是控制整体尺度的关键，其作用类似于插入一个 ``scale locker''，保证 stacking 之后的残差路径不爆炸。
+\lecturefigure{slide-08-where-we-are-2022.jpg}{2022 年的扩展：音频、艺术、推理、human feedback 与 diffusion。}{Stanford Online 官方视频 00:06:51--00:07:30。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{6cm}p{3cm}}
-\toprule
-方案 & 描述 & 适用场景 \\
-\midrule
-绝对位置编码 & 正弦/余弦函数 + 可学习参数 & 经典 Transformer \\
-RoPE & 将位置嵌入旋转到 embedding 空间，使 attention score 成本中包含相对角度 & 长序列推理 \\
-ALiBi & 在 attention score 上加线性 bias，无需显式位置 embedding & 需要线性化推理时（如 GPT 系列） \\
-\bottomrule
-\end{tabular}
-\caption{常见位置编码方案对比。}
-\end{table}
+课堂把 ChatGPT、human feedback、multimodal generation 与 diffusion models 放在同一时代背景中，但不能由此推出它们都由同一目标训练。Transformer 是序列处理骨架；RLHF 是把人类偏好注入模型行为的训练流程；diffusion 是另一类生成过程。把这些层次混在一起，正是旧稿出现大量无来源治理内容的根本原因。
 
-\subsection{本章小结}
-自注意力就是图上的消息传递，Transformer block 正是将快路径与宽度结合，用 LayerNorm 保障稳定。理解这一结构是后续 scaling 与应用扩展的基础。
+\lecturefigure{slide-09-future.jpg}{2023 年初的未来问题：视频、长序列、agent、领域模型、外部记忆与更低计算成本。}{Stanford Online 官方视频 00:07:30--00:10:12。}
 
-\section{Scaling 与实作策略}
-
-\subsection{从算法导向到 Compute/Data 导向}
-Karpathy 归功于他的同事们展示的实验：\textit{``if you scale a large neural network on large data set you can get very strong performance''}，这句话是迁移到 ``scale first'' 思维的分水岭。此后各类研究都证明：在顺畅的训练管线下，算法微调（如 attention 变体）对模型性能的提升远不及投入更多 compute 与更多 data。
-
-在此过程中，数据清理（去重、规范化）和 compute 节奏同样重要：Karpathy 提醒我们 ``worry about compute and data'' 意味着每笔 GPU 消耗都要有明确的目标，避免在低质量数据上浪费训练预算。
-
-\begin{importantbox}{Scaling Recipe}
-\begin{itemize}
-    \item 扩大 token 数量、模型参数规模与 batch size
-    \item 放眼 compute/data 成本（Karpathy 反复强调 ``worry about compute and data''）
-    \item 通过 prompt 设计或 RLHF 定制输出行为，而不是为模型增加复杂模块
-\end{itemize}
-\end{importantbox}
-
-\subsection{训练流水线：预训练 → 微调 → RLHF}
-Karpathy 提到 ChatGPT 的成功并非一蹴而就，而是三步走：在大规模 WebText 上进行自回归预训练 → 在指令式数据上做微调 → 通过 RLHF 调整可控性。这条流水线把 ``scale first'' 的模型交出，再在下游任务上用数据和人类反馈精细打磨。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{5cm}p{5cm}}
-\toprule
-阶段 & 输入 & 目标 \\
-\midrule
-预训练 & Common Crawl, WebText & 学习通用语言建模，生成下一个 token \\
-指令微调 & Prompt-response pairs & 让模型学会遵守格式与上下文 \\
-RLHF & 人类偏好比较 & 微调 reward model + PPO，使输出更自然 \\
-\bottomrule
-\end{tabular}
-\caption{训练流水线各阶段的输入与目标。}
-\end{table}
-
-\begin{knowledgebox}{Pipeline 的可扩展性}
-这样的流水线允许我们把大模型当作 ``基础模型''，通过微调与 RLHF 只改训练后的少量参数（或者通过调用 API）即可跨任务复用，是 ChatGPT、Claude 等产品背后的共通逻辑。
-\end{knowledgebox}
-
-\subsection{Prompt 设计就是 ``thick sequence'' 的编排}
-在讲述 prompt 时 Karpathy 说到：\textit{``you can design the sequence in the prompt ... because transformer is both powerful but also is trained on large enough very hard dataset, it kind of becomes this general purpose text computer''}。提示工程最终是把 prompt 当作 ``thick sequence''（一个紧密依赖上下文的程序），提前设置好任务约束与示例。
-
-他进一步指出，prompt 可以包含 chain-of-thought、具体角色设定或多阶段提示，并通过 ``few-shot'' 方式把示例嵌入开头，借助 attention 的长距离路径让模型直接沿着提示结构输出结果，而无需改动参数。
-
-\begin{knowledgebox}{Prompt 作为程序加载器}
-把 prompt 视为 ``sequence of instructions''：在前几个 token 中注入格式（``输入-输出对''、``角色设定''），Transformer 会将这些 token 视为 part of the computation graph，使后续 token 在同一个 ``graph execution'' 中完成任务。
-\end{knowledgebox}
-
-\subsection{RNN vs Transformer：串行 vs 并行}
-Karpathy 反复强调 RNN 虽然理论上 ``可以 implement arbitrary programs''，但它们 ``are serial computing devices''，图展开非常长，无法高效并行。相比之下，Transformer 是``shallow wide graph''，从监督到 input hop 数少，梯度也更容易穿过。
-
-\begin{warningbox}{深度循环网络的警示}
-\begin{itemize}
-    \item RNN 训练时 hop 数众多，backpropagation step 也多，容易出现梯度爆炸/消失
-    \item 串行展开的 compute graph 限制了大批量并行训练
-    \item 在工业级训练中，RNN 很难在 compute/d cost 竞争力上对抗 Transformer
-\end{itemize}
+\begin{warningbox}{读图时必须保留时间戳}
+页中的 4,000-token 量级、ChatGPT 无长期记忆、视频模型仍待突破等陈述，是 2023 年 1 月的课堂观察。它们的教学价值在于识别结构性问题：attention 对长度的二次代价、有限 context、随机输出的可控性、外部 memory 与 domain specialization；不能把具体产品状态当成 2026 年事实。
 \end{warningbox}
 
-\subsection{本章小结}
-Karpathy 的 scaling 逻辑：资源向 compute/data 倾斜、用 prompt 组织 ``thick'' 指令流、摒弃串行图，换成 Transformer 的并行路径。这个节奏指导了后续所有训练策略。
+\subsection{Karpathy 的讲座从哪里开始}
 
-\section{应用与案例剖析}
+课程团队完成背景介绍后，Karpathy 才正式接手。他说自己虽然住得近、可以走来上课，却为 slides 花了十小时，并因时间有限删掉了两个原计划主题。这一口头说明很重要：本讲是刻意压缩的 conceptual tour，后文不应假装它完整覆盖位置编码变体、训练系统、对齐或推理服务。
 
-\subsection{minGPT / nanoGPT 的教学案例}
-在 31 分钟左右，Karpathy 分享自己 ``reproducing GPT-2 on open WebText'' 的项目，并把 minGPT/nanoGPT 作为 ``快速上手'' 的示范，证明只要合理调参数，Transformer 微型版本也能复现核心行为。
+\lecturefigure{slide-10-karpathy-title.jpg}{Andrej Karpathy 的主体讲座标题页。}{Stanford Online 官方视频 00:10:14--00:10:39。}
 
-\begin{importantbox}{小模型也能讲大道理}
-minGPT 通过在小型架构上训练 GPT-2 复制品，让我们看到 Transformer 架构的可解释性：Attention map 可以可视化、layer norm 位置可以调整、每层 residual 贡献都可度量。
-\end{importantbox}
-
-他强调 minGPT/nanoGPT 所用的数据集在苏醒的人力资源（如 OpenWebText）上构建，允许学生重新运行训练流程，从数据准备、超参 sweep 到生成样本，都在单机 GPU 可控范围内完成，降低学习门槛。
-
-\begin{knowledgebox}{开放源码复现的意义}
-通过开放代码与权重，学生可以观察 attention heads、layer norm 影响，甚至在自己小型任务上做微调，从而把“Transformer 的算法”转化为“可重写的工程”。
-\end{knowledgebox}
-
-\subsection{多模态与 RL 方向的示例}
-Karpathy 提到 Whisper 和 Decision Transformer：Whisper 是 ``copy based Transformer''，将 spectrogram 当作 ``text'' 来处理；Decision Transformer 则利用扩展 prompt 载入 trajectory 片段，直接按 sequence 生成行为。这一思路展示了 Transformer 不再局限语言，而是跨模态使用相同计算图。
-
-\begin{knowledgebox}{跨模态的 Transformer 处理模式}
-将非文本输入（spectrogram、RL trajectory）编码为 ``token''，再交给 Transformer 处理；输出则用不同 head 解码（音频 frame、动作）。因为 self-attention 只关注 token 的关系，跨模态扩展只需在 tokenizer/decoder 上做工程。
-\end{knowledgebox}
-
-Karpathy 进一步提示，我们可以把 spectrogram 展开为序列，再让 self-attention 学习 frequency 之间的关系；对于 RLtrajectory，只需把 reward + state + action 串成 token，Transformer 就能像语言模型一样生成下一步动作。
-
-\subsection{未来趋势与人机交互}
-Karpathy 最后调侃自己 ``电脑上 200 个 open tabs''，同时感叹 ``we should be kind of writing years''——这是在表达人类需要向 ``AI 辅助的天才交互'' 进化，将 Transformer 的 prompt 设计作为新形态的编辑器。
-
-他的论调把 Transformer 当作 ``可编程界面''：我们不是在训练一个静态程序，而是在 prompt 中编排一系列动作，通过 attention 逐步渲染出用户需要的答案。这个趋势告诉我们，未来的工程师既要懂 Data 也要懂 prompt 组织。
-
-\subsection{Slides/Frames 与素材策略}
-本讲的封面已经采用课程官方的 cover slide（见第 1 节），我们还可以通过额外截图或 slide PDF 拓展插图。若存在 slides 数据（如 slide PDF 或 Google Slides），应优先将截取后的 jpg 作为 figure；若只有视频，也需要抓取 key frame。当前目录只保存了 cover.jpg，因此后续如果下载到补充 slide，务必统一放在 `slides-images/` 目录并引用。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{5cm}p{8cm}}
-\toprule
-素材类型 & 用法细节 \\
-\midrule
-Cover slide & 直接作为封面 figure，以 00:00:05--00:00:20 时间段说明来源 \\
-Key frame（若有） & 以 `frame-XX.jpg` 命名，放入 `frames/`，在 caption 中标注具体时间 \\
-Slides PDF & 使用 `magick -density` 提取主讲页面，优先用于关键概念页 \\
-\bottomrule
-\end{tabular}
-\caption{用户素材（slides/frames）采集与使用策略摘要。}
-\end{table}
+\teachervoice{Karpathy 明确说他会简化讲座并跳过部分主题。讲义因此选择“历史问题链 + attention 图解释 + nanoGPT 端到端实现 + 跨模态与 in-context learning”四条主线，而不是向课堂外扩写通用 LLM 全栈。}
 
 \subsection{本章小结}
-minGPT/nanoGPT、Whisper、Decision Transformer 这些例子都让同一个 Transformer 架构在不同模态、不同数据结构上复用，说明 ``only the data structure around the tokens'' 需要调整。
 
-\section{工程实践与复现}
+本章建立了时间、说话人和证据边界：前十分钟属于课程导论，主体讲座始于 10:14；课堂发生在 2023 年 1 月，上传发生在 2023 年 5 月；61 张视觉材料来自官方视频恢复。接下来进入 Karpathy 的核心历史论证：Transformer 的价值首先来自 AI 各领域从手工特征孤岛走向共同可训练架构。
 
-\subsection{数据与计算预算}
-这场讲座提醒我们，scale first 不只是加大模型参数，也需要把数据的质量和 compute budget 对齐。Karpathy 说 ``worry about compute and data''，因此我们要：
-\begin{itemize}
-    \item 收集 OpenWebText、Common Crawl 等大规模语料，并剔除重复与感官敏感内容
-    \item 用 BPE/Tokenizer 将句子分段为 512~1024 tokens，batch 维度根据 GPU memory 调整
-    \item 规划 compute budget：Token 数×模型参数数× epoch 数 给出实际 FLOPs
-\end{itemize}
+\section{从手工特征孤岛到统一架构}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{4cm}p{4cm}}
-\toprule
-维度 & 建议 & 说明 \\
-\midrule
-数据 & 去噪 + dedup & 保留 high-quality token，避免训练时 repeat \\
-Compute & Token budget & 例如 1e12~1e13 token 数量确保泛化 \\
-Infrastructure & Mixed precision + gradient checkpoint & 降低显存占用，保持 throughput \\
-\bottomrule
-\end{tabular}
-\caption{Scale-first 模型的实践预算参考。}
-\end{table}
+上一章说明了本讲要回答“为什么一门 Transformer 课会存在”。本章给出历史答案：十多年前，各领域不仅使用不同数据，还使用不同特征、词汇和软件栈；深度学习先统一了训练范式，Transformer 又进一步统一了主干架构。统一降低了跨领域学习成本，也让算力、数据与规模成为共同变量。
 
-\begin{knowledgebox}{数据与 compute 的协同}
-在训练的早期阶段，控制数据质量比盲目加模型更重要；到了 later stage，再用 larger compute 细调模型。这个过程就是 Karpathy 常说 ``build big first, then polish with data'' 的具体体现。
+\subsection{2011：把特征工程拼成一个脆弱 pipeline}
+
+Karpathy 从自己进入计算机视觉的经历讲起。问题不是研究者“不聪明”，而是系统把表示设计交给大量人工 descriptor：每篇论文贡献一个局部特征，实践者把它们全部提取、拼接，再在顶部训练分类器。这种流程难以联合优化，也难以判断错误来自特征、数据还是分类器。
+
+\lecturefigure{slide-11-historical-context.jpg}{历史背景：从 2011 年的视觉工作流回看 2023 年。}{Stanford Online 官方视频 00:10:39--00:11:17。}
+
+\teachervoice{他用《指环王》中回忆往昔的 Bilbo 自嘲，并问学生是否意识到 2023 年进入 AI 有多幸运。幽默背后的判断是：今天习以为常的统一工具链并非自然存在，而是表示学习、规模化训练和共享架构逐步形成的结果。}
+
+\lecturefigure{slide-12-scene-2011.jpg}{“Scene: it is 2011”：手工视觉 pipeline 的时代入口。}{Stanford Online 官方视频 00:11:17--00:11:30。}
+
+\term{handcrafted feature}（手工特征）是由研究者预先规定的图像统计量，如局部梯度、纹理、颜色直方图或几何模板；\term{descriptor} 是把局部区域编码成向量的规则。它们包含强 inductive bias，却不能像端到端神经网络那样让所有阶段围绕最终损失共同调整。
+
+\lecturefigure{slide-13-old-computer-vision-paper.jpg}{旧式视觉论文中的多页特征与工程细节。}{Stanford Online 官方视频 00:11:30--00:12:11。}
+
+\begin{knowledgebox}{读图：不要把密集术语误当成“模型更深”}
+页面密度主要来自 feature zoo：不同 descriptor 各自提取边缘、纹理、颜色或空间关系，再把向量送入 SVM。\term{SVM}（Support Vector Machine，支持向量机）是在特征空间寻找分类边界的监督模型。它可以很强，但上游表示通常固定，整个 pipeline 不是一个由同一目标端到端优化的可微系统。
 \end{knowledgebox}
 
-\subsection{调试与观察}
-确保训练稳定，需要实时监控 loss、attention maps、embedding scales 等。
+Karpathy 的尖锐评价是：代码从四处收集，系统不仅复杂，而且会产生今天看来像 bug 的荒谬预测。当时实践者有时只把它当作不可避免的偶发失败。这个对比体现了工程文化的变化：当模型、数据和训练路径更统一后，错误更可能被定位、复现与系统改进。
 
-\begin{importantbox}{关键监控指标}
-\begin{itemize}
-    \item LayerNorm / residual 的均值与方差是否飘移
-    \item Attention 图中是否有某些 head 恒定注意同一个位置
-    \item 学习率 warmup 曲线能否平滑过渡到 plateau
-\end{itemize}
+\lecturefigure{slide-14-old-lstm-paper.jpg}{不同领域的旧论文：序列模型有自己的术语、图示与实现传统。}{Stanford Online 官方视频 00:12:23--00:12:56。}
+
+LSTM 论文与视觉论文不仅处理不同对象，也使用不同问题分解方式。视觉研究者看到 hidden state、gates、time unrolling 时，要重新学习整套语言；序列研究者阅读视觉 descriptor 与几何 pipeline 也面临同样障碍。跨领域迁移的成本因此不只来自数学难度，还来自概念接口不统一。
+
+\lecturefigure{slide-15-old-language-model-paper.jpg}{旧式语言模型论文：另一套任务、符号与评价传统。}{Stanford Online 官方视频 00:12:23--00:12:56。}
+
+语言模型的核心目标其实可以非常统一：根据上下文预测下一个 token。但在早期论文中，n-gram、平滑、词形、句法和任务特定特征常形成独立技术栈。深度学习的突破之一，是让 embedding 与预测器一起从数据学习，使“上下文如何表示”不再完全依赖人工枚举。
+
+\lecturefigure{slide-16-old-neural-architecture.jpg}{旧式神经架构图：各领域网络仍呈现显著不同的结构语言。}{Stanford Online 官方视频 00:12:23--00:12:56。}
+
+这张图的教学重点不是逐个辨认方框，而是观察信息路径。早期系统常把任务假设直接硬编码进 topology：图像用局部二维连接，文本用时间递归，语音用专门前端。这样的 bias 可能提高样本效率，却让新模态、新传感器或长距离关系需要重新设计骨架。
+
+\lecturefigure{slide-17-ai-areas-different.jpg}{2012 年前：视觉、语言、语音、翻译与 RL 像不同学科。}{Stanford Online 官方视频 00:12:56--00:13:17。}
+
+\begin{warningbox}{统一不等于抹掉领域知识}
+共同的神经网络语言降低了阅读门槛，但不能推出所有领域只需同一数据处理。图像的二维邻域、语音的时间频率结构、RL 的行为条件与蛋白质的几何约束仍需进入 tokenization、position/type embedding、mask、objective 或 specialized module。统一的是可组合主干，不是现实世界本身。
+\end{warningbox}
+
+\subsection{2012：规模化学习统一训练范式}
+
+前面的问题是每个领域都在手工定义表示。ImageNet 时代展示了另一条路线：大数据集、大模型和加速硬件可以让神经网络自己学习层级表示。研究重心因此从“再发明一个 descriptor”转向“怎样获得数据、计算和稳定优化”，这一 recipe 随后复制到语音、翻译与 RL。
+
+\lecturefigure{slide-18-imagenet-2012.jpg}{ImageNet 2012：规模、数据与 GPU 训练改变视觉研究重心。}{Stanford Online 官方视频 00:12:56--00:13:33。}
+
+\begin{knowledgebox}{读图：真正改变的是优化闭环}
+输入像素经过共享参数的多层网络得到预测，分类损失再通过 backpropagation 调整全部层。表示不再是冻结的人工接口，而是与任务目标共同学习。这里的关键不只是卷积本身，而是“可微模型 + 大规模数据 + 并行计算 + 端到端损失”形成可复制闭环。
+\end{knowledgebox}
+
+\lecturefigure{slide-19-areas-read-more-similar.jpg}{深度学习之后：不同领域论文开始共享参数、优化器与训练语言。}{Stanford Online 官方视频 00:13:33--00:14:10。}
+
+Karpathy 强调，跨领域论文突然出现可识别的共同词汇：parameters、optimizer、loss、neural network。统一表示框架产生知识复用：视觉研究者可以理解机器翻译的优化问题，NLP 研究者也可以借鉴残差连接和规模化训练。共同工具链使领域边界变薄，为 2017 年之后的架构统一创造条件。
+
+\subsection{2017：连主干架构也开始收敛}
+
+深度学习先统一“怎样训练”，Transformer 再统一“训练什么样的主干”。Karpathy 的一阶近似是：把同一个架构 copy-paste 到不同领域，主要改变数据的 chunking 与输入方式。这个说法故意夸张，但准确指出 attention 允许模型在一个元素集合上学习动态关系。
+
+\lecturefigure{slide-20-transformer-2017.jpg}{2017 年 Transformer：一篇机器翻译论文提出可复用架构包。}{Stanford Online 官方视频 00:13:57--00:14:21。}
+
+\begin{knowledgebox}{读图：原论文图不只是 attention}
+左侧 encoder 与右侧 decoder 都包含 embedding、position、multi-head attention、feed-forward、residual add 与 normalization；decoder 还需要 causal mask 和 cross-attention。标题突出 attention，是因为它替代 recurrence 成为主要通信路径；模型能训练与扩展则依赖整套 package。
+\end{knowledgebox}
+
+\lecturefigure{slide-21-transformer-across-fields.jpg}{同一 Transformer 图在视觉、语言、语音、RL 与图学习中反复出现。}{Stanford Online 官方视频 00:14:17--00:14:40。}
+
+这页应按“接口层—共享层—任务层”阅读：接口层把 patch、word/subword、spectrogram slice、state/action/reward 或 graph element 映射成向量；共享层用 attention 和 MLP 更新向量；任务层把输出解释为分类、生成、控制或结构预测。跨领域复用发生在中间，输入与目标仍然决定模型学到什么。
+
+\lecturefigure{slide-22-brain-unified-compute.jpg}{皮层同质性类比：统一学习算法的诱人猜想。}{Stanford Online 官方视频 00:14:42--00:15:09。}
+
+\teachervoice{Karpathy 说视觉皮层、听觉皮层在宏观上相似，Transformer 在不同领域只改变部分“超参数”也许暗示一种统一强大学习算法。这是启发性类比，不是神经科学证据；架构迁移成功既可能来自普适计算结构，也可能来自现代数据与硬件共同偏好的工程解。}
+
+\subsection{本章小结}
+
+2011 年的 AI 被手工特征、领域词汇与专用 topology 分割；2012 年后的规模化深度学习统一了端到端优化语言；2017 年 Transformer 又把可复用主干推进到跨模态层面。下一章追问这套架构不是“从天而降”的：它沿着语言模型、seq2seq bottleneck 和 soft alignment 的问题链演化而来。
+
+\section{Attention 的历史问题链：从固定窗口到可寻址记忆}
+
+本章从“下一个 token 怎样依赖上下文”出发。固定窗口 MLP 只能看有限邻域；RNN/LSTM 能处理变长序列，却把源句压成单个最终状态；Bahdanau attention 让 decoder 对所有 encoder states 做可微寻址；Transformer 再把这种寻址提升为每层的主要通信原语。
+
+\lecturefigure{slide-23-where-transformer-came-from.jpg}{问题转场：Transformer 从哪里来？}{Stanford Online 官方视频 00:15:09--00:15:15。}
+
+这张过渡页提醒我们不要从 2017 年架构图倒背组件。历史顺序揭示每一步在修复什么：语言建模提供概率目标，seq2seq 提供变长输入输出，soft alignment 缓解固定向量瓶颈，自注意力缩短任意 token 间的信息路径，残差与归一化则让深层堆叠可优化。
+
+\subsection{2003：神经概率语言模型}
+
+语言模型给定 token 序列 $x_{1:T}$，学习联合概率的自回归分解：
+
+\[
+p(x_{1:T})=\prod_{t=1}^{T}p(x_t\mid x_{<t}).
+\]
+
+其中，$x_t$ 表示第 $t$ 个 token，$x_{<t}$ 表示它之前的上下文。Bengio 等人的 2003 模型用固定长度窗口，把若干词 embedding 拼接后送入 MLP，输出下一个词的概率分布；它已经具备“共享表示 + 神经预测器”的核心，但上下文长度被窗口固定。
+
+\lecturefigure{slide-24-neural-probabilistic-language-model.jpg}{2003 neural probabilistic language model：三个词预测第四个词。}{Stanford Online 官方视频 00:15:12--00:15:43。}
+
+\begin{knowledgebox}{读图：embedding 解决的是离散符号接口}
+词 ID 本身没有距离意义。Embedding table 把每个词映射为可学习向量，窗口内向量经过共享 MLP 后得到 vocabulary logits，再经 softmax 变成概率。模型可以学到“相似词在预测任务中使用相似表示”，但超过窗口的依赖不会直接进入当前预测。
+\end{knowledgebox}
+
+\subsection{2014 seq2seq：变长序列与固定向量瓶颈}
+
+机器翻译要求输入和输出都可变长。经典 seq2seq 用 encoder LSTM 逐词读取源句，把最后隐藏状态作为 context，再由 decoder LSTM 逐词生成目标句。若把 encoder states 记为 $\mathbf h_1,\ldots,\mathbf h_S$，最简单接口是
+
+\[
+\mathbf c=\mathbf h_S,
+\]
+
+其中，$S$ 是源序列长度，$\mathbf c$ 是传给 decoder 的单一 context vector。所有源信息必须穿过这条窄通道，长句中的局部细节容易丢失。
+
+\lecturefigure{slide-25-seq2seq-2014.jpg}{2014 seq2seq：encoder LSTM 把变长源句压成 context，decoder 再生成目标句。}{Stanford Online 官方视频 00:15:43--00:17:02。}
+
+\begin{warningbox}{Encoder bottleneck 不是“向量维度必然不够”这么简单}
+理论上高维实数向量可编码大量信息，但训练必须学会把所有相关细节稳定压缩、跨长时间路径传播，并让 decoder 可恢复。实际瓶颈来自有限容量、优化难度、长路径和统一摘要接口。Attention 的价值是让 decoder 直接访问多个源状态，而不是证明单向量在数学上不可能表示句子。
+\end{warningbox}
+
+\subsection{Bahdanau attention：每个输出位置软检索源序列}
+
+上一节的固定 context 对所有输出位置都相同，无法表达“生成这个词时主要需要源句中的哪一部分”。Bahdanau attention 把这个接口改成逐步查询：decoder 每前进一步，就重新比较当前生成状态与全部 encoder states，再组合出只服务于当前目标词的 context。对目标步 $t$，alignment model 先比较 decoder 前一状态 $\mathbf s_{t-1}$ 与每个 encoder state $\mathbf h_s$：
+
+\[
+e_{t,s}=a(\mathbf s_{t-1},\mathbf h_s),\qquad
+\alpha_{t,s}=\frac{\exp(e_{t,s})}{\sum_{j=1}^{S}\exp(e_{t,j})},
+\]
+\[
+\mathbf c_t=\sum_{s=1}^{S}\alpha_{t,s}\mathbf h_s.
+\]
+
+其中，$a$ 是可学习 compatibility function，$\alpha_{t,s}$ 是对源位置 $s$ 的归一化权重，$\mathbf c_t$ 是当前目标步的动态 context。固定摘要被“每一步都可重新寻址的 memory”取代。
+
+\lecturefigure{slide-26-neural-machine-translation-2014.jpg}{Bahdanau alignment：decoder 为每个目标词对 encoder states 做 soft search。}{Stanford Online 官方视频 00:17:02--00:18:32。}
+
+\begin{knowledgebox}{读图：先看信息路径，再看热力图}
+Encoder 仍按序列产生 $\mathbf h_s$，但 decoder 不再只接收最后一个状态。每个目标步根据当前需求计算一组 $\alpha_{t,s}$，热力图中的高权重位置表示更强的信息读取。权重可提供 alignment 线索，却不自动等价于人类解释或因果归因。
+\end{knowledgebox}
+
+\lecturefigure{slide-27-bahdanau-attention-history.jpg}{Attention 的口述历史：翻译对齐直觉、softmax 加权与命名过程。}{Stanford Online 官方视频 00:18:32--00:20:11。}
+
+\teachervoice{Karpathy 讲述自己邮件询问 Dzmitry Bahdanau：非英语母语者在脑中来回对齐源句与目标句，启发了 soft search；机制据称第一次尝试就奏效；“attention”这个更好的名称来自 Yoshua Bengio 的终稿建议。讲义保留这一归因，但不把个人回忆扩张成完整 priority history。}
+
+\subsection{2017 Transformer：把 attention 变成完整架构包}
+
+Transformer 去掉 recurrent computation，却不能只留下一个 softmax。因为 attention 对输入集合本身没有顺序概念，必须注入 position；因为网络要堆叠，必须有 residual pathway 与 normalization；因为每个位置还需要非线性变换，必须加入 position-wise MLP；因为不同关系可并行建模，使用 multiple heads；decoder 还要通过 mask 防止读取未来。
+
+\lecturefigure{slide-28-transformer-full-package.jpg}{2017 Transformer 的“全家桶”：attention、位置、残差、归一化、MLP 与多头。}{Stanford Online 官方视频 00:20:11--00:22:31。}
+
+\begin{knowledgebox}{读图：哪些部分后来改变，哪些部分保留}
+Karpathy 指出原始 post-norm 常被 pre-norm 替代，绝对 sinusoidal position 也发展出 relative/rotary 等方案；但 residual stream、attention、扩大约四倍的 feed-forward hidden dimension、多头与重复 block 长期保留。架构“韧性”是经验事实，不是证明原始超参数在所有规模都最优。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+神经语言模型定义 next-token 概率目标；seq2seq 解决变长输入输出，却形成单一 context bottleneck；Bahdanau attention 让 decoder 按需读取源状态；Transformer 将这种读取变成主干通信机制，并用位置、残差、归一化、MLP、heads 与 masks 组成可训练 package。下一章用图消息传递重新解释这套机制。
+
+\section{Attention 作为图上的通信阶段}
+
+公式常把 attention 写成矩阵乘法，容易掩盖它真正做的事。本章采用 Karpathy 的解释：每个 token 是图中的 node，node 保存 private state；attention 根据当前状态决定从哪些允许邻居收集什么信息；MLP 则在每个 node 内独立计算。Transformer block 因而交替执行 communication 与 computation。
+
+\subsection{Communication 与 computation 的交替}
+
+设第 $\ell$ 层的 token states 为矩阵 $X^{(\ell)}\in\mathbb R^{T\times d}$。一个 pre-norm block 可写成
+
+\[
+\widetilde X^{(\ell)}=X^{(\ell)}+\operatorname{Attn}(\operatorname{LN}(X^{(\ell)})),
+\]
+\[
+X^{(\ell+1)}=\widetilde X^{(\ell)}+\operatorname{MLP}(\operatorname{LN}(\widetilde X^{(\ell)})).
+\]
+
+其中，$T$ 是 token 数，$d$ 是 residual width，$\operatorname{LN}$ 是 LayerNorm。第一式让 token 交换信息，第二式让每个 token 对收集后的信息做相同参数的非线性变换。
+
+\lecturefigure{slide-29-attention-communication-phase.jpg}{Attention 是 data-dependent communication；MLP 是每个 node 的独立 computation。}{Stanford Online 官方视频 00:22:32--00:23:32。}
+
+\begin{importantbox}{核心抽象：先路由，再计算}
+Attention 回答“当前 node 应从哪些 node 读取、读取多少”；MLP 回答“拿到信息后怎样局部变换”。Connectivity mask 规定哪些边存在，attention weights 决定这些边当前有多强。二者不能混为一谈：固定 causal graph 仍可产生数据依赖的消息强度。
 \end{importantbox}
 
-此外，可以生成小批次的 sample，如 prompt: ``Translate English to German''，快速检验模型是否保留在 prompt 指定的任务上。
+\subsection{Q/K/V：寻址、匹配与传输}
 
-\subsection{复现脚本示例}
-下面是一个简化的训练循环（以 minGPT 为蓝本），帮助工程师迅速落地：
-\begin{lstlisting}[caption=简化 minGPT 训练循环]
-from torch import nn, optim
+上一节只把 attention 分成“通信阶段”，本节进一步回答一次通信怎样决定发送者与内容。关键是把同一个 node state 投影成三种角色：query 表达当前需求，key 提供可匹配地址，value 携带真正要聚合的信息。角色分离后，模型可以用一种特征判断“该不该读”，再用另一种特征决定“读到什么”。从状态 $X$ 线性投影得到
 
-model = SimpleTransformer(vocab_size=50257)
-optimizer = optim.AdamW(model.parameters(), lr=6e-4)
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\]
 
-for epoch in range(num_epochs):
-    for batch in dataloader:
-        logits = model(batch["input_ids"])
-        loss = nn.functional.cross_entropy(logits[:, :-1].reshape(-1, logits.size(-1)), batch["input_ids"][:, 1:].reshape(-1))
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+并计算 scaled dot-product attention：
+
+\[
+\operatorname{Attn}(Q,K,V)=
+\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}+M\right)V.
+\]
+
+其中，$Q$ 表示每个 node 正在寻找什么，$K$ 表示每个 node 可被怎样匹配，$V$ 表示真正传递的内容，$d_k$ 是 key/query 维度，$M$ 是 connectivity mask。除以 $\sqrt{d_k}$ 用来控制 dot-product variance，避免 softmax 在维度增大时过早饱和。
+
+\lecturefigure{slide-30-attention-code-and-graph.jpg}{Python 伪代码与有向图：一次 attention message-passing round。}{Stanford Online 官方视频 00:23:32--00:25:35。}
+
+\begin{knowledgebox}{读图：沿一个目标 node 走完整条路径}
+先取目标 node 的 query；再收集所有允许入边源 node 的 keys；dot product 得到未归一化 affinity；softmax 把它们转成和为 1 的权重；最后对源 nodes 的 values 加权求和，作为目标 node 的更新。图结构告诉模型“可向谁问”，Q/K 告诉模型“当前该问谁”，V 告诉模型“答案内容是什么”。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={单头 attention 的最小矩阵表达；真实实现还需要 batch/head 维度与 dropout。}]
+def attention(x, Wq, Wk, Wv, mask):
+    q = x @ Wq                  # [T, dk]
+    k = x @ Wk                  # [T, dk]
+    v = x @ Wv                  # [T, dv]
+    scores = q @ k.T / sqrt(k.shape[-1])
+    scores = scores.masked_fill(mask == 0, -inf)
+    weights = softmax(scores, dim=-1)
+    return weights @ v          # [T, dv]
 \end{lstlisting}
 
-\begin{warningbox}{实践中的注意事项}
-\begin{itemize}
-    \item 切勿在自动微分后忽略 \texttt{grad\_clip}，否则较大的 token 时长容易爆炸
-    \item 不了解模型 scale 时，尽量先在 1-2 张 GPU 上跑完一轮
-\end{itemize}
+\subsection{Heads 并行、layers 串行；self 与 cross 只差信息来源}
+
+Multi-head attention 用不同参数并行执行 $H$ 次 attention：
+
+\[
+\operatorname{MHA}(X)=\operatorname{Concat}(\text{head}_1,\ldots,\text{head}_H)W_O.
+\]
+
+每个 head 可以学习不同的 compatibility 与 value subspace；layers 则串行堆叠，使一轮收集后的表示成为下一轮通信输入。Self-attention 中 $Q,K,V$ 来自同一组 states；cross-attention 中 query 来自 decoder，key/value 来自 encoder。数学操作相同，memory source 不同。
+
+\lecturefigure{slide-31-parallel-communication-and-compute.jpg}{并行通信与逐点计算：encoder、causal decoder 和 cross-attention 的 connectivity。}{Stanford Online 官方视频 00:25:35--00:31:00。}
+
+\begin{knowledgebox}{读图：三种 connectivity}
+Encoder self-attention 通常允许所有 token 两两通信；causal decoder 只允许位置 $t$ 读取 $\le t$ 的 token，形成下三角图；encoder--decoder 模型还让 decoder queries 读取全部 encoder keys/values。多头不改变允许边集合，只是在同一边集合上学习多套并行路由规则。
+\end{knowledgebox}
+
+\teachervoice{有人问 heads 与 layers 的区别，Karpathy 的回答非常实用：“heads 是 copy-paste in parallel，layers 是 copy-paste in series。”他也承认图类比是当天早上才形成的，因此把它当教学模型，而把下一章的 nanoGPT 当可执行证据。}
+
+\subsection{本章小结}
+
+Attention 可以被理解为有向图上的 data-dependent message passing：mask 定义可通信边，Q/K 产生 affinity，softmax 归一化，V 传递内容；MLP 再在每个 node 内独立计算。Heads 提供并行关系子空间，layers 提供串行推理深度，self/cross attention 只在 key/value 来源上不同。
+
+\section{nanoGPT：从字符到可生成的 Decoder-only Transformer}
+
+前面的图解释仍可能停留在直觉。本章沿 Karpathy 的 nanoGPT walkthrough，把文本、token、batch、block、loss、mask 与 generation 连成一条可运行路径。目标不是记住一份 300 行代码，而是能够在每个 tensor 维度上回答：它代表哪些独立样本、哪些时间位置、哪些 heads，以及哪些 features。
+
+\subsection{证据边界与 Tiny Shakespeare}
+
+Karpathy 介绍 nanoGPT 时强调两点：代码足够小，能让学生读完；实现又足够认真，在当时可用 8 张 GPU 训练约 38 小时复现 GPT-2 级实验。课堂演示使用 Tiny Shakespeare 和字符 tokenizer，是为了暴露机制，不代表生产 GPT 也使用相同 vocabulary 或算力配置。
+
+\lecturefigure{slide-32-nanogpt.jpg}{nanoGPT：极简、可读、仍能进行严肃 GPT 复现实验。}{Stanford Online 官方视频 00:31:01--00:31:30。}
+
+\teachervoice{Karpathy 先承认图类比“今天早上才想出来”，随后立刻切到 executable implementation。这种顺序值得学习：直觉负责提出可检查的问题，代码与 tensor shape 负责防止直觉失控。}
+
+\lecturefigure{slide-33-tiny-shakespeare-dataset.jpg}{Tiny Shakespeare：把剧本文本拼成约 1 MB 的字符序列。}{Stanford Online 官方视频 00:31:31--00:32:00。}
+
+语言模型并不直接读取“意义”，而读取离散 symbol ID。对字符集合 $\mathcal V$ 建立映射 $\operatorname{encode}:\mathcal V\to\{0,\ldots,|\mathcal V|-1\}$，整份文本变成一维整数序列。模型学习的是在这个编码与训练分布下的条件概率；“无限 Shakespeare”只是不断从 learned conditional distribution 采样。
+
+\subsection{Tokenization、文档边界与输入序列}
+
+\term{token} 是模型处理的离散基本单元，可能是字符、subword、patch 或其他 element；\term{vocabulary} 是可用 token 的集合。字符 tokenization 简单且没有 unknown word，却让序列更长；subword tokenization 缩短序列，但编码规则更复杂。Embedding 将 token ID 映射成 $d$ 维向量。
+
+\lecturefigure{slide-34-character-tokenization.jpg}{字符 tokenizer：建立字符与整数 ID 的双向映射。}{Stanford Online 官方视频 00:32:00--00:32:31。}
+
+\begin{knowledgebox}{读图：encode/decode 不等于模型推理}
+Tokenizer 只是 deterministic interface：\texttt{encode} 把字符串变成整数，\texttt{decode} 做逆映射；真正的概率建模发生在 embedding、Transformer blocks 与 output head 中。字符 ID 的数值大小没有语义，ID 7 并不比 ID 3 “更大”。
+\end{knowledgebox}
+
+\lecturefigure{slide-35-tokenized-data.jpg}{Tokenized data：长文本成为一条一维整数 stream。}{Stanford Online 官方视频 00:32:27--00:33:00。}
+
+多个独立文档可以用 special end-of-text token 分隔。课堂口头说模型应学会在边界“wipe memory”，更准确的表述是：边界 token 向模型提供分段信号；若 attention mask 仍允许跨边界读取，模型是否忽略前文取决于训练数据、目标和学到的权重，而不是 token 自动清空某个 RNN hidden state。
+
+\begin{lstlisting}[caption={Tiny Shakespeare 的字符编码与 shifted batch 构造。}]
+chars = sorted(list(set(text)))
+stoi = {ch: i for i, ch in enumerate(chars)}
+encode = lambda s: [stoi[ch] for ch in s]
+data = torch.tensor(encode(text), dtype=torch.long)
+
+def get_batch(data, batch_size, block_size):
+    starts = torch.randint(len(data) - block_size - 1,
+                           (batch_size,))
+    x = torch.stack([data[i:i + block_size] for i in starts])
+    y = torch.stack([data[i + 1:i + block_size + 1]
+                     for i in starts])
+    return x, y
+\end{lstlisting}
+
+\subsection{Batch size 与 block size：不要把两个维度混掉}
+
+\term{block size} 是一次 forward pass 中每个序列的最大 context length；\term{batch size} 是并行处理的独立序列数量。若 $B=4,T=8$，输入 $X\in\mathbb N^{4\times8}$ 包含四个互不通信的八-token 片段。GPU 并行发生在 batch、time、head 与 feature 等多个维度，但 attention 不应跨 batch element 交换信息。
+
+\lecturefigure{slide-36-batch-construction.jpg}{从一维 token stream 随机裁出 $B\times T$ 训练批次。}{Stanford Online 官方视频 00:33:00--00:33:38。}
+
+\begin{knowledgebox}{读图：四条横线不是一条更长的序列}
+每一行是独立样本，起点从数据 stream 随机采样；每行长度由 block size 控制。把 batch 维误当成 time 维会造成样本间信息泄漏。增大 batch 主要改善硬件利用率和梯度估计，增大 block size 才会扩展单个样本可直接使用的上下文，并显著增加 attention 计算与显存。
+\end{knowledgebox}
+
+\lecturefigure{slide-37-input-target-tensors.jpg}{Input/target tensors：目标是输入在时间上右移一位。}{Stanford Online 官方视频 00:33:38--00:35:00。}
+
+对每个位置 $t$，输入 prefix 是 $x_{\le t}$，监督标签是 $x_{t+1}$。因此一个长度 $T$ 的 chunk 同时提供 $T$ 个 next-token 训练例。若 logits 为 $z_{b,t,v}$，标签为 $y_{b,t}$，平均 cross-entropy 为
+
+\[
+\mathcal L=-\frac{1}{BT}\sum_{b=1}^{B}\sum_{t=1}^{T}
+\log\frac{\exp z_{b,t,y_{b,t}}}{\sum_{v\in\mathcal V}\exp z_{b,t,v}}.
+\]
+
+其中，$v$ 遍历 vocabulary。训练一次 forward 就监督所有时间位置，而生成时仍需逐 token 追加。
+
+\subsection{Embedding、Block 与 residual stream}
+
+Token embedding $E_{\text{tok}}[x_t]$ 提供“是什么”，position embedding $E_{\text{pos}}[t]$ 提供“在哪里”：
+
+\[
+\mathbf x_t^{(0)}=E_{\text{tok}}[x_t]+E_{\text{pos}}[t].
+\]
+
+这些 states 进入重复 blocks，最后经 LayerNorm 和线性 language-model head 输出 vocabulary logits。Decoder-only 表示没有独立 encoder 与 cross-attention，不表示模型“没有 decoder block”。
+
+\lecturefigure{slide-38-decoder-missing-gpt.jpg}{Decoder-only GPT：保留 masked self-attention 与 MLP，去掉 encoder/cross-attention。}{Stanford Online 官方视频 00:35:00--00:38:31。}
+
+\begin{knowledgebox}{读图：红色标注是在做架构减法}
+原始 Transformer decoder 每层包含 masked self-attention、cross-attention 和 feed-forward。GPT 没有源序列 encoder，因此删除 cross-attention；剩余 causal self-attention 负责从左侧 context 收集信息，MLP 负责每个 token 的局部变换。Output head 把最终 hidden state 映射到下一个 token 的 logits。
+\end{knowledgebox}
+
+\lecturefigure{slide-39-block-module.jpg}{nanoGPT Block：pre-norm attention 与 MLP 的两次 residual update。}{Stanford Online 官方视频 00:37:08--00:38:31。}
+
+Residual connection 把子层输出加回主 stream，使梯度拥有短路径；\term{LayerNorm} 在 feature 维归一化单个 token state，稳定不同层的尺度；\term{pre-norm} 表示先归一化再进入子层。Block 的参数在不同 token 位置共享，因此同一个计算规则可作用于任意位置表示。
+
+\lecturefigure{slide-40-mlp-module.jpg}{Per-token MLP：线性升维、GELU、线性投影与 dropout。}{Stanford Online 官方视频 00:38:31--00:38:55。}
+
+\term{GELU} 是平滑非线性激活。经典 feed-forward network 把 residual width $d$ 扩到约 $4d$，再投影回 $d$。MLP 不跨 token 读取信息，因此它的所有 token 计算可完全并行；但不同 token 输入已经通过 attention 混合了上下文，所以同一个 MLP 会对不同语境产生不同输出。
+
+\subsection{Causal self-attention：mask 防止答案泄漏}
+
+若位置 $t$ 能读取未来位置 $s>t$，训练标签已经出现在输入 tensor 的右侧，模型会作弊。Causal mask 定义
+
+\[
+M_{t,s}=\begin{cases}
+0,&s\le t,\\
+-\infty,&s>t.
+\end{cases}
+\]
+
+加到 logits 后再 softmax，未来位置的概率变为零。Mask 是训练目标的一部分：它让并行计算所有位置仍然遵守 left-to-right factorization。
+
+\lecturefigure{slide-41-full-implementation.jpg}{CausalSelfAttention 全实现：Q/K/V reshape、mask、softmax、value aggregation 与 projection。}{Stanford Online 官方视频 00:38:55--00:41:34。}
+
+\begin{knowledgebox}{读图：高维 tensor 只是同一算法的批处理}
+实现把 $X$ 投影后 reshape 为 batch $B$、heads $H$、time $T$、head feature $d_h$。矩阵乘法一次完成所有 batch、head 和位置的 query-key dot products；\texttt{masked\_fill} 把未来 logits 设为 $-\infty$；softmax 得 weights；weights 再乘 values。transpose/contiguous/view 主要在重排维度，不是新的学习机制。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={带形状注释的最小 causal self-attention forward。}]
+def forward(self, x):
+    B, T, C = x.shape
+    q = self.q(x).view(B, T, self.n_head, C // self.n_head)
+    k = self.k(x).view(B, T, self.n_head, C // self.n_head)
+    v = self.v(x).view(B, T, self.n_head, C // self.n_head)
+    q, k, v = (z.transpose(1, 2) for z in (q, k, v))
+
+    scores = q @ k.transpose(-2, -1) / math.sqrt(k.size(-1))
+    scores = scores.masked_fill(self.causal[:, :, :T, :T] == 0,
+                                float("-inf"))
+    weights = torch.softmax(scores, dim=-1)
+    y = weights @ v
+    y = y.transpose(1, 2).contiguous().view(B, T, C)
+    return self.proj(y)
+\end{lstlisting}
+
+\subsection{训练曲线与 autoregressive generation}
+
+前面已经构造了训练 loss，本节把“loss 下降”和“文本生成”连接起来，并明确两者能证明什么。训练曲线下降说明模型更好地预测 held-out token，但不自动证明语法、事实或推理能力。对 Tiny Shakespeare，较低 loss 会让输出逐渐学到角色名、换行、词形与戏剧格式；因为数据小、字符级 context 有限，生成仍可能局部流畅而全局无意义。读图时应先看优化目标是否改善，再检查采样文本呈现的是局部统计、长程结构还是记忆复现。
+
+\lecturefigure{slide-42-training-loss.jpg}{训练 loss 下降：next-character prediction 持续改善。}{Stanford Online 官方视频 00:41:34--00:41:43。}
+
+\begin{warningbox}{读图：loss 是目标函数证据，不是通用智能刻度}
+Cross-entropy 衡量真实下一个 token 的对数概率。它支持“模型更贴合该数据分布”的结论，却不能单独证明长期一致性、事实正确、鲁棒性或安全性。训练与验证曲线还应分开阅读，以识别 memorization 与 generalization。
 \end{warningbox}
 
+\lecturefigure{slide-43-fake-shakespeare-output.jpg}{采样生成的“假莎士比亚”：格式与局部统计已被模型吸收。}{Stanford Online 官方视频 00:41:41--00:43:12。}
+
+生成从起始 token 开始，每次取最后位置 logits、采样新 token、追加到 context 并重复。设最大 context 为 $T_{\max}$，则第 $n$ 步只保留最近窗口：
+
+\[
+\hat x_{n+1}\sim p_\theta(\cdot\mid \hat x_{\max(1,n-T_{\max}+1):n}).
+\]
+
+\begin{lstlisting}[caption={带有限 context cropping 的 autoregressive generation。}]
+@torch.no_grad()
+def generate(model, ids, max_new_tokens, block_size):
+    for _ in range(max_new_tokens):
+        context = ids[:, -block_size:]
+        logits, _ = model(context)
+        probs = torch.softmax(logits[:, -1, :], dim=-1)
+        next_id = torch.multinomial(probs, num_samples=1)
+        ids = torch.cat((ids, next_id), dim=1)
+    return ids
+\end{lstlisting}
+
+\teachervoice{课堂把 block size 8 的 toy model 一步步“喂回”预测字符：context 从 1 增长到 8，超过后窗口开始滑动。这个演示比只说“自回归”更重要，因为它暴露了训练并行、生成串行与有限 context 三者之间的张力。}
+
 \subsection{本章小结}
-通过明确的数据/compute 预算、可解释的监控指标与示例训练代码，我们才能把 Karpathy 的 scaling 思维在工程中落地。
 
-\section{Transformer 演化与 Karpathy 视角}
+nanoGPT 路径把抽象机制落到 tensor：文本经 tokenizer 变成 ID stream；随机裁剪形成 $B\times T$ batch；输入与目标错一位；token/position embedding 进入重复 decoder blocks；causal mask 防止未来泄漏；cross-entropy 训练所有位置；generation 再逐 token 采样并受 block size 限制。
 
-\subsection{关键变体对照}
-Karpathy 在讲座中提到三个主流变体：BERT、GPT、T5（或 BART）等，它们沿用了 Transformer 的核心结构，但在 attention 方向、训练目标与位置编码上做出不同选择。
+\section{同一骨架的三种模型家族}
+
+前一章实现了 decoder-only GPT。本章只改变 connectivity 与 objective，就得到 encoder-only 和 encoder--decoder 家族。这个统一视角比死记模型名更可靠：先问每个位置能看谁，再问 keys/values 来自哪里，最后问训练目标要求输出什么。
+
+\subsection{Encoder：取消 causal mask}
+
+Encoder self-attention 允许每个 token 同时读取左、右上下文，因此适合生成 contextual representation、分类或 denoising。代码层面可以把 causal mask 删除，让 attention matrix 的所有位置参与 softmax；目标则不能再是同一个 left-to-right next-token loss，否则未来 token 会泄漏答案。
+
+\lecturefigure{slide-44-encoder-blocks.jpg}{Encoder blocks：删除 causal masking，让所有 token 双向通信。}{Stanford Online 官方视频 00:43:18--00:43:53。}
+
+\begin{knowledgebox}{读图：同一 attention，约束不同}
+GPT 的下三角 connectivity 强制因果生成；BERT 类 encoder 的全连接 self-attention 让每个 token 汇聚整句信息。BERT 常用 masked/denoising objectives：先破坏输入，再要求模型恢复或提取表示。架构差别不只是“有没有 mask”，objective 也必须与可见信息匹配。
+\end{knowledgebox}
+
+\subsection{Cross-attention：decoder 查询 encoder memory}
+
+Encoder--decoder 模型先把源序列编码成 $H_{\text{enc}}$，decoder state $X_{\text{dec}}$ 产生 queries，而 keys/values 来自 encoder：
+
+\[
+Q=X_{\text{dec}}W_Q,\qquad
+K=H_{\text{enc}}W_K,\qquad
+V=H_{\text{enc}}W_V.
+\]
+
+因此目标 token 既能通过 causal self-attention 看已生成前缀，也能通过 cross-attention 读取完整源输入。机器翻译、摘要和 text-to-text tasks 都可使用这种显式条件通道。
+
+\lecturefigure{slide-45-cross-attention.jpg}{Cross-attention：decoder queries 从 encoder keys/values 读取源信息。}{Stanford Online 官方视频 00:43:53--00:44:47。}
+
+\begin{knowledgebox}{读图：箭头方向对应信息来源}
+Decoder self-attention 的 Q/K/V 都来自 decoder states；cross-attention 的 query 仍来自当前 decoder node，但 key/value 来自 encoder 顶层。两者共享 dot product、softmax 与 value aggregation。所谓“cross”不是另一种神秘算法，而是跨两组 states 进行同一寻址操作。
+\end{knowledgebox}
+
+\subsection{GPT、BERT 与 T5 的结构化对照}
+
+模型名很多时，应把它们还原成 connectivity 与 objective。下表只描述经典原型，现实模型可能加入 span corruption、prefix LM、mixture-of-experts 或 multimodal adapters；判断新模型时仍可沿相同三问分析。
+
+\lecturefigure{slide-46-transformer-model-families.jpg}{三大家族：decoder-only GPT、encoder-only BERT、encoder--decoder T5。}{Stanford Online 官方视频 00:44:47--00:45:31。}
 
 \begin{table}[H]
 \centering
-\begin{tabular}{p{3cm}p{5cm}p{5cm}}
+\small
+\begin{tabularx}{\textwidth}{L{2.8cm}L{3.5cm}L{3.2cm}X}
 \toprule
-模型 & 训练目标 & Karpathy 的观察 \\
+家族 & Connectivity & 典型目标 & 适合的问题 \\
 \midrule
-BERT & Masked LM，聚焦双向理解 & 提供对 token 关系的深度表示，但不适合自回归生成 \\
-GPT & 自回归，因果 attention & stack size 可延展，适合 prompt / playback 交互 \\
-T5 / BART & Encoder-Decoder，seq2seq & 兼顾翻译与摘要，强调结构化输入 \\
+Decoder-only / GPT & 左到右的因果自注意力 & 预测下一个 token & 开放式生成、按 prompt 补全 \\
+Encoder-only / BERT & 双向自注意力 & 掩码恢复、去噪或监督任务 & 表征提取、分类、检索、序列标注 \\
+Encoder--decoder / T5 & 编码器全连接；解码器因果；跨注意力 & 条件序列生成 & 翻译、摘要、结构化转换 \\
 \bottomrule
-\end{tabular}
-\caption{Karpathy 讲座中提到的 Transformer 变体与定位。}
+\end{tabularx}
+\caption{术语消化：模型家族由可见信息与训练目标共同定义。}
 \end{table}
 
-\begin{knowledgebox}{Karpathy 的稳定性观察}
-他指出 ``Transformer architecture hasn't changed in 5 years''，说明 attention + residual 的基本组合已经足够强大，其扩展更多是周边细节（Position encoding、layer norm 的对称性）。
-\end{knowledgebox}
-
-\subsection{Karpathy 对稳定性的解读}
-尽管各个变体在 component 上有差异，但 Karpathy 认为整个系统仍旧围绕 ``self-attention + residual + MLP'' 展开，其他 90% 的改进都是对这个核心的微调（更好的 optimizer、long-range bias、prompt engineering）。
-
-\begin{importantbox}{稳定性与创新的平衡}
-模型架构的稳定性给了我们 ``史诗级可复现'' 的基础，具体任务的改进则通过数据、prompt、RLHF 实现，而不是不断堆叠新结构。
-\end{importantbox}
+\teachervoice{Q\&A 中 Karpathy 说自己不太喜欢每次采样一个 token 就永久提交的自回归过程，更偏爱类似 diffusion 的“先草稿、再修订”。这是 2023 年的个人研究直觉，不是本讲证明的 Transformer 必然演化方向。}
 
 \subsection{本章小结}
-Karpathy 对 Transformer 演化的观点强调核心结构的稳定性与周边优化的可插拔性，这种视角帮助我们明白“为什么重复使用同一个架构还会成功”。
 
-\section{讲座时间线与主题剖析}
+Decoder-only 用 causal self-attention 做 next-token generation；encoder-only 允许双向通信并采用不泄漏标签的表示学习目标；encoder--decoder 让 causal decoder 通过 cross-attention 查询源 memory。三者共享 attention 数学，只在 connectivity、state source 与 objective 上重新配置。
 
-\subsection{拆解主要章节}
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{4cm}p{6.5cm}}
-\toprule
-时间段 & 主题 & 亮点 \\
-\midrule
-00:00--00:06 & 课程定位 & Karpathy 强调 Transformer 不是机器人，更像是通用计算器 \\
-00:06--00:18 & 架构解构 & 自注意力、LayerNorm、残差路径与 scaling 之间的关系 \\
-00:31--00:47 & minGPT 实践 & 复制 GPT-2、论述开源模型对教育的价值 \\
-00:53--01:02 & Whisper / Decision Transformer & Multi-modal + RL 的延伸 \\
-01:02--01:07 & 未来趋势 & prompt 作为新编程界面，以及对 AI 助手的展望 \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 11 的时间线与主轴。}
-\end{table}
+\section{跨模态迁移：先把世界表示成可通信的元素}
 
-\begin{importantbox}{时间线的学习价值}
-按时间段拆解讲座有助于在复盘时快速定位核心内容，并决定哪些部分需要复看或加入笔记。
-\end{importantbox}
+模型家族回答“token 之间能怎样连接”，跨模态应用进一步回答“什么算 token”。Karpathy 用一句故意夸张的话概括迁移 recipe：把图像、语音、轨迹或分子结构切成元素，假装它们是文本，再让 Transformer 建模关系。真正的工程难点恰好藏在“切成元素”这一步。
 
-\subsection{Q\&A 与反思}
-Karpathy 在现场回答问题时说过：``RNNs are serial, Transformers are shallow wide graphs''，并坦言 ``most progress comes from scaling compute/data, not architecture tweaks''。这种语境帮助我们在未来读文献时分辨 hype 与实干。
+\subsection{Vision Transformer：patch 是视觉 token}
 
-\begin{knowledgebox}{现场问答启发}
-\begin{itemize}
-    \item ``RNN 能实现任意程序，但效率很低'' —— 说明研究应该把精力放在并行路径
-    \item ``Prompt is like designing a thick sequence'' —— 我们可以把 prompt 迭代看作人类编程 AI
-\end{itemize}
+上一章已经说明 encoder 能让一组 token 双向通信；视觉迁移的第一步，就是定义怎样把二维像素变成这组 token。ViT 选择最直接的接口：把图像划分为固定 patch，每个 patch 展平并线性投影为向量，再加入位置表示送入 encoder。若图像大小为 $H\times W$、patch 边长为 $P$，token 数约为 $N=HW/P^2$。更小 patch 提供更细粒度，但使 attention 的 $N^2$ 计算与显存迅速增长，因此 tokenization 同时决定视觉分辨率和系统成本。
+
+\lecturefigure{slide-47-vision-transformer.jpg}{Vision Transformer：把图像切成 patch sequence，再用 encoder 全局通信。}{Stanford Online 官方视频 00:52:41--00:53:42。}
+
+\begin{knowledgebox}{读图：ViT 没有让二维结构消失}
+Patch ordering 与 positional embedding 仍编码空间位置，训练增强与数据规模也提供视觉 bias。纯 Transformer 需要重新学习局部性与平移规律，因此常比 ConvNet 更依赖数据或预训练；但全局 attention 让远距离 patch 在浅层即可直接通信，并提供统一接口。
 \end{knowledgebox}
 
-\subsection{本章小结}
-把讲座按时间段拆解，结合问答摘录，可以更系统地复现 Karpathy 的思维路径与重点句。
+\subsection{Speech：spectrogram 序列与局部卷积 bias}
 
-\section{实践问题清单}
+语音可以先变成 time--frequency spectrogram，再沿时间切成帧或块。Conformer 不是“只把语谱图扔给 vanilla Transformer”，而是在 attention 之外加入 convolution module，以同时建模全局依赖与局部声学模式；Whisper 也使用专门前端、encoder--decoder 与大规模弱监督目标。
 
-\subsection{常见问题与应对}
-在实践中，我们常问：数据集是否 clean？Compute cost 如何控制？Prompt 是否符合任务？下面整理一个清单：
-\begin{enumerate}
-    \item 数据重叠率高？$\Rightarrow$ 引入 dedup 脚本 + 语义相似度过滤
-    \item Token 预算超支？$\Rightarrow$ 降低 seq\_len 或 batch，并开启 gradient checkpoint
-    \item Loss 曲线振荡？$\Rightarrow$ 检查 warmup，尝试更小 learning rate 或 gradient clipping
-    \item Attention 预热异常？$\Rightarrow$ 可视化 attention map 看是否稀疏
-    \item RLHF 不稳定？$\Rightarrow$ 先锁定 reward model，逐步放开 PPO
-    \item Prompt 表现不好？$\Rightarrow$ 加 few-shot 或 chain-of-thought 示例
-\end{enumerate}
+\lecturefigure{slide-48-conformer.jpg}{Conformer：attention 的全局建模与 convolution 的局部声学 bias 结合。}{Stanford Online 官方视频 00:53:42--00:54:00。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4.5cm}p{4.5cm}p{3cm}}
-\toprule
-问题 & 应对策略 & 工具提示 \\
-\midrule
-高 loss 波动 & 增加 grad\_clip + warmup & TensorBoard / WandB 可视化 \\
-Prompt 无响应 & 加 role + examples & 使用 prompt caching 表示 \\
-Compute 受限 & Mixed precision + gradient checkpoint & Apex / torch.compile \\
-\bottomrule
-\end{tabular}
-\caption{实践问题与常用工具。}
-\end{table}
-
-\subsection{工具与自动化}
-Karpathy 还建议把训练过程与 prompt 迭代写入文档，配合 scripts 自动化（如 `python train.py --config`）。工程师应在每次 run 后记录 `config`, `seed`, `throughput`，确保后续复现。
-
-\begin{knowledgebox}{可复现实践要素}
-把 config、seed、optimizer state 与 prompt design 放在 version control，配合 summary table，能显著提升跨团队协作时的信任度。
+\begin{knowledgebox}{读图：跨领域复用不是逐层完全相同}
+Mel 语谱图是语音在时间与频率上的能量表示；局部卷积擅长捕捉邻近帧模式，自注意力擅长远距离关系。Conformer 的贡献正是把二者组合。课堂所说“把它当成文本”应理解为共享序列接口，而不是抹掉声学结构与专门目标函数。
 \end{knowledgebox}
 
-\subsection{本章小结}
-有了实践清单与自动化工具，我们就能把 `Karpathy 讲 high-level idea` 变成 `工程师可执行的 pipeline`。
+\subsection{Decision Transformer：把控制轨迹写成序列}
 
-\section{Prompt 协同与人类交互}
+Decision Transformer 把 return-to-go、state 与 action 交错排列，让 causal model 在期望回报和历史条件下预测 action。它把 offline RL 重写为 conditional sequence modeling：训练数据来自已有轨迹，不在线与环境交互；规划能力依赖数据覆盖、return conditioning 与模型能否从序列统计中提取行为策略。
 
-\subsection{Chain-of-thought 与 prompt 结构}
-Karpathy 强调 prompt 并不是被动输入，而是 \textit{`thick sequence`} 的主动编排：在 prompt 前端注入角色设定、few-shot 示例、chain-of-thought 乃至调度约束，Transformer 会把整个 prompt 视为同一张计算图的一部分，从而直接在生成时遵循规则。
+\lecturefigure{slide-49-decision-transformer.jpg}{Decision Transformer：return、state、action 组成可自回归建模的轨迹序列。}{Stanford Online 官方视频 00:54:00--00:54:13。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{6cm}p{3cm}}
-\toprule
-Prompt 组成 & 作用 & 变体尝试 \\
-\midrule
-角色/格式说明 & 预定义模型输出的语气、结构 & ``Assistant is a translator'' \\
-Few-shot 示例 & 提供输入-输出 pair, 引导 attention pattern & Chain-of-thought 示例 \\
-Constraint Tokens & 强调必须遵守的 guardrails & ``Do not provide medical advice'' \\
-Post-amble & 指定总结、引用等输出形式 & ``Summarize in bullet points'' \\
-\bottomrule
-\end{tabular}
-\caption{Karpathy 讲解中 prompt 的结构化模板。}
-\end{table}
-
-\begin{knowledgebox}{Prompt 作为程序规格}
-把 prompt 想象成一个嵌入式 DSL：前端的说明 + 示例是编译器传入的 spec，Transformer 在内部图上执行，并将 spec 视为 ``next token'' 的约束。优秀的 prompt 能把 task 的复杂度转化为 token 之间的关系，而非修改模型参数。
+\begin{knowledgebox}{读图：它不是把奖励当普通单词}
+不同元素有不同语义与 embedding，时间步和 modality/type 信息必须被编码。模型学习 $p(a_t\mid R_t,s_{\le t},a_{<t})$ 一类条件分布，而不是直接求解 Bellman equation。序列建模提供统一训练接口，但不消除 offline data bias 与 extrapolation 风险。
 \end{knowledgebox}
 
-\subsection{Prompt 流程治理与 review}
-在团队实践中，应让 prompt 的迭代记录在 `prompt log` 中，类似代码评审：每次改动都要说明目的、预期效果与可能风险（如 hallucination）。Karpathy 提到 ``most progress comes from scaling compute/data, not architecture tweaks''，但在 prompt 层面仍需严谨的 review 机制，尤其当 prompt 被多个 downstream agents 调用时。
+\subsection{AlphaFold2：attention 进入专门的生物结构系统}
 
-\begin{warningbox}{Prompt 迭代的常见陷阱}
-\begin{itemize}
-    \item 过度依赖 ``magic token''，忽视 token 长度带来的 compute 成本
-    \item 没有复现环境（seed/config）就修改 prompt，导致不同 run 行为漂移
-    \item 把 prompt 结构当作 black-box，不记录版本，很难 troubleshoot
-\end{itemize}
+AlphaFold2 的 Evoformer 在 multiple-sequence alignment 与 residue-pair representation 之间执行多种 attention 和 specialized updates，之后结构模块输出三维构象。它说明 attention 可处理“哪些残基与哪些残基相关”，却不能被缩写为 GPT 对氨基酸做普通 next-token prediction。
+
+\lecturefigure{slide-50-alphafold.jpg}{AlphaFold2：attention 位于高度领域化的蛋白质结构推断系统中。}{Stanford Online 官方视频 00:54:13--00:54:23。}
+
+\begin{warningbox}{读图时容易犯的错误：把 backbone 相似写成系统等价}
+ViT、Conformer、Decision Transformer 与 AlphaFold2 都使用 attention，但输入单位、position geometry、目标函数、模块组合和输出语义不同。课程想证明的是“可寻址通信原语具有普适性”，不是“所有问题都已经被语言建模统一”。
 \end{warningbox}
 
-\subsection{本章小结}
-Prompt 不只是输入，它是 human-in-the-loop 的 orchestrator；结构化 prompt 与治理流程让 Transformer 输出更可靠，也让 engineer 可以审计每次交互。
+\subsection{异构条件输入：Transformer 为什么容易“加一种传感器”}
 
-\section{评估与治理实务}
+卷积网络的 feature map 与二维几何紧密绑定，添加 radar、map、vehicle state 或 audio 时必须决定在哪一层 concatenate 或 fuse。Transformer 可以把每种输入编码成统一 width 的元素，加入 type embedding 区分来源，再放进允许通信的集合；attention 学习数据依赖的融合权重。
 
-\subsection{评估矩阵与 failure signature}
-扩展模型容错能力的第一步是构建清晰的评估矩阵：Karpathy 演讲中的 ``worry about compute and data'' 同样适用于 evaluation，多个维度（准确性、鲁棒性、 hallucination rate）要同时跟踪。
+\lecturefigure{slide-51-tesla-input-flexibility.jpg}{Tesla 经验例：异构信息先编码成元素，再交给 self-attention 融合。}{Stanford Online 官方视频 00:54:23--00:55:39。}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{6cm}p{3cm}}
-\toprule
-维度 & 监控指标 & 工具 \\
-\midrule
-准确性 & Prompt 输出命中率、BLEU/METEOR & eval harness + 自定义 dataset \\
-鲁棒性 & 长 prompt / adversarial token 处理能力 & adversarial suites \\
-Hallucination & 不可验证事实比例 & human annotation / cross-check API \\
-风控 & 敏感内容触发率 & 强化指令 + filter \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 11 中 Karpathy 所强调的多个 evaluation axis。}
-\end{table}
-
-\begin{importantbox}{多维评估的价值}
-一个维度的提升可能掩盖另一个维度的退化。持续对照多个指标，可以在 prompt 或数据改动后立刻察觉 unintended drift，而不是等到线上问题爆发。
-\end{importantbox}
-
-\subsection{对齐治理的实战}
-治理过程中要制定 ``prompt change impact'' 报告，记录改动、实验 log 与人工评估结论。这份文档相当于 Karpathy 所说的 ``build big first, then polish with data'' 在控制层面的延伸：先搭建模型，再用具体指标调整 behavior。
-
-\begin{knowledgebox}{对齐治理三部曲}
+\begin{knowledgebox}{术语消化：输入自由度来自哪里}
 \begin{itemize}
-    \item 记录 baseline prompt 与 human feedback 分数
-    \item 施加策略 token/chain-of-thought，然后重新评估
-    \item 将最稳定的版本锁定，进行 A/B 评估，对照各个维度
+  \item \term{type embedding}：告诉模型元素来自 image、radar、map 或 vehicle state；
+  \item \term{positional encoding}：注入时间、二维坐标或其他几何关系；
+  \item \term{mask/connectivity}：限制哪些元素可以直接通信；
+  \item \term{tokenizer/adapter}：把不同原始维度投影到共享 residual width；
+  \item \term{inductive bias}：并未消失，而是从 core block 外移到接口、位置与连接规则。
 \end{itemize}
 \end{knowledgebox}
 
+\teachervoice{Karpathy 的口语总结是“把所有东西切碎，扔进 mix，让 self-attention 决定怎样交流”。这句话抓住工程便利，也容易被误读。真正可复现的版本必须回答：怎么切、怎样标注来源、哪些边允许、用什么目标监督，以及 token 数量是否承受得住。}
+
 \subsection{本章小结}
-通过多维评估与治理文档，我们能在 scaling 的背景下保持模型行为可预测并减少人工干预频率。
 
-\section{部署与可观察性}
+跨模态迁移的共同模式是把领域对象表示成带类型和位置的元素，再用 attention 路由信息。ViT 仍需要空间位置，Conformer 保留局部卷积，Decision Transformer 依赖轨迹条件，AlphaFold2 使用专门 pair/MSA 表示，异构传感器也要 type embedding 与 connectivity。共享骨架减少融合摩擦，却不替代领域建模。
 
-\subsection{部署准备 checklist}
-Karpathy 强调 ``worry about compute'' 不只是训练，还包括 deployment：在上线前务必确认 prompt、token 预算、配套 compute budget（如 max tokens per request）都明确。下面的 checklist 体现了他的 ``具体工程'' 逻辑：
+\section{Transformer 为什么有效：表达、优化、硬件与上下文学习}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4.5cm}p{4.5cm}p{2cm}}
-\toprule
-项目 & 要点 & 状态 \\
-\midrule
-Prompt stability & 不同输入变体下输出一致性 & ✅ \\
-Token budget & 计算单次请求 FLOPs，与 GPU budget 对齐 & ✅ \\
-Monitoring hooks & loss/latency/throughput 全链路钩子 & ⚠️ \\
-Fallback plan & 超时/异常时降级到 API 或缓存 & ⚠️ \\
-\bottomrule
-\end{tabular}
-\caption{部署前必须完成的核查项。}
-\end{table}
+前面已经说明 Transformer “能做什么”。本章回答更难的问题：为什么这套 package 在规模化后不断获得新能力。Karpathy 的答案不是 attention 单因素，而是三种性质同时成立：forward pass 足够 expressive，residual/normalization 让梯度优化可行，shallow-wide graph 又能高效使用 GPU；大规模 next-token training 最终产生 in-context adaptation。
 
-\begin{warningbox}{部署阶段的低级错误}
-忽略警告的 monitoring hook 是常见失误：Karpathy 在讲座中也提到 ``scale first'' 意味着在 failure 发生前就知晓，并在 prompt/compute 的层面提前设置 guardrail。
+\lecturefigure{slide-52-what-makes-transformer-effective.jpg}{核心追问：到底什么使 Transformer 如此有效？}{Stanford Online 官方视频 00:55:39--00:55:48。}
+
+这张过渡页应带着四个尺度阅读：单层尺度上，attention 路由信息；深度尺度上，residual blocks 累积计算；训练尺度上，数据、参数与 compute 共同扩展；推理尺度上，prompt 改变 activations，使同一组 weights 表现出不同任务行为。任何只在一个尺度解释成功的理论都不完整。
+
+\subsection{GPT-3：few-shot prompt 暴露 in-context learning}
+
+GPT-3 论文将任务说明和若干 input--output examples 放进 prompt，不更新参数也能提高新样例准确率。\term{few-shot learning} 在这里指 context 内给少量示例；\term{zero-shot} 指只给任务描述；\term{fine-tuning} 则真正用 gradient descent 更新 weights。三者不能混用。
+
+\lecturefigure{slide-53-gpt3.jpg}{GPT-3：规模化自回归语言模型与 few-shot evaluation。}{Stanford Online 官方视频 00:55:43--00:56:31。}
+
+\begin{knowledgebox}{读图：论文标题低估了机制问题}
+“Language Models are Few-Shot Learners”报告的是行为现象：更多 context examples 往往提高任务表现。Karpathy 更愿称之为 in-context learning 或 meta-learning，因为模型似乎在一次 forward pass 的 activations 中适配任务。现象不等于机制；具体任务还会受示例顺序、格式、label words 与数据污染影响。
+\end{knowledgebox}
+
+\lecturefigure{slide-54-chatgpt.jpg}{ChatGPT 作为 2023 年初的公共交互案例。}{Stanford Online 官方视频 00:55:43--00:56:31。}
+
+课程把 ChatGPT 放在 GPT-3 之后，是为了说明 prompt-conditioned behavior 已进入大众产品，而不是展开其训练细节。Karpathy 在 Q\&A 明确说自己不知道 ChatGPT internals。讲义因此只保留可观察层：用户通过自然语言 context 指定任务，模型在固定权重下产生条件化输出；不臆测未公开参数或系统实现。
+
+\subsection{Scaling laws：性能改善是经验规律，不是无限承诺}
+
+Scaling-law 研究用经验函数描述 loss 随参数 $N$、数据量 $D$ 或 compute $C$ 的变化，例如示意性写成
+
+\[
+L(N)\approx L_\infty+aN^{-\alpha},\qquad
+L(D)\approx L_\infty+bD^{-\beta}.
+\]
+
+其中，$L_\infty$ 是不可约损失近似，$a,b,\alpha,\beta$ 由特定模型族与数据拟合。幂律支持“可预测地扩展”这一工程策略，却不保证所有能力单调、所有数据同质或成本永远合理。
+
+\lecturefigure{slide-55-scaling-laws.jpg}{Scaling laws：模型、数据与计算扩展带来可测的 loss 趋势。}{Stanford Online 官方视频 00:56:31--00:57:14。}
+
+\begin{warningbox}{读图：曲线外推有适用域}
+先看横轴是 parameters、tokens 还是 compute，再看纵轴是训练/验证 loss 还是具体 downstream metric；不同曲线不能直接互换。幂律来自观察区间内的拟合，architecture、data quality、optimizer、tokenizer 与 evaluation 改变后，系数和转折点都可能变化。
 \end{warningbox}
 
-\subsection{可观察性与 drift detection}
-部署后继续监控 attention scales、token distribution、response length 等指标，Karpathy 指出 ``Transformer 是 shallow wide graph''，因此任意一层的 scale drift 可能立刻放大。可以结合 `WandB`、`TensorBoard` 等工具，把 attention map、loss log 与 prompt 版本关联，快速查明 root cause。
+\subsection{Outer loop 与 inner loop：参数学习和上下文适配}
 
-\begin{knowledgebox}{可观察性搭建要点}
+训练阶段的 outer loop 用 SGD 更新参数：
+
+\[
+\theta_{k+1}=\theta_k-\eta\nabla_\theta \mathcal L(\theta_k;\mathcal B_k).
+\]
+
+推理时参数 $\theta$ 固定，prompt examples 改变每层 activations $H^{(\ell)}$，形成行为上的 inner-loop adaptation。称其为“在 activations 中学习”是有用描述；称其执行字面 gradient descent 则需要额外机制证据。
+
+\lecturefigure{slide-56-in-context-learning.jpg}{In-context learning：示例数量增加时，无参数更新的任务表现改善。}{Stanford Online 官方视频 00:56:31--00:57:23。}
+
+\begin{knowledgebox}{读图：区分三种变化}
+Outer loop 改 weights，持续影响以后所有输入；in-context adaptation 改当前 forward 的 hidden states，只在 context 生命周期内生效；retrieval 或 tool use 还会改变外部输入。三者都能改善回答，却对应不同因果路径。把 prompt 效果都叫“fine-tuning”会掩盖系统行为。
+\end{knowledgebox}
+
+\subsection{Chain of thought：更多中间 token 也是更多计算步骤}
+
+Chain-of-thought prompting 让模型在最终答案前生成中间推理文本。对自回归 Transformer，每个新 token 都触发一次新的 forward step，并把先前生成内容加入 context；因此中间 token 不只是解释，也提供额外 sequential compute 与可读 scratch space。但可读步骤仍可能包含错误，不能自动作为忠实内部因果链。
+
+\lecturefigure{slide-57-chain-of-thought.jpg}{Chain-of-thought：用示例诱导中间推理步骤，提高部分任务表现。}{Stanford Online 官方视频 00:57:23--00:58:16。}
+
+\begin{warningbox}{读图：正确答案与忠实解释是两项指标}
+CoT 可能提高 arithmetic、symbolic 或 compositional tasks 的准确率，也可能产生事后合理化。评估时至少分开看 final answer、step validity、robustness to prompt perturbation 与 hidden reasoning fidelity。课堂用它支持“context 可配置计算”，并没有证明自然语言步骤等于模型内部真实算法。
+\end{warningbox}
+
+\subsection{三种性质必须同时成立}
+
+Karpathy 最终把成功归纳为 expressive、optimizable、efficient。表达力让 attention/MLP 组合实现复杂 sequence function；可优化性来自 residual stream、normalization、较短梯度路径和成熟初始化；效率来自训练时在 token 维并行的大矩阵乘法。缺任一项，都可能得到理论强但训不动、能训但太慢，或高效却表达不足的模型。
+
+\lecturefigure{slide-58-karpathy-tweets-transformer-history.jpg}{Karpathy 的高层总结：Transformer 同时优化表达力、可优化性与效率。}{Stanford Online 官方视频 00:58:16--00:58:45。}
+
+\begin{knowledgebox}{术语消化：三项性质分别回答什么}
 \begin{itemize}
-    \item attention map heatmap：寻找 head 过度聚焦的位置
-    \item LayerNorm scale：低频 drift 可能意味着 optimizer 失衡
-    \item Response length / token distribution：提示 prompt 尾端的 ``constraint tokens'' 是否生效
+  \item \term{expressive}：forward graph 能否表示复杂、数据依赖的计算；
+  \item \term{optimizable}：gradient descent 能否稳定找到有用参数；
+  \item \term{hardware-efficient}：主要算子能否转化为 GPU 擅长的大规模并行矩阵运算；
+  \item \term{scalable}：前面三项在增大参数、数据与设备时是否仍保持可预测收益。
 \end{itemize}
 \end{knowledgebox}
 
-\subsection{本章小结}
-部署阶段依然是 scaling 的关键节点：有了 checklist 和可观察性指标，我们才能对 prompt / compute drift 做到快速反应，保持 Transformer 作为 ``general purpose text computer'' 的可控性。
+\lecturefigure{slide-59-natural-language-model-history.jpg}{自然语言模型历史的重新解读：架构、规模与任务接口逐步汇合。}{Stanford Online 官方视频 00:58:45--00:59:17。}
 
-\section{复现与研究方向}
+这组高层推文是讲者面向大众的压缩叙事，不能替代论文细节。它的价值是把历史从“模型名字年表”改写为“计算图怎样变化”：固定窗口变成 recurrent state，单一 state 变成可寻址 memory，串行 recurrence 变成并行 attention，单任务 predictor 又在大规模 context 中表现出 runtime task adaptation。
 
-\subsection{数据与模型构建 pipeline}
-Karpathy 在讲座中多次提及 ``build big first, then polish with data''，因此复现 minGPT/nanoGPT 的第一步就是把训练数据与模型架构写成 checklist：先准备 OpenWebText/crawl 数据，再定义 tokenization、batch size、head 数等模型配置，最后搭建 logging + sample 生成。
+\subsection{Shallow-wide 与 long-thin：硬件效率也是模型能力来源}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{6cm}p{3cm}}
-\toprule
-阶段 & 关键操作 & 复现提示 \\
-\midrule
-数据 & Clean + dedup + tokenizer & 先确认 dataset 的 dedup rate，再保存 parser config \\
-模型 & 定义 layers/head/embedding & minGPT 提供默认 config，可直接 adapt \\
-训练 & Warmup + lr decay + grad clip & 关注 attention scale 与 loss curve \\
-\bottomrule
-\end{tabular}
-\caption{复现 minGPT/nanoGPT 时的 pipeline 分段。}
-\end{table}
+RNN 在时间上形成 long-thin graph，必须依次处理 token；Transformer 训练时形成 shallow-wide graph，同一层所有位置可并行，监督到输入的层级 hop 较少。Attention 的 $T^2$ 代价仍昂贵，但 dense matrix multiplication 极适合 GPU。更高设备利用率允许训练更大模型，而深度学习中规模本身会改变可达性能。
 
-\begin{knowledgebox}{Pipeline 复现要诀}
-把 config 与 training log 视为实验的 ``代码''：每次改动都用 git commit 保存、上传 artifact，并附上 sample 生成，以便后续团队可以无缝接手。
-\end{knowledgebox}
+\lecturefigure{slide-60-general-purpose-computer.jpg}{GPT 作为 runtime-reconfigurable computer：prompt 是自然语言程序，completion 是执行轨迹。}{Stanford Online 官方视频 00:59:17--01:01:11。}
 
-\subsection{推理效率与对齐探索}
-随着模型规模扩大，推理阶段的 token 预算与 prompt stability 变成 bottleneck。Karpathy 不断重申 ``worry about compute''，所以在部署前应预测每次调用的 FLOPs 并与 GPU budget 对齐。此外，可以把 prompt + context 的 token 双向记录，推测是否需要 slot-filling 或 streaming 机制来保持 prompt 结构。
-
-\begin{importantbox}{高效推理的实践思路}
-\begin{itemize}
-    \item 使用 sliding window 来支持超长 context 且不扩展 prompt size
-    \item 在 prompt 前端插入 summary token，压缩 context 而不丢语义
-    \item 通过 attention map 可视化确认新的 context token 是否被有效利用
-\end{itemize}
+\begin{importantbox}{“通用计算机”是类比，不是无限能力证明}
+固定 weights 的 GPT 可以因 prompt 而执行翻译、分类、抽取、格式转换或多步生成，类似同一硬件加载不同程序。但有限 context、有限 precision、训练分布、随机采样与错误累积都限制可靠性。类比强调 runtime reconfiguration，不保证任意程序可正确执行，也不保证输出满足形式规范。
 \end{importantbox}
 
-\subsection{本章小结}
-把复现 pipeline 与推理优化当成两个并行的工程线程，可以确保 Karpathy 的 scaling 思路在研究团体内部既能复现也能快速交付。
-
-\section{团队协同与知识管理}
-
-\subsection{角色与流程分工}
-Karpathy 讲述 scaling 时常常提到 ``every GPU hour matters''，这催生了清晰的分工：数据/compute 侧、模型/对齐侧、prompt/产品侧都要有明确负责人。一个典型团队包括 Data Engineer（负责 dedup 与 tokenizer）、Model Engineer（负责 attention map + training log）以及 Prompt Engineer（掌管 prompt 结构与 evaluation）。
-
-\begin{table}[H]
-\centering
-\begin{tabular}{p{3.5cm}p{6cm}p{3cm}}
-\toprule
-角色 & 核心任务 & 输出 artifact \\
-\midrule
-Data Engineer & 清洗/规范化语料，规划 token budget & Dedup log + tokenizer config \\
-Model Engineer & 训练监控、LayerNorm/attention 可视化 & loss curve + attention heatmap \\
-Prompt Engineer & 组织 prompt structure、设计 guardrails & prompt log + rulebook \\
-\bottomrule
-\end{tabular}
-\caption{Scaling 团队的分工与输出。}
-\end{table}
-
-\begin{importantbox}{协同沟通的节奏}
-每周轮流 review 命令行对应的 prompt log、monitoring curve 与 sample outputs；把 Karpathy 口中的 ``build big first'' 当成 sprint 目标再配合 prompt/gov review，能避免各自孤岛。
-\end{importantbox}
-
-\subsection{知识捕捉与分享}
-Karpathy 的讲座本身就是一次大型知识捕捉：他通过 slide、debug log 与 sample 生成，把 scaling 的经验分享给学生。我们在复现时也需要把每一个实验的 lesson（如 prompt 约束、 RLHF 弱点）写成小结，并贴进 repo 中供未来团队查阅。
-
-\begin{knowledgebox}{知识管理实践}
-\begin{itemize}
-    \item 用 `notes/` 目录存储每次 prompt/tuning 的 summary，配合 `git describe` 追踪
-    \item 定期把重要 quotes（如 ``worry about compute and data''）写入学习卡片，交给团队新人 review
-    \item 用 `slides-images/` 归档截图，并在 LaTeX 里引用复刻讲座视觉风格
-\end{itemize}
-\end{knowledgebox}
+\teachervoice{Q\&A 中 Karpathy 进一步比较：RNN 即使原则上能实现任意程序，也可能因 long-thin serial graph 而难优化、难并行；Transformer 的 shallow-wide graph、residual pathways 与 LayerNorm 让监督更快流向输入。第三项“硬件效率”常被低估，却决定实际能训练多大。}
 
 \subsection{本章小结}
-团队协作和知识管理让 scaling 经验跨人传承：分工明确、 artifacts 可追溯、lesson 有地方沉淀，才能把 Karpathy 的实践理念变成可持续的项目文化。
+
+Transformer 的成功来自 package-level synergy：attention/MLP 提供表达力，residual/normalization 提供可优化性，宽并行矩阵运算提供硬件效率，规模化 next-token training 又产生可由 prompt 配置的 in-context behavior。Scaling、few-shot 与 CoT 是行为证据；“inner optimizer”和“通用计算机”仍是需要边界的解释模型。
+
+\section{Q\&A：有限上下文、外部记忆与下一步}
+
+主体讲座在 1:00 左右结束，后续问题集中在三个边界：多模态 token 怎样区分来源，有限 context 怎样扩展，以及 Karpathy 接下来研究什么。因为部分观众提问不可辨认，本节只保留能够从回答中可靠恢复的教学点，不猜测缺失问题。
+
+\subsection{Context 不一定只靠无限加长}
+
+Karpathy 提出一种当时的 speculative idea：保持 context length 有限，让模型学会输出特殊 scratchpad 指令，把要记住的内容写入外部 notebook，之后再查询。它把“脑内短期状态”与“外部可读写 memory”分开，预示 tool use 和 memory-augmented agent 的接口思路，但课堂没有给出实现或实验。
+
+\teachervoice{他的类比是：人不会把所有事实都放在脑中，而会使用记事本。模型也可以学会发出 start/end scratchpad 标记，由外部系统保存、索引和重新注入内容。重要的是协议必须可监督、可寻址、可验证；仅仅给模型一个更长 prompt 不等于拥有可靠长期记忆。}
+
+\subsection{Epistemic honesty：不知道就明确说不知道}
+
+被问到 ChatGPT internals 时，Karpathy 直接说自己不知道；被问到 S4 时也没有假装熟悉。他最后回到正在做的 nanoGPT：把 minGPT 重写成更小、更现代、更容易复现 GPT 的代码，并对语言产品的持续迭代感兴趣。这种回答为讲义设定了同样标准：公开证据之外不补全系统细节。
+
+\lecturefigure{slide-61-thank-you.jpg}{结束页：理解架构之后，“go forth and transform”。}{Stanford Online 官方视频 01:00:31--01:00:45。}
+
+结束页几乎没有技术内容，却完成了课程动作：从一堂导论转向后续领域讲座。经过前文，``transform'' 不再只是换一个 backbone，而是完成四步设计：定义元素、注入位置/类型、规定 connectivity、选择 objective；然后验证 attention 路由、MLP 计算、优化稳定性与硬件成本是否共同成立。
+
+\subsection{本章小结}
+
+Q\&A 把架构边界转化为系统接口：多模态需要 type/position information，有限 context 可以结合外部 memory 与工具协议，未知内部实现必须保持未知。nanoGPT 则提供了继续学习的最短可执行路径：先复现小模型，再用实验检验关于 attention、mask、context 与 scaling 的直觉。
 
 \section{总结与延伸}
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{4cm}p{9cm}}
-\toprule
-维度 & 核心要点 \\
-\midrule
-架构解构 & Transformer 是图上的消息传递，相邻 token 通过 self-attention 形成动态连接；LayerNorm 保持信号稳定。 \\
-训练哲学 & 先 build big（compute + data），再 tune prompt；RNN 的串行拓扑难以竞争。 \\
-应用扩展 & minGPT/nanoGPT 示范微型模型可做解释，Whisper/Decision Transformer 则展示跨模态 prompt 续航。 \\
-\bottomrule
-\end{tabular}
-\caption{Lecture 11 的三条主线复盘。}
-\end{table}
+本讲的主线可以压缩成九个连续结论：
+
+\begin{enumerate}
+  \item 早期 AI 领域由手工特征、专用术语和不同 topology 分割；
+  \item 规模化深度学习先统一了端到端优化语言；
+  \item seq2seq 的固定 context bottleneck 推动可微 alignment；
+  \item Transformer 将 attention 提升为主要通信阶段，并与位置、残差、归一化、MLP、heads 和 masks 组成完整 package；
+  \item Q/K/V 可以理解为寻址需求、可匹配标签与传输内容；
+  \item nanoGPT 展示 token stream、shifted targets、causal mask、cross-entropy 与 autoregressive generation 的完整闭环；
+  \item GPT、BERT 与 T5 主要由 connectivity、state source 和 objective 区分；
+  \item 跨模态复用依赖 tokenization、type/position embedding 与领域 bias，而不是简单把所有问题变成文字；
+  \item 表达力、可优化性、GPU 效率与规模共同产生 in-context behavior，使 prompt 能在运行时重新配置模型。
+\end{enumerate}
+
+\begin{warningbox}{最后的证据边界}
+课堂证明了怎样实现一个最小 Transformer，也展示了多个领域的一手例子；它没有证明 attention 是唯一最优架构，没有证明 scaling 可无限持续，没有证明 in-context learning 等于梯度下降，也没有证明语言模型是可靠的任意程序执行器。高质量学习应把“可运行机制”“经验现象”“讲者判断”和“未来猜想”分别标记。
+\end{warningbox}
 
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Vaswani et al., ``Attention Is All You Need,'' NeurIPS 2017
-    \item Karpathy, ``minGPT,'' GitHub repo
-    \item OpenAI, ``Training language models to follow instructions with human feedback,'' NeurIPS 2022
-    \item OpenAI, ``Whisper: Open-source speech recognition in multiple languages,'' 2022
-    \item Chen et al., ``Decision Transformer: Reinforcement Learning via Sequence Modeling,'' NeurIPS 2021
-\end{itemize}
+
+建议按问题链阅读，而不是按论文名堆叠：
+
+\begin{enumerate}
+  \item Bengio et al., \href{https://www.jmlr.org/papers/v3/bengio03a.html}{\emph{A Neural Probabilistic Language Model}}：固定窗口神经语言模型与 learned embeddings；
+  \item Sutskever et al., \href{https://proceedings.neurips.cc/paper/2014/hash/a14ac55a4f27472c5d894ec1c3c743d2-Abstract.html}{\emph{Sequence to Sequence Learning with Neural Networks}}：变长 encoder--decoder；
+  \item Bahdanau et al., \href{https://arxiv.org/abs/1409.0473}{\emph{Neural Machine Translation by Jointly Learning to Align and Translate}}：soft alignment 与动态 context；
+  \item Vaswani et al., \href{https://arxiv.org/abs/1706.03762}{\emph{Attention Is All You Need}}：完整 Transformer package；
+  \item Karpathy, \href{https://github.com/karpathy/nanoGPT}{\emph{nanoGPT}}：用最小代码把数据、模型、训练与生成接起来；
+  \item Dosovitskiy et al., \href{https://arxiv.org/abs/2010.11929}{\emph{An Image is Worth 16x16 Words}}，以及 Chen et al., \href{https://arxiv.org/abs/2106.01345}{\emph{Decision Transformer}}：比较不同领域怎样定义 token；
+  \item Brown et al., \href{https://arxiv.org/abs/2005.14165}{\emph{Language Models are Few-Shot Learners}} 与 Wei et al., \href{https://arxiv.org/abs/2201.11903}{\emph{Chain-of-Thought Prompting}}：区分行为现象、prompt protocol 与机制解释。
+\end{enumerate}
+
+最有效的实践顺序是：先在 Tiny Shakespeare 上逐行验证 tensor shapes 与 causal mask；再切换 subword tokenizer 和更长 context；随后分别实现 unmasked encoder 与 cross-attention；最后选择一个非文本领域，明确写出 element definition、position/type encoding、connectivity 与 objective。这样才能把“Transformer everywhere”从口号变成可验证的设计方法。
 
 \end{document}

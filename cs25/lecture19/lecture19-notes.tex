@@ -1,210 +1,641 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 19：Low-level Embodied Intelligence with Foundation Models}
+\renewcommand{\noteauthors}{基于 Fei Xia 讲座、官方人工字幕、恢复幻灯片与 PaLM-E / RT-2 / Language-to-Rewards 论文整理}
+\renewcommand{\notedate}{CS25 V3 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-10-10；上传 2023-12-08}
+\renewcommand{\videoduration}{1:18:13}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=fz8wf9hN20c}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth,height=0.54\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-\newcommand{\notetitle}{[CS25] Low-level Embodied Intelligence / RT-2 --- Fei Xia, Google DeepMind}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Fall 2023}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{Fall 2023}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{来源审计：两种把语言接到机器人上的接口}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这堂课讨论的不是泛泛的“机器人接入大模型”，而是一个更具体的 systems question：高层语言和视觉语义已经很强，怎样把它们可靠地接到连续、实时、受物理约束的低层动作？Fei Xia 用两条路线回答。第一条是 PaLM-E、RT-2 与 RT-X 所代表的\textbf{模型整合路线}：把 perception、language reasoning 与 action prediction 收进一个可共同训练的模型。第二条是 Language to Rewards 所代表的\textbf{接口分层路线}：让 LLM 生成 reward program，再由 Model Predictive Control（MPC，模型预测控制）或其他优化器执行低层控制。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{官方课堂边界与旧稿问题}
 
-\tableofcontents
-\newpage
+本次重写以 Stanford Online 官方录像 \texttt{fz8wf9hN20c} 为唯一课堂顺序来源，课堂日期为 2023 年 10 月 10 日。录像提供人工 \texttt{en-US} 字幕，55 个完整教学状态从 1080p 视频逐页恢复。旧稿没有视频链接，只有一张正文图，并把 PaLM-E、RT-2、reward generation 和安全问题压缩成产品名词列表；它没有呈现 lecture 的两段结构、数据/接口两个根因、action token 的机制、co-fine-tuning 的证据链，也没有保留问答中的限制条件，因此本次直接重建而非局部扩写。
 
-%% --- 正文内容开始 --- %%
+\begin{longtable}{@{}L{0.18\textwidth}L{0.31\textwidth}L{0.39\textwidth}@{}}
+\toprule
+证据层 & 本地材料 & 在讲义中的职责 \\
+\midrule
+官方录像 & 1:18:13、55 个最终教学状态 & 决定 slide 顺序、demo、图表、公式和 Q\&A 边界 \\
+官方人工字幕 & 1,597 条 caption、timed transcript & 恢复动机、警告、设计取舍、安全与未来方向 \\
+Primary sources & PaLM-E、RT-1、RT-2、RT-X、Language Table、Language to Rewards & 核对模型结构、训练目标、benchmark 与术语 \\
+视觉审计 & 55 张全宽截图与 selection TSV & 同一视频 slide 只保留代表状态，不把逐帧播放当成不同页面 \\
+\bottomrule
+\end{longtable}
 
-\section{引言：具身智能与基础模型}
+\begin{warningbox}{时间边界与证据边界}
+本文重建 2023-10-10 的课堂，不把后续机器人模型倒灌为课堂事实。视频 demo 说明某个系统在特定设置中完成过任务，不等于可靠处理开放世界；benchmark 提升说明相对基线更好，不等于具备人类级物理常识；“positive transfer”说明联合训练在给定任务混合中带来收益，也不等于跨所有机器人、任务与环境都能迁移。
+\end{warningbox}
 
-Fei Xia 是 Google DeepMind 机器人团队的高级研究科学家，本讲聚焦于如何利用基础模型（Foundation Models）加速低层具身智能（Low-level Embodied Intelligence）的构建。
+\subsection{读图路线：从物理失败到接口选择}
 
-\begin{knowledgebox}{什么是具身智能}
-具身智能（Embodied Intelligence）是通用人工智能的重要里程碑——让 AI 不仅能在虚拟世界中处理文本和图像，还能与真实物理世界的非结构化、复杂环境进行交互。典型应用包括家用机器人、老人护理、自主清洁等。
+标题页把 Foundation Models 放在 Low-level Embodied Intelligence 的中心，但真正的主线不是“模型越大越好”。读图时应持续追踪五个对象：\textbf{observation} 提供了什么、\textbf{model} 学到了什么、\textbf{interface} 输出何种表示、\textbf{controller} 如何把表示变成动作、\textbf{evidence} 在什么分布上成立。后面所有架构和结果都可以放回这五格检查表。
+
+\lecturefigure{slide-01-title-low-level-embodied.jpg}{Lecture 19：Foundation Models 与低层具身智能}{官方录像恢复幻灯片 V001；00:01:18}
+
+\begin{importantbox}{本讲的核心判断}
+语言模型不是直接替代机器人系统，而是改变系统中\textbf{语义知识的来源}与\textbf{任务接口的表达方式}。低层控制仍要面对动作频率、动力学、接触、约束、延迟、硬件极限和安全层；真正的工程问题是把 foundation-model prior 接到这些物理环节，而不是忽略它们。
+\end{importantbox}
+
+\subsection{本章小结}
+
+本章确定了课堂边界与阅读坐标。后文先解释物理世界为何难，再介绍模型整合路线 PaLM-E/RT-2/RT-X，随后转向 Language to Rewards，最后用 Q\&A 比较两种接口的收益、失败模式与混合方案。
+
+\section{为什么 Embodied Intelligence 比聊天更难}
+
+虚拟世界里的错误通常表现为错误文字；物理世界里的错误会改变对象、损坏硬件，甚至伤害人。具身智能因此不仅需要识别“这是什么”，还要预测“我做了这个动作后会发生什么”。这把问题从静态语义理解扩展为闭环决策与后果建模。
+
+\subsection{失败案例揭示的是 world model 缺口}
+
+本节先用两个失败案例确定后续模型必须补上的能力。讲者展示机器人把可乐罐放入水槽时意外打开水龙头，以及机械臂收回时把容器倒置的例子。这些错误并非简单的 object detection failure；机器人可能看到了罐子、水槽和机械臂，却没有充分建模动作序列对液体、重力、碰撞和自身姿态的影响。
+
+\lecturefigure{slide-02-why-embodied-intelligence.jpg}{真实世界的复杂性与 ambient intelligence 目标}{官方录像恢复幻灯片 V002；00:04:06}
+
+可以用最小状态转移式表达这种缺口：
+$$
+s_{t+1}=f(s_t,a_t,\xi_t),\qquad o_t=h(s_t)+\epsilon_t.
+$$
+其中 $s_t$ 是时刻 $t$ 的真实环境状态，$a_t$ 是机器人动作，$f$ 是受动力学与接触影响的状态转移，$\xi_t$ 表示未建模扰动；$o_t$ 是传感器 observation，$h$ 是观测映射，$\epsilon_t$ 是测量噪声。机器人只看到 $o_t$，却必须推断隐藏的 $s_t$ 并预测动作后果。
+
+\begin{knowledgebox}{First use：world model}
+\term{World model（世界模型）}是对环境状态、动作与未来结果关系的内部表示。它可以是显式动力学模型、隐式 latent transition、视频预测器，也可以部分编码在 policy 中。它的价值不在于复刻整个世界，而在于支持与任务有关的预测、规划和错误检测。
 \end{knowledgebox}
 
-当前 AI 的智能主要存在于虚拟世界（写邮件、写文章），但在物理世界中的表现仍然很差。讲者展示了一个有趣的失败案例：机器人被要求将可乐罐放入水槽，但它却打开了拉环——这说明机器人缺乏对自身动作后果的理解，即缺少``世界模型''。
+\teachervoice{Fei Xia 用“机器人把罐子放入水槽，却打开水龙头”的意外行为提醒学生：真实世界会产生训练者没有预想到的动作后果。这个例子不是可爱的 blooper，而是在说明 policy 若缺少 consequence model，随机误差也可能进入危险状态。}
 
-\section{具身智能的层级划分}
+\subsection{Gibson：智能来自 agent 与环境的闭环}
 
-\subsection{高层 vs 低层}
+前面的失败自然引出 James J. Gibson 的 ecological view。与其只问模型内部存了什么，不如问 agent 被放进怎样的环境、能执行哪些动作、会收到什么反馈。儿童通过多年身体互动学习重力、摩擦、支撑、可达性和物体用途；机器人若没有对应经验，就难以仅靠少量 teleoperation trajectory 获得同样常识。
 
-\begin{importantbox}{高层与低层具身智能的区分}
-\textbf{高层}（High-level）：语义层面的规划与推理，如``先拿杯子，再倒水''。可以用自然语言描述。\\
-\textbf{低层}（Low-level）：精确的运动控制，如关节角度、力矩和轨迹。需要连续控制信号。
-\end{importantbox}
+\lecturefigure{slide-03-gibson-ecological-perception.jpg}{Gibson 的生态知觉：理解 head 所处的环境}{官方录像恢复幻灯片 V003；00:05:18}
 
-高层任务可通过 LLM（如 SayCan、Inner Monologue）实现：将复杂指令分解为子任务序列。低层任务则需要将语义理解转化为具体的电机控制命令。
+\begin{knowledgebox}{First use：affordance}
+\term{Affordance（可供性）}描述环境相对于某个 agent 能做什么，例如把手“可抓”、平面“可放”、按钮“可按”。它不是物体的纯视觉属性，而取决于机器人形态、动作空间与任务。相同杯子对两指夹爪、人手和移动底盘具有不同 affordance。
+\end{knowledgebox}
 
-\subsection{SayCan 与 Inner Monologue}
+\subsection{Simulation 是经验放大器，不是真实世界替身}
 
-SayCan 结合了 LLM 的语义知识和机器人的可行性评分（affordance），实现``说得到（Say）''与``做得到（Can）''的结合。Inner Monologue 进一步引入多模态反馈（成功检测、场景描述），形成闭环推理。
+安全 playpen 的工程实现之一是 simulation。讲者回顾自己在 iGibson 等工作中构建大规模室内场景、渲染 observation，并让 agent 在可交互环境中学习。Simulation 的优势是可重复、可并行、可访问隐藏状态并自动生成 label；它的风险是视觉、动力学、接触和任务分布与真实世界存在 gap。
 
-\subsection{本章小结}
-具身智能需要同时解决高层语义规划和低层运动控制两个层面，基础模型在高层展现出强大潜力。
+\lecturefigure{slide-04-simulation-digital-twin-perception.jpg}{Simulation 同时提供 rendered observation、physics 与 semantic labels}{官方录像恢复幻灯片 V004；00:06:36}
 
-\section{RT-1：机器人 Transformer}
+\lecturefigure{slide-05-large-realistic-scenes.jpg}{大规模 realistic scenes：从几何资产走向可交互环境}{官方录像恢复幻灯片 V005；00:07:24}
 
-\subsection{架构与训练}
+\begin{warningbox}{Simulation 不自动等于 world model}
+模拟器包含开发者写入的动力学与资产分布；agent 在模拟器里成功，可能只是利用了纹理、碰撞或 reset 机制的 shortcut。读 simulation result 时要区分：环境是否覆盖真实变化、传感器噪声是否合理、接触模型是否可信，以及 policy 是否在真实机器人上经过独立验证。
+\end{warningbox}
 
-RT-1（Robotics Transformer 1）是一个端到端的视觉-语言-动作模型：输入当前相机图像和自然语言指令，输出机器人动作（如末端执行器的位移和抓取命令）。
+\subsection{长时程任务暴露数据和组合性瓶颈}
 
-\begin{importantbox}{RT-1 关键设计}
-\begin{itemize}
-\item 使用 FiLM EfficientNet 作为视觉编码器，将图像 token 化
-\item Token Learner 压缩视觉 token 数量，提高推理效率
-\item Transformer 解码器生成离散化的动作 token
-\item 在 130k 条真实机器人演示上训练
-\end{itemize}
-\end{importantbox}
+单步抓取可以通过大量重复数据学习，长时程家务却要求在多个 room、object、failure recovery 与 subgoal 之间维持状态。图中的 household demo 不是为了证明家庭机器人已经解决，而是显示传统 imitation-learning pipeline 在场景规模、交互次数和任务组合上迅速变得昂贵。
 
-RT-1 展现了不错的泛化能力，可以处理训练集中未见过的指令组合（如``把苹果移到绿色布上''）。
+\lecturefigure{slide-06-long-horizon-home-tasks.jpg}{长时程家庭任务：动作链、状态变化与失败恢复}{官方录像恢复幻灯片 V006；00:08:15}
 
-\subsection{数据收集}
+\lecturefigure{slide-07-internet-ai-vs-embodied-ai.jpg}{Internet AI 与 Embodied AI：共享语义模块但动作闭环不同}{官方录像恢复幻灯片 V007；00:09:12}
 
-Google 使用了 13 台机器人在真实厨房环境中收集了超过 13 万条演示轨迹，涵盖 700 多个任务。这是当时最大规模的真实机器人操作数据集之一。
+\lecturefigure{slide-08-simulation-to-foundation-models.jpg}{从 50k episodes / 1.25M interactions 转向 Foundation Models}{官方录像恢复幻灯片 V008；00:11:15}
+
+\teachervoice{讲者把自己从 large-scale simulation 转向 foundation models 的经历描述成一次研究路线变化：仅扩大场景与交互仍很难覆盖真实世界，而 web-scale 模型可能提供物体、语言和常识 prior。这里的关键词是“补充 prior”，不是“simulation 和 robot data 都不再需要”。}
 
 \subsection{本章小结}
-RT-1 验证了 Transformer 架构可以有效地从大规模真实数据中学习机器人控制策略。
 
-\section{RT-2：视觉-语言-动作模型}
+具身智能的难点来自部分可观测状态、连续动作、物理后果与长时程组合。Simulation 能放大经验，但仍有 sim-to-real gap；foundation models 的机会在于导入大规模视觉语言先验，下一章要回答这些先验怎样与低层控制相接。
 
-\subsection{核心思想}
+\section{Foundation Models 与 Robotics 之间缺什么}
 
-RT-2 将机器人动作视为``另一种语言''，通过视觉-语言模型（VLM）的微调来生成动作。
+Foundation model 擅长 high-level reasoning，机器人系统却要在几十到几百毫秒内输出连续控制。二者之间不是一条自然存在的 API：模型输入输出的表示、训练数据的尺度、控制频率与安全约束都不同。本章把 lecture 的“为什么不能直接接上”完整展开。
 
-\begin{importantbox}{RT-2 的关键创新}
-RT-2 站在 VLM（如 PaLI、PaLM-E）的肩膀上：先用互联网规模数据预训练视觉-语言理解，再将机器人动作编码为特殊 token 进行联合微调。这使模型能将互联网知识迁移到机器人控制中。
+\subsection{High-level reasoning 与 low-level control}
+
+图中左侧的 PaLM-SayCan 负责从语言目标选择高层 skill，右侧 RT-1 负责把图像和指令转成低层动作。前者回答“下一步做什么”，后者回答“关节或末端执行器此刻怎样动”。高层计划可容忍秒级响应和离散步骤，低层 policy 必须处理连续误差与闭环修正。
+
+\lecturefigure{slide-09-foundation-models-robotics-gap.jpg}{Foundation Models + Robotics：high-level reasoning 与 low-level control}{官方录像恢复幻灯片 V009；00:13:42}
+
+一个低层 policy 可写成
+$$
+a_t\sim \pi_\theta(a_t\mid o_{\le t},g),
+$$
+其中 $a_t$ 是当前动作，$o_{\le t}$ 是截至时刻 $t$ 的视觉、proprioception 等 observation history，$g$ 是语言 goal，$\pi_\theta$ 是参数为 $\theta$ 的 policy。与一次性文本回答不同，这个分布会在每个控制周期重新调用，并改变下一步 observation。
+
+\begin{importantbox}{First use：policy 与 trajectory}
+\term{Policy（策略）}是从当前信息到动作分布的映射；\term{trajectory（轨迹）}是 $(o_0,a_0,o_1,a_1,\ldots)$ 的时序序列。Robot dataset 的基本单位常是 trajectory，而不是独立图文 pair。它更昂贵，因为每条数据需要真实或模拟 agent 与环境闭环交互。
 \end{importantbox}
 
-\subsection{动作 token 化}
+\subsection{从 modular stack 到 joint scaling}
 
-机器人动作（7 自由度末端执行器位移 + 抓取命令）被离散化为 256 个 bin，映射到语言模型词汇表中的特殊 token。这样，生成动作就像生成文本一样自然。
+时间线把 2014--2021 的模块化 perception/planning/control，与 2021--2023 的 RT-1、PaLM-E 和 RT-2 并列。趋势不是所有模块突然消失，而是更多表示和任务被放进共享参数空间，通过更大数据混合实现 model consolidation。下一页用 “combine large diverse offline datasets” 概括 scaling recipe，同时用 “Scale up and done?” 保留疑问。
 
-\subsection{涌现能力}
+\lecturefigure{slide-10-robotics-scaling-timeline.jpg}{机器人系统从模块化走向 model consolidation 的时间线}{官方录像恢复幻灯片 V010；00:15:06}
 
-RT-2 展现了令人惊喜的涌现能力：
+\lecturefigure{slide-11-scaling-recipe.jpg}{Scaling recipe：离线数据、多任务模型与 positive transfer}{官方录像恢复幻灯片 V011；00:15:36}
 
-\begin{itemize}
-\item \textbf{符号理解}：在从未被训练过相关机器人数据的情况下，能理解``将可乐罐移到数字 3 处''
-\item \textbf{推理}：能根据``选最不常见的饮料''在桌上物品中做出合理选择
-\item \textbf{新物体泛化}：从 Dollar Store 买来全新玩具进行测试（防止数据泄露），机器人仍能正确识别和操作
-\end{itemize}
+\begin{warningbox}{“Scale up” 不是缺省答案}
+语言数据可从互联网被动采集，机器人数据需要 embodiment、环境、operator、reset 和安全成本。参数增加只有在 data mixture 提供相关 supervision、action representation 可学习、模型容量没有被错误任务占用时才可能产生 transfer。规模是实验变量，不是替代问题定义的口号。
+\end{warningbox}
 
-\begin{warningbox}{评估机器人的数据泄露问题}
-与评估语言模型类似，评估机器人也需防止数据泄露。RT-2 团队专门从 Dollar Store 购买训练数据中未出现的新物品来进行评估——这与 LLM 社区为避免数据污染而使用全新问题的做法如出一辙。
+\subsection{Moravec's paradox：语言流畅不等于手指灵巧}
+
+本节进一步解释为什么 high-level model success 不能直接外推到控制。Moravec's paradox 指出，对人类显得高阶的 symbolic reasoning 可能容易被计算机实现，而感知运动能力虽然主观上“无需思考”，却包含漫长进化和身体经验。机器人抓取中的毫米误差、接触切换、柔性物体和遮挡，往往比生成一段解释更难。
+
+\lecturefigure{slide-12-moravec-paradox.jpg}{Moravec's paradox：低层感知运动可能比高层推理更难}{官方录像恢复幻灯片 V012；00:18:33}
+
+\teachervoice{Fei Xia 用 Moravec's paradox 解释为什么 LLM 的成功没有自动解决机器人：会描述“怎样抓杯子”与能在摩擦变化、遮挡和接触冲击下稳定抓住杯子，是不同层级的能力。课程把这种落差作为 low-level embodied intelligence 的定义性难题。}
+
+\subsection{两个根因：数据少与接口错位}
+
+第一张 challenge slide 用数量级差异展示 robot trajectories 的稀缺；第二张则指出 LLM 输出文本 token，而机器人需要位置、旋转、gripper、速度或力矩。即使 LLM 拥有语义知识，如果训练中没有看到可对齐的动作监督，或者输出空间无法表达控制精度，也无法直接变成 policy。
+
+\lecturefigure{slide-13-challenge-lack-of-data.jpg}{Challenge 1：robot data 远少于 image-text / text data}{官方录像恢复幻灯片 V013；00:20:21}
+
+\lecturefigure{slide-14-challenge-llm-interface.jpg}{Challenge 2：LLM 没有天然的 low-level control interface}{官方录像恢复幻灯片 V014；00:21:30}
+
+\lecturefigure{slide-15-agenda-two-parts.jpg}{两段路线：model consolidation 与 new interfaces}{官方录像恢复幻灯片 V015；00:23:27}
+
+\begin{knowledgebox}{两条路线分别修什么}
+PaLM-E / RT-2 路线主要修复\textbf{数据与表示共享}：让 web-scale semantic tasks 与 robot trajectories 在同一模型中共同训练。Language to Rewards 路线主要修复\textbf{接口错位}：语言模型不直接输出每个 actuator command，而输出一个可被控制器优化的 reward specification。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Foundation models 与 robot control 的缺口可归结为 data regime、action representation、control loop 和 safety constraint。Lecture 接下来先尝试把模型和数据整合进统一 VLA，再尝试保留传统 controller、只让 LLM 负责 reward interface。
+
+\section{PaLM-E：把多模态感知注入语言模型}
+
+PaLM-E 是第一段路线的起点。它不把机器人当成一个独立的 downstream classifier，而把连续 sensor embedding 插入语言 token sequence，让一个 embodied multimodal language model 同时处理机器人 planning、视觉问答、captioning 与一般语言任务。关键问题是：这种 consolidation 是否产生 positive transfer，而非任务相互干扰。
+
+\subsection{Model family 与 consolidation 目标}
+
+模型家族页把 PaLM-SayCan、RT-1、PaLM-E 与 RT-2 放在同一演进图中。纵向是 foundation model 规模，横向是 low-level policy 能力；PaLM-E 试图将 embodied planning 与通用语言视觉能力合并，RT-2 再进一步让 VLM 直接生成 action token。
+
+\lecturefigure{slide-16-model-consolidation-family.jpg}{2023--2024 Google DeepMind robotics model family}{官方录像恢复幻灯片 V016；00:26:00}
+
+\lecturefigure{slide-17-palm-e-title.jpg}{PaLM-E：Embodied Multimodal Language Model}{官方录像恢复幻灯片 V017；00:26:03}
+
+\subsection{Sensor embedding 怎样进入 LLM}
+
+PaLM-E 将 image、state estimate 或其他 sensor observation 通过 encoder 和 projection 映射到与 language token 相同维度，再把这些向量插入 prompt。若文字 token embedding 为 $E(w_i)$，sensor feature 为 $z_j$，projection 为 $W_s$，则输入序列可抽象为
+$$
+x=\big[E(w_1),\ldots,E(w_k),W_sz_1,\ldots,W_sz_m,E(w_{k+1}),\ldots\big].
+$$
+其中 $w_i$ 是第 $i$ 个文本 token，$z_j$ 是第 $j$ 个 sensor feature，$W_s$ 把 sensor feature 投影到 LLM hidden dimension，$x$ 是送入 Transformer 的统一 embedding sequence。
+
+\lecturefigure{slide-18-palm-e-architecture.jpg}{PaLM-E：sensor encoder 输出作为 language-model token}{官方录像恢复幻灯片 V018；00:26:12}
+
+\begin{importantbox}{PaLM-E 的 consolidation 不等于 sensor 都变成文字}
+Sensor embedding 与 text embedding 共享序列接口，但二者来源不同。模型利用 self-attention 在同一 hidden space 中融合它们；这并不意味着 image、proprioception 或 state estimate 被无损翻译成自然语言，也不保证 LLM 原有知识能直接用于每种机器人状态。
+\end{importantbox}
+
+\subsection{Mixed-task training：让 robot data 借力 web data}
+
+Training slide 同时放入 embodied robotics tasks、vision-language tasks 和一般语言任务。直觉是 robot data 数量少，但 web tasks 能训练视觉语义、对象关系与语言遵循；如果共享表示有效，模型可用大规模辅助任务改善机器人决策。一个简化目标是
+$$
+\mathcal{L}=\lambda_r\,\mathbb{E}_{D_r}\!\left[-\log p_\theta(y_r\mid x_r)\right]
++\lambda_w\,\mathbb{E}_{D_w}\!\left[-\log p_\theta(y_w\mid x_w)\right].
+$$
+其中 $D_r$ 是 robot/embodied dataset，$D_w$ 是 web-scale vision-language 或 language dataset，$x$ 是输入序列，$y$ 是目标 token，$\lambda_r,\lambda_w$ 控制两类任务在训练中的采样或损失权重。
+
+\lecturefigure{slide-19-palm-e-training-and-tasks.jpg}{PaLM-E 的 embodied 与 vision-language 混合训练}{官方录像恢复幻灯片 V019；00:28:09}
+
+\lecturefigure{slide-20-palm-e-main-model.jpg}{Main model：PaLM-E-562B 与多类 sensor / task 输入}{官方录像恢复幻灯片 V020；00:29:30}
+
+\begin{lstlisting}[caption={多任务训练采样器的概念伪代码}]
+for step in range(num_steps):
+    task = sample_task(weights={"robot": lambda_r, "web": lambda_w})
+    batch = datasets[task].next_batch()
+    inputs = encode_text_and_sensors(batch)
+    loss = autoregressive_loss(model(inputs), batch.targets)
+    optimizer.step(loss)
+\end{lstlisting}
+
+\teachervoice{讲者强调 PaLM-E 的目标不是为每个任务维护一个专用模型，而是观察 joint scaling 能否让任务相互帮助。讲义因此把 “one model” 理解为共享参数与表示的实验假设，而不是部署时所有 perception、planning 和 safety module 都必须消失。}
+
+\subsection{Positive transfer 应怎样读}
+
+Multimodal example 页展示模型能回答视觉问题、处理机器人状态和执行 embodied planning；bar chart 更关键，因为它比较不同训练方案下 robot task 的表现。定义目标任务 $T$ 上联合训练与单任务训练的差异为
+$$
+\Delta_T=\operatorname{Score}(M_{\text{joint}},T)-\operatorname{Score}(M_{\text{single}},T).
+$$
+其中 $M_{\text{joint}}$ 使用多任务混合，$M_{\text{single}}$ 只使用目标任务数据。$\Delta_T>0$ 是 positive transfer，$\Delta_T<0$ 则是 negative interference。它必须逐任务、逐数据量解释，不能只看平均值。
+
+\lecturefigure{slide-21-palm-e-multimodal-examples.jpg}{PaLM-E 的多模态与 embodied task 示例}{官方录像恢复幻灯片 V021；00:32:27}
+
+\lecturefigure{slide-22-palm-e-positive-transfer.jpg}{PaLM-E positive transfer：不同任务组的相对收益}{官方录像恢复幻灯片 V022；00:36:27}
+
+\begin{knowledgebox}{读图：先看 training mixture，再看 bar height}
+图中不同颜色代表不同 model/data 配置，横轴是任务组。第一步不是寻找最高柱，而是确认比较是否只改变 model scale、是否加入 general visual-language data、robot data 是否一致；第二步观察收益是否集中在某类任务。图支持“联合训练可产生 transfer”，但不证明任意 web data 都有帮助，也不证明所有 embodied tasks 都共享同一最优 representation。
+\end{knowledgebox}
+
+\subsection{Real robot result 的正确结论}
+
+Real Robot Results 页把 language prompt、图像 observation 与机器人行为并列。它证明模型可以在真实平台执行训练和泛化任务，并显示同一 model checkpoint 处理多种指令；它没有单独量化长期可靠性、恢复率、硬件磨损或安全事故，因此不能从几段成功视频推断可部署性。
+
+\lecturefigure{slide-23-palm-e-real-robot-results.jpg}{PaLM-E 的真实机器人结果与任务迁移}{官方录像恢复幻灯片 V023；00:37:57}
+
+\begin{warningbox}{Positive transfer 不是“互联网知识自动变成动作”}
+Web task 提供对象、语言和关系 prior，robot trajectory 提供动作与后果监督。若目标对象、camera geometry、action semantics 或 embodiment 与训练不兼容，模型仍可能失败。Transfer 是通过共同训练和表示对齐产生的统计效果，不是一个无需 robot data 的知识拷贝按钮。
 \end{warningbox}
 
 \subsection{本章小结}
-RT-2 证明了互联网规模的视觉-语言知识可以有效迁移到机器人控制领域，实现零样本泛化。
 
-\section{RT-X 与开放数据}
+PaLM-E 通过统一 embedding sequence 与 mixed-task objective 实现 model consolidation。它的重要证据不是模型“能看图聊天”，而是辅助任务和 scale 是否提高 embodied task；同时，真实机器人 demo 仍需与长期可靠性和安全评估分开。
 
-\subsection{Open X-Embodiment}
+\section{RT-2：从 Vision-Language Model 到 Vision-Language-Action Model}
 
-Google DeepMind 联合 33 个机构发起 Open X-Embodiment 项目，汇集了来自 22 种机器人形态的超过 100 万条轨迹数据。
+PaLM-E 仍主要输出 language-level plan 或 answer。RT-2 更进一步：保留 VLM 的视觉语义能力，同时把机器人 action 离散化为 token，让 autoregressive decoder 直接预测低层动作。由此产生 Vision-Language-Action（VLA）模型这一接口。
 
-\begin{knowledgebox}{正向迁移}
-在语言模型领域，正向迁移（用更多数据训练得到更好性能）已是常识。但在机器人领域，跨机器人、跨场景的正向迁移仍处于早期阶段。Open X-Embodiment 的初步结果表明，混合不同机器人数据确实可以提升单个机器人的表现。
+\subsection{VLM prior 为什么有用}
+
+VLM 通过 image-text pretraining 学习对象类别、属性、关系、常见用途和语言指令。机器人数据可能从未出现“把草莓放进正确颜色的碗”或“把灭绝动物移走”这类组合，但 VLM 已在互联网数据中学到 strawberry、color matching、extinct animal 等概念。RT-2 要测试这些 semantic prior 能否在 robot trajectory supervision 下进入 action prediction。
+
+\lecturefigure{slide-24-rt2-transition.jpg}{从 VLM 语义世界进入 RT-2 机器人控制}{官方录像恢复幻灯片 V024；00:39:54}
+
+\lecturefigure{slide-25-vlm-world-understanding.jpg}{VLM 同时编码 visual 与 semantic world knowledge}{官方录像恢复幻灯片 V025；00:40:42}
+
+\begin{knowledgebox}{First use：VLA}
+\term{Vision-Language-Action model（VLA）}接收视觉 observation 与语言 instruction，并输出机器人动作或动作 token。它与普通 VLM 的差异不只在最后一层 label：训练数据含闭环 robot trajectories，输出 token 具有控制语义，推理还受到控制频率、硬件和安全层约束。
 \end{knowledgebox}
 
-\subsection{AutoRT}
+\subsection{把 action 表示成 token}
 
-AutoRT 利用 VLM 和 LLM 实现大规模自动化数据收集：VLM 描述场景中的物品，LLM 生成可行任务，机器人自主执行。这种方式大幅降低了人工标注成本。
+RT-1 已用离散 action bins 训练 Transformer policy；RT-2 把同一思想接到大型 VLM decoder。设连续动作第 $j$ 维范围为 $[l_j,u_j]$，用 $B$ 个 bins 离散化，则
+$$
+z_{t,j}=\operatorname{clip}\!\left(
+\left\lfloor \frac{a_{t,j}-l_j}{u_j-l_j}B\right\rfloor,0,B-1
+\right).
+$$
+其中 $a_{t,j}$ 是动作 $a_t$ 的第 $j$ 维，$z_{t,j}$ 是对应离散 token index，$l_j,u_j$ 是物理范围，$B$ 是 bin 数。推理时把 token 中心解码回连续动作，再交给 robot controller。
+
+\lecturefigure{slide-26-vlm-as-robot-policy.jpg}{RT-1 与 RT-2：image + text 到 discretized actions}{官方录像恢复幻灯片 V026；00:45:15}
+
+\lecturefigure{slide-27-action-tokenization.jpg}{Action tokenization：位置、旋转与 gripper 维度离散化}{官方录像恢复幻灯片 V027；00:45:57}
+
+\begin{lstlisting}[caption={连续动作与 action token 的概念转换}]
+def encode_action(action, low, high, bins):
+    ratio = (action - low) / (high - low)
+    token = floor(clip(ratio, 0.0, 1.0) * bins)
+    return clip(token, 0, bins - 1)
+
+def decode_action(token, low, high, bins):
+    center = (token + 0.5) / bins
+    return low + center * (high - low)
+\end{lstlisting}
+
+\begin{warningbox}{Action token 的三种误差}
+第一是\textbf{quantization error}：bin 太少会损失精度；第二是\textbf{support error}：训练中未见的 dexterous motion 可能没有合适 token pattern；第三是\textbf{semantic collision}：若 action token 与文本 vocabulary 共用或映射不清，decoder 可能混淆输出语义。Tokenization 让模型可训练，不代表连续控制难题消失。
+\end{warningbox}
+
+\subsection{Autoregressive action 与 co-fine-tuning}
+
+把一个时间步的动作写成 token sequence $z_{t,1:J}$ 后，模型预测
+$$
+p_\theta(z_{t,1:J}\mid I_t,g)
+=\prod_{j=1}^{J}p_\theta(z_{t,j}\mid I_t,g,z_{t,<j}),
+$$
+其中 $I_t$ 是当前 image observation，$g$ 是语言 instruction，$J$ 是动作维度或 token 数，$z_{t,<j}$ 是此前已生成的 action tokens。Autoregressive factorization 借用了 language modeling machinery，但各维顺序和 decoding latency 会影响控制。
+
+Co-fine-tuning 交替采样 web VQA/caption examples 与 robot trajectory examples。Web examples 维持 semantic prior；robot examples 教模型何时输出 action token。若只在 robot data 上训练，模型规模大却可能忘记通用语义；若只用 web data，则完全没有动作监督。
+
+\lecturefigure{slide-28-rt2-training-data-models.jpg}{RT-2 training mixture：web-scale data + robot trajectories}{官方录像恢复幻灯片 V028；00:46:54}
+
+\lecturefigure{slide-29-rt2-inference.jpg}{RT-2 inference：图像与指令经过 VLA 输出 action tokens}{官方录像恢复幻灯片 V029；00:48:54}
+
+\teachervoice{讲者把 action representation 称为仍在探索的问题。Decimal、float-like string、extra tokens 都可以工作，但没有哪一种被宣告为普适最佳；若未来换新 embodiment 或新增 action dimension，旧 vocabulary 是否可迁移仍是开放问题。}
+
+\begin{importantbox}{Co-fine-tuning 的因果链}
+Web data 提供 semantic variation；robot data 把语义锚定到 action；共享参数允许两种 supervision 交互；ablation 再检查 improvement 是否真的来自 co-fine-tuning。只有这四步连起来，才能把“互联网知识进入控制”从叙事变成可检验机制。
+\end{importantbox}
 
 \subsection{本章小结}
-开放数据和自动化数据收集是突破机器人数据瓶颈的关键方向。
 
-\section{安全性考量}
+RT-2 把 VLM 改造成 VLA：视觉和语言进入同一 decoder，低层动作离散为 token，web data 与 robot trajectories 共同训练。这个接口充分利用 autoregressive Transformer，但要承担 quantization、控制延迟、OOD action 与新 embodiment 迁移问题。
 
-\begin{warningbox}{机器人安全是刚性需求}
-与语言模型不同，机器人的错误可能造成物理伤害。RT-2 团队通过硬件安全层（力矩限制）、软件安全层和``宪法安全''（Constitutional Safety）机制来保障安全。讲者透露团队对安全问题``非常认真''。
+\section{RT-2 的结果：看见 novelty，也看见边界}
+
+结果部分有四种证据：成功案例、分类汇总、ablation 和专门 benchmark。高质量读法是分别问它们回答什么，而不是把所有漂亮 demo 合并成“emergence”。本章按 qualitative、quantitative、causal 和 compositional 四层拆解。
+
+\subsection{Emergent skills：组合新指令而非凭空创造}
+
+Qualitative grid 展示 RT-2 对未在 robot data 中直接出现的对象、符号和语义组合执行动作，例如识别可乐品牌、选择最小物体或理解抽象类别。所谓 emergent 更接近\textbf{web semantics + learned motor primitive 的新组合}；动作空间仍来自训练过的 robot controller 与 token vocabulary。
+
+\lecturefigure{slide-30-rt2-emergent-skills.jpg}{RT-2 emergent skills：符号、常识与新指令组合}{官方录像恢复幻灯片 V030；00:49:30}
+
+\lecturefigure{slide-31-rt2-emergent-skills-chart.jpg}{Emergent skill 分类：symbol understanding、reasoning、human recognition}{官方录像恢复幻灯片 V031；00:50:24}
+
+\begin{knowledgebox}{读图：平均柱状图会隐藏什么}
+柱状图汇总多个 task family，先比较同一 category 内的模型，再看 average。若 reasoning 提升而 motor execution 不变，说明 semantic prior 在起作用；若 human recognition 高但 unseen environment 低，说明视觉概念迁移不等于场景鲁棒性。平均值不能告诉我们失败集中在哪些对象、动作或环境。
+\end{knowledgebox}
+
+\subsection{Seen / unseen 分类与 ablation}
+
+Quantitative slide 分开 unseen objects、unseen backgrounds 和 unseen environments，这是必要设计：对象变化测试 semantic recognition，背景变化测试视觉鲁棒性，环境变化还会改变 geometry 与 affordance。Ablation slide 再比较 co-fine-tuning、只用 robot data、不同 model scale，尝试识别 transfer 来自哪里。
+
+\lecturefigure{slide-32-rt2-quantitative-generalization.jpg}{RT-2 在 seen 与多类 unseen 设置中的成功率}{官方录像恢复幻灯片 V032；00:51:00}
+
+\lecturefigure{slide-33-rt2-ablation-results.jpg}{RT-2 ablation：co-fine-tuning 与 data mixture 的贡献}{官方录像恢复幻灯片 V033；00:51:48}
+
+\begin{warningbox}{Ablation 仍有外推限制}
+若 ablation 在同一 robot、camera、task template 和 evaluation protocol 上进行，它能说明训练配置对该体系的影响，却不能直接回答新硬件、触觉控制、动态人类环境或数小时任务。实验控制越严格，因果解释越清楚；同时，适用范围也必须写清。
 \end{warningbox}
+
+\subsection{Language Table 与 chain-of-thought}
+
+Language Table benchmark 测试由语言描述的桌面 manipulation，适合比较 instruction following 与组合泛化。Chain-of-thought 页面则让模型先生成视觉语义推理，再生成 action；它展示 intermediate reasoning 可以帮助处理“把能装水的物体移到某处”一类任务，但文字 reasoning 是否真实因果地驱动动作，仍需 intervention 而非只看自然语言 trace。
+
+\lecturefigure{slide-34-language-table-benchmark.jpg}{Language Table：push-object instruction 的泛化结果}{官方录像恢复幻灯片 V034；00:52:03}
+
+\lecturefigure{slide-35-rt2-chain-of-thought.jpg}{RT-2-PaLM-E 的 chain-of-thought 与行动序列}{官方录像恢复幻灯片 V035；00:53:30}
+
+\begin{knowledgebox}{什么叫“reasoning 帮助了 policy”}
+最强证据不是模型写出了看似合理的解释，而是改变或移除 intermediate reasoning 会系统性改变 action success；或者 model 在需要多步关系组合的 held-out tasks 上显著优于同容量、不生成 reasoning 的 baseline。自然语言 trace 是诊断窗口，不自动等于 faithful internal computation。
+\end{knowledgebox}
+
+\subsection{VLA 总结与仍未解决的问题}
+
+VLA summary 页把新任务、新对象、chain-of-thought 与 generalization 列为收益，同时把 data diversity、额外 context 与 capability 扩展列为未来方向。它没有宣告 low-level control 已解决；恰恰相反，结果表明 semantic transfer 已出现，但 robot data、动作精度和 closed-loop reliability 仍是决定性瓶颈。
+
+\lecturefigure{slide-36-vla-summary.jpg}{VLA 模型的能力总结与未来问题}{官方录像恢复幻灯片 V036；00:55:36}
+
+\teachervoice{讲者把这些结果称为“semantic transfer”而不是通用机器人智能。课堂语气很重要：模型能执行训练中没有逐字出现的命令，是值得重视的新能力；但它仍在相同 action space、机器人平台和有限场景中工作。}
+
+\subsection{本章小结}
+
+RT-2 的可信结论来自多层证据共同支持：qualitative cases 展示新组合，category metrics 衡量泛化，ablation 追踪 co-fine-tuning，Language Table 测 instruction generalization。它们支持 VLM prior 可迁移到控制，但没有消除 embodiment、可靠性与安全边界。
+
+\section{RT-X：Cross-Embodiment Data 能否继续扩大 Transfer}
+
+如果单一机器人数据太少，一个自然方向是合并多机构、多机器人、多任务 trajectories。Open X-Embodiment / RT-X 把 action space、observation 和 dataset schema 尽可能统一，再检查一个模型能否从不同 embodiment 受益。这是 scaling law 在 robotics 中更接近现实的试验场。
+
+\subsection{Data mixture 与 action heterogeneity}
+
+Collage 页显示数据来自不同机械臂、camera、workspace 与任务。合并时必须处理 action dimension、coordinate frame、control frequency、gripper semantics 和 missing sensors。简单 concatenate 可能让大 dataset 淹没小 dataset，也可能让 incompatible action labels 产生 negative transfer。
+
+\lecturefigure{slide-37-rtx-data-collage.jpg}{Open X-Embodiment：跨机构、跨机器人数据混合}{官方录像恢复幻灯片 V037；00:56:33}
+
+\lecturefigure{slide-38-rtx-positive-transfer.jpg}{RT-X：跨 embodiment 训练的 positive-transfer 结果}{官方录像恢复幻灯片 V038；00:57:09}
+
+\begin{knowledgebox}{术语消化：robotics scaling 的四个维度}
+\begin{tabularx}{\textwidth}{@{}L{0.18\textwidth}X@{}}
+\toprule
+维度 & 增加的对象与主要风险 \\
+\midrule
+Model scale & 参数和 compute；风险是 data 不足、latency 与 memory 增大 \\
+Task scale & 指令和行为种类；风险是 label/action 冲突与 long-tail failure \\
+Environment scale & 场景、物体和背景；风险是 observation shift 与新 affordance \\
+Embodiment scale & 机器人形态和 action space；风险是坐标、频率与控制语义不兼容 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{Fei Xia 对 RT-X 的总结很克制：机器人领域看到了 positive transfer 的“signs of life”，但语言模型社区已经把 transfer 当作常态。换言之，cross-embodiment scaling 是重要信号，却还没有到“更多数据必然更好”的成熟阶段。}
+
+\subsection{Part 1 的结论}
+
+第一部分最终收束为三点：model consolidation 让 high-level reasoning 与 low-level control 更接近同一系统；joint scaling 测试 diverse data 是否产生 transfer；positive transfer 是评估 scaling 是否成立的关键。接下来课程不再继续扩大一个 end-to-end policy，而是换一种接口，把 LLM 的输出改成 reward code。
+
+\lecturefigure{slide-39-part1-summary.jpg}{Part 1：model consolidation、joint scaling 与 positive transfer}{官方录像恢复幻灯片 V039；00:57:51}
+
+\subsection{本章小结}
+
+RT-X 把数据稀缺问题转化为跨 embodiment 数据标准化与 transfer 问题。它扩展了 RT-2 的路线，但 action heterogeneity 和 dataset imbalance 让“统一模型”更难；这也解释为什么第二条路线选择保留传统 controller。
+
+\section{Language to Rewards：让 LLM 写目标，而不是直接写动作}
+
+第二部分重新定义接口。若 LLM 直接生成 actuator-level code，语义错误会立即进入控制；若它直接生成 action tokens，又可能受训练 support 和离散精度限制。Language to Rewards 让 LLM 生成一个 reward function，低层 optimizer 再寻找满足 reward 和约束的 trajectory。
+
+\subsection{为什么 raw code / raw action 都可能是坏接口}
+
+标题页之后，失败例子比较两种直接接口：让模型写低层控制代码可能产生不可执行或危险逻辑；让模型吐出长串数字 action 又缺少稳定的物理语义和 feedback correction。真正的问题不是 LLM 会不会生成 token，而是哪种中间表示能保留语言意图、又让 controller 利用动力学。
+
+\lecturefigure{slide-40-language-to-rewards-title.jpg}{Language to Rewards for Robotic Skill Synthesis}{官方录像恢复幻灯片 V040；00:58:30}
+
+\lecturefigure{slide-41-naive-language-action-interface.jpg}{直接生成 code 或 action sequence 的脆弱性}{官方录像恢复幻灯片 V041；00:58:45}
+
+\lecturefigure{slide-42-interface-question.jpg}{核心问题：language 与 low-level action 的最佳接口是什么？}{官方录像恢复幻灯片 V042；00:58:51}
+
+\begin{importantbox}{Reward 是 specification，不是完整 policy}
+Reward function 描述“什么状态或行为更好”，policy/controller 决定“怎样到达”。把两者分开后，LLM 可使用语义知识写目标，MPC 可使用 dynamics、constraint 和当前 state 做闭环优化。但 reward misspecification 仍会产生 reward hacking，因此 specification 也需要检查与迭代。
+\end{importantbox}
+
+\subsection{Reward translator + motion controller}
+
+设语言 instruction 为 $g$，LLM 生成 reward program $R_\phi(s_t,a_t;g)$；controller 在 horizon $H$ 内求解
+$$
+\max_{a_{t:t+H-1}}
+\sum_{k=0}^{H-1}\gamma^k R_\phi(s_{t+k},a_{t+k};g)
+\quad\text{s.t.}\quad
+s_{t+k+1}=f(s_{t+k},a_{t+k}),
+$$
+并只执行第一个动作，再用新 observation 重新规划。这里 $\phi$ 表示 LLM 生成的 reward program，$\gamma$ 是时间折扣，$H$ 是 planning horizon，$f$ 是 simulator 或 learned dynamics。这个 receding-horizon loop 是 MPC 的核心。
+
+\lecturefigure{slide-43-language-to-reward-pipeline.jpg}{Language-to-Reward pipeline：LLM reward translator + motion controller}{官方录像恢复幻灯片 V043；01:00:15}
+
+\lecturefigure{slide-44-reward-translator-prompt.jpg}{Motion descriptor prompt 与生成 reward code}{官方录像恢复幻灯片 V044；01:01:15}
+
+\begin{lstlisting}[caption={Reward program 与 MPC 执行循环的概念伪代码}]
+instruction = "make the robot dog stand on two feet"
+reward_code = llm.generate_reward(instruction, robot_schema)
+reward = sandbox.compile_and_validate(reward_code)
+
+while not task_done:
+    state = observe_robot_and_scene()
+    action_plan = mpc.optimize(dynamics, reward, state, constraints)
+    execute(action_plan[0])
+    if user_feedback_available():
+        reward = revise_reward(reward, user_feedback())
+\end{lstlisting}
+
+\begin{warningbox}{生成 code 前必须有 sandbox 与 validation}
+LLM 生成的 reward code 可能引用不存在的 state、符号错误、数值爆炸、遗漏 safety constraint，或通过意外 shortcut 获得高 reward。实际系统需要 schema-restricted API、静态检查、unit tests、数值范围限制、timeout、simulator rollout 和 human approval，不能把任意 Python 直接部署到真实控制器。
+\end{warningbox}
+
+\subsection{MPC 保留了哪些传统机器人能力}
+
+MuJoCo MPC 页面展示 reward 改动后，optimizer 可实时合成新动作。与直接 action token 相比，MPC 显式使用 dynamics rollout，可加入 joint limit、collision、balance 和 energy 等约束，并在 observation 更新后重规划。它的代价是需要可用模型、在线优化计算与精心设计的 reward landscape。
+
+\lecturefigure{slide-45-mujoco-mpc-controller.jpg}{MuJoCo MPC：根据 reward 实时合成 controller}{官方录像恢复幻灯片 V045；01:01:33}
+
+\lecturefigure{slide-46-language-to-rewards-skill-set.jpg}{Language to Rewards 生成的 robot-dog 与 dexterous skills}{官方录像恢复幻灯片 V046；01:01:51}
+
+\teachervoice{讲者把这一接口概括为“LLM 做它擅长的 semantic translation，controller 做它擅长的 physical optimization”。这不是复古地放弃 end-to-end learning，而是明确每个组件的责任边界，让语言先验、动力学模型和安全约束可以同时存在。}
+
+\subsection{本章小结}
+
+Language to Rewards 把自然语言转成可优化的 objective，而非直接输出每个动作。Reward program 提供任务语义，MPC 提供闭环动力学与约束；系统可交互修改目标，但必须防止 reward misspecification 与不安全 code。
+
+\section{Language-to-Rewards 的证据：从 Simulation 到 Real Robot}
+
+机制成立后，需要检查三个问题：生成 reward 是否覆盖 diverse skills，是否优于更直接的 LLM interface，以及 simulator 中的 reward 与 controller 能否迁移到真实硬件。课程用 humanoid、quadruped、dexterous hand 和 real-robot manipulation 逐层回答。
+
+\subsection{Prompt-to-skill：动作来自优化而非背诵}
+
+Humanoid 与 manipulation 页面把 user prompt、生成 code 和最终 motion 放在一起。模型不需要在语言训练中见过每个关节轨迹；它利用“backflip”“open drawer”等语义写 state-based reward，optimizer 再搜索轨迹。因此同一 LLM 可通过不同 robot schema 生成不同 objective。
+
+\lecturefigure{slide-47-humanoid-reward-code.jpg}{Humanoid skill：语言到 reward code，再到优化动作}{官方录像恢复幻灯片 V047；01:04:27}
+
+\lecturefigure{slide-48-manipulation-reward-code.jpg}{Manipulation skill：open the drawer 的 reward 与动作}{官方录像恢复幻灯片 V048；01:04:39}
+
+\begin{knowledgebox}{读 demo：至少检查四层}
+第一层是 prompt 是否明确；第二层是 reward 是否真正编码任务而非画面 shortcut；第三层是 optimizer 是否稳定找到可行解；第四层是 execution 是否在扰动后保持成功。视频通常只展示第四层的成功片段，讲义必须把前面三层补回来。
+\end{knowledgebox}
+
+\subsection{Baseline comparison：reward-only 与 code-as-policy}
+
+Benchmark 图比较 Language to Rewards、只由语言描述 reward 的简化方法，以及直接 code-as-policy 等 baseline。读图应看每个 task 的相对稳定性：reward interface 若在多种 morphology 上都优于 direct code，说明将 semantic objective 与 controller 分层具有价值；若少数任务差距小，则可能是 controller 本身已足够或 prompt 不需要复杂语义。
+
+\lecturefigure{slide-49-language-to-rewards-benchmark.jpg}{Language to Rewards 与 reward-only / code-as-policy 比较}{官方录像恢复幻灯片 V049；01:05:06}
+
+\begin{knowledgebox}{读图：比较的不是“谁更会写 Python”}
+绿色、蓝色和黑色柱反映不同 interface 产生的最终 task performance。核心变量是 LLM 输出的抽象层级：reward specification 是否给优化器留下搜索空间，direct policy code 是否过早锁死动作。图支持 reward interface 在这些任务上更有效，但不说明所有任务都适合 MPC，也不衡量真实硬件延迟。
+\end{knowledgebox}
+
+\subsection{Sim-to-real：reward、trajectory 与 hardware 分层}
+
+Sim-to-real 页面展示 reward translation、planned trajectory、simulator rollout 和 real execution。迁移成功依赖任务几何、robot calibration 与 controller robustness；如果 simulator dynamics 不准，MPC 可能产生在 simulation 中高分、真实世界不可执行的动作。Real-robot apple demo 因此是必要证据，但仍只是有限物体和平台上的验证。
+
+\lecturefigure{slide-50-sim-to-real-transfer.jpg}{从 reward 与 planned trajectory 到 simulation / real execution}{官方录像恢复幻灯片 V050；01:05:36}
+
+\lecturefigure{slide-51-real-robot-apple.jpg}{真实机器人执行“pick up the apple”}{官方录像恢复幻灯片 V051；01:05:57}
+
+\begin{warningbox}{First use：sim-to-real gap}
+\term{Sim-to-real gap} 是模拟与真实在视觉、动力学、接触、延迟、传感噪声和硬件磨损上的差异。常见缓解手段包括 domain randomization、system identification、robust control、online correction 和 real-data fine-tuning。一次成功 transfer 说明 pipeline 可行，不等于 gap 已消失。
+\end{warningbox}
+
+\subsection{LLM 作为 general pattern machine}
+
+讲者最后把 LLM 抽象为 sequence transformation、sequence completion 与 sequence improvement。Language to Rewards 使用 transformation：instruction 变 reward code；interactive revision 使用 improvement：根据 feedback 修改 reward；RT-2 使用 completion：给定 image、instruction 与前缀 action，预测后续 token。这个抽象把两条路线放进同一计算框架。
+
+\lecturefigure{slide-52-llm-general-pattern-machines.jpg}{LLM 的三类 pattern operation：转换、补全与改进}{官方录像恢复幻灯片 V052；01:07:12}
+
+\lecturefigure{slide-53-sequence-improvement.jpg}{Sequence improvement：根据反馈迭代 reward 与动作}{官方录像恢复幻灯片 V053；01:08:51}
+
+\teachervoice{课程把用户反馈放回 loop：如果生成的 motion 太快、姿态不自然或目标含糊，用户可以修改描述，LLM 更新 reward，controller 重新优化。这种交互性是 reward interface 的优势，但也意味着系统行为取决于 prompt、state schema、code validator 和 optimizer 的共同质量。}
+
+\subsection{本章小结}
+
+Language to Rewards 的证据链从 diverse simulated skills、baseline comparison 延伸到 sim-to-real 与 real robot。它说明 reward program 是一种有效语义接口，却仍依赖 controller、dynamics model、validation 和硬件安全。两条路线的差异将在下一章统一比较。
+
+\section{Direct Action 与 Reward Program：系统级比较}
+
+Lecture 的两部分不是互相否定。RT-2 把 action generation 纳入大模型，获得共享表示和快速 inference；Language to Rewards 保留 optimizer，获得 constraint handling 与交互式目标修改。真正的架构选择取决于数据、动作复杂度、控制频率、模型可用性与安全要求。
+
+\subsection{最终总结页：模型、数据与接口}
+
+Final summary 页把第一部分概括为 model consolidation、joint scaling、positive transfer，把第二部分概括为 new interfaces to LLMs。Key takeaway 再强调：rethinking scaling 可以让 robotics 更像 foundation-model training；rethinking interface 可以让 LLM 负责 semantic translation 而不是承担所有低层物理细节。
+
+\lecturefigure{slide-54-final-summary.jpg}{Final summary：Language to Rewards 与 general pattern machines}{官方录像恢复幻灯片 V054；01:09:39}
+
+\lecturefigure{slide-55-key-takeaway.jpg}{Key takeaway：共同扩展模型，也重新设计接口}{官方录像恢复幻灯片 V055；01:10:39}
+
+\subsection{两种路线的 tradeoff table}
+
+下面的表不是选出永久赢家，而是把 component responsibility 写清。系统也可以混合：先用 Language to Rewards 在 simulator 中生成 diverse trajectories，再 distill 到 VLA；或让 VLA 提议 skill、MPC 负责最后一段高精度接触。
+
+\begin{longtable}{@{}L{0.20\textwidth}L{0.32\textwidth}L{0.32\textwidth}@{}}
+\toprule
+维度 & Direct action / VLA & Reward program + controller \\
+\midrule
+主要输出 & action tokens 或连续动作参数 & state/action reward code 或 objective \\
+语义来源 & web + robot co-fine-tuning & pretrained LLM + robot schema / prompt \\
+物理执行 & policy 隐式学 dynamics 与 feedback & optimizer 显式使用 dynamics 与 constraint \\
+推理成本 & 一次或少量 autoregressive decoding & 每步需要 rollout / optimization \\
+数据需求 & 大量 robot trajectories，支持 distillation & 可零样本写 reward，但需 simulator/model 与 validation \\
+优势 & 端到端、快速、可与 VLM 表示共享 & 动作多样、约束明确、可交互修改目标 \\
+主要风险 & OOD action、quantization、behavior support、不可解释失败 & reward hacking、code error、model bias、在线优化失败 \\
+适合场景 & 高频重复 skill、充足 demonstrations、固定 embodiment & 新语义任务、复杂 constraint、可用 dynamics model \\
+\bottomrule
+\end{longtable}
+
+\begin{importantbox}{课堂给出的混合方案}
+用 Language to Rewards 生成大规模、语义多样的 simulator trajectories，再把这些数据 distill 到 Transformer/VLA，可同时利用 optimizer 的探索能力与 policy 的快速 inference。反方向也可行：VLA 负责高层 skill proposal，MPC 在局部执行并满足碰撞、平衡或力限制。
+\end{importantbox}
+
+\teachervoice{Q\&A 中讲者明确比较两条路线：direct action generation 与 autoregressive modeling 高度一致，但可能难以产生训练分布外的 dexterous motion；reward generation 借用了传统 robotics 的 optimization，可加入 safety constraint 并产生更多样动作。这个回答比“端到端或模块化二选一”更接近真实系统设计。}
+
+\subsection{Data 仍是最大的 bottleneck}
+
+即使模型规模增长，机器人领域仍缺少互联网级闭环数据。语言中的 positive transfer 已经普遍到不再被单独强调，而 robotics 仍在寻找早期信号。数据瓶颈不仅是数量：失败、恢复、危险状态、长期任务和不同 embodiment 的 coverage 往往比成功 demonstrations 更稀缺。
+
+\begin{knowledgebox}{数据审计的六个问题}
+采集了多少独立 trajectories？失败是否保留？环境和物体是否多样？action distribution 是否覆盖 recovery？不同 operator 是否造成 style bias？evaluation 是否在真正 held-out environment 和 object 上？如果这些问题没有答案，仅报告“总小时数”不足以判断 dataset quality。
+\end{knowledgebox}
+
+\subsection{Physical safety 不能只继承 LLM alignment}
+
+最后的学生提问聚焦安全。机器人错误直接作用于人和环境，因此不能只依赖 LLM 拒答。系统需要 hardware torque/force limit、emergency stop、workspace boundary、collision monitor、software interlock、safe controller、simulation test 和 human supervision。讲者还提到团队在探索 constitutional safety，但没有公开细节；讲义只保留这一未来方向，不把未发布系统写成已验证方案。
+
+\begin{warningbox}{“模型不会说危险话”不等于机器人安全}
+安全目标至少包括：指令本身是否合法、模型是否理解对象指代、计划是否进入危险区域、低层动作是否超过力/速度限制、传感器失效时是否 fail safe、用户是否能中止。Language alignment 只覆盖其中一部分；hardware 与 controller safety layer 必须独立存在。
+\end{warningbox}
+
+\teachervoice{讲者说团队“非常认真”对待 safety，因为物理系统可能伤害人或环境。他举出可脱落 robot finger 作为硬件力限制的例子，也用“把猫放进洗碗机”的歧义指令说明 semantic misunderstanding 会成为 catastrophic physical failure，而不是普通文本 hallucination。}
+
+\subsection{本章小结}
+
+VLA 与 reward-program 路线分别把更多责任交给 learned policy 或 optimizer。前者擅长共享表示与快速 inference，后者擅长显式 constraint 与新任务合成；混合系统往往更现实。无论路线如何，robot data coverage 和独立 safety layers 都不能被 scale 替代。
 
 \section{总结与延伸}
 
-本讲全面介绍了 Google DeepMind 在具身智能领域的进展路径：RT-1 $\to$ RT-2 $\to$ Open X-Embodiment $\to$ AutoRT。核心信息是：基础模型（特别是视觉-语言模型）为机器人带来了前所未有的语义理解和泛化能力；但数据瓶颈和安全性仍是最大挑战。
+本讲从“为什么机器人还不会收拾房间”出发，最终落在一个清晰的系统分解：foundation model 提供 semantic prior，robot data 提供 action grounding，interface 决定模型输出的抽象层级，controller 处理 dynamics 与 constraint，evaluation 检查 transfer，safety layer 限制物理后果。PaLM-E 证明 sensor embedding 与 language model 可以共同训练；RT-2 把 action token 接进 VLM，形成 VLA；RT-X 测试 cross-embodiment positive transfer；Language to Rewards 则让 LLM 写 objective、MPC 写 trajectory。
+
+\subsection{六条可迁移的工程启示}
+
+\begin{enumerate}
+  \item \textbf{先定义接口，再选模型。} 决定输出是 skill、action token、trajectory、reward 还是 constraint，比盲目增大参数更基础。
+  \item \textbf{把 data mixture 当成设计对象。} Web data、robot success、failure、recovery 与多 embodiment 数据需要不同权重和审计。
+  \item \textbf{分开 semantic generalization 与 motor generalization。} 会识别新对象不等于会产生新接触动作；评价指标必须拆开。
+  \item \textbf{用 ablation 证明 transfer 路径。} 只看大模型更好，无法区分 scale、co-fine-tuning、robot data 与 web prior 的作用。
+  \item \textbf{保留 controller 与 safety layer 的可见性。} 即使 policy 端到端，执行层仍应有 rate/force/geometry guardrail 与 emergency stop。
+  \item \textbf{考虑 hybrid bootstrap。} Reward optimizer 可生成 diverse data，VLA 可 distill 成快速 policy，两者可以形成 data flywheel。
+\end{enumerate}
+
+\begin{importantbox}{把本讲压缩成一句话}
+Foundation models 对机器人最重要的贡献，不是让语言模型直接控制一切，而是让我们重新设计\textbf{共享表示、训练数据与任务接口}；真正可用的 embodied system 仍必须把语义、动作、动力学、评价和安全连接成闭环。
+\end{importantbox}
+
+\subsection{最容易误读的三句话}
+
+\begin{warningbox}{不要把局部证据扩大为通用结论}
+“RT-2 有 emergent skills”不等于学会任意新动作；“RT-X 有 positive transfer”不等于 robotics scaling law 已成熟；“LLM 能写 reward”不等于生成代码可直接上真实机器人。三句话都需要附带 action support、dataset boundary、controller、validation 与 safety 条件。
+\end{warningbox}
 
 \subsection{拓展阅读}
+
 \begin{itemize}
-\item Brohan et al., ``RT-1: Robotics Transformer for Real-World Control at Scale'', 2023
-\item Brohan et al., ``RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control'', 2023
-\item Open X-Embodiment Collaboration, ``Open X-Embodiment: Robotic Learning Datasets and RT-X Models'', 2023
-\item Ahn et al., ``Do As I Can, Not As I Say: Grounding Language in Robotic Affordances'' (SayCan), 2022
+  \item Driess et al., \href{https://arxiv.org/abs/2303.03378}{\emph{PaLM-E: An Embodied Multimodal Language Model}}
+  \item Brohan et al., \href{https://arxiv.org/abs/2212.06817}{\emph{RT-1: Robotics Transformer for Real-World Control at Scale}}
+  \item Brohan et al., \href{https://arxiv.org/abs/2307.15818}{\emph{RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control}}
+  \item Open X-Embodiment Collaboration, \href{https://arxiv.org/abs/2310.08864}{\emph{Open X-Embodiment: Robotic Learning Datasets and RT-X Models}}
+  \item Yu et al., \href{https://arxiv.org/abs/2306.08647}{\emph{Language to Rewards for Robotic Skill Synthesis}}
+  \item Lynch et al., \href{https://arxiv.org/abs/2206.04717}{\emph{Interactive Language: Talking to Robots in Real Time}}
 \end{itemize}
 
-%% --- 正文内容结束 --- %%
+阅读这些论文时可以沿用本讲的五格检查表：observation、model、interface、controller、evidence。只要其中一格被“端到端”或“emergent”一词遮住，就继续追问数据来自哪里、动作怎样表达、物理约束由谁处理、失败如何被记录，以及什么实验能够否定当前解释。
 
 \end{document}

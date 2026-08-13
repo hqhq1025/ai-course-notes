@@ -1,248 +1,580 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 33：从 Transformer 历史理解 AI 的主导力量}
+\renewcommand{\noteauthors}{基于 Hyung Won Chung 官方独立讲座、67 页 deck 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V4 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2024-04-11；上传 2024-06-11}
+\renewcommand{\videoduration}{36:30}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=orDKvo8h71o}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-\newcommand{\notetitle}{[CS25] New Training Objectives --- Hyung Won Chung, OpenAI}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2024}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{Spring 2024}
-\newcommand{\videoduration}{$\sim$40min}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{研究变化本身：先识别主导力量}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+AI 进展太快时，逐条追新闻会积累事实，却不一定形成方向判断。Hyung Won Chung 选择另一条路线：把 Transformer 的架构史当成一组自然实验，追问哪些设计在旧任务与旧算力下合理，哪些设计随着规模、数据和交互方式变化而失去优势。整堂课的目标不是证明 decoder-only 永远正确，而是训练一种可迁移的研究方法。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{为什么历史分析不是怀旧}
 
-\tableofcontents
-\newpage
+标题页把 ``history'' 与 ``future'' 放在同一句话里。读下面两页时应先抓住方法论：研究对象不是某个模型名称，而是变化轨迹。只要能识别支配轨迹的方向性变量，就能把杂乱更新压缩成少数可检验假设。后文每一次架构比较都要回到这个问题：它是在记录一个静态赢家，还是在解释为什么相对优势会随 regime 移动？
 
-%% --- 正文内容开始 --- %%
+\lecturefigure{hyung-slide-001.jpg}{讲座主题：从 Transformer 历史塑造 AI 的未来}{Hyung Won Chung official deck, p.~1}
 
-\section{引言：从历史中学习未来}
+\lecturefigure{hyung-slide-002.jpg}{不要只追最新结果，要研究变化本身}{Hyung Won Chung official deck, p.~2}
 
-Hyung Won Chung 是 OpenAI ChatGPT 团队的研究科学家，此前在 Google Brain 工作。他的代表作包括 Flan-T5/PaLM（大规模指令微调）和 T5X（PaLM 的训练框架）。本讲不讨论具体的新训练目标，而是通过分析 Transformer 架构的历史演变，建立一个``统一视角''来理解和预测 AI 研究的趋势。
+\teachervoice{00:02:05--00:02:58，Hyung Won 强调：当变化速度超过人的追踪能力时，应回看旧系统，画出“我们怎样走到现在”的路径。课堂重点不是背 2024 年的榜单，而是从路径中抽象方向。}
 
-\begin{importantbox}{核心论点}
-AI 进步的根本驱动力是指数级增长的计算能力。理解这一驱动力，可以帮助我们看清看似无关的技术事件之间的深层联系，并据此推断未来方向。
-\end{importantbox}
-
-\section{指数驱动力：计算能力的增长}
-
-\subsection{摩尔定律与 GPU 革命}
-
-\begin{knowledgebox}{计算成本的指数下降}
-从 1970 年代至今，计算成本以指数速度下降。GPU 的出现进一步加速了这一趋势——NVIDIA GPU 的 FLOPS/\$ 每两年翻一番。这种指数增长是 AI 研究所有重大进展的底层驱动力。
-\end{knowledgebox}
-
-\subsection{规模化与苦涩教训}
-
-这一指数驱动力正是 Rich Sutton ``苦涩教训''（The Bitter Lesson）的物质基础：能够充分利用更多计算的通用方法（搜索、学习），最终总会超越依赖人类领域知识的方法。
-
-\subsection{本章小结}
-理解指数驱动力是建立统一视角的前提。
-
-\section{归纳偏置的生命周期}
-
-\subsection{什么是归纳偏置}
-
-\begin{importantbox}{归纳偏置 = 计算不足时的捷径}
-归纳偏置是我们在数据或计算不足时，人为加入模型的结构性假设。例如：
-\begin{itemize}
-\item 卷积 = ``局部性''假设
-\item 双向注意力 = ``可以看到全部输入''假设
-\item 掩码语言模型 = ``可以并行训练所有位置''假设
-\end{itemize}
-这些假设在资源有限时是有益的捷径，但在资源充足时反而限制了模型的通用性。
-\end{importantbox}
-
-\subsection{添加容易、移除困难}
-
-\begin{warningbox}{学术界的激励不对称}
-学术界擅长``添加结构''——提出新的归纳偏置可以发论文。但``移除结构''（证明某个假设已不再需要）缺乏发表激励。这导致许多过时的归纳偏置在研究中存留过久。Chung 呼吁社区更多关注``减法研究''。
+\begin{warningbox}{独立剪辑的证据边界}
+本视频是官方播放列表中的独立 36:30 剪辑，与 Lecture 27 合并录像的 Hyung Won 后半段内容相同，但不包含后续联合 Q\&A。本讲义只保留独立视频中实际出现的 prepared talk，不把 Q\&A 中关于 MLE、RLHF 或能源极限的讨论倒灌进来。
 \end{warningbox}
 
+\subsection{Identify、understand、roll forward}
+
+第三页把预测拆成三步：先识别 dominant driving force，再理解它怎样改变方法之间的相对优劣，最后谨慎地把趋势向前外推。主导力量不是唯一力量，而是在当前精度要求下解释大部分方向性的变量；如果 regime 改变，就必须重新建模。读图前还应区分“描述过去”与“预测未来”：前者可由历史数据约束，后者必须同时写出失效条件和替代解释。
+
+\lecturefigure{hyung-slide-003.jpg}{研究变化的三步法：识别、理解并外推主导力量}{Hyung Won Chung official deck, p.~3}
+
+\begin{importantbox}{Dominant driving force 的工作定义}
+主导驱动力是在给定时间尺度、预算与误差容忍度下，足以解释主要方向变化的因素。它允许研究者暂时忽略较小作用，以换取可分析性；但忽略项必须公开，预测失败时也应首先检查被省略的反馈与约束。
+\end{importantbox}
+
+\teachervoice{00:03:03--00:04:07，讲者把研究流程概括为 identify、understand、roll forward，并指出预测命中率不必很高才有价值。重要的是让假设可检查，而不是假装精确知道未来。}
+
+\subsection{落笔实验：什么时候可以忽略空气阻力}
+
+一支笔从静止释放时，现实中同时存在重力、空气阻力、旋转与材料形变；课堂仍只建模重力，因为在短距离、普通精度下它足够主导。若把向下方向记为正，可写为
+\[
+y(t)=y_0+v_0t+\frac{1}{2}gt^2.
+\]
+其中 $y(t)$ 是时刻 $t$ 的位置，$y_0$ 是初始位置，$v_0$ 是初速度，$g$ 是重力加速度。公式成立的条件不是“阻力不存在”，而是“阻力对当前问题的误差贡献可接受”。
+
+\lecturefigure{hyung-slide-004.jpg}{落笔实验：用重力说明如何忽略次要力量}{Hyung Won Chung official deck, p.~4}
+
+\lecturefigure{hyung-slide-006.jpg}{主导力量越多、相互作用越复杂，轨迹越难预测}{Hyung Won Chung official deck, p.~6}
+
+\begin{knowledgebox}{读图：横轴不是观测字段数量}
+横轴表示\textbf{相互竞争的主导力量数量}。一个系统可以有很多特征，却仍由少数机制决定方向；反过来，变量很少但反馈强耦合，也可能难以外推。图支持的是建模顺序：先找方向性最强的因素，再决定何时加入相互作用。
+\end{knowledgebox}
+
+\teachervoice{00:04:40--00:05:57，讲者明确提到空气阻力和复杂气动相互作用，却选择忽略它们。课堂提示不是“现实只有一个变量”，而是“先定义精度需求，再决定哪些变量可以近似掉”。}
+
 \subsection{本章小结}
-归纳偏置有其最佳适用期，及时移除与及时添加同样重要。
 
-\section{Encoder-Decoder vs Decoder-Only 的历史分析}
+本章建立了整堂课的证据纪律：历史不是模型名单，而是自然实验；主导力量不是唯一因果，而是可声明误差边界的近似；外推不是保证，而是生成下一组实验。接下来把这套方法用于 compute、inductive bias 与 Transformer 架构。
 
-\subsection{原始 Transformer（2017）}
+\section{Compute、Bitter Lesson 与归纳偏置的生命周期}
 
-原始 Transformer 使用 encoder-decoder 架构用于机器翻译：
+开场已经给出“识别主导力量”的方法，现在把它用于 AI 研究史。Hyung Won 的核心判断是，计算成本长期下降和 associated scaling 构成重要方向性力量，因此结构设计不能只看今天是否更准，还要看它是否会限制明天继续扩大规模。这里的重点不是宣称单因果，而是把架构选择放到 compute regime 中重新比较。
 
-\begin{itemize}
-\item \textbf{编码器}：$N$ 层双向自注意力 + 前馈网络
-\item \textbf{解码器}：$N$ 层因果自注意力 + 交叉注意力 + 前馈网络
-\item \textbf{连接}：交叉注意力让解码器关注编码器的输出
-\end{itemize}
+\subsection{为什么把 compute per dollar 当作主导力量}
 
-\subsection{BERT 的选择（2018）}
+本节先读证据。图的纵轴不是晶体管数量，而是固定资金可以买到的计算能力；横轴覆盖超过一个世纪。Hyung Won 由这条长期趋势得出研究策略：不要和强大、持续的外生趋势竞争，应设计能利用它的方法。同时必须把硬件、算法、精度和软件效率都纳入“有效计算”，否则会把某个器件指标错当成整条研究轨迹。
 
-BERT 只用编码器 + 双向注意力 + 掩码语言模型（MLM）目标。当时双向注意力确实更强：能看到完整上下文，训练效率高（每个位置独立预测）。
+\lecturefigure{hyung-slide-007.jpg}{固定成本可获得的计算能力长期增长，约每五年提高十倍}{Hyung Won Chung official deck, p.~7}
 
-\subsection{GPT 的选择（2018）}
+若每五年计算能力约增长十倍，可写成
+\[
+C(t)=C_0\,10^{t/5},
+\]
+其中 $C(t)$ 是相对起点经过 $t$ 年后固定预算可购买的计算量，$C_0$ 是起点计算量。这个表达只是在课堂图上的近似，不保证未来继续保持同一指数；能源、制造、互连、资本与算法都可能改变有效增长率。
 
-GPT 只用解码器 + 因果注意力 + 自回归目标。当时看起来不如 BERT，但这个选择引入了最少的结构性假设。
+\begin{knowledgebox}{读图：compute per dollar 不是单一硬件指标}
+课堂图聚合了硬件、算法、数值精度、软件栈与系统协同的长期效果。真正相关的问题是“固定成本能完成多少有效训练计算”，而不是只追踪晶体管数量。图展示的是历史趋势；它没有证明能源、制造、互连和资本约束在未来不会改变斜率。
+\end{knowledgebox}
 
-\subsection{为什么 Decoder-Only 最终胜出}
+\teachervoice{00:08:00--00:09:03 的措辞是“不要与这条趋势竞争，尽量利用它”。这是一条研究选择启发式，不是对无限指数增长的保证；讲义因此把历史观察、研究策略与未来预测分开。}
 
-\begin{importantbox}{统一视角下的分析}
+\subsection{Bitter Lesson：少替机器规定我们自以为懂的思考方式}
+
+上一节说明 scale 是强趋势，本节解释为什么过多人工结构会冲突。研究者常把自己对人类思维的解释编码成模型；这些结构在低算力时可能像捷径，却限制模型探索其他表示。Bitter Lesson 的课堂版本是：长期进展反复来自更一般、假设更弱的方法，再加更多数据与计算。
+
+\lecturefigure{hyung-slide-008.jpg}{“教机器按我们以为自己在思考的方式思考”可能施加错误结构}{Hyung Won Chung official deck, p.~8}
+
+\lecturefigure{hyung-slide-009.jpg}{Bitter Lesson：更一般的方法、更弱的建模假设与更多规模}{Hyung Won Chung official deck, p.~9}
+
+\begin{importantbox}{什么是 inductive bias}
+Inductive bias（归纳偏置）是模型在有限数据下偏好某类函数、表示或交互方式的结构性假设。卷积的局部性、encoder/decoder 参数分离、双向 attention、特定不变性都属于偏置。偏置能提高样本效率，但也排除了部分解；它的价值取决于当前数据、算力、任务和部署约束。
+\end{importantbox}
+
+\teachervoice{Hyung Won 在 00:09:17--00:11:19 说，研究者往往试图建模“我们以为自己如何思考”，但并不真正理解低层认知机制。课堂观点故意强烈；讲义把它保留为一种设计警告，而不是证明所有先验结构都错误。}
+
+\subsection{结构越少越 scalable，但今天不一定更好}
+
+若把结构多寡放到横向比较，结构较多的方法通常在低计算区间起点更高，却可能较早饱和；结构较少的方法早期训练困难，但给模型更大自由度，随规模增长可能超过前者。这里的 ``scalable'' 指增长曲线能继续改善，不只是能在更多 GPU 上运行。
+
+\lecturefigure{hyung-slide-010.jpg}{更多结构提高低算力性能，却可能降低长期可扩展性}{Hyung Won Chung official deck, p.~10}
+
+\begin{knowledgebox}{读图：比较交叉点，而不是给结构贴好坏标签}
+蓝色方法在当前预算左侧可能明显更好；红色方法要到更大 compute 才超越。研究决策取决于部署点在哪里、能否承受探索成本，以及未来是否真的能到达交叉点。图支持的是 regime-dependent choice，而不是“永远选择最少结构”。
+\end{knowledgebox}
+
+\lecturefigure{hyung-slide-013.jpg}{当前 compute regime 应选择可工作的偏置，同时记住未来移除它}{Hyung Won Chung official deck, p.~13}
+
+\lecturefigure{hyung-slide-014.jpg}{给定计算、数据、算法和架构时存在暂时最优的 inductive bias}{Hyung Won Chung official deck, p.~14}
+
+可以把结构强度记为 $b$，当前资源状态记为 $r$，性能写成
+\[
+b^{\star}(r)=\arg\max_b\; P(b;r).
+\]
+其中 $P(b;r)$ 是偏置 $b$ 在资源状态 $r$ 下的性能，$b^{\star}(r)$ 是当前最优结构。随着 $r$ 包含的 compute、data 与 algorithm 改变，$b^{\star}$ 也会移动；所以一个曾经正确的架构决定不应永久冻结。
+
+\teachervoice{00:12:04--00:13:27 的关键限定是：不能从一开始就等待最一般的方法，因为它可能在当前预算完全不工作。正确动作是“现在加入有用偏置，并明确记录将来何时复查和移除”。}
+
+\subsection{研究激励为什么更擅长加结构，不擅长删结构}
+
+结构生命周期还有社会层原因。新增模块、损失项或机制容易形成论文贡献；证明一个复杂模块在更大规模下可以删除，往往看起来不够新颖。因此社区会积累为旧 regime 设计的假设，却缺少系统性减法。本节把研究激励也视为架构演化的一部分，因为哪些实验得到资源、哪些负结果被发表，会直接影响旧偏置被保留多久。
+
+\lecturefigure{hyung-slide-015.jpg}{长期更好的方法在当前往往更差}{Hyung Won Chung official deck, p.~15}
+
+\begin{warningbox}{短期 leaderboard 优势不等于长期研究价值}
+如果一个方法只在小模型、小数据或特定 benchmark 上领先，需要继续问：优势是否来自更强先验？规模扩大后是否饱和？实现复杂度是否妨碍更大训练？这些问题不能由当前单点排名回答。
+\end{warningbox}
+
+\teachervoice{Hyung Won 在 00:13:27--00:14:23 直言，论文激励鼓励添加结构，却很少奖励删除结构。他还说长期更好的方法几乎必然在今天看起来更差，因为更自由的学习系统在低资源区间更混乱。}
+
+\lecturefigure{hyung-slide-016.jpg}{阶段总结：主导力量是更便宜的计算与 associated scaling}{Hyung Won Chung official deck, p.~16}
+
+这张总结页不是把其他力量全部否定，而是宣布接下来的分析坐标系：把 Transformer 架构中的额外结构逐项解释为某个历史条件下的 inductive bias，再问当前规模是否仍需要它。这样，架构图不再是静态分类，而变成可以沿 scale trajectory 推理的对象。
+
+\subsection{本章小结}
+
+本章建立了 Hyung Won 的判断框架：计算成本长期下降使一般方法具有强大后劲；归纳偏置在低资源下提高效率，却可能限制后续规模化。正确结论既不是“结构越多越好”，也不是“结构越少越好”，而是持续估计当前 regime 的最优偏置，并为未来的减法实验保留路径。
+
+\section{三类 Transformer：从 sequence model 的共同底座出发}
+
+上一章讨论为什么要研究结构，本章先把结构讲清楚。Encoder-decoder、encoder-only 与 decoder-only 不是三个完全无关的发明；它们都把离散输入变成向量序列，再用 attention 建模元素间交互。差异主要来自参数是否共享、attention mask 如何限制可见范围，以及输出如何被训练和使用。
+
+\subsection{三类架构的任务接口}
+
+本节先看全景，再逐步进入图。Encoder-decoder 为输入与输出设置两套 stack；encoder-only 把输入压成表征，通常需要 task-specific head；decoder-only 把输入与目标串接，在一个 causal stack 中逐 token 生成。不同接口隐含了不同任务假设。
+
+\lecturefigure{hyung-slide-017.jpg}{Transformer 的三类架构：encoder-decoder、encoder-only、decoder-only}{Hyung Won Chung official deck, p.~17}
+
+\begin{knowledgebox}{术语表：三类架构解决什么问题}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth} X}
+\toprule
+架构 & 核心机制与课程关系 \\
+\midrule
+Encoder-decoder & 输入由 encoder 双向编码，decoder 通过 causal self-attention 与 cross-attention 生成目标；适合显式 sequence-to-sequence。 \\
+Encoder-only & 全序列双向交互，输出通常用于分类、检索或 token labeling；若要生成序列，需要额外生成机制。 \\
+Decoder-only & 输入与历史输出位于同一 causal 序列，参数共享、接口统一，天然适合 autoregressive generation 与多轮续写。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{从字符到向量序列，再到 interaction}
+
+架构分类之前需要理解共同 pipeline。文本先被 tokenizer 映射成 token ID；embedding table 再把每个 ID 映射到 $d_{\text{model}}$ 维向量；sequence model 根据 attention pattern 让不同位置交换信息。模型处理的是向量序列，而不是直接处理“词义”。
+
+\lecturefigure{hyung-slide-018.jpg}{原始字符序列是 Transformer pipeline 的起点}{Hyung Won Chung official deck, p.~18}
+
+\lecturefigure{hyung-slide-021.jpg}{完整 pipeline：tokenization、embedding 与 sequence model}{Hyung Won Chung official deck, p.~21}
+
+若 token ID 为 $i_t$，embedding matrix 为 $E\in\mathbb{R}^{V\times d}$，则
+\[
+h_t^{(0)}=E[i_t]+p_t.
+\]
+其中 $V$ 是词表大小，$d$ 是 hidden dimension，$E[i_t]$ 是第 $i_t$ 个 token 的向量，$p_t$ 是位置表示，$h_t^{(0)}$ 是送入第一层的状态。Tokenization 决定序列长度和切分边界，embedding 决定初始连续表示，两者都会影响后续计算成本。
+
+\teachervoice{Hyung Won 在 00:16:11--00:17:26 把 Transformer 先定义成 sequence model：输入元素可以是词、图像或其他对象，核心是对元素之间的 interaction 建模。这个顺序避免把 attention 公式脱离数据接口。}
+
+\subsection{Encoder-decoder：三种 attention role}
+
+现在进入原始 Transformer。读图时先把三条信息流分开：encoder 内的双向 self-attention、decoder 内的因果 self-attention，以及 decoder 查询 encoder 表示的 cross-attention。每一条边都对应“哪个位置可以读取哪个位置”的权限。
+
+\lecturefigure{hyung-slide-022.jpg}{完整 encoder-decoder 架构与三种 attention role}{Hyung Won Chung official deck, p.~22}
+
+\begin{importantbox}{Self-attention 与 cross-attention}
+给定 query $Q$、key $K$、value $V$，scaled dot-product attention 为
+\[
+\operatorname{Attn}(Q,K,V)=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}+M\right)V.
+\]
+其中 $d_k$ 是 key 维度，$M$ 是可见性 mask。Self-attention 的 $Q,K,V$ 来自同一序列；cross-attention 的 $Q$ 来自 decoder，$K,V$ 来自 encoder 输出。
+\end{importantbox}
+
+\lecturefigure{hyung-slide-023.jpg}{Encoder 使用 bidirectional self-attention 建模完整输入}{Hyung Won Chung official deck, p.~23}
+
+Bidirectional attention（双向注意力）允许输入中任一位置读取任一其他位置。若序列长度为 $n$，可见性 mask 可写为 $M_{ij}=0$；没有未来屏蔽。它适合一次性给定的输入，因为所有 token 在编码时都已知，但也意味着输入末尾变化会影响前面所有位置的表示。
+
+\lecturefigure{hyung-slide-025.jpg}{Decoder 使用 causal self-attention，只读取当前位置及其左侧历史}{Hyung Won Chung official deck, p.~25}
+
+Causal attention（因果注意力）用上三角 mask 阻止读取未来：
+\[
+M_{ij}=\begin{cases}
+0,&j\le i,\\
+-\infty,&j>i.
+\end{cases}
+\]
+其中 $i$ 是当前 query 位置，$j$ 是被读取的 key 位置。Softmax 后，未来位置权重变为零，因此训练时可以并行计算所有位置，推理时又保持 autoregressive 条件。
+
+\lecturefigure{hyung-slide-027.jpg}{Cross-attention 把 decoder 目标位置连接到 encoder 输入表示}{Hyung Won Chung official deck, p.~27}
+
+\lecturefigure{hyung-slide-028.jpg}{Encoder-decoder 的最终构造：输入双向编码，目标因果生成}{Hyung Won Chung official deck, p.~28}
+
+\begin{knowledgebox}{读图：一条机器翻译路径怎样流动}
+输入 ``That is good'' 先在 encoder 内双向交互，形成每个源 token 的上下文化表示；decoder 在生成 ``Das ist gut'' 时，只能读取已生成的目标前缀，同时通过 cross-attention 访问 encoder 最终层。图支持的是信息权限结构，不表示 attention 权重天然等同于对齐解释。
+\end{knowledgebox}
+
+\subsection{Encoder-only 与 decoder-only 的关键差异}
+
+前一节使用两个 stack；本节看两个极端。Encoder-only 产生全局双向表征，分类时常读取特殊 token 并加 task-specific layer；decoder-only 则把输入和输出统一成一个序列，用同一套参数和 causal self-attention 承担上下文理解与生成。
+
+\lecturefigure{hyung-slide-032.jpg}{Encoder-only 的完整形态：双向表征、特殊 token 与任务头}{Hyung Won Chung official deck, p.~32}
+
+\begin{warningbox}{Encoder-only 不是“不能输出任何序列”}
+这页说的是默认接口：单个 encoder stack 不自带 autoregressive generation path。可以在其上增加 decoder、span head、迭代填空或其他生成机制；代价是系统不再是图中这个最简 encoder-only 结构。课程比较的是内建假设，而不是逻辑上的绝对能力。
+\end{warningbox}
+
+\lecturefigure{hyung-slide-037.jpg}{Decoder-only 的完整形态：串接输入目标、共享参数与 causal attention}{Hyung Won Chung official deck, p.~37}
+
+Decoder-only 的统一接口可写成
+\[
+p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{<t}).
+\]
+其中 $x$ 是输入 token 序列，$y$ 是目标序列，$y_{<t}$ 是已生成目标前缀。输入和目标使用同一个 stack，但 loss 通常可以只在目标位置计算；“参数共享”不等于模型无法区分角色，因为位置、分隔 token 和上下文本身仍提供条件。
+
+\subsection{本章小结}
+
+三类 Transformer 共享 tokenization、embedding、attention 和 MLP 底座；主要差异是信息可见性、参数分组和任务接口。理解这些差异后，下一章不再把 encoder-decoder 与 decoder-only 当成不可通约的类别，而是通过四步操作把前者连续变换为后者，从而暴露真正的归纳偏置。
+
+\section{四步变换：把 Encoder-decoder 连续改写成 Decoder-only}
+
+上一章给出静态架构图，本章执行 Hyung Won 的核心推导。起点是标准 encoder-decoder，终点是 decoder-only；每一步只消除一个差异，并更新比较表。推导的教学价值不在于推荐某个具体实现，而在于把“架构不同”改写成四个可单独实验的假设。
+
+\subsection{起点：四类差异}
+
+本节先固定比较维度：额外 cross-attention、encoder/decoder 参数是否分离、target-to-input 在哪一层连接，以及输入 self-attention 是否双向。后续每一步都只改变其中一项，避免把多个变化混在一次 ablation 中。
+
+\lecturefigure{hyung-slide-040.jpg}{变换起点：标准 encoder-decoder 与 decoder-only 并排比较}{Hyung Won Chung official deck, p.~40}
+
+\begin{importantbox}{四个可检验假设}
 \begin{enumerate}
-\item \textbf{双向注意力}是一种归纳偏置——假设可以看到完整输入。在规模较小时有用，但阻止了模型作为通用生成器
-\item \textbf{交叉注意力}是另一种归纳偏置——假设编码和解码需要不同处理。随规模增大被证明不必要
-\item \textbf{掩码语言模型目标}假设可以并行预测所有被掩码的位置——这比自回归目标更高效但更受限
-\item \textbf{KV 缓存}：因果注意力天然支持 KV 缓存（已处理的 token 可复用），而双向注意力不支持。这在多轮对话场景中是巨大的工程优势
+  \item 输入与目标是否需要独立 attention role？
+  \item 输入与目标是否需要独立参数？
+  \item decoder 每层是否只能读取 encoder 最终层？
+  \item 输入是否必须使用 bidirectional attention？
 \end{enumerate}
+把它们分开，才能知道性能差异来自哪一项结构。
 \end{importantbox}
 
-\subsection{本章小结}
-Decoder-only 架构的胜出是``苦涩教训''的又一例证：最少假设 + 最多计算 = 最好结果。
+\subsection{步骤一：共享 cross-attention 与 self-attention 参数}
 
-\section{对当前趋势的审视}
+Cross-attention 和 self-attention 都使用 query、key、value 与 output projection；差别主要是输入张量来自哪里。因此第一步不删除连接，而是让两种 role 共享投影参数，使一个 attention module 同时承担序列内与跨序列交互。
 
-\subsection{当前的``捷径''}
+\lecturefigure{hyung-slide-041.jpg}{步骤一：共享 cross-attention 与 self-attention 参数}{Hyung Won Chung official deck, p.~41}
 
-Chung 认为当前仍有许多``结构性捷径''有待被移除：
+若原先有 $W_Q^{\mathrm{self}},W_K^{\mathrm{self}},W_V^{\mathrm{self}}$ 与 $W_Q^{\mathrm{cross}},W_K^{\mathrm{cross}},W_V^{\mathrm{cross}}$，参数共享就是施加约束
+\[
+W_{\bullet}^{\mathrm{self}}=W_{\bullet}^{\mathrm{cross}},
+\quad \bullet\in\{Q,K,V,O\}.
+\]
+其中 $Q,K,V,O$ 分别表示 query、key、value 与 output projection。连接来源仍可不同，但模型不能为两种 role 保留完全独立的线性映射。
 
-\begin{itemize}
-\item 低精度训练（FP16/BF16）——虽然有用，但本质上是计算受限时的权宜之计
-\item 固定的 tokenizer——人为设计的 token 切分规则可能不是最优的
-\item 固定的训练数据配比——可能随模型规模变化而需要调整
-\end{itemize}
+\lecturefigure{hyung-slide-042.jpg}{步骤一后的比较：独立 cross-attention 变成 self-attention 兼任两种 role}{Hyung Won Chung official deck, p.~42}
 
-\subsection{硬件协同设计}
-
-如果架构足够确定（如 Transformer），可以将其硬编码到芯片中以获得更高效率。当前 GPU ``太通用''了——这既是优势也是浪费。
-
-\begin{knowledgebox}{机器辅助的芯片设计}
-Chung 半开玩笑地预测：AI 很快将在芯片设计方面超越人类。届时，AI 可以帮助设计专门优化 Transformer 推理的硬件，形成``AI 设计 AI 硬件''的正反馈循环。
+\begin{knowledgebox}{读图：共享参数不等于共享输入}
+表格改变的是 module identity，而不是可见性。Decoder 仍可以对自己的历史和 encoder 表示使用不同 mask；只是投影矩阵相同。实验时若同时改变 mask 和参数，很难判断收益来自表示共享还是连接模式。
 \end{knowledgebox}
 
+\subsection{步骤二：共享 encoder 与 decoder 参数}
+
+第一步统一 attention role，第二步统一两套 stack。若输入与目标都只是 token sequence，使用完全独立参数相当于假设两类序列需要不同表示空间。共享参数则要求同一组 layer 处理两者，把差异交给上下文和 mask 表达。本节因此不仅比较参数数量，还比较“角色差异应写进权重，还是应由序列条件动态表达”这两种建模选择。
+
+\lecturefigure{hyung-slide-044.jpg}{步骤二：共享 encoder 与 decoder 的 layer 参数}{Hyung Won Chung official deck, p.~44}
+
+\lecturefigure{hyung-slide-045.jpg}{步骤二后的比较：separate parameters 变成 shared parameters}{Hyung Won Chung official deck, p.~45}
+
+\begin{warningbox}{参数共享是一种更弱任务先验，也可能造成干扰}
+共享能减少参数并促进跨语言、跨角色知识复用，但当输入与目标分布差异很大时，也可能产生容量竞争。正确问题不是“共享必然更先进”，而是当前任务是否仍需要专门化，以及增加总容量后这种专门化收益是否保留。
+\end{warningbox}
+
+\teachervoice{00:24:53--00:25:17 的讲解非常直接：decoder-only 只有一个 stack，所以自然共享参数。Hyung Won 借这个对比追问 encoder-decoder 的分离是否仍有必要，而不是声称共享本身没有代价。}
+
+\subsection{步骤三：让 decoder 与 encoder 的同层表示对齐}
+
+标准 cross-attention 通常让每个 decoder layer 读取 encoder 最终层。Decoder-only 的同层 self-attention 则让第 $\ell$ 层读取前缀 token 在同一层的表示。第三步把连接改成 layer-aligned，使表示粒度更接近单 stack。
+
+\lecturefigure{hyung-slide-047.jpg}{步骤三：decoder layer $\ell$ attends to encoder layer $\ell$}{Hyung Won Chung official deck, p.~47}
+
+\lecturefigure{hyung-slide-048.jpg}{步骤三后的比较：final-layer cross-attention 变成同层连接}{Hyung Won Chung official deck, p.~48}
+
+\begin{knowledgebox}{读图：为什么 layer index 可能代表 granularity}
+深层网络常呈层级表示：底层偏局部形式，高层偏抽象语义。若 decoder 第一层只能读取 encoder 最终层，它必须从高度抽象表示中恢复低层信息；同层连接允许每个阶段读取相近粒度的输入。这个解释是设计直觉，是否真的形成瓶颈仍需随深度做 ablation。
+\end{knowledgebox}
+
+\subsection{步骤四：把 encoder self-attention 改成 causal}
+
+前三步已统一 module、参数和层间连接，剩下的主要差异是输入序列内部是否双向可见。将 encoder mask 改为 causal 后，前面 token 不再读取后面 token；把输入与目标串接起来，两个 stack 的计算图便接近单个 decoder-only stack。
+
+\lecturefigure{hyung-slide-050.jpg}{步骤四：将 encoder 的 bidirectional self-attention 改成 causal}{Hyung Won Chung official deck, p.~50}
+
+\lecturefigure{hyung-slide-051.jpg}{四步完成后的差异表：两类架构只剩很小实现差别}{Hyung Won Chung official deck, p.~51}
+
+\begin{lstlisting}[caption={四步 architecture transformation 的概念伪代码}]
+model = encoder_decoder()
+share(model.cross_attention, model.self_attention)
+share(model.encoder_layers, model.decoder_layers)
+connect_decoder_layer_to_matching_encoder_layer(model)
+set_encoder_mask(model, mode="causal")
+concatenate_input_and_target(model)
+\end{lstlisting}
+
+\teachervoice{00:26:21--00:26:45，Hyung Won 认为完成四步后，两种架构在同任务同数据下的差异可能小于重复训练噪声。这是经验判断，不是课程给出的正式定理；真正验证仍需要控制参数量、初始化、训练预算和数据顺序。}
+
 \subsection{本章小结}
-保持``减法思维''——持续审视哪些假设可以被移除——是推动进步的关键心态。
 
-\section{对今天 LLM 系统设计的直接建议}
+四步变换把架构标签还原成四个局部假设：attention role、参数分离、层间连接和输入方向性。它们都能单独实验，也都可能随规模改变价值。下一章将逐项解释这些结构为什么在机器翻译和早期任务中合理，以及为什么在通用语言模型、多轮对话和更深网络中需要重新审视。
 
-\subsection{先问什么是必须的，再问什么是方便的}
+\section{结构为何曾经有效：翻译与 Instruction Tuning 的自然实验}
 
-Chung 的``苦涩教训''视角，对今天做 LLM 系统的人有很强的现实意义。很多组件之所以存在，并不是因为它们在长期最优，而是因为它们在当前资源约束下\textbf{方便、便宜、可控}。这并没有错，但团队必须明确：哪些设计是本质需求，哪些只是暂时折中。
+上一章完成形式变换，本章问历史动机。Encoder-decoder 的额外结构并非任意复杂化：2017 年的核心任务是机器翻译，输入和目标来自不同语言；后来的学术 instruction-tuning 数据又常呈长输入、短答案。结构与数据分布吻合时，归纳偏置会显著提高有限预算下的效率。
 
-\begin{importantbox}{一条可执行的架构审查问题}
-面对任意一个系统组件，都可以问三件事：第一，它是否真正提高了最终能力；第二，它是否只是为绕开当前算力/数据限制；第三，如果未来计算更便宜，它是否仍然值得保留。能经受这三问的设计，才更可能跨越代际演化。
+\subsection{三项额外结构}
+
+本节先看完整清单，再聚焦第一项。相对 decoder-only，encoder-decoder 假设输入与目标足够不同，目标应读取已经完全编码的输入，并且输入 token 之间适合全双向交互。三项假设分别对应参数、层间连接和 attention mask。
+
+\lecturefigure{hyung-slide-052.jpg}{Encoder-decoder 相对 decoder-only 的三项额外结构}{Hyung Won Chung official deck, p.~52}
+
+\lecturefigure{hyung-slide-053.jpg}{第一项假设：输入与目标不同到值得使用独立参数}{Hyung Won Chung official deck, p.~53}
+
+\begin{importantbox}{判断一个 inductive bias 是否仍有效的三问}
+\begin{enumerate}
+  \item 它最初匹配了什么数据分布或任务约束？
+  \item 当前数据、目标和交互方式是否仍满足这个约束？
+  \item 若移除结构并增加规模，性能曲线在哪个预算点交叉？
+\end{enumerate}
+只回答第一问会把历史合理性误当成永久正确性。
 \end{importantbox}
 
-\subsection{这如何影响模型与产品决策}
+\subsection{机器翻译：独立参数曾经很自然}
 
-例如，在应用层大量堆叠 prompt 模板、手工规则和链式路由，也许能快速提升短期效果，但这些结构常常会随着基础模型能力提升而被淘汰。反过来，数据管线、评测体系、推理缓存和服务编排这类基础设施，往往会长期保值，因为它们解决的是系统层问题，而非对模型施加过强假设。
+2017 年 Transformer 面向 source-to-target translation。输入是源语言句子，目标是另一种语言的输出，二者词表、语序和生成角色不同。在只优化翻译的设定下，让 encoder 专注源语言、decoder 专注目标语言是一种高效先验。本节先承认这一历史合理性，再比较通用预训练改变了哪些条件，避免用今天的任务接口倒推旧设计“从一开始就错误”。
 
-\subsection{本章小结}
+\lecturefigure{hyung-slide-054.jpg}{机器翻译中的 source/target 分布差异支持独立参数}{Hyung Won Chung official deck, p.~54}
 
-苦涩教训不是反对工程技巧，而是要求我们持续区分``长期资产''和``阶段性补丁''。
+\lecturefigure{hyung-slide-055.jpg}{通用语言模型要融合跨语言知识，独立参数的动机减弱}{Hyung Won Chung official deck, p.~55}
 
-\section{何时应该保留归纳偏置}
+读第二页时要注意任务已经改变。现代 pretraining 不只学习英德翻译，而要在多语言文本中形成共享世界知识；同一事实可能用不同语言表达。若把输入与目标永久隔离，模型可能更难复用表示。另一方面，多语专门化仍可能有价值，因此这页提出的是 scale-era counterargument，不是独立参数绝对无用。
 
-\subsection{偏置不是原罪，而是要有退出条件}
+\teachervoice{00:27:27--00:28:45 的历史对比非常具体：当目标只是翻译时，给不同语言分开参数“很自然”；当目标变成一般知识学习时，讲者更希望把跨语言知识合并。Inductive bias 的评价随着 objective 改变。}
 
-这节课很容易被误读为``所有归纳偏置都该删掉''。更准确的理解是：归纳偏置在资源不足、数据有限、上线约束严格时非常有价值，但它们最好带有\textbf{明确的适用边界和退出条件}。如果某个偏置随着算力增长仍持续带来收益，那它就不再只是权宜之计，而可能是稳定的系统结构。
+\subsection{FLAN：长输入、短目标让 encoder-decoder 意外占优}
 
-\begin{knowledgebox}{现实中常见的两类健康偏置}
-\begin{itemize}
-\item \textbf{安全偏置}：权限控制、审计日志、沙箱执行。这些限制不是为了弥补模型能力不足，而是为了降低系统风险。
-\item \textbf{产品偏置}：明确的工作流和交互约束，用来减少用户困惑与误操作。
-\end{itemize}
+Instruction tuning 提供了更细的自然实验。同一团队在 PaLM（decoder-only）与 T5（encoder-decoder）上做 fine-tuning；虽然大部分时间用于优化 PaLM，T5 的增益却更大。讲者没有把结果归因于架构普遍优越，而是回到数据长度分布寻找匹配关系。
+
+\lecturefigure{hyung-slide-056.jpg}{Instruction finetuning 把大量学术任务统一成自然语言指令}{Hyung Won Chung official deck, p.~56}
+
+\lecturefigure{hyung-slide-057.jpg}{FLAN 实验中 encoder-decoder 的 fine-tuning 增益更大}{Hyung Won Chung official deck, p.~57}
+
+\begin{knowledgebox}{读图：比较的是增益，不是绝对模型胜负}
+表格强调 instruction tuning 前后的 improvement。不能只看红框就得出 T5 在所有任务、所有规模上优于 PaLM；课堂结论是 encoder-decoder 的结构与该批学术数据特别匹配，因此 fine-tuning 信号利用率更高。
 \end{knowledgebox}
 
-\subsection{对研究者的提醒}
+\lecturefigure{hyung-slide-058.jpg}{学术数据常有长输入、短目标的长度分布}{Hyung Won Chung official deck, p.~58}
 
-\begin{warningbox}{不要把``通用性''误当作不需要系统设计}
-即使 decoder-only 模型赢得了主流，也不代表所有任务都该用同一套最小假设直接硬做。真正的经验是：尽量把偏置放在系统层和数据层，而不是过早固化在模型结构里。
+若输入长度随机变量为 $L_x$、目标长度为 $L_y$，该数据集大致满足
+\[
+\mathbb{E}[L_x]\gg \mathbb{E}[L_y].
+\]
+其中 $\mathbb{E}[L_x]$ 与 $\mathbb{E}[L_y]$ 分别是输入和目标平均长度。长题面、短标签使两侧分布明显不同，独立 encoder/decoder 参数就能专门化；但长文本生成和多轮聊天会缩小甚至反转这种不对称。
+
+\teachervoice{00:29:22--00:30:46，Hyung Won 说团队花了 99\% 时间优化 PaLM，T5 却在几天内得到更大增益；他的解释是数据长度偏置与架构“意外对上了”。这段 teacher voice 把结果从品牌比较变成分布匹配分析。}
+
+\begin{warningbox}{Academic benchmark 的可评分性会塑造训练分布}
+长目标难以人工标注和自动评分，因此学术数据偏向长输入、短答案。可评分性不是用户价值的同义词：创作、代码、分析与对话往往需要长输出。若模型架构只对 benchmark 分布优化，部署任务改变后原有结构优势可能消失。
 \end{warningbox}
 
 \subsection{本章小结}
 
-最健康的做法不是迷信无偏，也不是迷信结构，而是在技术进步过程中不断重新验证哪些假设仍然值得保留。
+机器翻译和 FLAN 说明归纳偏置为什么能在特定时代产生真实收益：它把有限容量投向数据分布最需要的方向。但通用预训练、长生成和多轮对话改变了输入/目标关系，迫使研究者重新测试参数分离。历史不是为了嘲笑旧设计，而是为了识别设计成立的条件。
+
+\section{表示粒度、Bidirectionality 与多轮缓存}
+
+前一章分析参数分离，本章处理剩余两项结构：decoder 只读取 encoder 最终层，以及 encoder 使用 bidirectional attention。两项都曾提高任务质量，但随着网络更深、对话更长，信息粒度和重复计算问题会变得突出。这里第一次把 architecture choice 与 serving cost 放到同一张图中。
+
+\subsection{只读最终 encoder layer 会不会形成信息瓶颈}
+
+本节关注 cross-attention 的读取位置。深层网络往往在不同层表示不同粒度的信息；若 decoder 的第一层也只能访问 encoder 最终层，低层形式信息可能经过过度压缩。当前几十层模型上影响也许很小，但极深网络可能放大这种不匹配。
+
+\lecturefigure{hyung-slide-059.jpg}{第二项假设：目标只需读取已经完全编码的输入}{Hyung Won Chung official deck, p.~59}
+
+\lecturefigure{hyung-slide-060.jpg}{标准 cross-attention 只读取 encoder 最终层激活}{Hyung Won Chung official deck, p.~60}
+
+\lecturefigure{hyung-slide-061.jpg}{深层网络的底层与顶层通常编码不同粒度的信息}{Hyung Won Chung official deck, p.~61}
+
+\begin{knowledgebox}{读图：representation hierarchy 是启发式，不是固定语义表}
+视觉网络常用“底层边缘、顶层物体”说明层级表示；语言模型中也可能出现局部形式到抽象语义的趋势。但层含义会随训练目标、残差连接与深度变化。图真正支持的是：不同层可能提供互补信息，因此只暴露最终层是一项需要检验的结构选择。
+\end{knowledgebox}
+
+\teachervoice{00:32:19--00:33:01，Hyung Won 说在自己用过的 24 层左右 T5 上，layer 1 读取 layer 24 似乎没问题；但若未来有十倍或千倍深度，他“不太舒服”。这是 scale extrapolation 的典型提问，而不是已观察到的失败。}
+
+\subsection{Layer-aligned connection 是怎样的反事实}
+
+上一节指出粒度问题，本节构造最小替代方案：让 decoder 第 $\ell$ 层读取 encoder 第 $\ell$ 层。这样每个阶段得到相近深度的输入表示，也更接近 decoder-only 同层 token interaction。反事实的价值在于可做受控实验，即使最终不采用它。
+
+\lecturefigure{hyung-slide-062.jpg}{第三项假设：输入内部需要 all-to-all bidirectional interaction}{Hyung Won Chung official deck, p.~62}
+
+\lecturefigure{hyung-slide-063.jpg}{Layer-aligned connection 与 causal input 的替代架构}{Hyung Won Chung official deck, p.~63}
+
+\begin{importantbox}{结构分析的正确产物是 ablation axis}
+从 H059--H063 可以得到两个独立实验轴：final-layer versus layer-aligned cross-attention，以及 bidirectional versus causal input mask。若一次同时改变两者，性能差异无法归因；课程的四步推导正是为了生成可单独缩放的 ablation。
+\end{importantbox}
+
+\subsection{Bidirectionality 的质量收益与系统成本}
+
+Bidirectional encoder 在 BERT 时代对困难理解任务非常重要，因为每个 token 能同时利用左右上下文。但在大规模 instruction tuning 中，讲者的 anecdotal experience 是双向与单向差异不大；与此同时，多轮聊天暴露了明显系统成本：新消息改变了旧输入的“未来”，双向表示必须重新编码。
+
+\lecturefigure{hyung-slide-064.jpg}{在足够规模下 bidirectionality 可能收益变小，却增加多轮对话成本}{Hyung Won Chung official deck, p.~64}
+
+\teachervoice{00:33:11--00:33:59，Hyung Won 明确把结论标成 highly anecdotal：Flan-2 中双向和单向 fine-tuning 差异不大。讲义保留这个证据等级，不能把它改写成“bidirectional attention 已被证明无用”。}
+
+\subsection{为什么 causal attention 可以复用 KV cache}
+
+本节把图转成计算账。Causal model 中旧 token 的表示不依赖未来新 token，因此它们在前一轮计算出的 key/value 可以缓存；追加消息时只计算新增部分。Bidirectional encoder 中旧 token 可以读取新 token，追加后旧表示失效，通常需要重新编码整个输入。
+
+\lecturefigure{hyung-slide-066.jpg}{多轮对话中 bidirectional 重编码与 unidirectional cache reuse 的对比}{Hyung Won Chung official deck, p.~66}
+
+设已有上下文长度为 $n$，新增长度为 $m$。忽略常数与 MLP，重新做 full attention 的代价近似
+\[
+O\bigl((n+m)^2\bigr),
+\]
+而 causal KV cache（key-value cache，保存旧 token 每层的 key/value 张量）只需为新增 query 计算对旧缓存和新增 token 的 attention，增量代价近似
+\[
+O(nm+m^2).
+\]
+其中 $n$ 是旧上下文长度，$m$ 是新增 token 数。缓存降低重复计算，却增加显存占用；长上下文服务仍需管理 cache placement、batching 与 eviction。
+
+\begin{knowledgebox}{读图：蓝色可复用区域对应因果不变性}
+Unidirectional 情况下，旧 token 不能看未来，因此新消息到来不会改变旧 key/value；bidirectional 情况下，``How are you?'' 的表示会因为后续 ``Bad'' 出现而改变。系统效率优势来自计算图的依赖方向，而不是 decoder-only 名称本身。
+\end{knowledgebox}
+
+\teachervoice{00:34:07--00:35:12 的课堂解释把模型质量与 serving 连接起来：一个在 2018 年提高 benchmark 的结构，可能在多轮产品形态中制造重编码成本。Architecture trajectory 不只由 accuracy 决定，也由交互模式决定。}
+
+
+\subsection{结论：把历史分析变成下一次消融}
+
+最后一页没有要求学生复制某个固定架构，而是要求回到自己的研究问题：当前系统中有哪些默认结构？它们为什么在旧 regime 中有用？随着 compute、数据、网络深度与交互长度变化，它们会不会从捷径变成瓶颈？
+
+\lecturefigure{hyung-slide-067.jpg}{结论：识别主导力量，并用 scaling 视角分析额外结构}{Hyung Won Chung official deck, p.~67}
+
+\teachervoice{00:35:42--00:36:18，Hyung Won 的结尾要求学生反复做历史分析，训练自己识别“哪些假设需要复查、为什么、能否换成更一般的机制并 scale up”。这比记住 decoder-only 胜出更重要。}
+
+\begin{importantbox}{从历史结论到实验问题}
+对任一结构 $b$，至少写出四项：它解决的旧问题、当前收益、可能限制的规模轴、以及能隔离该假设的 ablation。若只知道“去掉后当前分数下降”，还没有回答它是否会改变长期 scaling trajectory。
+\end{importantbox}
+
+\subsection{本章小结}
+
+表示层级提醒我们检查 final-layer bottleneck；多轮交互提醒我们把 attention direction 与缓存成本一起考虑；结尾则把这些案例压缩成一般研究程序：识别默认假设，解释它在旧环境中的收益，再沿新的规模轴测试它是否仍值得保留。
 
 \section{总结与延伸}
 
-本讲通过历史分析建立了一个强大的思维框架：(1) AI 进步由计算能力的指数增长驱动；(2) 归纳偏置是资源不足时的权宜之计；(3) 随着资源增加，应系统地移除不必要的假设；(4) 最简单、最通用的方法在长期内总会胜出。这一框架不仅解释了过去，也为思考未来提供了指导。
+Hyung Won Chung 用 67 页 deck 完成了一次“架构考古”：先提出 exponentially cheaper compute 这一方向性力量，再用 Bitter Lesson 解释结构与规模的张力，随后把 encoder-decoder 到 decoder-only 拆成四个局部变换，最后用翻译、FLAN、层级表示与多轮缓存说明每项偏置为什么曾经合理、又为什么可能过期。
+
+\subsection{十条核心结论}
+
+\begin{enumerate}
+  \item 研究快速变化领域时，追踪结果之外还要研究变化轨迹。
+  \item Dominant driving force 是带误差边界的建模近似，不是唯一因果宣言。
+  \item Compute per dollar 的历史趋势能指导研究策略，但不能自动证明未来斜率。
+  \item Inductive bias 同时带来当前效率与潜在 scale ceiling。
+  \item ``Scalable'' 指随预算扩大仍持续改善，不等同于能分布式运行。
+  \item Encoder-decoder、encoder-only 与 decoder-only 共享 sequence-model 底座，差异可局部拆解。
+  \item 四步 transformation 分别移除 attention 参数、stack 参数、layer connection 与 mask 的结构假设。
+  \item 机器翻译和 long-input/short-target 数据解释了 encoder-decoder 为什么曾经有优势。
+  \item Final-layer-only cross-attention 与 bidirectionality 的价值都应随深度和交互模式重新测量。
+  \item 架构历史真正提供的是一套 bias audit，而不是永恒的赢家名单。
+\end{enumerate}
+
+\subsection{一张表压缩结构生命周期}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}L{0.17\textwidth}L{0.24\textwidth}L{0.24\textwidth}L{0.25\textwidth}@{}}
+\toprule
+结构假设 & 旧环境中的理由 & Regime 变化 & 应做的测试 \\
+\midrule
+输入/目标参数分离 & 翻译两侧角色和词表不同 & 通用知识、长生成、多轮对话 & 参数共享 scaling curve \\
+只读最终 encoder layer & 中等深度下足够、实现简单 & 网络更深、粒度层级更丰富 & layer-aligned cross-attention \\
+输入双向 attention & 完整输入上的理解任务 & streaming 与多轮增量交互 & 质量收益对重编码成本 \\
+固定 architecture label & 便于实现与比较 & 组件可局部替换、系统约束变化 & 单变量 transformation ablation \\
+\bottomrule
+\end{tabular}
+\caption{把历史结构写成可检验的生命周期假设。}
+\end{table}
+
+\subsection{实践：Bias audit 的最小流程}
+
+下面的伪代码把课堂方法变成研究记录。它不会替代实验，却能防止团队只报告当前最好分数，而忘记记录结构成立的条件。
+
+\begin{lstlisting}[caption={Inductive-bias audit 的研究记录模板}]
+for bias in architecture.assumptions:
+    document(original_problem(bias))
+    measure(current_regime_gain(bias))
+    choose_scale_axes(compute, data, depth, interaction)
+    run_single_variable_ablation(bias, scale_axes)
+    report(crossover_point, uncertainty, system_cost)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={区分当前最优与长期趋势的决策伪代码}]
+if deployment_budget < observed_crossover:
+    ship(currently_efficient_method)
+else:
+    validate(less_structured_method)
+keep_both_curves_and_failure_cases()
+never_label_extrapolation_as_measurement()
+\end{lstlisting}
+
+\begin{warningbox}{不要把“减法研究”变成新的教条}
+移除结构并不天然更科学。若某个偏置表达真实不变性、显著降低数据需求，或满足延迟、隐私与能耗约束，它可能长期合理。正确动作是测量收益、成本与交叉点，而不是把 ``less structure'' 当作无需证据的审美偏好。
+\end{warningbox}
+
+\subsection{自测问题}
+
+\begin{enumerate}
+  \item 为什么落笔实验允许忽略空气阻力，却不能推出复杂系统永远只有一个主导变量？
+  \item Compute per dollar 与 Moore's law 有什么区别？课堂图没有证明什么？
+  \item Inductive bias 如何同时提高 sample efficiency 又降低长期 scalability？
+  \item Encoder-decoder 的三种 attention role 分别是什么？
+  \item 四步 transformation 每一步移除了哪一项结构假设？
+  \item 为什么机器翻译天然支持输入/目标参数分离？
+  \item FLAN-T5 的更大增益为什么只是支持数据分布假设，而不是完成因果证明？
+  \item Final-layer-only cross-attention 在极深网络中可能造成什么瓶颈？
+  \item Bidirectional attention 为什么妨碍多轮对话中的 KV cache 复用？
+  \item 如果 compute 趋势改变，应该更新哪些假设，而不是机械保留哪句结论？
+\end{enumerate}
 
 \subsection{拓展阅读}
-\begin{itemize}
-\item Sutton, ``The Bitter Lesson'', 2019
-\item Vaswani et al., ``Attention Is All You Need'', 2017
-\item Devlin et al., ``BERT: Pre-training of Deep Bidirectional Transformers'', 2019
-\item Chung et al., ``Scaling Instruction-Finetuned Language Models'', 2022
-\end{itemize}
 
-%% --- 正文内容结束 --- %%
+\begin{itemize}
+  \item Richard Sutton, \emph{The Bitter Lesson}：一般方法、计算与人工结构的长期关系。
+  \item Vaswani et al., \emph{Attention Is All You Need}：原始 encoder-decoder Transformer 与三类 attention role。
+  \item Devlin et al., \emph{BERT}：encoder-only 与 masked language modeling 的代表性设计。
+  \item Brown et al., \emph{Language Models are Few-Shot Learners}：decoder-only scaling 的历史节点。
+  \item Chung et al., \emph{Scaling Instruction-Finetuned Language Models}：FLAN-T5/PaLM 的 instruction-tuning 证据。
+\end{itemize}
 
 \end{document}

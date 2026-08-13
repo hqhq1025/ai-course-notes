@@ -1,348 +1,748 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 07：从 Self-Attention 到 Non-Parametric Transformer——让模型在 datapoints 之间推理}
+\renewcommand{\noteauthors}{基于 Aidan Gomez、Jannik Kossen、Neil Band 讲座、官方手动字幕与 NPT 原始论文整理}
+\renewcommand{\notedate}{CS25 V1 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-16}
+\renewcommand{\videoduration}{1:05:43}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=zejXBg-2Vpk}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Self Attention \& NPTs — Aidan Gomez}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2021}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2021}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与课程地图：同一个 attention，两种计算轴}
 
-\section{引言：Transformer 的核心与历史}
+本讲由两个相互咬合的部分组成。Aidan Gomez 先用约十五分钟回顾 Transformer 的起源与训练直觉；随后 Jannik Kossen 与 Neil Band 介绍 Non-Parametric Transformer（NPT）。若只按演讲顺序做摘要，二者像是“基础复习加一篇论文”；真正的教学主线却更统一：Transformer 首先把 attention 放到\textbf{同一序列的 tokens 之间}，NPT 再把 attention 的作用轴提升到\textbf{同一数据集的 datapoints 之间}。
 
-Aidan Gomez 是 Transformer 原始论文``Attention Is All You Need''的共同作者之一，也是 Cohere 的联合创始人。本讲分为两部分：第一部分回顾 Transformer 的核心机制和历史，第二部分介绍 Non-Parametric Transformers（NPTs）。
+本次重写以 Stanford Online 官方上传 `zejXBg-2Vpk` 为时间基准。视频提供 1,476 条可解析的官方手动英文字幕，但没有公开独立 slide PDF，因此从 1080p 录像中恢复并人工筛选 28 张教学页。渐进动画只保留最终完整状态或真正有独立教学作用的中间状态；Q\&A 中反复跳回的旧页、空白转场与片尾被省略，口头解释则进入 teacher-voice ledger 与正文。
 
-\subsection{从 LSTM 到 Transformer}
+\lecturefigure{slide-01-transformers-title.jpg}{第一部分标题：Transformer 的简史与直觉。}{Stanford Online 官方视频 00:00:46--00:01:07。}
 
-\begin{knowledgebox}{Transformer 之前的世界}
-在 Transformer 之前，序列建模的主流方法是 LSTM + 注意力：
-\begin{itemize}
-    \item LSTM 提供序列处理能力
-    \item 注意力机制（Bahdanau, 2014）用于编码器-解码器之间的对齐
-    \item 但注意力仅用于\textbf{两个序列之间}，而非序列内部
-\end{itemize}
-Transformer 的两大创新：(1) \textbf{自注意力}——序列内部的注意力；(2) \textbf{多头注意力}——多个并行的注意力头。
-\end{knowledgebox}
+这张标题页提醒我们，Gomez 的任务不是重新讲完一门 Transformer 课，而是抽出三个决定后续故事的机制：self-attention、multi-head attention，以及可以并行训练的 autoregressive decoder。理解这三个机制后，读者才容易看出 NPT 的关键创新并不是“又发明一种 attention”，而是重新定义 attention 的对象。
 
-\subsection{自注意力机制}
+\lecturefigure{slide-02-transformer-overview.jpg}{Transformer 概览：multi-head attention、self-attention 与 fast autoregressive decoding。}{Stanford Online 官方视频 00:01:08--00:01:41。}
 
-\begin{importantbox}{自注意力的数学形式}
-$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
-其中 $Q = XW_Q$，$K = XW_K$，$V = XW_V$，$X$ 是输入序列。
-
-关键特性：
-\begin{itemize}
-    \item 每个 token 可以直接关注序列中的任意其他 token
-    \item Query-Key 电路和 Output-Value 电路是\textbf{完全独立的}
-    \item 缩放因子 $\sqrt{d_k}$ 防止点积过大导致 softmax 饱和
-\end{itemize}
+\begin{importantbox}{整讲的一个压缩问题}
+当模型预测一个样本时，它只能依赖“该样本的特征 + 已经压入参数的训练经验”，还是可以在推理时直接读取其他训练样本？标准 supervised neural network 通常采用前者；NPT 尝试学习后者，而且让“读哪些样本、如何组合它们”由 attention 端到端决定。
 \end{importantbox}
 
-\subsection{自回归解码}
+\teachervoice{Gomez 把 Transformer 的贡献概括为三个组合件，而不是某个孤立公式。这个视角很重要：后来成为标准配置的 LayerNorm、learning-rate warmup、初始化和 residual 细节，当时都还是会显著影响成败的实验变量。}
 
-Transformer 使用因果掩码（causal mask）实现自回归生成：
-\begin{itemize}
-    \item 训练时：所有位置并行计算，掩码防止看到未来 token
-    \item 推理时：逐 token 生成，利用 KV 缓存避免重复计算
-    \item 相比 LSTM 的逐步处理，训练效率大幅提升
-\end{itemize}
+\subsection{阅读路线}
 
-\subsection{本章小结}
+接下来先建立 token-level attention 与 autoregressive training 的最小数学框架，再转向 NPT 的 dataset-level input contract。实验部分不会只复述“排名很好”，而会依次回答四个更强的问题：NPT 是否竞争力足够、是否能表示跨样本算法、是否真的使用其他样本、以及这种依赖具有怎样的结构。
 
-Transformer 通过自注意力和并行训练彻底改变了序列建模，成为现代 AI 的基础架构。
-
-\section{Non-Parametric Transformers（NPTs）}
-
-\subsection{动机：将注意力用于数据点之间}
-
-传统机器学习处理表格数据（tabular data）时，模型独立处理每个数据点。NPTs 的核心思想是：\textbf{让数据点之间也能通过注意力互相``交流''}。
-
-\begin{importantbox}{NPTs 的核心架构}
-将整个数据集视为一个序列，其中每个``token''是一个数据点（包含所有特征）：
-\begin{enumerate}
-    \item 将 $N$ 个数据点排列为序列
-    \item 每个数据点的 $D$ 个特征被嵌入为一个向量
-    \item 通过多层自注意力让数据点之间互相影响
-    \item 预测目标变量时，模型可以参考所有其他数据点
-\end{enumerate}
-\end{importantbox}
-
-\subsection{训练方式：掩码预测}
-
-\begin{itemize}
-    \item 随机掩码部分数据点的目标变量
-    \item 模型根据未掩码的数据点（类似 few-shot 上下文）预测被掩码的目标
-    \item 类似 BERT 的掩码语言模型，但应用于表格数据
-\end{itemize}
-
-\begin{warningbox}{NPTs 不等于 kNN}
-虽然 NPTs 让模型参考其他数据点，但它不是简单的 k 近邻检索。通过多层注意力的堆叠，NPTs 可以学习\textbf{高阶依赖}——即数据点之间的复杂关系模式，这是单层注意力或 kNN 无法捕捉的。
-\end{warningbox}
-
-\subsection{与 few-shot 学习的联系}
-
-NPTs 天然适合 few-shot 和 one-shot 学习场景：
-\begin{itemize}
-    \item 未掩码的数据点相当于``支持集''
-    \item 掩码的数据点相当于``查询集''
-    \item 模型学会了从少量示例中泛化
-\end{itemize}
-
-\subsection{本章小结}
-
-NPTs 将 Transformer 的序列建模能力扩展到数据点之间，为表格数据和 few-shot 学习提供了新的视角。
-
-\section{Self-Attention as Data Routing}
-
-\subsection{从注意力权重到可解释路径}
-
-Attention 的 Query-Key dot product 在训练中学到的结构，常常对应一种``数据路由''——每个 token 选择与哪些 token 交流。可以把这一机制看成一种\textbf{soft routing}：每条 token 的输出是所有 token 的加权组合，权重代表选择的概率。
-
-\begin{knowledgebox}{Routing 的两个角度}
-\begin{itemize}
-    \item \textbf{解释性角度}：attention map 可以可视化，有助于理解模型为什么把某些 token 关联
-    \item \textbf{工程角度}：可以在推理时只保留 top-k 的注意力，降低计算与内存
-\end{itemize}
+\begin{knowledgebox}{两条轴不要混淆}
+\begin{tabularx}{\textwidth}{L{0.23\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+机制 & 被 attention 比较的对象 & 主要问题 \\
+\midrule
+序列 self-attention & 一个样本内部的 tokens / attributes & 句内或样本内有哪些元素相关？ \\
+NPT 的 ABD & 同一批次中的 datapoints / rows & 当前样本应从哪些其他样本读取信息？ \\
+NPT 的 ABA & 一个 datapoint 内部的 attributes & 一行内部的字段应怎样变换与交互？ \\
+\bottomrule
+\end{tabularx}
 \end{knowledgebox}
 
-\subsection{低秩与稀疏注意力的落地}
+\subsection{本章小结}
 
-在训练大模型时，attention 的权重矩阵可能是低秩的，代表只有少数``路''被持续使用；而稀疏 attention 机制（BigBird、Longformer）则强制让每个 token 只连接部分其他 token。在实际工程里，可以借助稀疏 attention 近似，把成本控制在线性级别。
+本讲不是两个无关主题的拼接，而是 attention 作用域的逐级扩展。第一部分解释并行训练和序列关系；第二部分把数据集本身变成模型输入，使预测可以显式依赖其他 datapoints。
 
-\begin{warningbox}{稀疏机制的风险}
-虽然稀疏 attention 降低了复杂度，但如果掩码位置选择不当，会丢失关键依赖。例如在长文本中，把文末 token 的注意力限制在局部，会导致无法捕捉跨段落的依赖。
+\section{Self-Attention：从两条序列对齐到序列内部关系}
+
+传统 encoder--decoder attention 通常让 target-side query 去读取 source-side keys 与 values；self-attention 则令 query、key、value 来自同一个表示集合。这个变化看似只是在函数调用里把三个输入设成相同张量，统计含义却发生了改变：模型不再只做跨序列对齐，而开始学习一个样本内部的关系图。
+
+\lecturefigure{slide-03-self-attention.jpg}{Self-attention 把 source 与 target 设为同一序列，学习 intra-sequence relations。}{Stanford Online 官方视频 00:01:42--00:02:39。}
+
+设输入表示为 $X\in\mathbb{R}^{m\times d_{\mathrm{model}}}$，scaled dot-product attention 写为
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\]
+\[
+A=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right),
+\qquad Z=AV.
+\]
+
+\begin{itemize}
+  \item $m$：序列长度，也就是参与关系建模的 token 数量；
+  \item $W_Q,W_K,W_V$：把输入投影为 query、key、value 的可学习矩阵；
+  \item $d_k$：每个 key/query 的维度，$\sqrt{d_k}$ 用于控制 dot product 的尺度；
+  \item $A_{ij}$：第 $i$ 个 token 从第 $j$ 个 token 读取信息的归一化权重；
+  \item $Z_i$：第 $i$ 个 token 聚合所有 value 后得到的新表示。
+\end{itemize}
+
+\teachervoice{讲者用 “blue ball” 说明 self-attention 的语义：模型应学会把形容词 blue 与它修饰的名词 ball 关联起来。这个例子不是在宣称某个 head 必然对应语法树，而是在强调 attention weight 可以承载输入内部的关系假设。}
+
+\begin{warningbox}{Attention weight 不是自动获得的解释}
+$A_{ij}$ 是一次前向计算中的信息混合权重。它能提示模型正在读取哪里，但不能单独证明某条语言学关系、因果关系或决策理由。解释时还需结合 value 内容、后续层、ablation 或 intervention。
 \end{warningbox}
+
+\subsection{Multi-Head Attention：并行学习不同关系子空间}
+
+单个 attention map 只能在一个投影空间里比较 query 与 key。Multi-head attention 将表示投影到多个较低维子空间，让不同 heads 可以形成不同相似度度量，再把结果拼接并重新混合。读图时应先看“拆分--独立 attention--拼接”这条数据流，而不是把 head 数量理解为简单复制模型。
+
+\lecturefigure{slide-04-multi-head-attention.jpg}{Multi-head attention：多个关系子空间独立计算后再拼接。}{Stanford Online 官方视频 00:02:40--00:03:27。}
+
+\[
+\operatorname{head}_r
+=\operatorname{Att}\!\left(QW_r^Q,KW_r^K,VW_r^V\right),
+\]
+\[
+\operatorname{MHA}(Q,K,V)
+=\operatorname{Concat}(\operatorname{head}_1,\ldots,\operatorname{head}_H)W^O.
+\]
+
+\begin{itemize}
+  \item $H$：attention head 数量；
+  \item $W_r^Q,W_r^K,W_r^V$：第 $r$ 个 head 的独立投影；
+  \item $W^O$：把所有 heads 的输出重新混合回 model dimension；
+  \item 每个 head 可以学习不同关系，但没有机制保证人工可命名的完美分工。
+\end{itemize}
+
+\teachervoice{Gomez 的直觉是：一个 head 可以偏向形容词--名词关系，另一个 head 学别的模式。应把它读成“容量允许关系分工”，而不是“训练后每个 head 都会自动变成清晰的人类概念”。}
+
+\begin{knowledgebox}{为什么除以 $\sqrt{d_k}$}
+若 query 与 key 的各维近似独立且方差为常数，dot product 的方差随 $d_k$ 增大。过大的 logits 会让 softmax 过早饱和、梯度变小；缩放因子把数值范围拉回更稳定的区域。
+\end{knowledgebox}
+
+\subsection{Transformer 不是单一 trick}
+
+Self-attention 和 multi-head attention 是容易被记住的标题，但 Gomez 特别强调原始系统还依赖一组当时并不显然的训练选择：LayerNorm、residual path、learning-rate warmup、初始化与 Tensor2Tensor 的工程默认值。论文发表后它们逐渐成为常识，容易让后来的读者误以为这些组件天然就该这样组合。
+
+\teachervoice{团队曾反复做 ablation，发现移除 warmup、LayerNorm 或改动看似细小的配置会真实破坏优化。工程结论是：一个架构的成功往往来自彼此配合的机制集合，不能把所有贡献压缩为一张 attention 公式。}
+
+\teachervoice{Gomez 回忆原始工作在约三个月内快速汇聚，并在截止日前冲刺完成；他当时并未预见影响。这段历史更有价值的读法不是制造“天才瞬间”，而是看到成熟工具、多人迭代、实验反馈与时机共同促成新范式。}
 
 \subsection{本章小结}
 
-Self-attention 可以看成数据之间的 soft routing，将信息在不同 token 之间按结构化方式分发。低秩与稀疏的设计可以降低成本，但要保留全局依赖需要谨慎。
+Self-attention 把关系建模从两条序列之间移到同一输入内部；multi-head attention 提供多个关系子空间。Transformer 的实际可训练性还依赖一套优化与残差工程，不能只由 $QK^{\top}V$ 一式解释。
 
-\section{NPTs at Scale: Benchmarks and Metrics}
+\section{Fast Autoregressive Training：为什么 decoder 能并行训练}
 
-\subsection{Benchmarking data-aware models}
+生成模型在推理时必须逐 token 展开，但训练不必照搬这一串行过程。Transformer decoder 的关键是把真实 target sequence 整体右移后送入模型，并通过 causal mask 保证每个位置只能看到过去。于是所有位置的 next-token loss 可以在一次并行前向中计算。
 
-NPT 们在 tabular benchmarks（如 UCI、OpenML）表现突出，但重复训练成本很高。Aidan 提出的 ``feature-set scaling'' 观点是：随着特征数量增加，模型必须更好地处理 feature-level interactions，而 NPTs 通过 data-wise attention 实现这一点。
+\lecturefigure{slide-05-decoder-transition.jpg}{Transformer decoder 与 fast autoregressive decoding 的转场。}{Stanford Online 官方视频 00:03:28--00:04:07。}
+
+给定输入 $x$ 与输出序列 $y_{1:T}$，autoregressive factorization 为
+\[
+p(y_{1:T}\mid x)=\prod_{t=1}^{T}p(y_t\mid y_{<t},x).
+\]
+
+\begin{itemize}
+  \item $T$：输出长度；
+  \item $y_{<t}$：位置 $t$ 之前的 prefix；
+  \item 推理时必须先得到 $y_{t-1}$，才能构造下一步条件；
+  \item 训练时已有完整 gold sequence，可以同时构造所有正确 prefixes。
+\end{itemize}
+
+\lecturefigure{slide-06-sequence-generation.jpg}{序列生成：训练目标是学习从输入序列到输出序列的条件映射。}{Stanford Online 官方视频 00:04:08--00:05:19。}
+
+\subsection{Teacher Forcing：用 gold prefix 训练每一个位置}
+
+Teacher forcing（教师强制）指训练时把真实历史 tokens 而非模型自己的采样结果作为 decoder 输入。设右移后的输入为 $\tilde y=(\langle\mathrm{BOS}\rangle,y_1,\ldots,y_{T-1})$，则一次 forward 可以产生全部位置的 logits，并计算
+\[
+\mathcal{L}_{\mathrm{TF}}
+=-\sum_{t=1}^{T}\log p_{\theta}(y_t\mid y_{<t},x).
+\]
+
+\begin{itemize}
+  \item $\theta$：模型参数；
+  \item $p_{\theta}(y_t\mid y_{<t},x)$：在正确 prefix 下对第 $t$ 个 target 的概率；
+  \item 每个 $t$ 的 hidden state 可并行计算，但序列维度仍有 attention 与 memory 成本；
+  \item 训练条件与自由生成条件不同，会形成 exposure bias，但不改变并行训练的正确性。
+\end{itemize}
+
+\lecturefigure{slide-07-autoregressive-decoding.jpg}{推理逐步生成，训练则可以一次喂入完整的正确 target sequence。}{Stanford Online 官方视频 00:05:20--00:06:03。}
+
+\teachervoice{Gomez 称这个细节“有点 subtle，但对训练速度影响巨大”。模型在训练早期即使自己会生成垃圾 token，也仍在正确 prefix 上学习每个 next-token conditional；正是这种并行监督让大规模 Transformer 训练成为可能。}
+
+\lecturefigure{slide-08-teacher-forcing.jpg}{Teacher forcing 的核心问题：如何在一次 decoder 调用中预测所有位置而不泄露答案？}{Stanford Online 官方视频 00:06:04--00:06:33。}
+
+\begin{lstlisting}[caption={Teacher forcing 与 causal mask 的概念性训练步骤。}]
+def autoregressive_training(source, target, model):
+    decoder_input = shift_right(target, bos_token=True)
+    causal_mask = upper_triangle_is_blocked(len(target))
+    logits = model(source, decoder_input, causal_mask=causal_mask)
+    return cross_entropy(logits, target)
+\end{lstlisting}
+
+\subsection{Causal Mask：并行不等于允许看未来}
+
+上一小节已经说明 gold sequence 为什么能换来并行监督，本小节补上这个技巧成立的必要条件：每个位置的计算图仍必须与 autoregressive factorization 一致。若把完整 target 直接交给 self-attention，位置 $t$ 可以读取 $y_t$ 或未来 token，训练任务会退化为抄答案；因此读下面公式时应同时检查“哪些位置可见”和“并行矩阵乘法是否仍被保留”。Causal mask 把 attention logits 的严格上三角设为负无穷：
+\[
+C_{ij}=\begin{cases}
+0, & j\le i,\\
+-\infty, & j>i,
+\end{cases}
+\qquad
+A=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}+C\right).
+\]
+
+\begin{itemize}
+  \item $i$：当前 query 位置；
+  \item $j$：被读取的 key/value 位置；
+  \item $j>i$ 的未来位置在 softmax 后权重为零；
+  \item mask 保留并行矩阵计算，同时维护 autoregressive conditional 的信息边界。
+\end{itemize}
+
+\lecturefigure{slide-09-causal-mask.jpg}{完整 causal mask：每个位置只能读取自身与左侧 prefix。}{Stanford Online 官方视频 00:12:36--00:13:04。}
+
+\begin{knowledgebox}{读图：黑白矩阵代表什么}
+横轴可理解为 key/value 位置，纵轴为 query 位置。允许区域形成下三角；被遮挡的未来区域不会参与归一化。图中 mask 的价值不是节省计算，而是阻止 target leakage，使并行训练仍等价于正确的 next-token likelihood。
+\end{knowledgebox}
+
+\begin{warningbox}{训练并行与推理解码不要混为一谈}
+Teacher forcing 让训练中的所有位置并行，但普通 autoregressive inference 仍需逐步采样，因为下一步输入取决于模型刚生成的 token。KV cache、speculative decoding 等技术优化推理成本，却不是 teacher forcing 本身。
+\end{warningbox}
+
+\teachervoice{讲者反复强调“不能向前偷看”：我们已经把正确答案放进 decoder input，如果没有 causal mask，零误差并不意味着模型学会生成，只意味着它发现了数据泄漏。}
+
+\subsection{本章小结}
+
+Autoregressive likelihood 仍按时间分解；teacher forcing 只是利用已知 targets 并行构造所有正确 prefixes。Causal mask 是维持信息边界的必要条件，它把“并行训练”和“未来不可见”同时实现。
+
+\section{NPT 的范式转换：预测时显式读取训练数据}
+
+现在把 attention 的对象从 tokens 换成 datapoints。标准 parametric model 在训练后把经验压进参数 $\theta$，推理一条样本时通常只读取该样本；NPT 则让训练点与测试点共同进入模型，使预测对当前可见数据集保持显式依赖。
+
+\lecturefigure{slide-10-npt-overview.jpg}{NPT 一页概览：dataset-as-input、datapoint self-attention 与 stochastic masking。}{Stanford Online 官方视频 00:17:00--00:17:21。}
+
+这张图给出三个不可删减的组成部分：第一，输入不是单行而是数据集；第二，模型在 rows 之间做 self-attention；第三，masking objective 决定哪些值可见、哪些值需要重建。只保留其中任意两项都不能得到论文所称的 NPT predictive mechanism。
+
+\lecturefigure{slide-11-npt-motivation.jpg}{Parametric prediction 与 NPT：后者让目标行显式读取其他 datapoints。}{Stanford Online 官方视频 00:17:22--00:18:17。}
+
+\begin{importantbox}{本讲中“non-parametric”的精确定义}
+Non-parametric 不等于“没有参数”。NPT 仍有大量可学习的 attention、embedding 与 feed-forward 参数。这里强调的是：预测函数在 inference 时显式依赖 supplied training data，写作 $p(y_*\mid x_*,\mathcal{D}_{\mathrm{train}})$，而不是只依赖 $x_*$ 与固定参数 $\theta$。
+\end{importantbox}
+
+\teachervoice{有人在社交媒体上把 NPT 称作 “k-NN 2.0”。这个说法适合建立直觉：模型会从其他 rows 查找信息；但 NPT 不只按固定距离找邻居，它可以学习多层、任务相关、非线性的 match--transform--aggregate 过程。}
+
+\subsection{传统 non-parametric models 在哪里}
+
+NPT 并未发明 non-parametric prediction。Gaussian process、kernel method 与 k-nearest neighbors 都让预测显式依赖训练数据；deep kernel learning 与 neural process 等工作也尝试结合 representation learning。NPT 的主张更窄：Transformer 可以作为一个通用关系学习器，把检索、比较与聚合共同端到端训练。
+
+\lecturefigure{slide-12-traditional-nonparametric.jpg}{传统 non-parametric models 与深度扩展：NPT 的历史位置。}{Stanford Online 官方视频 00:22:00--00:23:39。}
+
+\begin{knowledgebox}{术语消化：几类 explicit-data prediction}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}L{0.27\textwidth}X}
+\toprule
+方法 & 如何使用训练数据 & 与 NPT 的关系 \\
+\midrule
+k-NN & 按预设距离检索邻居并投票/平均 & NPT 可学习相似度、聚合与后续变换，不局限于固定距离。 \\
+Kernel method & 通过 kernel similarity 加权训练点 & Attention 同样形成数据依赖权重，但具有深层表示和多层组合。 \\
+Gaussian process & kernel 定义函数分布，并给出预测不确定性 & NPT 不是标准 GP，也不自动具有一致的 Bayesian uncertainty。 \\
+Deep kernel / neural process & 用神经网络学习表示或条件聚合 & 与 NPT 共享“参数化关系学习 + 显式 context”的动机。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{Kossen 强调他们想要的是易用、plug-and-play、能适应多种场景的 non-parametric mechanism，而不是依赖复杂专用 inference scheme。这个目标是设计动机，不应被误读成已经证明 NPT 在所有场景都优于经典方法。}
+
+\begin{warningbox}{NPT 不是本讲已经完成的 meta-learning 系统}
+论文实验主要为一个固定数据集训练一个模型，并假设 train/test 来自同一任务分布。Meta-learning 通常要求跨多个任务或数据集迁移。NPT 可以被扩展为把新 dataset 当 context 的系统，但那是讲者讨论的未来方向，不是本讲实验已经证明的能力。
+\end{warningbox}
+
+\teachervoice{Q\&A 中三位讲者把边界说得很清楚：当前工作仍是标准 supervised learning；多数据集、zero-shot 或少量 gradient step 的 meta-learning 只是值得探索的 framing。}
+
+\subsection{本章小结}
+
+NPT 的新意不是“无参数”，而是把训练 datapoints 保留在预测计算图里，并让 attention 学习如何读取它们。它继承经典 non-parametric intuition，同时以深度表示与多层关系计算扩大可学习机制的范围。
+
+\section{Dataset-as-Input：数据矩阵、mask 与预测契约}
+
+要让整个数据集进入模型，首先必须把 supervised-learning notation 改写为一个统一矩阵。NPT 将 rows 视为 datapoints、columns 视为具有共享语义的 attributes；label 也占据某个 attribute column。Mask matrix 决定哪些 entries 被观察，哪些 entries 是模型应预测的未知量。
+
+\lecturefigure{slide-13-entire-dataset-input.jpg}{第一要素：把 entire dataset，即全部 datapoints，作为模型输入。}{Stanford Online 官方视频 00:24:00--00:24:13。}
+
+设
+\[
+X\in\mathbb{R}^{n\times d},\qquad M\in\{0,1\}^{n\times d}.
+\]
+
+\begin{itemize}
+  \item $n$：当前 forward 中的 datapoint 数；小数据可为全数据集，大数据通常为 mini-batch；
+  \item $d$：attributes 数，既包含 input features，也可包含 target columns；
+  \item $X_{ij}$：第 $i$ 个 datapoint 的第 $j$ 个 attribute；
+  \item $M_{ij}=1$：该 entry 被 mask，需要预测；$M_{ij}=0$：该 entry 可见。
+\end{itemize}
+
+\lecturefigure{slide-14-datapoint-attention.jpg}{第二要素：在 datapoints 之间应用 self-attention。}{Stanford Online 官方视频 00:24:14--00:24:27。}
+
+在 test-time batch 中，attention 可以同时连接 train--train、test--test 与 train--test rows。这里的“train/test”是由 target visibility 决定的角色：训练 rows 可以暴露部分 labels，测试 rows 的 labels 必须全部遮挡。模型看到同一个矩阵，却通过 mask 知道哪些 entries 可以作为 context。
+
+\lecturefigure{slide-15-masking-objective-overview.jpg}{第三要素：用 masking-based objective 联合学习 target 与 feature reconstruction。}{Stanford Online 官方视频 00:24:28--00:24:41。}
+
+定义 masked 与 observed entries：
+\[
+X^{\mathcal{M}}=\{X_{ij}\mid M_{ij}=1\},\qquad
+X^{\mathcal{O}}=\{X_{ij}\mid M_{ij}=0\}.
+\]
+NPT 学习
+\[
+p\!\left(X^{\mathcal{M}}\mid X^{\mathcal{O}},M\right),
+\]
+并输出 $\widehat X\in\mathbb{R}^{n\times d}$。这种表示把分类、回归、imputation、self-supervision 与 semi-supervision 都转化为“改变 mask 的位置”。
+
+\begin{importantbox}{Mask 是任务接口}
+同一 architecture 可以通过 $M$ 表达不同问题：遮住测试 rows 的 label column 得到 supervised prediction；随机遮住 feature entries 得到 imputation/self-supervision；遮住多个 target columns 得到 multi-target prediction。模型接口统一，不代表不同任务的数据分布与 loss 已自动统一。
+\end{importantbox}
+
+\subsection{完整 notation：为什么必须把 mask 也输入模型}
+
+前面的三张图给出了 dataset、datapoint attention 与 masking objective，本小节把它们收束成一个不会产生歧义的输入接口。读完整 notation 图时应先分清“数值是什么”和“数值是否可见”：同一个零既可能是合法观测，也可能是缺失占位符，仅看 $X$ 无法分辨。把 $M$ 与 $X$ 一同嵌入，相当于显式告诉模型每个值的 epistemic status：它是已知 evidence，还是待预测 query；这也决定 loss 应落在哪些 entries 上。
+
+\lecturefigure{slide-16-full-dataset-mask-notation.jpg}{完整输入契约：dataset $X$、mask $M$、目标 $p(X^{\mathcal{M}}\mid X^{\mathcal{O}})$。}{Stanford Online 官方视频 00:25:06--00:27:15。}
+
+\begin{knowledgebox}{读图：三种颜色与问号}
+每一行是 datapoint，每一列是语义固定的 attribute。问号不是“值为零”，而是 $M_{ij}=1$ 的未知 entry。模型需要同时利用同一行其他 features、其他行 features，以及允许暴露的其他行 targets，来重建问号位置。
+\end{knowledgebox}
+
+\begin{warningbox}{Test-label leakage 的底线}
+Stochastic target masking 可以在训练 rows 上保留部分 labels，帮助模型学习跨行 lookup；测试 rows 的真实 labels 永远不能作为输入。若构造 batch 或 mask 时把 test label 暴露，漂亮结果只说明 pipeline 泄漏答案。
+\end{warningbox}
+
+\teachervoice{讲者把三要素先整体说出，再逐个展开：数据集作为输入、datapoint attention、masking objective。这个顺序提醒我们，不应只盯 architecture block；真正定义 NPT 的还有 input semantics 与 training task。}
+
+\subsection{本章小结}
+
+NPT 用 $(X,M)$ 统一表示 evidence 与 query。Rows 是 datapoints，columns 是共享语义 attributes，mask 决定预测任务。这个契约使 train/test points 可以共同进入 attention，同时要求严格保护 test targets。
+
+\section{NPT Architecture：在 datapoints 与 attributes 之间交替 attention}
+
+输入契约建立后，下一步是决定 attention 沿哪个维度运行。NPT 先对每个 attribute 做类型感知 embedding，得到三维张量；随后在“整行表示”与“行内 attributes”之间反复 reshape，交替执行 Attention Between Datapoints（ABD）和 Attention Between Attributes（ABA）。
+
+\subsection{Per-Attribute Embedding}
+
+不同 columns 可能是 continuous、categorical、position/index 或 target。NPT 不把它们粗暴拼成同一种 token，而为每个 attribute 采用相应 linear/typed embedding，并把 mask information 一起编码。
+
+\lecturefigure{slide-17-per-attribute-embedding.jpg}{每个 attribute 独立嵌入，形成 $n\times d\times e$ 的表示张量。}{Stanford Online 官方视频 00:27:16--00:27:43。}
+
+记初始表示为
+\[
+H^{(0)}=\operatorname{Embed}(X,M)
+\in\mathbb{R}^{n\times d\times e},
+\]
+其中 $e$ 是每个 attribute embedding 的维度。对 categorical value 可使用 learned lookup，对 continuous value 可使用带 column-specific 参数的线性映射；position/type embedding 帮助模型保留 column identity。
+
+\begin{knowledgebox}{为什么 rows 可交换、columns 不可随意交换}
+Datapoint order 通常没有语义，所以模型应对 row permutation equivariant。Columns 却表示年龄、收入、标签等不同变量；交换 columns 会改变任务，除非连同 column-specific embeddings、mask 与输出语义一起变换。
+\end{knowledgebox}
+
+\subsection{ABD：把一整行压成 attention token}
+
+ABD 需要比较 datapoints，因此先把每一行的 $d$ 个 attribute embeddings flatten 成长度 $h=d\cdot e$ 的向量。Self-attention 随后沿 $n$ 维运行，每个 row 可以从其他 rows 聚合信息。
+
+\lecturefigure{slide-18-flatten-datapoint-attention.jpg}{ABD：将 attributes flatten 后，在 $n$ 个 datapoints 之间做 self-attention。}{Stanford Online 官方视频 00:27:44--00:29:35。}
+
+\[
+R_{\mathrm{row}}:
+\mathbb{R}^{n\times d\times e}\rightarrow
+\mathbb{R}^{n\times (de)},
+\]
+\[
+\operatorname{ABD}(H)
+=R_{\mathrm{row}}^{-1}\!\left(
+\operatorname{MHSA}(R_{\mathrm{row}}(H))
+\right).
+\]
+
+\begin{itemize}
+  \item $R_{\mathrm{row}}$：把每个 datapoint 的 attributes 串成一个 row representation；
+  \item MHSA 的 sequence length 此时是 $n$，不是 $d$；
+  \item 一个 ABD layer 学 pairwise row interactions，多层可组合为 higher-order interactions；
+  \item 计算与 memory 的主要项随 $n^2$ 增长。
+\end{itemize}
+
+\subsection{ABA：在每一行内部重新组织 attributes}
+
+只做 ABD 会把整行当作一个不可分的 token，难以重新编码具体 columns。ABA 把张量恢复为 $n\times d\times e$，并对每一行独立地沿 $d$ 个 attributes 做 self-attention，使模型学习 per-datapoint transformation。
+
+\[
+\operatorname{ABA}(H)
+=\operatorname{stack}_{i=1}^{n}
+\left[\operatorname{MHSA}(H_{i,:,:})\right]
+\in\mathbb{R}^{n\times d\times e}.
+\]
+
+\begin{itemize}
+  \item $H_{i,:,:}$：第 $i$ 行的 attribute sequence；
+  \item ABA 在各 rows 之间共享参数，但每行独立计算；
+  \item 它学习 attribute interactions，不直接读取其他 datapoints；
+  \item ABD 与 ABA 交替，使“找相关行”和“变换当前行”互相促进。
+\end{itemize}
+
+\lecturefigure{slide-19-abd-aba-architecture.jpg}{完整交替架构：ABD 学跨 datapoint 关系，ABA 学单行变换，并保持 row permutation equivariance。}{Stanford Online 官方视频 00:29:36--00:31:03。}
+
+\begin{importantbox}{Permutation equivariance}
+令 $P\in\{0,1\}^{n\times n}$ 为 row permutation matrix，NPT 满足
+\[
+f(PX,PM)=P\,f(X,M).
+\]
+也就是说，打乱输入 rows 只会以同样方式打乱输出 rows，不应改变每个 datapoint 的预测内容。Equivariance 与 invariance 不同：输出不是保持完全不变，而是跟随输入置换。
+\end{importantbox}
+
+\teachervoice{讲者强调 ABD 与 ABA 的职责不同：前者捕捉 higher-order relationships between datapoints，后者处理 individual datapoint transformations。把二者都叫“attention block”会丢掉最关键的 tensor axis。}
+
+\teachervoice{Q\&A 中作者承认 ABA 不是不可替代的教条：ablation 显示它有益，但若 attribute 数极大，可以考虑用 compact MLP 替代，以降低 attribute dimension 的扩展成本。}
+
+\subsection{三阶段系统与 masking objective}
+
+前两阶段解决“输入如何表示、关系如何传播”，第三阶段决定模型为什么会学会 lookup。NPT 不是先训练普通 classifier 再在推理时临时加入 neighbors；它从训练开始就反复面对被遮住的 features 与 targets，并必须利用可见 entries 重建它们。
+
+\lecturefigure{slide-20-three-stage-overview.jpg}{NPT 三阶段：dataset input、datapoint attention、masking-based objective。}{Stanford Online 官方视频 00:31:04--00:33:33。}
+
+\lecturefigure{slide-21-stochastic-masking-objective.jpg}{Feature masking 与 target masking 的联合目标。}{Stanford Online 官方视频 00:33:34--00:33:52。}
+
+设 $\mathcal{L}_{\mathrm{Targets}}$ 是被 mask targets 的 negative log-likelihood 或回归 loss，$\mathcal{L}_{\mathrm{Features}}$ 是随机被 mask feature entries 的辅助重建 loss：
+\[
+\mathcal{L}_{\mathrm{NPT}}
+=(1-\lambda)\mathcal{L}_{\mathrm{Targets}}
++\lambda\mathcal{L}_{\mathrm{Features}}.
+\]
+
+\begin{itemize}
+  \item $p_{\mathrm{feature}}$：训练时随机遮住 feature values 的概率；
+  \item $p_{\mathrm{target}}$：训练时随机遮住 training targets 的概率；
+  \item $\lambda$：target loss 与 auxiliary feature loss 的权衡；
+  \item test time 只对 test targets 做 mask 与评估，不能暴露其真值。
+\end{itemize}
+
+\begin{knowledgebox}{两个 masking term 各自做什么}
+Feature masking 让模型学习整个数据矩阵的结构，增加 supervision 并提供 regularization；论文 ablation 中它帮助了十个 tabular datasets 中的八个。Target masking 则让部分 training labels 保持可见，使另一些被遮住的 rows 可以学习读取、匹配与变换这些 labels。
+\end{knowledgebox}
+
+\teachervoice{Neil Band 的关键解释是：模型不必把每条 training input--output mapping 全部记进 parameters；它可以把容量用于学习“如何利用其他 training features 与 targets”。这正是 learned k-NN intuition 从比喻变成 objective-level mechanism 的地方。}
+
+\begin{lstlisting}[caption={NPT forward 与随机 mask 的概念性伪代码。}]
+def npt_step(dataset, train_rows, test_rows, model):
+    mask = sample_feature_masks(dataset)
+    mask |= sample_training_target_masks(train_rows)
+    mask |= all_test_targets(test_rows)
+
+    hidden = per_attribute_embed(dataset, mask)
+    for _ in range(num_blocks):
+        hidden = attention_between_datapoints(hidden)  # ABD
+        hidden = attention_between_attributes(hidden)  # ABA
+    prediction = project_all_attributes(hidden)
+    return masked_entry_loss(prediction, dataset, mask)
+\end{lstlisting}
+
+\begin{warningbox}{Mini-batch approximation改变了 retrieval set}
+对大数据使用随机 mini-batch 时，某个 query 只能读取同 batch 的 datapoints，而不是全体训练集。增大 batch 提高候选覆盖，却带来 $O(b^2)$ attention 成本；因此 mini-batching 是统计与系统折中，不是严格等价的全数据计算。
+\end{warningbox}
+
+\teachervoice{作者给出具体尺度：不做 mini-batching 时可容纳约 8,000 points；11 million points 的数据集必须依赖 mini-batches。他们也观察到无需“荒谬地大”的 batch 才能学到跨 datapoint 关系，但这仍是经验结论。}
+
+\subsection{本章小结}
+
+NPT 将 $(X,M)$ 嵌入为 $n\times d\times e$ 张量，交替用 ABD 处理 rows、ABA 处理 columns，并以 masking objective 训练关系性 lookup。Row equivariance、test-label protection 与 quadratic datapoint attention 是理解实现的三条硬约束。
+
+\section{Benchmark Evidence：为什么选择 tabular data，表格应该怎样读}
+
+如果只在容易被深度网络统治的 benchmark 上测试，很难判断 dataset-level attention 是否真的有价值。作者选择 tabular data，是因为它覆盖分类与回归、连续与离散字段、数百到千万样本，同时 tree-based boosting 长期强势；这迫使 NPT 与真正有竞争力的非神经 baseline 比较。
+
+\lecturefigure{slide-22-tabular-domain.jpg}{Tabular benchmark：规模、字段类型、任务与强基线都高度多样。}{Stanford Online 官方视频 00:37:16--00:38:07。}
+
+\begin{knowledgebox}{基线与指标速查}
+\begin{tabularx}{\textwidth}{L{0.19\textwidth}L{0.25\textwidth}>{\raggedright\arraybackslash}X}
+\toprule
+名称 & 解决机制 & 为什么必须比较 \\
+\midrule
+XGBoost / LightGBM & 高效 gradient-boosted decision trees & Tabular data 的工业强基线，善于非线性分裂与缺失/稀疏特征。 \\
+CatBoost & 针对 categorical features 的 ordered boosting & 防止 NPT 只因类别字段处理更好而获得虚假优势。 \\
+Random Forest / GBDT & bagging 或 boosting 的树模型 & 覆盖经典 ensemble family。 \\
+MLP & 每行独立的 parametric neural baseline & 检验提升是否来自跨 datapoint mechanism。 \\
+TabNet & 面向 tabular data 的 attentive neural model & 比较 domain-specific neural architecture。 \\
+k-NN & 固定距离的 local lookup & 对照“learned non-parametric lookup”是否优于简单邻居。 \\
+AUROC / Accuracy / RMSE & 二分类排序、多分类正确率、回归误差 & 三类任务指标方向不同，论文统一转为 method rank。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{作者选择 tabular domain 不只是因为数据方便，而是因为 general-purpose deep nets 在这里经常输给 boosting；若 NPT 只胜过一个弱 MLP，并不足以支持其通用性主张。}
+
+\teachervoice{团队对 NPT 在 small datasets 上的 robustness 感到意外，而且没有进行极端数量的 hyperparameter 调整。这个口头观察值得记录，但它不替代严格的 tuning-budget 比较。}
+
+\subsection{Average rank 不是 pooled accuracy}
+
+结果页将十个 UCI datasets 按任务分组：四个 binary classification 使用 AUROC，两个 multi-class classification 使用 accuracy，四个 regression 使用 RMSE。对每个 dataset 先给 methods 排名，再在同任务组内取平均；因此数值越小越好，且不能把不同列直接当作同一物理量比较。
+
+\lecturefigure{slide-23-tabular-benchmarks.jpg}{UCI benchmark 的平均排名与 CIFAR-10 早期结果。}{Stanford Online 官方视频 00:38:08--00:40:44。}
 
 \begin{table}[H]
 \centering
-\caption{NPT 与传统模型的比较}
-\begin{tabular}{lccc}
+\small
+\caption{论文 Table 1 的关键平均排名；数值越低越好。}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}L{0.23\textwidth}L{0.23\textwidth}X}
 \toprule
-模型家族 & 处理数据依赖 & Few-shot & 可解释性 \\
+方法 & Binary AUROC rank & Multi-class accuracy rank & Regression RMSE rank \\
 \midrule
-MLP & 无 & 否 & 极低 \\
-GNN / DeepSets & 限于局部图结构 & 部分 & 低 \\
-NPT & 全局数据 attention & 强 & 中等 \\
+NPT & $2.50\pm0.87$ & $2.50\pm0.50$ & $3.25\pm1.31$ \\
+CatBoost & $2.75\pm0.85$ & $3.50\pm0.50$ & $3.00\pm0.91$ \\
+XGBoost & $4.75\pm1.25$ & $2.50\pm1.50$ & $3.25\pm0.63$ \\
+MLP & $5.75\pm1.49$ & $3.00\pm2.00$ & $5.00\pm1.22$ \\
+k-NN & $8.25\pm0.48$ & $8.50\pm0.50$ & $8.75\pm0.25$ \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
-\subsection{Precision / Recall for masked targets}
+\begin{knowledgebox}{读图：先看竞争区间，再看冠军数量}
+NPT 在 binary 与 multi-class 平均 rank 位于第一梯队，在 regression 与 CatBoost/XGBoost 接近；论文还报告 NPT 在十个 tabular datasets 中四个为 top performer。更稳妥的结论是“跨多种任务具有竞争力”，而不是“统一击败所有 tree methods”。
+\end{knowledgebox}
 
-训练 NPTs 时，掩码目标的分布可以用 ROC 曲线来判断模型是否过度依赖某个 feature。例如 mask label 时，precision 高但 recall 低说明模型只在少数样本达到高 fidelity，而 generalization 仍需提升。
+\begin{warningbox}{平均排名隐藏了什么}
+十个 datasets 数量有限，不同任务组只有二到四个数据集；rank 会丢失绝对 performance gap，也受 tuning protocol 与 dataset selection 影响。标准误差来自 datasets 上的 rank variation，不是一次大样本 accuracy 的置信区间。
+\end{warningbox}
+
+\teachervoice{Q\&A 花了不少时间澄清 “4 of 10”“2 of 10” 与 standard error。讲义因此必须明确：这些数字首先描述 dataset/task 分组，其次才是 methods 的平均排名，不能从表面小数推出普遍显著优势。}
+
+\subsection{Image result 的正确边界}
+
+论文也在 CIFAR-10 与 MNIST 上测试 NPT。讲座展示的 CIFAR-10 结果使用 CNN encoder 加 NPT，并报告 93.7\% accuracy；这说明跨-image datapoint interaction 可以嵌入视觉 pipeline，但不能证明 NPT 取代了视觉 backbone。论文附录中的 linear patching 结果更弱，也反映 input embedding 仍会影响表现。
+
+\begin{warningbox}{“通用输入格式”不等于“前端无关紧要”}
+任何 modality 可 reshape 成 matrix，只说明接口能接收；是否保留局部结构、是否有合适 encoder、数据量与 augmentation 如何设置，仍决定 optimization 与 sample efficiency。NPT 的贡献是新增跨 datapoint mechanism，不是抹去全部 modality knowledge。
+\end{warningbox}
 
 \subsection{本章小结}
 
-NPTs 在表格 benchmark 上具有优势；评估时需同时看 mask precision 与 recall，避免模型只在易解样本上取得高分。
+NPT 在多种 tabular tasks 上进入强基线竞争区，并展示 image extension 的可行性。证据支持“具有竞争力”，但平均 rank、有限 datasets 与不同前端不允许我们宣称它在所有场景普遍最优。
 
-\section{Operationalizing NPTs and Attention Systems}
+\section{Corruption Experiment：模型是否真的使用其他 datapoints}
 
-\subsection{Deployment requirements}
+Benchmark performance 不能直接证明跨 datapoint attention 发挥了作用：一个高容量 NPT 可能学会忽略其他 rows，退化成普通 per-row parametric model。作者因此设计 intervention-like test，在保持当前 target row 不变的同时，破坏所有其他 rows 的关系信息，再观察预测是否恶化。
 
-将 NPT 投入生产，需要解决以下几点：
+\lecturefigure{slide-24-corruption-goal.jpg}{Corruption experiment 的目标：禁止模型从其他 datapoints 获得有用关系。}{Stanford Online 官方视频 00:51:16--00:51:31。}
+
+对每个被评估的 target entry $(i,d)$，方法保留第 $i$ 行，并对其他 rows 的每个 attribute column 独立随机 permutation。可写成
+\[
+\widetilde X_{k,j}=X_{\pi_j(k),j},
+\qquad k\ne i,
+\]
+其中每个 column $j$ 使用独立 permutation $\pi_j$。
+
 \begin{itemize}
-    \item Data sharding：整个 dataset 满足 attention，但 production pipeline 通常增量更新
-    \item Caching embeddings：attention 需要每个 token embedding，因此必须缓存并更新
-    \item Monitoring drift：数据分布 shift 会导致注意力权重失效，需要实时 drift 检测
+  \item 当前 query row $i$ 不变；
+  \item 单个 column 的 marginal values 大致保留；
+  \item 同一 row 内原有 feature--feature 与 feature--target correspondence 被打散；
+  \item 若预测依赖其他 rows 的结构，corruption 后 performance 应下降。
 \end{itemize}
 
-\begin{importantbox}{Data engineering cost > Modeling cost}
-Aidan 强调：NPT 的建模贡献可能只占项目一半 effort，另半是 data engineering（清洗、合并、版本管理）。模型看起来很漂亮，但如果数据 pipeline 不能保持一致，性能会剧烈波动。
+\lecturefigure{slide-25-corruption-method.jpg}{Corruption method：逐 attribute 打乱其他 rows，保留 query row。}{Stanford Online 官方视频 00:51:32--00:53:01。}
+
+\teachervoice{讲者特别说明不想用简单噪声把输入“弄坏”，因为模型可能只检测到 distribution shift。逐 column permutation 尽量保留 marginal statistics，却摧毁跨字段、跨样本的可用对应关系。}
+
+\subsection{结果：有些任务强依赖，有些任务主动忽略}
+
+若 NPT 在所有数据集都同样依赖其他 rows，corruption 应普遍造成巨大损失；实际结果更细致：Protein 等任务显著恶化，Forest、Kick、Breast Cancer 等几乎不变。这说明 architecture 提供了 relation channel，但 optimization 可以按数据决定是否使用。
+
+\lecturefigure{slide-26-corruption-results.jpg}{破坏其他 datapoints 信息后的 performance change。}{Stanford Online 官方视频 00:53:02--00:54:43。}
+
+\begin{table}[H]
+\centering
+\small
+\caption{论文 Table 2：corruption 后的 performance 变化；负值代表变差。}
+\begin{tabularx}{\textwidth}{L{0.21\textwidth}*{4}{>{\centering\arraybackslash}X}}
+\toprule
+分类数据集 & CIFAR-10 & Poker & Income & Higgs \\
+\midrule
+$\Delta$ Accuracy & $-1.2$ & $-1.1$ & $-1.1$ & $-0.5$ \\
+\bottomrule
+\end{tabularx}
+\vspace{0.6em}
+\begin{tabularx}{\textwidth}{L{0.21\textwidth}*{4}{>{\centering\arraybackslash}X}}
+\toprule
+分类数据集 & MNIST & Forest & Kick & Breast Cancer \\
+\midrule
+$\Delta$ Accuracy & $-0.4$ & $-0.1$ & $-0.1$ & $0.0$ \\
+\bottomrule
+\end{tabularx}
+\vspace{0.6em}
+\begin{tabularx}{\textwidth}{L{0.21\textwidth}*{4}{>{\centering\arraybackslash}X}}
+\toprule
+回归数据集 & Yacht & Protein & Boston & Concrete \\
+\midrule
+$\Delta\mathrm{RMSE}/\mathrm{RMSE}$ & $-52\%$ & $-21\%$ & $-20\%$ & $-7\%$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{importantbox}{更有意思的不是“全部下降”}
+在某些 datasets 上，NPT 发现其他 rows 没有足够价值，于是可以学会忽略它们并退化为近似 parametric predictor；在另一些 datasets 上，corruption 使 performance 严重崩溃。可学习的关键不是固定采用 non-parametric rule，而是选择依赖程度。
 \end{importantbox}
 
-\subsection{Operational checklist for attention systems}
+\begin{warningbox}{Corruption 支持机制依赖，但不是完整因果证明}
+Performance drop 表明预测利用了被破坏的跨-row structure；它不能单独告诉我们某个 attention head 的唯一因果路径，也不能推出“non-parametric 普遍优于 parametric”。Corruption 同时改变了高阶联合分布，仍可能引入模型敏感的 out-of-distribution pattern。
+\end{warningbox}
+
+\teachervoice{论文与讲座都谨慎指出：Forest、Kick、Breast Cancer 几乎不受影响，并非实验失败，而是模型可能判断跨 datapoint lookup 没有优势。这种可退化性恰好支持“依赖程度由数据学习”的主张。}
+
+\subsection{本章小结}
+
+Corruption test 从“模型有跨行 attention”推进到“模型在若干真实任务中实际依赖跨行信息”。证据来自反事实式的 performance change，但实验不能识别唯一机制，也不能泛化成 parametric 与 non-parametric 的普遍优劣结论。
+
+\section{Duplicate 与 Intervention：把 learned lookup 拆成可观察步骤}
+
+真实数据上的 corruption 说明关系通道被使用，却仍不清楚模型学到了什么算法。Semi-synthetic duplicate task 构造一个更透明的机制：复制若干 rows，把 originals 的 target 遮住、duplicates 的 target 暴露；正确预测必须匹配对应 row、读取 target、再复制回 query。
+
+\lecturefigure{slide-27-duplicate-intervention.jpg}{Semi-synthetic duplicate task、attention、预测与 target intervention 的完整证据链。}{Stanford Online 官方视频 00:54:44--01:00:41。}
+
+\begin{knowledgebox}{读图：五个 panel 的推理顺序}
+\begin{enumerate}
+  \item (a) 构造 original/duplicate rows，并遮住 originals 的 targets；
+  \item (b) 检查 ABD attention 是否集中到对应 duplicates；
+  \item (c) 验证 predictions 与 duplicate targets 高度相关；
+  \item (d) 在 test time 主动改变某个 duplicate target，不重新训练；
+  \item (e) 观察 original prediction 是否沿 intervention 变化。
+\end{enumerate}
+\end{knowledgebox}
+
+这个任务要求模型学会一个组合程序：
+\[
+x_i\xrightarrow{\text{match features}}
+x_{j(i)}^{\mathrm{dup}}
+\xrightarrow{\text{read target}}
+y_{j(i)}^{\mathrm{dup}}
+\xrightarrow{\text{copy/transform}}
+\widehat y_i.
+\]
 
 \begin{itemize}
-    \item 每次数据更新前，执行 ``attention heatmap sanity check''：确认新的 data chunk 没有触发空 attention
-    \item 将 attention weight distribution log 到 monitoring 系统，设定 drift threshold
-    \item 对服务端推理请求做 prioritized caching：多次访问同一 data point 时 reuse attention results
+  \item $j(i)$：与 original row $i$ 对应的 duplicate index；
+  \item match 由 learned attention representation 完成，而不是预写 row ID；
+  \item intervention 改变 $y_{j(i)}^{\mathrm{dup}}$，其他机制保持不变；
+  \item 若 $\widehat y_i$ 随 intervention 稳定移动，说明模型使用了可泛化的 lookup path。
 \end{itemize}
 
-\subsection{本章小结}
+\teachervoice{讲者报告 intervention 后 prediction 与 duplicate value 的相关性仍约为 99.6\%。关键是模型未重新训练，却跟随一个训练分布之外的 target value 改变；这比只看普通 test error 更接近机制检验。}
 
-部署 attention-heavy 模型必须同时管好数据 pipeline 与监控。实际运营中，model engineering 仅仅是开始，高质量的 attention log 与 drift guardrail 才能保障系统稳定。
+\subsection{为什么它不只是 nearest neighbor}
 
-\section{Slide Gallery: Key Moments}
+Plain k-NN 也能找到 duplicate 并复制 target，因此基础任务还不足以展示 NPT 的可学习关系变换。作者进一步把 duplicate target 加一；固定 copy rule 会系统性出错，而 NPT 可以学习先 lookup 再减一。更一般地，NPT 可以学习 joint feature--target relation，而非只在固定 metric 下做局部平均。
 
-\subsection{Slide 1 — Transformer Reunion}
+\begin{importantbox}{NPT 学到的不是一个静态邻居表}
+最强证据不是“attention 看向相似 row”，而是模型在 match 之后还能执行 task-dependent transformation。多层 ABD/ABA 使 lookup、attribute reasoning 与 value transformation 可以组成一段 learned algorithm。
+\end{importantbox}
 
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{开场 slide：Aidan 回顾 Transformer 原始论文与 Cohere 的愿景（时间戳 00:02:15）。}
-\end{figure}
+\teachervoice{Kossen 主动承认基础 duplicate task 可被 nearest neighbor 解决，然后提出加一变换来提高难度。这种论证方式值得学习：不要回避简单 baseline，而要构造能区分机制能力的最小实验。}
 
-\subsection{Slide 2 — Routing Patterns}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{展示 attention routing 的热图示意，强调 soft routing 而非 hard wiring（时间戳 00:12:40）。}
-\end{figure}
-
-\subsection{Slide 3 — Feature Scaling}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{feature scaling chart，说明随着维度增加模型需要更多数据点之间交互（时间戳 00:17:20）。}
-\end{figure}
-
-\subsection{Slide 4 — Few-shot Masks}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{掩码预测流程图，用 few-shot 设置作为可视化背景（时间戳 00:23:05）。}
-\end{figure}
-
-\subsection{Slide 5 — Attention Heatmaps}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{Attention heatmap 解释图，强调 drift monitoring 要追踪的指标（时间戳 00:29:10）。}
-\end{figure}
-
-\subsection{Slide 6 — Data Pipeline}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{数据 pipeline diagram，提到 data sharding 与 embedding cache 需求（时间戳 00:33:45）。}
-\end{figure}
-
-\subsection{Slide 7 — Operational Checklist}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{Operational checklist，列出 attention log、drift guardrail、cache 设计（时间戳 00:38:56）。}
-\end{figure}
-
-\subsection{Slide 8 — Incident Timeline}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{Incident timeline figure，用于讲述 post-mortem 的时间线（时间戳 00:44:25）。}
-\end{figure}
-
-\subsection{Slide 9 — AI SRE Stack}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{AI SRE stack figure，展示 observation→response→automation 三段（00:48:10）。}
-\end{figure}
+\begin{warningbox}{Semi-synthetic success 的外推边界}
+任务被刻意设计为存在清晰 duplicate 与可验证 intervention，因此适合证明 representational capability。现实数据通常没有完美匹配、干净单一机制或可操控 labels；成功不等价于 NPT 已掌握一般 causal reasoning。
+\end{warningbox}
 
 \subsection{本章小结}
 
-本节以幻灯片画廊形式重访关键时刻，结合 caption 说明时间线、运维、事件复盘和 monitoring 的真实引用，确保视觉证据与文字内容同步。
-\subsection{Slide 10 — Governance Toolkit}
+Duplicate/intervention experiment 将跨 datapoint reasoning 拆成 match、read、transform、write 四步，并用 test-time intervention 验证 prediction 随 context 改变。它是强机制证据，但仍局限于透明的 semi-synthetic construction。
 
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{治理工具包：展示 guardrail checklist 与 action owners（时间 00:52:40）。}
-\end{figure}
+\section{限制、连接与未来：dataset attention 的代价是什么}
 
-\subsection{Slide 11 — Evidence Matrix}
+NPT 的表达力来自让 datapoints 彼此可见，同一设计也制造最大系统瓶颈。若 batch 中有 $b$ 个 datapoints、每行 flatten 后 hidden dimension 为 $h=de$，ABD attention map 大小为 $b\times b$，主要计算可近似写为
+\[
+\operatorname{Cost}_{\mathrm{ABD}}=O(b^2h),
+\qquad
+\operatorname{Memory}_{\mathrm{attn}}=O(b^2).
+\]
 
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{Evidence matrix：对比 NPT/Transformer 的 evidence with operations（时间 00:55:18）。}
-\end{figure}
+\begin{itemize}
+  \item $b$：实际参与一次 relational lookup 的 datapoint 数；
+  \item $h$：每个 row 的 hidden width；
+  \item 增大 $b$ 提升候选 context 覆盖，却以 quadratic cost 增长；
+  \item 随机 mini-batch 降低成本，但会遗漏 batch 外的潜在关键 neighbors。
+\end{itemize}
 
-\subsection{Slide 12 — Future Directions}
+\lecturefigure{slide-28-summary-future-work.jpg}{NPT 总结：实验、quadratic scaling 限制与 future work。}{Stanford Online 官方视频 01:00:42--01:05:36。}
 
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.85\textwidth,height=0.78\textheight]{cover.jpg}
-\caption{未来方向 slide：highlight hybrid attention + reinforcement agents in production（时间 00:59:00）。}
-\end{figure}
+\begin{knowledgebox}{读图：结论与开放问题分开看}
+左侧是本讲已经展示的结果：dataset-as-input、datapoint self-attention、tabular/image benchmarks 与 intervention evidence。右侧是尚未解决的限制：scaling，以及 multi-task、few-shot、semi-supervised、domain adaptation 等新任务。Future work 不是当前能力清单。
+\end{knowledgebox}
+
+\subsection{与 GNN 的连接}
+
+把每个 datapoint 看作 node，ABD 相当于在 fully connected graph 上做 learned message passing。区别在于许多 GNN 预先给定 sparse edges，而 NPT 从 attention score 中软学习关系；但现代 graph models 也可以学习 edges，因此二者不是绝对分界。
+
+\teachervoice{Q\&A 中讲者接受 fully connected graph 的类比，并指出 NPT 可以被理解为 discovering relational structure。Neil Band 提到 Neural Relational Inference：当 edges 未知时，attention/message passing 都在学习潜在交互。}
+
+\begin{warningbox}{Fully connected graph 不等于关系已被正确发现}
+允许任意两点通信只是 hypothesis space。模型仍可能学到 shortcut、spurious similarity 或近似 uniform attention；需要 corruption、intervention、OOD evaluation 与可扩展 sparse retrieval 才能判断关系是否有用。
+\end{warningbox}
+
+\subsection{Small data 与 large data 的不同价值}
+
+Small data 的优势是能把全数据集放进一次 forward，模型获得近乎完整 context；large data 则迫使我们引入 retrieval、sparsity、kernel approximation 或 learned representatives。后者虽然损失精确全连接 attention，却可能把 NPT 连接到现代 retrieval-augmented learning：参数负责学习检索与变换规则，外部 datapoints 负责保存可更新事实。
+
+\teachervoice{讲者在最后提出一个尖锐问题：大型 parametric models 有多少参数其实在“存数据”？若显式 lookup 能承担部分记忆，参数或许可以更专注于学习怎样检索、组合与推理。这个问题后来在 retrieval-augmented systems 中变得更加重要。}
+
+\begin{knowledgebox}{Scaling 路线图}
+\begin{tabularx}{\textwidth}{L{0.24\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+方向 & 收益 & 新风险 \\
+\midrule
+Random mini-batch & 实现简单、训练稳定 & 关键 datapoint 可能不在 batch，context 随机。 \\
+Sparse / local attention & 将 $b^2$ 降为少量 edges & 需要定义或学习 candidate graph。 \\
+ANN / learned retrieval & 先检索 top-$k$ rows，再做 NPT reasoning & Retriever recall 成为上游瓶颈。 \\
+Representative points & 用 prototypes / inducing points 压缩数据集 & 压缩可能丢失罕见样本与局部细节。 \\
+Kernel / low-rank approximation & 近似全局 attention & 近似误差与硬件效率需共同评估。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{从固定数据集走向 meta-learning}
+
+本讲实验为 fixed-dataset supervised learning，但 input contract 天然适合 context-based extension：把 support set、unlabeled set 与 query set 放入统一矩阵，通过 masks 指定任务。如果跨 datasets 训练，NPT 可能学习通用的 within-dataset algorithm；这与 in-context learning、few-shot learning、semi-supervised learning 和 domain adaptation 形成直接连接。
+
+\teachervoice{讲者把这些方向明确列为 future work，包括去除 mini-batch approximation、few-shot generalization、domain adaptation、semi-supervised 与 multi-task learning。讲义只把它们作为研究路线，不把尚未完成的实验写成既成能力。}
+
+\subsection{本章小结}
+
+Dataset attention 的表达力与 $O(b^2)$ 代价来自同一设计。GNN、retrieval、sparse attention 与 meta-learning 提供自然扩展，但每种近似都会改变可见 context 与 statistical contract，需要新的机制验证。
 
 \section{总结与延伸}
 
-\subsection{关键要点}
+\subsection{从 token relation 到 datapoint relation}
 
-\begin{itemize}
-    \item Transformer 让序列内部的 attention 成为可能，而 NPT 将 attention 扩展到数据点之间
-    \item Self-attention 本质上是 data routing，可解释性与稀疏化设计决定了如何推广长序列
-    \item NPT 在 tabular benchmark 上强于传统 MLP/DeepSets，需要同时关注 precision 和 recall
-    \item 生产部署不仅是模型，更是 data engineering、caching 与 attention drift monitoring
-    \item 通过 attention log、heatmap sanity check 与 incident checklist 才能让 attention 系统稳定运行
-\end{itemize}
+本讲最值得保留的统一图景是：attention 并不天然属于语言 token，它是“让一个对象依据一组其他对象更新表示”的计算模板。Transformer 在 tokens 之间学习关系；NPT 将每个 datapoint 变成对象，再通过 reshape 在 datapoints 与 attributes 两条轴之间交替推理。
 
-\subsection{进一步阅读}
+\begin{importantbox}{十二条核心结论}
+\begin{enumerate}
+  \item Self-attention 令 query、key、value 来自同一集合，学习输入内部关系。
+  \item Multi-head attention 提供多个投影子空间，但不保证每个 head 都可被人类命名。
+  \item Teacher forcing 用 gold prefixes 并行训练所有 next-token positions。
+  \item Causal mask 防止模型读取未来 targets，是 likelihood 正确性的边界。
+  \item NPT 仍是 parametric neural network；“non-parametric”指 inference 显式依赖训练 datapoints。
+  \item $(X,M)$ 把 observed evidence 与 masked queries 放进统一 dataset representation。
+  \item ABD 在 rows 之间 attention，ABA 在每行 attributes 之间 attention。
+  \item Row permutation equivariance 保证 datapoint 顺序不携带虚假语义。
+  \item Feature masking 提供 regularization，target masking 训练 relational lookup。
+  \item UCI average-rank evidence支持竞争力，不支持所有任务普遍胜出。
+  \item Corruption 与 duplicate intervention 证明若干任务中跨 datapoint mechanism 确实被使用。
+  \item Quadratic datapoint attention 是核心限制，未来需要 retrieval、sparsity 或 representative points。
+\end{enumerate}
+\end{importantbox}
 
-\begin{itemize}
-    \item Vaswani et al., ``Attention Is All You Need,'' NeurIPS 2017
-    \item Kossen et al., ``Self-Attention Between Datapoints: Going Beyond Individual Input-Output Pairs in Deep Learning,'' NeurIPS 2021
-    \item Garnelo et al., ``Neural Processes,'' ICML 2018 Workshop
-    \item Parmar et al., ``Image Transformer,'' ICML 2018 — attention 视作 routing 的早期例证
-    \item Izmailov et al., ``Subspace Inference for Deep Learning,'' ICML 2021 — 低秩参数更新的补充阅读
-\end{itemize}
+\subsection{一个工程化判断框架}
+
+若要在新任务中判断 NPT-style mechanism 是否值得采用，可以依次问五个问题：第一，其他 examples 在 inference 时是否真的提供额外信息；第二，是否能合法、安全、低延迟地访问这些 examples；第三，batch/retrieval set 是否覆盖关键 neighbors；第四，普通 tree、k-NN、retrieval baseline 是否已足够；第五，corruption 与 intervention 能否证明模型没有只靠自身 features 或 shortcut。
+
+\begin{knowledgebox}{实践清单}
+先实现强 per-row baseline；再加入 explicit retrieval；随后比较固定 k-NN、learned retriever 与 full datapoint attention；最后做 row corruption、neighbor removal、label intervention、batch-composition sensitivity 和 OOD evaluation。只有性能与机制证据同时改善，才应把收益归因于跨 datapoint reasoning。
+\end{knowledgebox}
+
+\subsection{拓展阅读}
+
+建议按“机制--架构--验证”顺序阅读：先回到 \emph{Attention Is All You Need} 理解 causal training；再读 Kossen 等人的 NPT 论文第 2 节与附录掌握 tensor shapes 和 masking；随后对照 Deep Sets、Set Transformer、Neural Relational Inference 与 Neural Processes，比较 permutation symmetry、message passing、context conditioning 和 uncertainty assumptions。工程上还应继续追踪 sparse attention 与 retrieval-augmented modeling，因为它们直接面对 NPT 的全数据 quadratic bottleneck。
+
+\teachervoice{讲者的收尾并未宣称问题已经解决，而是把 scaling 与更丰富任务留作开放方向。最稳妥的总结是：NPT 证明了“训练一个会读取数据集的预测算法”可以工作，并提供了少见的 mechanism-level experiments；它同时把检索覆盖、计算复杂度与数据泄漏变成不可回避的系统问题。}
 
 \end{document}

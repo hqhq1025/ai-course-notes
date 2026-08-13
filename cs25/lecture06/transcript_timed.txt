@@ -1,0 +1,1399 @@
+[00:00:05--00:00:07] So today I'm going to be talking about some recent work
+[00:00:07--00:00:09] that we've been doing at DeepMind,
+[00:00:09--00:00:11] developing this line of architectures
+[00:00:11--00:00:13] that we're calling perceivers.
+[00:00:13--00:00:17] And I'll be motivating this in terms of a goal that we have,
+[00:00:17--00:00:20] which is to develop a general purpose architectures.
+[00:00:20--00:00:22] And so just right off the bat, I want
+[00:00:22--00:00:25] to motivate why we care about general purpose architectures.
+[00:00:25--00:00:27] And so the first--
+[00:00:27--00:00:29] both of the reasons are fairly pragmatic.
+[00:00:29--00:00:32] But basically the idea is if we're
+[00:00:32--00:00:34] thinking about all of the data that we could possibly
+[00:00:34--00:00:38] imagine collecting in the world, a lot of it
+[00:00:38--00:00:39] is basically involved in what we think
+[00:00:39--00:00:42] of as sort of traditional sense modalities.
+[00:00:42--00:00:45] And these things range from touch, and proprioception,
+[00:00:45--00:00:47] to echolocation, to the kind of perception
+[00:00:47--00:00:49] you need to ingest texts--
+[00:00:49--00:00:51] however you want to format that--
+[00:00:51--00:00:56] just to more exotic things like event-based cameras,
+[00:00:56--00:00:59] touching with your senses-- things like smell and depth--
+[00:00:59--00:01:02] and all the way up to the kinds of sense modalities
+[00:01:02--00:01:04] that we really think about when we're thinking
+[00:01:04--00:01:06] about scientific perception.
+[00:01:06--00:01:10] And so basically if we think about the full set of data
+[00:01:10--00:01:12] and what it would take to actually model
+[00:01:12--00:01:14] each of these different modalities,
+[00:01:14--00:01:17] it basically looks effectively intractable to try
+[00:01:17--00:01:19] to the engineer inductive biases that will work
+[00:01:19--00:01:21] for every single one of these.
+[00:01:21--00:01:24] So we don't want to engineer them one by one.
+[00:01:24--00:01:25] This is an approach that's worked.
+[00:01:25--00:01:27] And in some ways it's maybe a reasonable description
+[00:01:27--00:01:30] of how we think about developing new architectures
+[00:01:30--00:01:31] for different problems.
+[00:01:31--00:01:33] But it's just not going to scale.
+[00:01:33--00:01:36] We can't afford as a community to hand design
+[00:01:36--00:01:38] inductive biases that will work for each
+[00:01:38--00:01:39] and every one of these.
+[00:01:39--00:01:40] And so rather than doing that, we
+[00:01:40--00:01:42] want to sort of build architectures
+[00:01:42--00:01:45] that at least a first pass will allow us to handle everything.
+[00:01:45--00:01:47] There's another practical argument
+[00:01:47--00:01:50] for why we should work on general purpose architectures.
+[00:01:50--00:01:52] And that's because it will allow us to build simpler
+[00:01:52--00:01:55] and more unified systems.
+[00:01:55--00:01:57] So if you look at how, in particular,
+[00:01:57--00:02:01] complex multimodal data streams are typically
+[00:02:01--00:02:06] approached in the sensory computer vision or pattern
+[00:02:06--00:02:08] recognition literatures.
+[00:02:08--00:02:10] Effectively, the typical way this is done
+[00:02:10--00:02:12] is by using inductive biases that we now
+[00:02:12--00:02:14] hold for the individual modalities,
+[00:02:14--00:02:16] and then engineer ways of combining
+[00:02:16--00:02:18] those different subsystems.
+[00:02:18--00:02:22] So this can mean building specific heads, specific input
+[00:02:22--00:02:24] modules for each of these things,
+[00:02:24--00:02:26] and then trying out the various different ways
+[00:02:26--00:02:27] of combining them.
+[00:02:27--00:02:29] So this can work, but it gives us
+[00:02:29--00:02:32] systems that in principle really will only work on one
+[00:02:32--00:02:34] or a small number of domains.
+[00:02:34--00:02:36] And it gives us systems that are very hard to maintain,
+[00:02:36--00:02:38] tend to be fragile, tend to depend
+[00:02:38--00:02:40] on specific processing assumptions about the input
+[00:02:40--00:02:41] modalities.
+[00:02:41--00:02:43] So rather than do that, we sort of
+[00:02:43--00:02:45] want to move in a direction of having
+[00:02:45--00:02:48] unified black-box architectures that kind of just work.
+[00:02:48--00:02:51] And the idea here is that if we can get to that point,
+[00:02:51--00:02:54] we can abstract the architecture construction process
+[00:02:54--00:02:56] and really focus on other more high-level problems.
+[00:02:56--00:02:59] So this is sort of the motivation
+[00:02:59--00:03:01] for this line of work.
+[00:03:01--00:03:03] And the way that we're going to be doing this
+[00:03:03--00:03:06] is of course by working on the most general purpose
+[00:03:06--00:03:08] architecture that we have so far,
+[00:03:08--00:03:10] which is basically a transformer.
+[00:03:10--00:03:12] And you'll all be very familiar with the basic building
+[00:03:12--00:03:14] blocks of a transformer.
+[00:03:14--00:03:16] But just at a very high level, we
+[00:03:16--00:03:17] can think about what they do right,
+[00:03:17--00:03:21] which is they use a general purpose inductive bias.
+[00:03:21--00:03:22] So they're non-local, which means
+[00:03:22--00:03:24] they're not making domain specific assumptions
+[00:03:24--00:03:26] about which point should be compared to each other,
+[00:03:26--00:03:29] rather they tend to be global in terms of the attentional focus
+[00:03:29--00:03:31] that they have.
+[00:03:31--00:03:35] They use a position as a feature rather than a hard constraint
+[00:03:35--00:03:36] of the architecture.
+[00:03:36--00:03:40] And this is in contrast to sort of NLP-based architectures
+[00:03:40--00:03:43] or ConvNets in the way that they typically work,
+[00:03:43--00:03:46] which used position as an architectural component
+[00:03:46--00:03:50] to constrain how compute is happening.
+[00:03:50--00:03:52] And then of course finally, there's
+[00:03:52--00:03:56] extensive weight sharing in the way that that they're designed.
+[00:03:56--00:03:58] And because they focus on Matmuls,
+[00:03:58--00:03:59] they tend to be TPU and GPU friendly.
+[00:03:59--00:04:01] So these are all very nice things about the way
+[00:04:01--00:04:03] transformers work.
+[00:04:03--00:04:04] Of course on the other hand, they
+[00:04:04--00:04:07] have very poor compute memory scaling.
+[00:04:07--00:04:09] And there are two components to this.
+[00:04:09--00:04:11] So attention itself scales quadratically.
+[00:04:11--00:04:17] So there's this O of M squared L complexity
+[00:04:17--00:04:20] at the heart of transformers, and I like writing it this way,
+[00:04:20--00:04:23] because it really emphasizes that this is a property of--
+[00:04:23--00:04:25] basically as you make your models bigger,
+[00:04:25--00:04:28] either at the input size or as you make them deeper,
+[00:04:28--00:04:30] this problem is just going to get worse.
+[00:04:30--00:04:34] And because you have this scaling in depth as well,
+[00:04:34--00:04:35] there's another sort of practical thing
+[00:04:35--00:04:39] that happens here because the amount of compute
+[00:04:39--00:04:41] that we're doing is proportional to the input size.
+[00:04:41--00:04:42] So there's no bottleneck in the way
+[00:04:42--00:04:45] that standard transformers work.
+[00:04:45--00:04:48] Even the linear scaling becomes a problem.
+[00:04:48--00:04:52] And so in practice for very, very large transformers,
+[00:04:52--00:04:54] this can often be the bottleneck that really matters.
+[00:04:54--00:04:55] But they're both at play here.
+[00:04:55--00:04:58] And so we really want to sort of tamp down both of these.
+[00:04:58--00:05:00] And so the sort of perspective here
+[00:05:00--00:05:02] is that to have really general purpose architectures,
+[00:05:02--00:05:05] we can't have ones that are just in principle general.
+[00:05:05--00:05:06] We have to have ones that you can actually
+[00:05:06--00:05:10] use on the scales and the kinds of data that we care about.
+[00:05:13--00:05:14] And so just to--
+[00:05:14--00:05:16] this will all be old hat for all of you,
+[00:05:16--00:05:19] but just the way that standard QKV attention
+[00:05:19--00:05:21] works is basically like this.
+[00:05:21--00:05:23] So it's all about matrix multiplications.
+[00:05:23--00:05:24] So we have some input.
+[00:05:24--00:05:26] We compute the query keys and values
+[00:05:26--00:05:29] by having a 1d convolution, a 1 by 1 convolution
+[00:05:29--00:05:31] that we run over the input.
+[00:05:31--00:05:34] We then compute the attention scores.
+[00:05:34--00:05:37] This is a matrix multiply that has the following,
+[00:05:37--00:05:38] these sorts of shapes.
+[00:05:38--00:05:42] We then use the output here to compute
+[00:05:42--00:05:45] the weights to compute the actual output of the attention
+[00:05:45--00:05:46] module itself.
+[00:05:46--00:05:49] And then finally, we run this through an additional MLP,
+[00:05:49--00:05:53] which is applied convolutionally to get the outputs.
+[00:05:53--00:05:57] So this is the starting point of what we're working on here.
+[00:05:57--00:06:00] And let me just briefly just reiterate
+[00:06:00--00:06:02] why we would want the sort of advantages
+[00:06:02--00:06:04] that we have with these sort of standard transformers.
+[00:06:04--00:06:08] So non-locality is one of the two inductive bias principles
+[00:06:08--00:06:09] that we have here.
+[00:06:09--00:06:11] It's useful, I think, to contrast this
+[00:06:11--00:06:13] to way that the effective locality
+[00:06:13--00:06:16] that you get in convnets and what this actually means.
+[00:06:16--00:06:20] So if we look at basically as a function of depth, which inputs
+[00:06:20--00:06:22] can see which other ones, which means
+[00:06:22--00:06:26] like how easily it is to express a function of two input points.
+[00:06:26--00:06:28] Let's say we look at these this yellow and purple point
+[00:06:28--00:06:29] here at the input.
+[00:06:29--00:06:32] Now I set them sort of as far apart as possible.
+[00:06:32--00:06:36] But we might ask how deep would the effect of computation
+[00:06:36--00:06:39] have to be before you actually process these two?
+[00:06:39--00:06:43] And if you look at a 3 by 3 convolution, you're talking--
+[00:06:43--00:06:45] you're having to look basically until the very end
+[00:06:45--00:06:48] of the network until you're processing
+[00:06:48--00:06:50] these things together.
+[00:06:50--00:06:53] And what this means is that the functions
+[00:06:53--00:06:55] that you can express that actually
+[00:06:55--00:06:57] look at both of these points end up being quite shallow,
+[00:06:57--00:06:59] because they have to be built on top
+[00:06:59--00:07:01] of this very, very deep stack that just gives you
+[00:07:01--00:07:02] the locality.
+[00:07:02--00:07:05] And so in point of fact, if you look at,
+[00:07:05--00:07:07] for example, the way ResNets work,
+[00:07:07--00:07:09] so you have an initial block which has a 7 by 7 convolution.
+[00:07:09--00:07:12] And then afterwards it's 3 by 3 columns all the way up.
+[00:07:12--00:07:16] You need 28, 3 by 3 convs with that standard processing
+[00:07:16--00:07:19] stack before all of the 224 by 224 pixels in an image
+[00:07:19--00:07:20] you're looking at each other.
+[00:07:20--00:07:24] And what this means is that in a ResNet 50,
+[00:07:24--00:07:25] the points on the very edge of the pixels
+[00:07:25--00:07:27] actually never see each other.
+[00:07:27--00:07:29] And it's a little bit--
+[00:07:29--00:07:31] I found this a little bit counterintuitive.
+[00:07:31--00:07:33] But it suggests that we really are constraining
+[00:07:33--00:07:35] quite a lot, the functions that are easy to express
+[00:07:35--00:07:36] with these models.
+[00:07:36--00:07:38] And so there are some functions of images
+[00:07:38--00:07:42] you just can't capture with a ResNet 50.
+[00:07:42--00:07:44] On the other hand, if you look at an architecture that
+[00:07:44--00:07:48] has global attention over the full input, so
+[00:07:48--00:07:50] the transformers, you could scale it that way
+[00:07:50--00:07:53] or in a perceiver, we're going to be talking about all
+[00:07:53--00:07:55] of the pixels can interact.
+[00:07:55--00:07:57] So the model can basically capture these things
+[00:07:57--00:07:59] and express these functions much more
+[00:07:59--00:08:02] easily than can be expressed in things that put locality first.
+[00:08:06--00:08:08] The other sort of interesting property
+[00:08:08--00:08:12] of these sorts of architectures is that position is featurized.
+[00:08:12--00:08:13] And this basically means that we're
+[00:08:13--00:08:16] no longer sort of encoding the architectural location
+[00:08:16--00:08:19] of something to figure out where it's located
+[00:08:19--00:08:21] with respect to the other ones.
+[00:08:21--00:08:24] And this allows the network to basically use
+[00:08:24--00:08:27] any positional information that it wants but can also
+[00:08:27--00:08:30] discard it as it prefers.
+[00:08:30--00:08:31] And so this is the standard way it's
+[00:08:31--00:08:34] done, of course, in the context of architectures
+[00:08:34--00:08:37] that use Fourier or sinusoidal-like features.
+[00:08:37--00:08:40] But there's a lot of flexibility here.
+[00:08:40--00:08:41] OK, so now just thinking in terms
+[00:08:41--00:08:44] of how ConvNets relate to transformers sort
+[00:08:44--00:08:46] of at the opposite end, it may look
+[00:08:46--00:08:48] like that we have sort of a scalability
+[00:08:48--00:08:51] versus generality trade off.
+[00:08:51--00:08:55] And so if we look at ConvNets the way that they're applied,
+[00:08:55--00:08:57] so typically we can think about using them
+[00:08:57--00:08:59] on grid structure data.
+[00:08:59--00:09:01] There are, of course, generalizations of convolutions
+[00:09:01--00:09:05] that work on data sets with more interesting topology.
+[00:09:05--00:09:07] But typically we can think of them
+[00:09:07--00:09:10] as operating on grids in some sort of space.
+[00:09:10--00:09:12] Whereas, transformers apply to generic sets.
+[00:09:12--00:09:16] So transformers are more general from this point of view.
+[00:09:16--00:09:18] On the other hand, they scale much, much worse.
+[00:09:18--00:09:22] So ConvNets are linear both in the input points, the filter
+[00:09:22--00:09:25] size, and the number of layers of that architecture,
+[00:09:25--00:09:28] whereas transformers have this quadratic scaling
+[00:09:28--00:09:31] and they're still linear in the depth.
+[00:09:31--00:09:32] So from this point of view, what we're
+[00:09:32--00:09:35] interested in doing in the perceiver line of work
+[00:09:35--00:09:39] was to scale transformers but to keep the generality properties.
+[00:09:39--00:09:42] So we want something that lives in between these two extremes.
+[00:09:42--00:09:46] And the way that we do this is by looking
+[00:09:46--00:09:49] at self-attention and sort of modifying it in a way that
+[00:09:49--00:09:51] allows us to scale better.
+[00:09:51--00:09:53] So to walk through what self-attention actually
+[00:09:53--00:09:56] does in sort of standard transformers,
+[00:09:56--00:09:59] we take our input array, which here is written as the number--
+[00:09:59--00:10:02] as the indices, which is the number of tokens
+[00:10:02--00:10:03] or the number of pixels, basically
+[00:10:03--00:10:05] the number of input units depending what you're
+[00:10:05--00:10:08] looking at, and the channels.
+[00:10:08--00:10:09] We have a 1D convolution.
+[00:10:09--00:10:12] So this is O of M with respect to the Q,
+[00:10:12--00:10:15] K, and V. We then compute the attention maps using
+[00:10:15--00:10:17] the output of this operation.
+[00:10:17--00:10:18] This gives us a matrix multiply, which
+[00:10:18--00:10:21] is the source of the quadratic scaling.
+[00:10:21--00:10:23] And then finally, we compute output features
+[00:10:23--00:10:25] with another matrix multiply.
+[00:10:29--00:10:31] We're already rate limited here, because for even
+[00:10:31--00:10:34] standard resolution images, M is quite large.
+[00:10:34--00:10:36] So it's around 50,000 for standard ImageNet images,
+[00:10:36--00:10:38] which again are very small.
+[00:10:38--00:10:40] So this is something that just isn't
+[00:10:40--00:10:43] going to work if we want deep architectures.
+[00:10:43--00:10:46] So what we do is we replace, at the input to the architecture
+[00:10:46--00:10:49] we replace the self-attention with a cross-attention layer.
+[00:10:49--00:10:53] And we do this using basically a learned query.
+[00:10:53--00:10:57] And so we're replacing only the query from the input here
+[00:10:57--00:10:58] with a learned component.
+[00:10:58--00:11:00] And so these indices and channels,
+[00:11:00--00:11:02] you can just think of these as basically
+[00:11:02--00:11:05] working like the learned initial state for an RNN.
+[00:11:05--00:11:07] there's a variety of names that this idea
+[00:11:07--00:11:09] goes under in the literature.
+[00:11:09--00:11:13] We refer to them as latents.
+[00:11:13--00:11:15] But they're sometimes called inducing
+[00:11:15--00:11:17] points or other things.
+[00:11:17--00:11:19] So the basic idea is we're learning the input to the query
+[00:11:19--00:11:22] and keeping the key value input the same.
+[00:11:22--00:11:24] The downside or the sort of upside of this
+[00:11:24--00:11:28] is that when we compute the attention map after this, now
+[00:11:28--00:11:30] we basically turned this from a square matrix
+[00:11:30--00:11:34] to a rectangular matrix--
+[00:11:34--00:11:37] and reduces the complexity of the matrix multiplied
+[00:11:37--00:11:40] to O of MN, so now it's linear in the input size.
+[00:11:40--00:11:44] And the second matrix multiply has the exact same property.
+[00:11:44--00:11:47] So it from quadratic, it becomes linear.
+[00:11:47--00:11:49] And the quite cool thing about this
+[00:11:49--00:11:51] is that, OK, so the cross-attention
+[00:11:51--00:11:54] is linear in complexity, but the output is actually smaller.
+[00:11:54--00:11:55] And so this, I think, is actually
+[00:11:55--00:11:57] the more important point here.
+[00:11:57--00:11:59] It's that this allows us to map something which
+[00:11:59--00:12:01] is quite large into something that has size that's
+[00:12:01--00:12:03] independent of the input.
+[00:12:03--00:12:05] So we have full control over this as a hyperparameter.
+[00:12:05--00:12:10] And this allows us to build deep networks on top of this latent.
+[00:12:10--00:12:12] So because this is of a small size that we can control,
+[00:12:12--00:12:15] we can afford to have quadratic complexity on top of this.
+[00:12:15--00:12:17] And so we use this--
+[00:12:17--00:12:18] yep?
+[00:12:18--00:12:18] I'm sorry.
+[00:12:18--00:12:21] I'm still a little bit confused as to how
+[00:12:21--00:12:24] you guys are able to turn this square into a rectangle
+[00:12:24--00:12:25] in the second step.
+[00:12:25--00:12:28] Is it because you replaced the query
+[00:12:28--00:12:30] with the learned something that is significantly
+[00:12:30--00:12:33] smaller compared to the input size in the first step?
+[00:12:33--00:12:35] Yeah, that's exactly right.
+[00:12:35--00:12:36] So if you look at the--
+[00:12:36--00:12:40] so the underlying matrix multiply here,
+[00:12:40--00:12:44] which is written as the QK transpose,
+[00:12:44--00:12:47] so the outer dimension here has shape N, which
+[00:12:47--00:12:48] is determined by the query.
+[00:12:48--00:12:50] And so by shrinking that query, we're
+[00:12:50--00:12:53] just changing the output of the matrix multiply.
+[00:12:53--00:12:54] OK.
+[00:12:54--00:12:56] Thank you.
+[00:12:56--00:12:58] Yeah, so I guess--
+[00:12:58--00:12:59] sorry, go ahead please.
+[00:12:59--00:13:00] OK, cool.
+[00:13:00--00:13:03] So basically you only do that for the query, right?
+[00:13:03--00:13:06] So key and value remain the original size
+[00:13:06--00:13:08] matrices, correct?
+[00:13:08--00:13:09] That's right, yeah.
+[00:13:09--00:13:10] OK.
+[00:13:10--00:13:16] But so basically-- so I don't know what I'm not
+[00:13:16--00:13:17] understanding basically.
+[00:13:17--00:13:21] So the problem for me is that for a query, now in my head
+[00:13:21--00:13:25] I'm looking for let's say, I have the ith token,
+[00:13:25--00:13:28] now there is no ith query anymore.
+[00:13:28--00:13:33] Doesn't that cause a problem when I'm trying to use it
+[00:13:33--00:13:35] and to compute scores?
+[00:13:35--00:13:36] Yeah.
+[00:13:36--00:13:38] So what's happening here is you're
+[00:13:38--00:13:40] comparing-- you'll have a smaller subset of query.
+[00:13:40--00:13:42] So if you think about this and not in terms of the matrix
+[00:13:42--00:13:44] multiplies but in terms of comparing
+[00:13:44--00:13:48] each query to each key, so in normal self-attention
+[00:13:48--00:13:50] we have one query for each key, so every point
+[00:13:50--00:13:51] compares to every other point.
+[00:13:51--00:13:52] Right?
+[00:13:52--00:13:54] So here what we've done is instead of comparing
+[00:13:54--00:13:55] every point to every other point,
+[00:13:55--00:13:57] we have a set of sort of cluster centers--
+[00:13:57--00:13:59] you may be able to think about them as.
+[00:13:59--00:14:00] So that's a smaller number.
+[00:14:00--00:14:04] And we compare each of those to each of the input points.
+[00:14:04--00:14:08] But we don't know which tokens technically belong
+[00:14:08--00:14:10] to which clusters, right?
+[00:14:10--00:14:11] That's right.
+[00:14:11--00:14:12] So it has to be learned.
+[00:14:12--00:14:13] Through Matmuls.
+[00:14:13--00:14:15] Yeah, exactly.
+[00:14:15--00:14:18] So one way to think about this, about what's happening here
+[00:14:18--00:14:24] is that instead of-- so in a normal self-attention
+[00:14:24--00:14:27] transformer, by comparing all to all we're sort of saying,
+[00:14:27--00:14:29] OK, I know what the feature is at this point
+[00:14:29--00:14:32] and I want it to attend to similar features.
+[00:14:32--00:14:34] Here what we're saying is we're learning
+[00:14:34--00:14:38] a bunch of supplementary points that
+[00:14:38--00:14:40] should be sort of maximally similar
+[00:14:40--00:14:42] to some subset of the inputs,.
+[00:14:42--00:14:45] So correct me if I'm wrong but this is essentially
+[00:14:45--00:14:46] using a hard engine, right?
+[00:14:46--00:14:50] We're using a-- it's about like declaring all the points.
+[00:14:50--00:14:53] It's like some points, which we think are very similar,
+[00:14:53--00:14:57] and only were self-attention was so hardened like this points
+[00:14:57--00:14:58] you're sharing, right?
+[00:14:58--00:14:59] Yeah.
+[00:14:59--00:15:00] So they're related.
+[00:15:00--00:15:02] That would be one way to think about it.
+[00:15:02--00:15:06] The slight modifier to that idea,
+[00:15:06--00:15:09] though, is that they basically live in an abstract space.
+[00:15:09--00:15:11] So they're not assigned sort of one
+[00:15:11--00:15:13] to one, to one of the input queries
+[00:15:13--00:15:15] or to one of the input points.
+[00:15:15--00:15:17] They're sort of learned, so they can be somewhere in the middle.
+[00:15:17--00:15:19] But I think that's a good way to think about it,
+[00:15:19--00:15:21] that's a good intuition.
+[00:15:21--00:15:24] But I guess one of the places where I'm a little confused
+[00:15:24--00:15:26] here is you have here indices and indices for the twos,
+[00:15:26--00:15:28] likessssssssssss sssssssssssssssssssssssssssssss
+[00:15:28--00:15:31] the purple and green matrices of the far left.
+[00:15:31--00:15:32] But those indices are not necessarily
+[00:15:32--00:15:34] corresponding to inputs.
+[00:15:34--00:15:36] Like in the NLP space, those would not necessarily
+[00:15:36--00:15:37] be tokens, right?
+[00:15:37--00:15:38] These are just sort of--
+[00:15:38--00:15:39] Exactly.
+[00:15:39--00:15:42] But the matrix in this case is the result
+[00:15:42--00:15:46] of some kind of mapping from the input tokens to an N
+[00:15:46--00:15:48] by D matrix, is that right?
+[00:15:48--00:15:50] No, it's actually-- so it basically
+[00:15:50--00:15:52] acts like it's a learned set of weights.
+[00:15:52--00:15:53] It's one way to think about it.
+[00:15:53--00:15:55] So they function exactly the same way that
+[00:15:55--00:15:56] learned position encodings do.
+[00:15:56--00:15:59] So it's basically just a learned embedding.
+[00:15:59--00:16:01] But it's not conditioned on anything.
+[00:16:05--00:16:06] It's just sort of a set of weights.
+[00:16:06--00:16:07] Oh, OK.
+[00:16:07--00:16:08] That makes more sense.
+[00:16:08--00:16:09] Thank you.
+[00:16:09--00:16:10] Mm-hmm.
+[00:16:14--00:16:15] OK, so if there are no more questions,
+[00:16:15--00:16:16] I'm going to keep going.
+[00:16:16--00:16:20] But of course, feel free to interrupt me.
+[00:16:20--00:16:24] So the way that given this idea, so we have this
+[00:16:24--00:16:25] learned latent array, which again it
+[00:16:25--00:16:28] functions sort of like an RNN in an initial state
+[00:16:28--00:16:30] or it's a set of weights.
+[00:16:30--00:16:32] We basically randomly initialize that.
+[00:16:32--00:16:36] And then we use this to attend onto the input byte array.
+[00:16:36--00:16:39] And so the byte array here is the flattened set of pixels
+[00:16:39--00:16:41] for example for ImageNet.
+[00:16:41--00:16:43] And the output of this is going to live in the same space
+[00:16:43--00:16:47] as-- so the same index space as the latent array does.
+[00:16:47--00:16:49] And there's residual connections in the way
+[00:16:49--00:16:55] that you would normally do in an attention layer as well.
+[00:16:55--00:16:59] So once we're in the space, we can then build an architecture
+[00:16:59--00:17:03] by using a standard transformer but phrased in the latent space
+[00:17:03--00:17:05] rather than in the input space.
+[00:17:05--00:17:09] And this is going to allow us to basically end up,
+[00:17:09--00:17:11] because we sort of distilled the input down
+[00:17:11--00:17:12] to the smaller space.
+[00:17:12--00:17:15] We can still flexibly allow all of these points to interact.
+[00:17:15--00:17:19] So this should be still as nearly as expressive
+[00:17:19--00:17:20] as a normal transformer is.
+[00:17:20--00:17:22] And then each of the modules here now
+[00:17:22--00:17:25] is quadratic in the latent size rather than the input size.
+[00:17:25--00:17:29] So this is something that we can control quite a lot.
+[00:17:29--00:17:32] So in the original version of the procedure,
+[00:17:32--00:17:36] we found it was very helpful to have additional cross attends.
+[00:17:36--00:17:39] So this is certainly something that you could do.
+[00:17:39--00:17:42] And the reason-- the intuition behind this
+[00:17:42--00:17:46] is that this bottleneck is quite severe.
+[00:17:46--00:17:48] We can't maintain all of the information from the input,
+[00:17:48--00:17:50] and so we want these queries, which
+[00:17:50--00:17:52] are now sort of conditioned on the past
+[00:17:52--00:17:54] to be able to look back at the input point.
+[00:17:54--00:17:59] And so this is something that we found to be quite helpful when
+[00:17:59--00:18:00] tuning for the first paper.
+[00:18:00--00:18:02] But the caveat, I will say, is that we're no longer
+[00:18:02--00:18:04] recommending this as best practice,
+[00:18:04--00:18:07] because these cross attentions end up being quite heavy.
+[00:18:07--00:18:09] But this is something that you can explore certainly
+[00:18:09--00:18:11] if you want sort of more conditional queries,
+[00:18:11--00:18:13] or if you want to be able to cross attend to new inputs that
+[00:18:13--00:18:15] are coming in.
+[00:18:15--00:18:17] The other thing that we found quite helpful
+[00:18:17--00:18:21] in the context of data sets that have a limited amount of data,
+[00:18:21--00:18:24] which for these architectures includes ImageNet,
+[00:18:24--00:18:26] is to allow weight sharing in depth.
+[00:18:26--00:18:28] And so this basically just amounts
+[00:18:28--00:18:30] to tying the weights for the different cross
+[00:18:30--00:18:32] attention and different self-attention layers
+[00:18:32--00:18:33] as they're repeated.
+[00:18:33--00:18:36] So this ends up looking like an RNN that's unrolled in depth.
+[00:18:40--00:18:43] At a high level, this gives us an architecture
+[00:18:43--00:18:44] that we can apply to images.
+[00:18:44--00:18:45] But it doesn't make any assumptions
+[00:18:45--00:18:46] about image structure.
+[00:18:46--00:18:48] So it's one that you can use elsewhere.
+[00:18:48--00:18:54] And we basically, we give information about the input
+[00:18:54--00:18:58] sort of spatial structure by having positional coatings
+[00:18:58--00:19:01] and here we use a 2D Fourier feature position encoding.
+[00:19:01--00:19:03] And just to show you what that looks like here to give you
+[00:19:03--00:19:08] a sense, so each of the input points is assigned.
+[00:19:08--00:19:11] Basically, so you'll be some position here.
+[00:19:11--00:19:14] And we have sinusoidal and cosinusoidal features in 2D.
+[00:19:14--00:19:17] So this is basically a Fourier decomposition
+[00:19:17--00:19:19] of the position of the 2D input.
+[00:19:19--00:19:23] And a couple of things that we found with that, if we sampled
+[00:19:23--00:19:25] the frequency, that's the maximum frequency that's
+[00:19:25--00:19:28] used up to the Nyquist frequency of the signal,
+[00:19:28--00:19:31] we end up doing better than if you
+[00:19:31--00:19:32] use a lower version of this.
+[00:19:32--00:19:33] And this basically is because this
+[00:19:33--00:19:35] will allow every other point to be
+[00:19:35--00:19:38] aware of every distinct point in the image.
+[00:19:38--00:19:40] Whereas if you sample at a lower frequency,
+[00:19:40--00:19:42] you're going to end up with aliasing.
+[00:19:42--00:19:45] And so not all points will be sort of legible.
+[00:19:45--00:19:47] We also found that sampling the spectrum relatively densely
+[00:19:47--00:19:50] tends to help and the contrast here
+[00:19:50--00:19:53] at the time we were developing was with respect to NeRF.
+[00:19:53--00:19:56] So NeRF, at least in earlier implementations,
+[00:19:56--00:19:59] used quite a small number of frequency bands.
+[00:19:59--00:20:01] We found that the more we added the better we did.
+[00:20:01--00:20:05] So in general, this is something to be attentive to.
+[00:20:05--00:20:09] An then, finally, as opposed to language where you typically
+[00:20:09--00:20:11] have addition of whatever you're embedding
+[00:20:11--00:20:15] is with the sinusoidal or position encoding that you use.
+[00:20:15--00:20:17] Here we found that concatenating them
+[00:20:17--00:20:20] performed consistently better.
+[00:20:20--00:20:22] And so this may be because the positioning,
+[00:20:22--00:20:25] the content embedding is not as sparse as it is in language.
+[00:20:25--00:20:26] We're not totally sure.
+[00:20:26--00:20:30] But this is something that I observed consistently.
+[00:20:30--00:20:31] And before I move on to results.
+[00:20:31--00:20:34] I just want to contrast this to some other approaches
+[00:20:34--00:20:38] for using transformers in the image context.
+[00:20:38--00:20:42] So the obvious precedent here is visual transformers.
+[00:20:42--00:20:47] And I think this line of work is great, especially
+[00:20:47--00:20:49] in the image context, but there are some caveats about it
+[00:20:49--00:20:53] that make it less suitable for sort of more general purpose
+[00:20:53--00:20:54] use.
+[00:20:54--00:20:57] So one is that-- so vision transformers
+[00:20:57--00:20:58] do use an input 2D convolution.
+[00:20:58--00:21:00] So this is often phrased in terms
+[00:21:00--00:21:04] of patches, input patches, the special case of a 2D
+[00:21:04--00:21:05] transformer.
+[00:21:05--00:21:10] So it does restrict the class of inputs you can use it for.
+[00:21:10--00:21:13] And because we're basically building this patching
+[00:21:13--00:21:16] or convolution into it, this means
+[00:21:16--00:21:19] that this has an approach really isn't sufficient to get
+[00:21:19--00:21:20] it to work on non-grid data.
+[00:21:20--00:21:21] There are other ways you could adapt it,
+[00:21:21--00:21:23] but this is something that you will
+[00:21:23--00:21:26] have to special case for every domain you're looking at.
+[00:21:26--00:21:29] And then finally, because we have this input where we're
+[00:21:29--00:21:31] telling the architecture what it should look at first
+[00:21:31--00:21:33] in the initial grouping, this does amount
+[00:21:33--00:21:36] to getting rid of the non-locality assumption.
+[00:21:36--00:21:39] It's not super clear doing much doing this just once will
+[00:21:39--00:21:40] make a difference.
+[00:21:40--00:21:42] But this is something to be aware of when you're thinking
+[00:21:42--00:21:44] about this architecture.
+[00:21:44--00:21:48] And then finally cross-attention itself is used quite broadly
+[00:21:48--00:21:49] in the vision literature.
+[00:21:49--00:21:54] So to highlight a couple of examples, DETR,
+[00:21:54--00:21:58] which is an object detection method from Facebook,
+[00:21:58--00:22:00] basically, has a convolutional backbone
+[00:22:00--00:22:02] that's then used to give an output feature map.
+[00:22:02--00:22:05] This is then passed into a transformer encoder-decoder.
+[00:22:05--00:22:07] And of course, whenever you hear encoder-decoder,
+[00:22:07--00:22:10] you can cross-attention because from the encoder to the decoder
+[00:22:10--00:22:12] there's a cross-attention step.
+[00:22:12--00:22:14] And so they're using basically the cross-attention
+[00:22:14--00:22:16] to go from some feature map representation
+[00:22:16--00:22:20] to something that looks more like the object bounding boxes.
+[00:22:20--00:22:25] There's also quite nice work on learning
+[00:22:25--00:22:29] self-supervised or unsupervised object segmentation models.
+[00:22:29--00:22:32] And in this work, they're doing something very similar,
+[00:22:32--00:22:34] where they have a convolutional backbone.
+[00:22:34--00:22:38] They then use something like these latent the latency
+[00:22:38--00:22:42] that we introduce here to do to what they call them slots here.
+[00:22:42--00:22:45] But basically, to assign some of the output
+[00:22:45--00:22:48] pixels to different slots, so that they sort of
+[00:22:48--00:22:51] have independent complementary decoding of the slots
+[00:22:51--00:22:52] in the segmentation model here.
+[00:22:55--00:22:58] And there's a lot of other things, OK.
+[00:22:58--00:23:03] So now I'm going to walk you through results of this model.
+[00:23:03--00:23:06] Hi, can I-- oh, go ahead.
+[00:23:06--00:23:07] I'll go after you.
+[00:23:07--00:23:08] Go for it.
+[00:23:08--00:23:11] OK, cool, sorry for that.
+[00:23:11--00:23:12] Can you go back a couple of slides,
+[00:23:12--00:23:20] where you had how the inputs flow into I think one--
+[00:23:20--00:23:23] yeah, that one.
+[00:23:23--00:23:24] OK, so I have two questions.
+[00:23:24--00:23:25] The latent transformer is basically
+[00:23:25--00:23:26] like a self-attention.
+[00:23:26--00:23:29] Is that correct?
+[00:23:29--00:23:31] Yeah, so the latent transformer is a fully
+[00:23:31--00:23:34] self-attentional transformer.
+[00:23:34--00:23:35] Got it.
+[00:23:35--00:23:39] Why-- see, for the key and value,
+[00:23:39--00:23:41] they flow directly into your cross-attention.
+[00:23:41--00:23:44] And there is the query also flowing into it.
+[00:23:44--00:23:48] But the latent array is flowing into the cross-attention
+[00:23:48--00:23:49] in parallel to the query.
+[00:23:49--00:23:51] Can you explain that?
+[00:23:51--00:23:53] Yeah, so this is just--
+[00:23:53--00:23:54] [INTERPOSING VOICES]
+[00:23:55--00:23:58] Yeah, it's meant to depict the residual connection.
+[00:23:58--00:24:01] So the cross-attention-- this is sort
+[00:24:01--00:24:03] of a cross-attention depicted as a cross-attention module.
+[00:24:03--00:24:06] And so the cross-attention itself has the attention,
+[00:24:06--00:24:08] it has a residual connection, and then there's an MLP.
+[00:24:08--00:24:11] So that's what that's meant to indicate.
+[00:24:11--00:24:11] OK.
+[00:24:11--00:24:15] But it's basically-- the QKV is standard.
+[00:24:15--00:24:16] Got it.
+[00:24:16--00:24:18] Thanks.
+[00:24:18--00:24:22] Hi, I had a question that is slightly related to this.
+[00:24:22--00:24:24] So you can just stay on this slide, actually.
+[00:24:24--00:24:26] So I think one thing that's interesting about this--
+[00:24:30--00:24:31] I lost you.
+[00:24:31--00:24:34] You're cutting off.
+[00:24:34--00:24:37] It's mostly consisting of attention layers,
+[00:24:37--00:24:39] whether it's attention or image transformers.
+[00:24:39--00:24:40] Can you hear me?
+[00:24:40--00:24:42] Is that coming through?
+[00:24:42--00:24:43] No, it's cutting off.
+[00:24:43--00:24:44] I think--
+[00:24:44--00:24:46] But I think some--
+[00:24:46--00:24:47] Oh, OK.
+[00:24:47--00:24:48] Should I type it?
+[00:24:48--00:24:50] Is that-- should I type it?
+[00:24:50--00:24:52] Yeah, that's a good idea.
+[00:24:52--00:24:53] I'll type it.
+[00:24:53--00:24:54] Thanks, sorry.
+[00:24:54--00:24:54] No worries.
+[00:24:58--00:24:59] Feel free to go ahead.
+[00:24:59--00:25:02] I'll type it slowly.
+[00:25:02--00:25:02] Sounds good.
+[00:25:02--00:25:04] Sounds good to me.
+[00:25:04--00:25:05] Actually, can I chime in?
+[00:25:05--00:25:09] Drew, while you're on that previous slide on the flow,
+[00:25:09--00:25:11] so these residual connections, I actually
+[00:25:11--00:25:12] didn't know that cross-attention used them.
+[00:25:12--00:25:15] How reliant are these sequential cross-attention layers
+[00:25:15--00:25:19] on the residual connections?
+[00:25:19--00:25:25] Yeah, so here, in the initial--
+[00:25:25--00:25:28] so the two things I will say is that
+[00:25:28--00:25:31] in the initial cross-attention, it doesn't really
+[00:25:31--00:25:34] make a difference, if it's something we've ablated.
+[00:25:34--00:25:36] When we get to the Perceiver IO version of this,
+[00:25:36--00:25:39] we also did the same thing in the decoder cross-attention.
+[00:25:39--00:25:40] And it can make some of--
+[00:25:40--00:25:43] it can make a difference there, depending on what you're doing.
+[00:25:43--00:25:45] I think it's actually essential in the content--
+[00:25:45--00:25:47] when you're using repeated cross-attention this way,
+[00:25:47--00:25:49] so when you have this sort of iterative structure.
+[00:25:49--00:25:51] And the reason for this is that the thing
+[00:25:51--00:25:53] that's actually used to condition the query
+[00:25:53--00:25:55] is basically all--
+[00:25:55--00:25:58] that's your full representation of this sort of the state
+[00:25:58--00:25:59] of the architecture so far.
+[00:25:59--00:26:02] And so the skip connection is from--
+[00:26:02--00:26:04] it's in, basically the query channel.
+[00:26:04--00:26:06] It's in the latent space.
+[00:26:06--00:26:07] And so this is basically what allows
+[00:26:07--00:26:13] you to end up with this sort of dense and stable architecture.
+[00:26:13--00:26:14] Thank you.
+[00:26:14--00:26:14] Mm-hmm.
+[00:26:21--00:26:23] So to ImageNet.
+[00:26:23--00:26:26] OK, so in standard ImageNet processing,
+[00:26:26--00:26:29] basically, we compare against a few--
+[00:26:29--00:26:31] so this is a little bit out of date at this point,
+[00:26:31--00:26:35] but against a few just sort of sanity check baselines here.
+[00:26:35--00:26:38] So comparing against ResNet50, and then at the time,
+[00:26:38--00:26:40] the best vision transformer model
+[00:26:40--00:26:41] that was purely on ImageNet.
+[00:26:41--00:26:44] And we're definitely in the ballpark.
+[00:26:44--00:26:46] This isn't-- these aren't anywhere near state of the art
+[00:26:46--00:26:47] results.
+[00:26:47--00:26:49] But this is an architecture that, again, it's
+[00:26:49--00:26:51] not using any 2D convolutions.
+[00:26:51--00:26:53] And so the fact that it was able to do this well was,
+[00:26:53--00:26:55] we found, very, very surprising at the time.
+[00:26:55--00:26:57] One of the quite cool things about this
+[00:26:57--00:27:00] is that because this architecture is not
+[00:27:00--00:27:02] making any assumptions, the architecture itself
+[00:27:02--00:27:06] isn't making any assumptions about the spatial structure
+[00:27:06--00:27:08] of the input images.
+[00:27:08--00:27:10] We can look at permuted ImageNet.
+[00:27:10--00:27:13] And in the first version of this, what we do is basically
+[00:27:13--00:27:16] we compute the features using the 2D position.
+[00:27:16--00:27:18] So the 2D position is sort of fixed to a position--
+[00:27:18--00:27:19] to the pixel.
+[00:27:19--00:27:20] And then we just shuffle it all.
+[00:27:20--00:27:22] And so this is basically-- will give you
+[00:27:22--00:27:25] a sense of how dependent the baselines are
+[00:27:25--00:27:28] on the input image structure.
+[00:27:28--00:27:31] And so if we look at the transformer perceiver,
+[00:27:31--00:27:33] by construction, they don't change.
+[00:27:33--00:27:34] So this is not an empirical finding.
+[00:27:34--00:27:36] This is a property of the models.
+[00:27:36--00:27:39] But we find that ResNet50 falls by--
+[00:27:39--00:27:41] the performance falls by about half.
+[00:27:41--00:27:44] And ViT, which again, only has one layer where
+[00:27:44--00:27:46] it's relying on the spatial structure also
+[00:27:46--00:27:48] has about a 15 point drop.
+[00:27:48--00:27:49] And so this suggests that it's relying
+[00:27:49--00:27:52] quite a lot on that very first one
+[00:27:52--00:27:55] to give it some information about the structure.
+[00:27:55--00:27:57] We can push this a little bit by,
+[00:27:57--00:28:00] instead of relying on 2D Fourier features,
+[00:28:00--00:28:03] learning completely learned positional encodings.
+[00:28:03--00:28:06] And this basically-- this is an architecture now--
+[00:28:06--00:28:08] this is a model that has absolutely no information
+[00:28:08--00:28:10] about the input structure.
+[00:28:10--00:28:11] And so shuffling them and learning them again
+[00:28:11--00:28:13] is absolutely equivalent.
+[00:28:13--00:28:15] And we find that this architecture also
+[00:28:15--00:28:16] can be pushed above 70%.
+[00:28:16--00:28:18] And we've gotten slightly better numbers here.
+[00:28:18--00:28:21] In general, this seems to work worse.
+[00:28:21--00:28:24] So the 2D information is useful.
+[00:28:24--00:28:25] But it's quite cool that you can get
+[00:28:25--00:28:29] what would have been numbers comparable to state
+[00:28:29--00:28:31] of the art about five or six years ago.
+[00:28:31--00:28:32] So this is quite cool.
+[00:28:32--00:28:35] Sorry, I'm a little thick here.
+[00:28:35--00:28:38] You're saying the difference between the last two rows
+[00:28:38--00:28:42] is that the second-to-last row has a two-dimensional position
+[00:28:42--00:28:45] embedding, and the last one has a one-dimensional position
+[00:28:45--00:28:47] embedding, essentially, is that right?
+[00:28:47--00:28:48] So it's learned.
+[00:28:48--00:28:51] So it's basically.
+[00:28:51--00:28:54] It'll be-- it's a, I believe, a 256 dimensional vector
+[00:28:54--00:28:56] that's learned.
+[00:28:56--00:28:58] But it doesn't-- it basically--
+[00:28:58--00:29:00] it means that the model itself has
+[00:29:00--00:29:04] no information about the input spatial structure.
+[00:29:04--00:29:06] So the 2D positional encodings that we're
+[00:29:06--00:29:09] using end up having about 200--
+[00:29:09--00:29:10] it's 200 some features, depending
+[00:29:10--00:29:11] on what you're looking at.
+[00:29:11--00:29:14] But they're always-- they give you very detailed information
+[00:29:14--00:29:15] about the 2D structure of the input,
+[00:29:15--00:29:17] because they're based on a Fourier decomposition
+[00:29:17--00:29:19] of the input space.
+[00:29:19--00:29:20] OK, that makes sense.
+[00:29:20--00:29:22] Thank you.
+[00:29:22--00:29:23] Hi, Drew.
+[00:29:23--00:29:25] Can I ask a question about frequency
+[00:29:25--00:29:32] that you used to generate those [INAUDIBLE] a couple of slides
+[00:29:32--00:29:32] before.
+[00:29:38--00:29:40] Yeah, this slide.
+[00:29:40--00:29:46] So basically, I have taken some lectures in signal processing.
+[00:29:46--00:29:51] And I know if I want to avoid aliasing,
+[00:29:51--00:29:54] I need to sample with at least Nyquist frequency.
+[00:29:54--00:29:58] So I'm curious to know why do you use frequencies starting
+[00:29:58--00:30:01] from one to the Nyquist frequency
+[00:30:01--00:30:03] instead of starting from Nyquist frequency
+[00:30:03--00:30:06] to some very high frequency?
+[00:30:06--00:30:12] I see, so basically, so the maximum frequency that's used
+[00:30:12--00:30:13] is always Nyquist.
+[00:30:13--00:30:15] So anything above Nyquist is going to be aliased.
+[00:30:15--00:30:18] So you're not actually going to be able to resolve it.
+[00:30:18--00:30:20] Because it's in pixel space, right?
+[00:30:20--00:30:22] So we sample--
+[00:30:22--00:30:24] 1 is basically just giving you an oscillation
+[00:30:24--00:30:26] that covers the entire image.
+[00:30:26--00:30:29] And so this is basically just to sample of the full range
+[00:30:29--00:30:32] of non-aliased frequencies.
+[00:30:32--00:30:33] Oh, OK, cool, thank you, got it.
+[00:30:42--00:30:45] OK, so after the ImageNet results,
+[00:30:45--00:30:48] we wanted to try it on other domains.
+[00:30:48--00:30:50] And in particular, we were interested in how
+[00:30:50--00:30:52] this could be used to work on sort of multimodal domains,
+[00:30:52--00:30:55] so ones combining various different types
+[00:30:55--00:30:57] of input features.
+[00:30:57--00:31:00] And one challenge or one sort of problem
+[00:31:00--00:31:02] that you encounter in these sorts of spaces
+[00:31:02--00:31:04] is that the data from different modalities
+[00:31:04--00:31:06] end up having different features.
+[00:31:06--00:31:08] And they always have different semantics.
+[00:31:08--00:31:10] So if you take the positional encoding
+[00:31:10--00:31:12] plus the RGB for video, you end up
+[00:31:12--00:31:14] with some number of channels.
+[00:31:14--00:31:16] And then if you have audio, that corresponds--
+[00:31:16--00:31:19] the data may be paired, but it tends to have fewer features.
+[00:31:19--00:31:21] And it only has a 1D positional encoding.
+[00:31:21--00:31:23] So the way that we handle this is basically
+[00:31:23--00:31:27] by learning modality specific position encodings.
+[00:31:27--00:31:29] And so these are basically embeddings
+[00:31:29--00:31:32] that are special and learned for each of the modalities.
+[00:31:32--00:31:35] And what this does is basically tags-- ends up
+[00:31:35--00:31:38] tagging the features that come from audio or video
+[00:31:38--00:31:39] with some information that the network can
+[00:31:39--00:31:42] learn that allows it to distinguish which one's which.
+[00:31:42--00:31:47] But given these padded, these sort of learned, padded feature
+[00:31:47--00:31:49] vectors, we then concatenate them all.
+[00:31:49--00:31:51] And that's how we process multimodal data.
+[00:31:51--00:31:53] So basically, the input to the architecture
+[00:31:53--00:31:54] still looks like just one big array.
+[00:31:54--00:31:56] It's just that when constructing this,
+[00:31:56--00:31:58] we know that some of those features,
+[00:31:58--00:32:00] some of the rows in that array, come from video
+[00:32:00--00:32:01] and some come from audio.
+[00:32:01--00:32:03] But the model itself isn't given information about that,
+[00:32:03--00:32:05] other than what it learns.
+[00:32:05--00:32:08] We also have some questions.
+[00:32:08--00:32:09] [INAUDIBLE] can go first.
+[00:32:13--00:32:15] You're muted.
+[00:32:15--00:32:16] Yeah, sorry.
+[00:32:16--00:32:18] I thought I was muted now.
+[00:32:18--00:32:20] Yeah, sure.
+[00:32:20--00:32:23] If you can you hear me, this is a super easy one.
+[00:32:23--00:32:26] I haven't been studying a lot transformer stuff normally,
+[00:32:26--00:32:30] so I just didn't know what positional embedding was.
+[00:32:30--00:32:33] Oh, so what is positional embedding?
+[00:32:33--00:32:37] Yes, so basically a positional embedding is--
+[00:32:37--00:32:40] it's a feature that says this--
+[00:32:40--00:32:42] so the simplest way to think about it is in text.
+[00:32:42--00:32:44] So text, the input is 1D.
+[00:32:44--00:32:46] So things live in some 1D sequence.
+[00:32:46--00:32:49] And for each point there, you featurize where
+[00:32:49--00:32:50] it's located in that sequence.
+[00:32:50--00:32:51] So the simplest thing to do would
+[00:32:51--00:32:54] be if you have negative 1 to 1 is the full range,
+[00:32:54--00:32:58] it just denotes actually where it's located in that sequence.
+[00:32:58--00:33:00] But we typically will add sort of--
+[00:33:00--00:33:02] we'll want to featurize allows this
+[00:33:02--00:33:05] to have more dimensions than just a single one.
+[00:33:05--00:33:07] And so the Fourier transpose-- the Fourier decomposition
+[00:33:07--00:33:09] is one way to do this to sort of give it
+[00:33:09--00:33:12] privileged information about the high frequency structure.
+[00:33:12--00:33:16] But we can also just use the position to index
+[00:33:16--00:33:19] on to some embedding array, which is how we do it
+[00:33:19--00:33:20] when we're learning things.
+[00:33:20--00:33:22] So basically, it's just a set of weights
+[00:33:22--00:33:24] that are added to the feature for that point that
+[00:33:24--00:33:26] give the network information about where it's located
+[00:33:26--00:33:27] in the ground truth sequence.
+[00:33:31--00:33:33] OK, you want to go next?
+[00:33:38--00:33:41] Sorry, I had to find a mute button, unmute button.
+[00:33:41--00:33:43] OK, so I actually have two questions
+[00:33:43--00:33:47] regarding to the Fourier features.
+[00:33:47--00:33:56] The I think, do you guys sample them uniformly or are they--
+[00:33:56--00:33:59] do you like to learn these?
+[00:33:59--00:34:02] Yeah, so basically, we sample them linearly.
+[00:34:02--00:34:04] So basically, we take the full space
+[00:34:04--00:34:07] and we sample them linearly with whatever the budget is.
+[00:34:07--00:34:10] There are-- so in various settings,
+[00:34:10--00:34:12] we have actually tried learning these.
+[00:34:12--00:34:14] So you could actually initialize an array with them
+[00:34:14--00:34:15] and then learn them.
+[00:34:15--00:34:18] And that does help sometimes, actually.
+[00:34:18--00:34:19] And you could potentially learn--
+[00:34:19--00:34:21] you could try a more sophisticated strategy on this,
+[00:34:21--00:34:22] too.
+[00:34:22--00:34:23] OK, cool.
+[00:34:23--00:34:26] My follow-up question is that basically, I
+[00:34:26--00:34:29] feel like the selling point of your research,
+[00:34:29--00:34:32] right, is that you don't make any structural assumptions,
+[00:34:32--00:34:33] right?
+[00:34:33--00:34:36] You can take any type of format.
+[00:34:36--00:34:39] However, for the encoding, wouldn't the dimensionality,
+[00:34:39--00:34:42] so for example, if it's text, it's 1D,
+[00:34:42--00:34:47] right, if it's an image, it will be 2D, and if it's like a video
+[00:34:47--00:34:49] it would be 3D.
+[00:34:49--00:34:55] You have more-- the positional encoding will have more points,
+[00:34:55--00:34:56] right?
+[00:34:56--00:35:04] Wouldn't that inherently give away the nature of the input?
+[00:35:04--00:35:04] Yeah, so it does.
+[00:35:04--00:35:06] So I completely agree with this.
+[00:35:06--00:35:07] You're totally right.
+[00:35:07--00:35:10] The version of this where we have learned position encodings
+[00:35:10--00:35:12] is the most pure from that point of view.
+[00:35:12--00:35:14] So it's one that gives it basically no information
+[00:35:14--00:35:18] about the ground truth spatial structure.
+[00:35:18--00:35:20] What it does give the model, so when
+[00:35:20--00:35:21] you do the learned position encoding,
+[00:35:21--00:35:23] it will say that, for example, there
+[00:35:23--00:35:27] is a correspondence between point k on image one
+[00:35:27--00:35:29] and point k on image two.
+[00:35:29--00:35:33] So that's basically the least amount of information
+[00:35:33--00:35:34] you can give it while still allowing
+[00:35:34--00:35:37] it to sort of figure out what the structural relationship
+[00:35:37--00:35:38] between the input points is.
+[00:35:38--00:35:41] So this is the direction that we've been trying to push in.
+[00:35:41--00:35:44] In general, giving the architecture access
+[00:35:44--00:35:46] to sort of ground truth structural information
+[00:35:46--00:35:50] like this lives on this point in 2D is helpful.
+[00:35:50--00:35:53] So there's a couple of things here.
+[00:35:53--00:35:55] There's sort of from a practical point of view,
+[00:35:55--00:35:58] if you want good results, you need to exploit these things.
+[00:35:58--00:36:00] Or it's helpful to exploit these things.
+[00:36:00--00:36:01] But we do want to move in the direction
+[00:36:01--00:36:04] where we're relying on these things less.
+[00:36:04--00:36:06] And so this is basically something
+[00:36:06--00:36:08] we're actively looking into.
+[00:36:08--00:36:09] OK, makes sense.
+[00:36:09--00:36:11] Thank you.
+[00:36:11--00:36:14] So I think [AUDIO OUT] has posted her question
+[00:36:14--00:36:16] on the chat.
+[00:36:16--00:36:18] I also see you have your hand raised.
+[00:36:18--00:36:21] So if you want, you can give it a try.
+[00:36:21--00:36:23] If not, I'll read out the question.
+[00:36:23--00:36:24] OK, I'll try.
+[00:36:24--00:36:27] Just let me know if it's choppy.
+[00:36:27--00:36:29] Yeah, so is it good right now?
+[00:36:29--00:36:30] So far so good.
+[00:36:30--00:36:31] Oh good, OK cool.
+[00:36:31--00:36:34] So I'm just curious, looking at the perceiver diagram
+[00:36:34--00:36:36] you had, it's a bunch of attention layers,
+[00:36:36--00:36:38] the cross-attention and self-attention.
+[00:36:38--00:36:41] And I think there's been this small trend
+[00:36:41--00:36:44] in recent work in vision transformers
+[00:36:44--00:36:46] to try to sort of replace the last few layers instead
+[00:36:46--00:36:48] of having attention, like make them
+[00:36:48--00:36:51] be convolutions to address this attention scaling problem,
+[00:36:51--00:36:53] right, in a different manner.
+[00:36:53--00:36:55] And so here, the perceiver architecture
+[00:36:55--00:36:58] is trying to make self-attention less expensive.
+[00:36:58--00:37:01] And there, they're just trying to replace it.
+[00:37:01--00:37:03] And they kind of just avoid the problem.
+[00:37:03--00:37:04] And so I'm curious--
+[00:37:04--00:37:06] and so I've seen papers both ways,
+[00:37:06--00:37:08] some that try to do things like the ones
+[00:37:08--00:37:10] you cited, and then some they're trying to do this as well.
+[00:37:10--00:37:14] And in my mind, everyone always has the good results and stuff.
+[00:37:14--00:37:15] So I'm curious if you think there's a reason
+[00:37:15--00:37:18] to do one or the other, or if you
+[00:37:18--00:37:21] think this alternative approach is also promising,
+[00:37:21--00:37:23] or is there reason research should go
+[00:37:23--00:37:26] in one direction or the other?
+[00:37:26--00:37:28] Yeah, so to my mind, the big trade-off
+[00:37:28--00:37:31] is one between-- so the vision literature, I think,
+[00:37:31--00:37:34] it's just exploded in terms of these sort of hybrids.
+[00:37:34--00:37:36] And people trying to find the right-- the exact right
+[00:37:36--00:37:38] place on the Pareto curve for the trade-off
+[00:37:38--00:37:41] of speed and performance.
+[00:37:41--00:37:43] But they're basically looking primarily
+[00:37:43--00:37:44] on vision specific problems.
+[00:37:44--00:37:48] So something-- the computer vision community
+[00:37:48--00:37:50] itself typically doesn't regularize itself away
+[00:37:50--00:37:53] from things that don't work on things that aren't vision.
+[00:37:53--00:37:56] So you end up with things that are very, very efficient
+[00:37:56--00:37:58] and very performant on vision problems.
+[00:37:58--00:38:01] And so I think from that point of view,
+[00:38:01--00:38:02] it's an incredibly important line of work.
+[00:38:02--00:38:06] And that's probably the right way of doing things.
+[00:38:06--00:38:08] But what we're sort of aiming for is something--
+[00:38:08--00:38:12] is the things that are as general as possible while still
+[00:38:12--00:38:14] kind of being performant.
+[00:38:14--00:38:15] Got it.
+[00:38:15--00:38:16] So this kind of thing is critical--
+[00:38:16--00:38:17] Oh sorry to cut you off.
+[00:38:17--00:38:18] Go ahead.
+[00:38:18--00:38:19] No, no, please go ahead.
+[00:38:19--00:38:21] I was going to say-- so this kind of thing is--
+[00:38:21--00:38:22] it's important.
+[00:38:22--00:38:24] Just to summarize, so you feel like it's
+[00:38:24--00:38:26] important to focus on attention, because that's
+[00:38:26--00:38:27] kind of critical for NLP.
+[00:38:27--00:38:29] You can't just sort put in a convolution at the end
+[00:38:29--00:38:30] and sort of fix the problem.
+[00:38:30--00:38:33] But in vision maybe you can, and it's fine.
+[00:38:33--00:38:36] Is that a right way of understanding it?
+[00:38:36--00:38:36] That's part of it.
+[00:38:36--00:38:39] Vision and NLP aren't the only two domains.
+[00:38:39--00:38:42] And so the thing that we're really basically-- so
+[00:38:42--00:38:46] the kinds of problems that we're interested in doing with this
+[00:38:46--00:38:50] include things like event-based cameras, cell biology,
+[00:38:50--00:38:53] sort of proteins, all of these sorts of things,
+[00:38:53--00:38:56] where we may or may not have the right convolutional inductive
+[00:38:56--00:39:00] biases to even know how to build those sorts of things.
+[00:39:00--00:39:02] They end up being whole research programs,
+[00:39:02--00:39:04] like the mesh-based convolution work.
+[00:39:04--00:39:05] Oh, cool, thank you.
+[00:39:05--00:39:09] I also have one more question about the architecture.
+[00:39:09--00:39:11] So I saw that-- and I'm sorry if you said this
+[00:39:11--00:39:13] and I just missed it.
+[00:39:13--00:39:16] But you had cross-attention and then the latent transformer,
+[00:39:16--00:39:17] and then cross-attention.
+[00:39:17--00:39:19] I'm curious what happens if you replace
+[00:39:19--00:39:22] the self-attention in those layers with cross attention.
+[00:39:22--00:39:24] Does it affect your accuracy?
+[00:39:24--00:39:25] Is that even feasible?
+[00:39:25--00:39:28] Is that a valid question?
+[00:39:28--00:39:30] Yeah, so the sort of thing that you could do
+[00:39:30--00:39:32] is you could modify this to make it sort of hierarchical.
+[00:39:32--00:39:34] So that there are multiple stages of cross-attention.
+[00:39:34--00:39:37] We haven't gotten this working yet.
+[00:39:37--00:39:40] But it doesn't mean it's not a good idea.
+[00:39:40--00:39:42] So there might be-- there might be a right way
+[00:39:42--00:39:44] to do this that we haven't figured out, right?
+[00:39:44--00:39:45] But it's something we have tried a little bit.
+[00:39:45--00:39:47] Oh, cool, OK, thank you so much.
+[00:39:47--00:39:48] I appreciate it.
+[00:39:48--00:39:50] Yeah, no problem.
+[00:39:50--00:39:54] OK, let me--
+[00:39:54--00:39:55] I think we're running short on time.
+[00:39:55--00:39:56] So maybe I'll skip ahead.
+[00:40:01--00:40:04] So before we run out of too much time,
+[00:40:04--00:40:07] I want to at least talk about the modifications
+[00:40:07--00:40:10] to this architecture that we've made to make it work
+[00:40:10--00:40:11] sort of even more generally.
+[00:40:11--00:40:15] So one of the problems with sort of the first architecture
+[00:40:15--00:40:17] that we looked at here, the basic procedure,
+[00:40:17--00:40:21] is that it works basically for arbitrary inputs.
+[00:40:21--00:40:26] But it's designed to work only on classification
+[00:40:26--00:40:28] and regression tasks as an output.
+[00:40:28--00:40:30] And so basically, we wanted to see
+[00:40:30--00:40:32] if we could use the same cross-attention strategy
+[00:40:32--00:40:33] for decoding.
+[00:40:33--00:40:34] And it turns out, you can.
+[00:40:34--00:40:36] It's something that works pretty well just kind of out
+[00:40:36--00:40:37] of the box.
+[00:40:37--00:40:40] So the idea is that we have-- if we
+[00:40:40--00:40:42] have our cross-attention input and self-attention
+[00:40:42--00:40:45] sort of to do the processing, we can introduce
+[00:40:45--00:40:47] a set of additional queries.
+[00:40:47--00:40:49] And these are basically queries that
+[00:40:49--00:40:51] give the semantics of each of the points
+[00:40:51--00:40:53] that you're trying to decode.
+[00:40:53--00:40:57] And we pass these as input to another cross-attention layer,
+[00:40:57--00:40:59] which is configured in basically the opposite way
+[00:40:59--00:41:01] that the encoder cross-attention is configured.
+[00:41:01--00:41:03] So now, the queries are going to be something
+[00:41:03--00:41:05] that's potentially large.
+[00:41:05--00:41:07] And the keys and values are coming from this latent.
+[00:41:07--00:41:09] And so what this allows us to do basically
+[00:41:09--00:41:11] is to keep all of the nice advantages
+[00:41:11--00:41:12] of the original perceiver.
+[00:41:12--00:41:15] So we have an encoder that scales linearly.
+[00:41:15--00:41:17] We have a processor stage, this sort of latent self-attention
+[00:41:17--00:41:20] that scales independently of the input size.
+[00:41:20--00:41:23] And we now have a decoder that keeps the decoupling,
+[00:41:23--00:41:26] but gives us linear scaling with respect to output size.
+[00:41:26--00:41:31] And so by doing this, we can now basically apply
+[00:41:31--00:41:35] the same approach to basically dense output tasks.
+[00:41:35--00:41:37] And so to give you a sense of how this works, just
+[00:41:37--00:41:40] sort of intuitively, if we're doing autoencoding
+[00:41:40--00:41:43] on this image of puppies, basically what
+[00:41:43--00:41:46] we do is we encode, process, and then to decode,
+[00:41:46--00:41:50] we take a query that corresponds to each of the points.
+[00:41:50--00:41:52] And then we pass it into this decoder.
+[00:41:52--00:41:54] So we can query one of the points,
+[00:41:54--00:41:56] we get one pixel, query another one, we get another one.
+[00:41:56--00:42:00] And all the way up, until we get all 10,000 points.
+[00:42:00--00:42:02] And that's how we can do reconstruction with this.
+[00:42:02--00:42:04] And the cool thing about this is that it opens up
+[00:42:04--00:42:08] a bunch of new applications.
+[00:42:08--00:42:10] And we can get different kinds of outputs
+[00:42:10--00:42:12] just by changing how the queries work.
+[00:42:12--00:42:15] So if we want to do something like multimodal autoencoding,
+[00:42:15--00:42:17] where we have some of the outputs or videos,
+[00:42:17--00:42:21] we use the same construction trick to get positions that--
+[00:42:21--00:42:23] to get queries that have the relevant semantics
+[00:42:23--00:42:25] for each of the points that we're decoding.
+[00:42:25--00:42:28] And we can do this, even though, basically,
+[00:42:28--00:42:30] the sizes of these different data,
+[00:42:30--00:42:32] so the number of points they have is quite diverse.
+[00:42:32--00:42:35] So in the multimodal autoencoding experiments
+[00:42:35--00:42:38] that we have in this paper, we do this for video, audio,
+[00:42:38--00:42:39] and labels at the same time.
+[00:42:39--00:42:40] So that all of them are just passed
+[00:42:40--00:42:42] into their uniform network and then decoded one
+[00:42:42--00:42:44] by one in this way.
+[00:42:44--00:42:47] But we can also do masked language modeling now
+[00:42:47--00:42:51] by conditioning on the position in a sequence.
+[00:42:51--00:42:53] We can do multitask classification
+[00:42:53--00:42:56] by having basically an index that gives which task you're
+[00:42:56--00:42:58] querying from the network.
+[00:42:58--00:43:00] And we can do things like optical flow
+[00:43:00--00:43:03] by passing in input features as well as the positions.
+[00:43:03--00:43:06] And so I'm just going to just quickly skip
+[00:43:06--00:43:09] to a couple of the different--
+[00:43:09--00:43:12] I can share these slides with you, with you all afterwards,
+[00:43:12--00:43:14] to look through them.
+[00:43:14--00:43:16] Some of these things are quite cool.
+[00:43:16--00:43:20] But just quickly, I want to talk about language
+[00:43:20--00:43:21] and then optical flow.
+[00:43:21--00:43:25] So for language, basically, what we
+[00:43:25--00:43:27] wanted to do with this was to see if we could use
+[00:43:27--00:43:29] this to replace tokenization.
+[00:43:29--00:43:33] And why might we care about getting rid of tokenization?
+[00:43:33--00:43:37] So we use tokenization primarily because transformers scale
+[00:43:37--00:43:38] poorly with sequence length.
+[00:43:38--00:43:41] And tokenizing cuts sequence length by about a factor of 4.
+[00:43:44--00:43:46] But there are various problems that arise with this.
+[00:43:46--00:43:52] And so why might we care about removing tokenizers?
+[00:43:52--00:43:58] So for one, tokenizers perform less well on rare words.
+[00:43:58--00:44:01] So if you compare the sort of the byte based decomposition,
+[00:44:01--00:44:02] the UTF based--
+[00:44:02--00:44:05] UTF-8 encoding of an input-- of an input sequence like this,
+[00:44:05--00:44:07] you can see that there's basically
+[00:44:07--00:44:10] a uniform allocation of points in memory
+[00:44:10--00:44:12] to each of the input characters.
+[00:44:12--00:44:13] The exception are diacritics, which
+[00:44:13--00:44:15] end up splitting it into two.
+[00:44:15--00:44:18] But if you look at the SentencePiece tokenization,
+[00:44:18--00:44:21] so it's learned that pepper is one token.
+[00:44:21--00:44:25] But jalapeno gets split into five in this case.
+[00:44:25--00:44:27] So this basically says it's--
+[00:44:27--00:44:30] the amount of capacity that you allocate
+[00:44:30--00:44:32] depends on how rare the word is, which can
+[00:44:32--00:44:35] lead to suboptimal encodings.
+[00:44:35--00:44:37] They're also brittle to subtle perturbations.
+[00:44:37--00:44:41] A famous example of this is that if you enter--
+[00:44:41--00:44:43] so if you've ever played around with GPT-3,
+[00:44:43--00:44:45] you'll notice that the output can
+[00:44:45--00:44:47] be quite sensitive if you add a space
+[00:44:47--00:44:48] or omit a space at the end.
+[00:44:48--00:44:50] And this basically is because the space
+[00:44:50--00:44:52] can end up being factorized into different parts
+[00:44:52--00:44:53] of the tokenization.
+[00:44:53--00:44:54] There are other problems-- there are
+[00:44:54--00:44:55] other things that can happen there, too,
+[00:44:55--00:44:58] but this is one cause of that.
+[00:44:58--00:45:01] And finally, tokens don't transfer across languages.
+[00:45:01--00:45:04] So if you wanted to have a model that, without any tuning,
+[00:45:04--00:45:06] could be used on many different languages at the same time,
+[00:45:06--00:45:08] tokenizers are a blocker for this.
+[00:45:08--00:45:11] So if we can get rid of them, it'll simplify the pipeline.
+[00:45:11--00:45:13] It'll also make things less brittle
+[00:45:13--00:45:16] and then hopefully lead to more general models.
+[00:45:16--00:45:18] So the way that we do masked language modeling
+[00:45:18--00:45:20] is the same as the way that I showed
+[00:45:20--00:45:22] in that schematic autoencoding experiment.
+[00:45:22--00:45:26] So we mask some fraction of our inputs, about 15%
+[00:45:26--00:45:28] is sort of the standard magic number.
+[00:45:28--00:45:31] We then decode at each of the positions that are masked.
+[00:45:31--00:45:35] And we task the model with decoding whatever characters
+[00:45:35--00:45:38] were masked at those locations.
+[00:45:38--00:45:39] And then once we have this model,
+[00:45:39--00:45:41] so this is what we do for pre-training,
+[00:45:41--00:45:44] we can then fine tune it by replacing the decoder
+[00:45:44--00:45:47] with a multitask decoder that takes in the tasks
+[00:45:47--00:45:50] that we're using on the downstream evaluation
+[00:45:50--00:45:53] setting and training the model to reconstruct the logits
+[00:45:53--00:45:54] on a per task basis.
+[00:45:58--00:46:01] OK, so to look at how this model performs,
+[00:46:01--00:46:04] we basically first compare it to BERT Base.
+[00:46:04--00:46:06] So this is just a solid benchmark
+[00:46:06--00:46:07] that we understand very well.
+[00:46:07--00:46:11] And first, by looking at sort of matched
+[00:46:11--00:46:13] two models that have matched FLOPs,
+[00:46:13--00:46:18] we can see that Perceiver IO and BERT Base work on par.
+[00:46:18--00:46:20] You see there's a different trade-off here.
+[00:46:20--00:46:21] So to get the same number of FLOPs,
+[00:46:21--00:46:23] basically, we make Perceiver IO deeper.
+[00:46:23--00:46:26] And this ends up giving it more parameters.
+[00:46:26--00:46:28] But on a per FLOPs basis, it ends up
+[00:46:28--00:46:31] performing about the same.
+[00:46:31--00:46:34] On the other hand, if we remove the tokenizer from BERT
+[00:46:34--00:46:36] and keep the FLOPs the same, we see
+[00:46:36--00:46:38] that the number of parameters-- the number
+[00:46:38--00:46:41] of parameters and the depth just drastically fall down.
+[00:46:41--00:46:43] And this is because BERT scales quite poorly
+[00:46:43--00:46:47] with sequence length, because it uses a normal transformer.
+[00:46:47--00:46:50] But if we use a perceiver without the tokenization,
+[00:46:50--00:46:54] we can see that we only get a slight reduction
+[00:46:54--00:46:57] in the number of parameters at the FLOPs count.
+[00:46:57--00:47:00] But the performance performs almost exactly the same.
+[00:47:00--00:47:02] So this means that the perceiver in this setting
+[00:47:02--00:47:04] is performing basically the same with and without
+[00:47:04--00:47:05] the tokenization.
+[00:47:05--00:47:06] It's learning a different strategy.
+[00:47:06--00:47:07] It's using different parameters.
+[00:47:07--00:47:10] But it basically can be brought to the same performance.
+[00:47:10--00:47:12] We can then scale this more by sort
+[00:47:12--00:47:15] of leaning into what happens in the tokenizer free setting.
+[00:47:15--00:47:17] And we see that we can get a moderate performance
+[00:47:17--00:47:20] boost as well.
+[00:47:20--00:47:22] I think it's also-- in the language setting,
+[00:47:22--00:47:24] it's also useful to look at what the attention--
+[00:47:24--00:47:26] the attention maps that are sort of learned.
+[00:47:26--00:47:28] And what's being visualized here are basically,
+[00:47:28--00:47:31] for each of the latents, for some subset of the latents,
+[00:47:31--00:47:33] we're looking at where it's attending to
+[00:47:33--00:47:34] in the input sequence.
+[00:47:34--00:47:36] And some of these end up being local,
+[00:47:36--00:47:40] so looking at specific points in the sentence.
+[00:47:40--00:47:42] Some of them are periodic, so they
+[00:47:42--00:47:45] look sort of at recurring points over the sequence.
+[00:47:45--00:47:47] And some of them also look like they pick out
+[00:47:47--00:47:50] syntactic features, which is quite nice.
+[00:47:50--00:47:52] So they pick out, basically, exclamation
+[00:47:52--00:47:55] points, or capital letters, or other punctuation that's
+[00:47:55--00:47:58] quite useful and decodable from right
+[00:47:58--00:47:59] at the beginning of the sequence.
+[00:48:02--00:48:05] We can also basically use this exact same architecture
+[00:48:05--00:48:07] on optical flow.
+[00:48:07--00:48:11] And optical flow is basically an important classical problem
+[00:48:11--00:48:14] in computer vision, where given a pair of frames in a video,
+[00:48:14--00:48:17] we want to basically track all of the points,
+[00:48:17--00:48:20] so figure out the motion from every point from one frame
+[00:48:20--00:48:21] to the other.
+[00:48:21--00:48:23] And so optical flow is usually visualized
+[00:48:23--00:48:25] using this sort of colorized images
+[00:48:25--00:48:27] that are shown in the bottom.
+[00:48:27--00:48:28] And what this gives you basically
+[00:48:28--00:48:33] is a per pixel indication of the velocity at every single point.
+[00:48:33--00:48:35] And so you can see that--
+[00:48:35--00:48:39] so the blade the character here is holding
+[00:48:39--00:48:40] is moving to the right.
+[00:48:40--00:48:42] Whereas, this creature behind her
+[00:48:42--00:48:46] is sort of moving as moving downwards.
+[00:48:46--00:48:49] So there are a couple of problems with optical flow
+[00:48:49--00:48:52] that make it interesting to sort of approach.
+[00:48:52--00:48:54] So one, it's a dense task.
+[00:48:54--00:48:58] And it basically involves long range correspondences.
+[00:48:58--00:49:00] But the standard training protocol, there's
+[00:49:00--00:49:02] basically no large scale realistic training data,
+[00:49:02--00:49:03] just because it's incredibly hard
+[00:49:03--00:49:06] to sort of label all of the pixels in a real world scene
+[00:49:06--00:49:08] and figure out where they go to.
+[00:49:08--00:49:11] So the typical way to do this is to train on some synthetic data
+[00:49:11--00:49:14] and then evaluate on more realistic scenes.
+[00:49:14--00:49:17] And optical flow is also interesting,
+[00:49:17--00:49:20] because it's basically the locus of some
+[00:49:20--00:49:23] of the most complicated visual architectures
+[00:49:23--00:49:24] in the literature.
+[00:49:24--00:49:27] So the previous state-of-the-art result here is this method
+[00:49:27--00:49:31] called RAFT, which won the best paper award at ECCV last year.
+[00:49:31--00:49:32] And I'm just highlighting this to give you
+[00:49:32--00:49:35] a sense of how much work people do into sort of hand
+[00:49:35--00:49:37] engineering these architectures.
+[00:49:37--00:49:39] So this is a very, very cleverly designed architecture.
+[00:49:39--00:49:43] And basically it incorporates things like global correlation
+[00:49:43--00:49:46] volumes that are explicitly computed at different offsets
+[00:49:46--00:49:49] to basically allow the model to reason about how
+[00:49:49--00:49:50] things at different scales are moving
+[00:49:50--00:49:53] with respect to each other.
+[00:49:53--00:49:57] It also has local neighborhood gather operations, as well as
+[00:49:57--00:49:59] update blocks to keep track of what's
+[00:49:59--00:50:02] happening within each specific correlation block.
+[00:50:02--00:50:05] And then finally, there's a flow specific upsampling
+[00:50:05--00:50:07] operators that were developed.
+[00:50:07--00:50:10] So in contrast to this, we're basically--
+[00:50:10--00:50:13] we wanted to see how well Perceiver IO would do here.
+[00:50:13--00:50:15] And just to give you a sense of sort
+[00:50:15--00:50:17] of what we were expecting coming into this,
+[00:50:17--00:50:18] we thought, well, maybe--
+[00:50:18--00:50:20] so Perceiver IO is throwing a lot of the structure away.
+[00:50:20--00:50:23] So we were hoping that we would get some good results.
+[00:50:23--00:50:24] But it would probably overfit.
+[00:50:24--00:50:26] And there's this sort of problem of the domain transfer
+[00:50:26--00:50:27] that's happening here.
+[00:50:27--00:50:29] But on the other hand, self-attention
+[00:50:29--00:50:31] seems to be a reasonable way to match this sort
+[00:50:31--00:50:33] of correspondence thing.
+[00:50:33--00:50:37] What we actually found was that just by doing the very,
+[00:50:37--00:50:40] very simple preprocessing here, so extracting basically a patch
+[00:50:40--00:50:44] around each pixel and then using the standard Perceiver IO
+[00:50:44--00:50:47] architecture, we were able to get state-of-the-art results
+[00:50:47--00:50:47] here.
+[00:50:47--00:50:53] And so this is basically was validation
+[00:50:53--00:50:54] of this general approach of trying
+[00:50:54--00:50:56] to have general purpose architectures that
+[00:50:56--00:50:58] would transfer over.
+[00:50:58--00:51:01] And so basically with minimal tuning,
+[00:51:01--00:51:04] we are able to get results that are
+[00:51:04--00:51:08] both of the sort of compelling benchmarks
+[00:51:08--00:51:11] on both of the Sintel, the Sintel evaluation methods,
+[00:51:11--00:51:13] and to get comparable results on KITTI.
+[00:51:13--00:51:15] So these are the standard ones.
+[00:51:15--00:51:16] And we can also sort of visualize
+[00:51:16--00:51:20] what happens when we apply this on real world data.
+[00:51:20--00:51:21] So there's no ground truth here.
+[00:51:21--00:51:23] So you-- we can't really compare it.
+[00:51:23--00:51:26] But it's still useful to sort of see how it moves around.
+[00:51:26--00:51:28] And we can see that qualitatively, it's
+[00:51:28--00:51:31] able to capture a lot of the fine structure
+[00:51:31--00:51:35] and to sort of get the right motion for the things that
+[00:51:35--00:51:39] are very clearly moving in the specific direction.
+[00:51:39--00:51:41] We can also sort of-- it's also, I think,
+[00:51:41--00:51:43] informative to look at what happens--
+[00:51:43--00:51:44] how it managed to--
+[00:51:44--00:51:47] how it manages to represent sort of small structure.
+[00:51:47--00:51:50] Is this video playing?
+[00:51:50--00:51:52] Yeah, we can see it.
+[00:51:52--00:51:53] OK, cool.
+[00:51:53--00:51:55] So the thing to look at here is the fine water droplets
+[00:51:55--00:51:58] that are sort of flying through the air as that bird flies by.
+[00:51:58--00:52:02] And because we're decoding at every single output point,
+[00:52:02--00:52:05] the architecture is able to represent those.
+[00:52:05--00:52:08] So it's able to capture very, very fine scale segmentation
+[00:52:08--00:52:09] that would be difficult to capture
+[00:52:09--00:52:11] if you had, for example, a convolutional upsampler here.
+[00:52:15--00:52:16] OK, so I'm just going to-- also, the light
+[00:52:16--00:52:18] might've just gone off in this room.
+[00:52:21--00:52:22] I'm just going to--
+[00:52:22--00:52:24] Also try a task like gap estimation,
+[00:52:24--00:52:27] because Perceiver IO looks like it can also work
+[00:52:27--00:52:30] very well on that modalities.
+[00:52:30--00:52:33] Yeah, so we haven't published anything.
+[00:52:33--00:52:35] But some internal results suggest
+[00:52:35--00:52:37] that it works just fine.
+[00:52:37--00:52:39] There basically-- there don't seem
+[00:52:39--00:52:41] to be-- one of the surprising things, the things
+[00:52:41--00:52:43] that we were a little bit unsure about was
+[00:52:43--00:52:46] how much information was going to be contained in this latent.
+[00:52:46--00:52:48] Because basically, you're abstracting quite a lot.
+[00:52:48--00:52:51] And you're not-- it doesn't have any 2D structure intrinsically.
+[00:52:51--00:52:54] But it does seem like that it seems
+[00:52:54--00:52:56] to be able to represent things quite well.
+[00:52:56--00:52:59] And these sorts of decoding mechanisms
+[00:52:59--00:53:00] do seem to be able to do that.
+[00:53:00--00:53:01] Got it, OK.
+[00:53:04--00:53:05] So I'm just going to--
+[00:53:05--00:53:07] in the interest of time, I'm going to skip ahead
+[00:53:07--00:53:08] to the conclusion.
+[00:53:08--00:53:11] Drew, I had one question with respect
+[00:53:11--00:53:14] to the metrics that you've shared for the optical flow,
+[00:53:14--00:53:15] the number.
+[00:53:15--00:53:20] So in the table, it was like Sinel.final, clean, and KITTI
+[00:53:20--00:53:23] were these different data sets or different metrics,
+[00:53:23--00:53:26] same metric for different sets or these
+[00:53:26--00:53:28] are three different metrics?
+[00:53:28--00:53:30] Yeah, so these are three different data sets.
+[00:53:30--00:53:33] So Sintel.clean and Sintel.final are basically two--
+[00:53:33--00:53:37] they're two ways of doing the final rendering for Sintel.
+[00:53:37--00:53:39] In all cases, these methods are trained just
+[00:53:39--00:53:41] on the autoflow data set.
+[00:53:41--00:53:44] So they're trained on this sort of general purpose
+[00:53:44--00:53:47] kind of wacky synthetic motion data set.
+[00:53:47--00:53:49] And then we're evaluation-- we're
+[00:53:49--00:53:51] evaluating on these different domains without fine tuning.
+[00:53:51--00:53:52] OK.
+[00:53:55--00:53:58] Yeah, the flow has quite-- the data sets are quite small.
+[00:53:58--00:54:01] So it's generally even problematic to fine tune.
+[00:54:01--00:54:01] Thank you.
+[00:54:05--00:54:08] OK, so just to summarize--
+[00:54:08--00:54:13] What is the ground truth to find the point error?
+[00:54:13--00:54:16] Yeah, so the way this works is Sintel
+[00:54:16--00:54:21] is a computer-- it's basically a relatively high quality CGI
+[00:54:21--00:54:24] movie that was basically open-source.
+[00:54:24--00:54:26] And so they actually have the ground truth.
+[00:54:26--00:54:28] So if you know the ground truth and the state,
+[00:54:28--00:54:31] you can compute the pixel correspondence from frame
+[00:54:31--00:54:32] to frame.
+[00:54:32--00:54:33] So that's what's used on Sintel.
+[00:54:33--00:54:35] And then KITTI, they basically have--
+[00:54:35--00:54:39] they have a LIDAR sensor that's used to figure out
+[00:54:39--00:54:40] the depth of all points.
+[00:54:40--00:54:43] And then they compute the correspondences.
+[00:54:43--00:54:46] So the ground truth is actually the ground truth optical flow.
+[00:54:46--00:54:49] But in general, it's hard to get dense optical flow.
+[00:54:49--00:54:51] It's very expensive to collect it.
+[00:54:51--00:54:52] Great, thanks.
+[00:54:56--00:54:59] OK, so the-- so basically, just to summarize,
+[00:54:59--00:55:02] so the perceivers are attention-based architectures
+[00:55:02--00:55:05] that scale linearly and work as drop-in replacements
+[00:55:05--00:55:07] for transformers on a variety of settings.
+[00:55:07--00:55:10] They also seem to be able to achieve results that
+[00:55:10--00:55:12] are comparable, at least, in performance
+[00:55:12--00:55:15] with models that rely on 2D convolutions.
+[00:55:15--00:55:17] But of course, there is a trade-off here.
+[00:55:17--00:55:18] And so it's good to be very aware of this,
+[00:55:18--00:55:22] of generality versus speed in specific domains.
+[00:55:22--00:55:24] And so as was pointed out in settings
+[00:55:24--00:55:26] where you can use 2D convolutions.
+[00:55:26--00:55:30] It's certainly good to have them in the loop.
+[00:55:30--00:55:32] It's basically a unified architecture
+[00:55:32--00:55:36] that allows joint modeling of different modalities
+[00:55:36--00:55:38] of different sizes.
+[00:55:38--00:55:42] And basically, overall, it seems to be a quite flexible
+[00:55:42--00:55:44] architecture that's able to produce a state-of-the-art
+[00:55:44--00:55:46] or near state-of-the-art results on a variety of different
+[00:55:46--00:55:48] domains.
+[00:55:48--00:55:51] And there's-- in the two papers, we look at a number of other
+[00:55:51--00:55:53] domains that I didn't talk about,
+[00:55:53--00:55:55] including 3D point cloud modeling,
+[00:55:55--00:55:59] replacing the transformer that's used in the StarCraft,
+[00:55:59--00:56:01] in the sort of StarCraft behavioral cloning agent
+[00:56:01--00:56:03] and a couple of others.
+[00:56:03--00:56:05] So this does-- we have a lot of evidence
+[00:56:05--00:56:07] that this general approach seems to work broadly.
+[00:56:07--00:56:09] And there's a lot of things we still haven't tried.
+[00:56:09--00:56:12] So we're very interested in pushing this and always,
+[00:56:12--00:56:16] always open for suggestions and so forth.
+[00:56:16--00:56:19] So we're relying on a large body of related work,
+[00:56:19--00:56:21] because we're sort of drawing from a lot of different areas
+[00:56:21--00:56:22] here.
+[00:56:22--00:56:23] So here are some highlights.
+[00:56:23--00:56:29] And then I just want to thank my coauthors on this work.
+[00:56:29--00:56:31] And of course, I'm happy to talk more.
+[00:56:33--00:56:35] Thanks, Drew.
+[00:56:35--00:56:36] Thanks a lot.
+[00:56:36--00:56:38] Thanks, Drew.
+[00:56:38--00:56:41] So one question I had is so what do you think
+[00:56:41--00:56:44] is the future of similar models.
+[00:56:44--00:56:47] Do you think these are going to be
+[00:56:47--00:56:51] used more in the sort of transformer community
+[00:56:51--00:56:54] to replace ConvNet and other stuff?
+[00:56:54--00:56:59] Yeah, so the-- I think, broadly speaking, I think it's--
+[00:56:59--00:57:01] I think of perceivers now as sort of--
+[00:57:01--00:57:03] because we know how to adapt them pretty well
+[00:57:03--00:57:05] to sort of domains where we don't have
+[00:57:05--00:57:08] a great idea of the right way to structure an architecture,
+[00:57:08--00:57:09] an inductive bias.
+[00:57:09--00:57:13] So I think that's one of the really strong cases for it,
+[00:57:13--00:57:15] so settings in which you don't really
+[00:57:15--00:57:18] know what the right way to structure a problem is.
+[00:57:18--00:57:22] I also think these kinds of approaches
+[00:57:22--00:57:24] can be used in conjunction with ConvNets
+[00:57:24--00:57:28] for sort of things that are as domain agnostic as needed.
+[00:57:28--00:57:33] But I think multimodal and new domains is really--
+[00:57:33--00:57:36] that's where these are obvious choices.
+[00:57:36--00:57:39] Also, what do you think are the current bottlenecks with this?
+[00:57:39--00:57:42] And if you don't mind, if you can disclose,
+[00:57:42--00:57:45] what are you working on towards next with this stuff?
+[00:57:45--00:57:49] So I can't-- I can't talk about too many details about that.
+[00:57:49--00:57:53] But a couple of domains--
+[00:57:53--00:57:55] so one, we don't really have a great handle
+[00:57:55--00:57:58] on how to use them on sort of small scale data,
+[00:57:58--00:58:04] so data where you don't have the data to sort of recover
+[00:58:04--00:58:05] the inductive bias.
+[00:58:05--00:58:08] So this is, I think, a really important area.
+[00:58:08--00:58:10] The other thing that we haven't sort of talked about here,
+[00:58:10--00:58:13] but you could probably imagine that we'd be thinking about
+[00:58:13--00:58:15] would be how to train on multiple modalities or sort
+[00:58:15--00:58:17] of multiple things at the same time.
+[00:58:17--00:58:19] So right now, all of these architectures
+[00:58:19--00:58:21] are sort of trained in isolation.
+[00:58:21--00:58:24] But there are a lot of opportunities
+[00:58:24--00:58:27] for sort of figuring out how to pose problems together and use
+[00:58:27--00:58:29] a single architecture on all of them.
+[00:58:29--00:58:30] Got it.
+[00:58:30--00:58:32] Also, I'm sure if you've tried, but can you also
+[00:58:32--00:58:34] use this for tabular data?
+[00:58:34--00:58:38] Yeah, so effectively, the architecture
+[00:58:38--00:58:41] treats any input data as tabular data.
+[00:58:41--00:58:45] So I think that's exactly the right way to think about it.
+[00:58:45--00:58:46] Sounds good.
+[00:58:46--00:58:47] Thanks for the talk.
+[00:58:47--00:58:50] I will open mic general questions for the students.
+[00:58:50--00:58:53] So stop the recording.

@@ -1,297 +1,649 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 41：视频生成中的 Transformer——Movie Gen 的表示、Flow Matching 与规模化系统}
+\renewcommand{\noteauthors}{基于 Andrew Brown（Meta）Stanford CS25 V5 官方讲座、人工字幕与 Movie Gen 一手论文整理}
+\renewcommand{\notedate}{CS25 V5 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2025-06-03；上传 2025-07-03}
+\renewcommand{\videoduration}{1:13:35}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=YGHF8_tf--g}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{Andrew Brown, official Stanford CS25 recording, #3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \normalsize
+  \setlength{\parskip}{0.25em}
 }
-
-\newcommand{\notetitle}{[CS25 V5] Transformers for Video Generation (Movie Gen) --- Andrew Brown, Meta}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2025}
-\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
-\newcommand{\videopublishdate}{Spring 2025}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{视频生成的进步，不只是“画面更清楚”}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这场课从几段生成视频开始，但真正的问题不是挑选哪一帧最漂亮，而是理解 2022--2024 年间为什么运动、反射、镜头语言、文本遵循和可编辑性同时进步。讲者给出的主线很克制：把媒体压缩为可处理的 token 序列，用 Flow Matching 训练一个大而统一的 Transformer，再让数据、计算与模型规模共同增长。后文将把这句话拆成可核算的表示、学习目标、架构、数据和评估系统。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{三种开场样例分别在证明什么}
 
-\tableofcontents
-\newpage
+开场样例承担三种不同证据角色：冲浪考拉展示复杂主体与运动，幽灵镜像展示几何与反射一致性，跑步者编辑展示输入视频的内容保持和指令控制。本节先建立这套读图框架：先问“任务是什么”，再问“哪些属性保持了”，最后问“这是不是稳定能力”；否则几个成功片段很容易被误写成完整可靠性，也无法为后面的架构判断提供证据。
 
-\section{引言：视频生成的飞速进步}
+\lecturefigure{slide-064-moviegen-demo-koala.jpg}{文本到视频样例：主体、相机、海浪与冲浪动作需要共同保持}{00:01:50}
 
-Andrew Brown 是 Meta GenAI 团队的研究科学家，专注于视频生成。他在牛津大学 VGG 组（Andrew Zisserman 指导）完成 PhD 后加入 Meta，先后参与了 Emu Video 和 Movie Gen 等前沿视频生成项目。
+冲浪片段的难点不是生成一只考拉，而是让主体外观、冲浪板、海浪、镜头距离和连续运动在多个帧中一致。单帧图像模型只需优化空间 plausibility；视频模型还必须控制时间轴上的身份稳定、运动连续和遮挡恢复。
 
-本讲的核心信息可以用一句话概括：\textbf{对简单 Transformer 进行数据、计算和模型参数的扩展，在视频生成领域同样有效。}
+\lecturefigure{slide-091-moviegen-demo-ghost.jpg}{镜像样例：反射、视角和主体身份形成跨区域约束}{00:02:22}
 
-\begin{knowledgebox}{视频生成的惊人进步}
-2022 年 9 月的最先进模型只能生成模糊、不自然的短视频。仅仅两年后（2024 年 10 月），Movie Gen 就能生成几乎无法与真实视频区分的高质量内容——包括复杂运动、奇幻场景，甚至镜面反射等物理效果。这种进步速度在机器学习各子领域中都是空前的。
-\end{knowledgebox}
+镜像场景要求模型把“真实主体”和“镜中主体”绑定成同一对象，同时遵守视角变化。它支持模型已经学到某些视觉规律，却不证明模型拥有显式光学引擎；更可靠的测试需要改变镜面角度、遮挡和主体位置，观察规律是否系统泛化。
 
-\subsection{个人动机}
+\lecturefigure{slide-112-moviegen-editing-intro.jpg}{指令式视频编辑：同一输入分别增加物体、替换服装与改变环境}{00:02:48}
 
-Andrew 分享了他进入视频生成领域的契机：2019 年在牛津听了 MIT Antonio Torralba 教授关于 GAN Dissection 的讲座。当时的图像生成模型只能产生模糊的厨房场景，但研究者发现可以通过激活/去激活特定神经元来让窗户出现或消失——更令人震惊的是，模型自动学会了``窗户会透光并在大理石台面上产生反射''这一物理常识。
+编辑任务的评价维度与纯生成不同。除了输出是否好看，还要检查未编辑区域是否保持、目标区域是否严格执行指令、动作节奏是否延续，以及修改是否在整段视频中持续存在。后文会看到，这类能力并非直接从基础 T2V 模型自动出现，而需要额外训练路径。
 
-\subsection{本章小结}
-
-视频生成在两年内经历了从``模糊可辨''到``以假乱真''的飞跃，Transformer + 扩展是实现这一进步的核心策略。
-
-\section{视频生成的历史背景}
-
-\subsection{两个里程碑事件}
-
-视频生成领域在 2022--2024 年间经历了两个关键转折：
-
-\textbf{里程碑一：扩散模型进入视频生成（2022）。} 整个社区开始采用扩散建模方法进行视频生成，取代了之前的 GAN 和 VAE 方法。
-
-\textbf{里程碑二：Sora 的发布（2024 年 2 月）。} OpenAI 的 Sora 展示了令人震惊的视频生成质量，改变了整个领域的研究格局和公众预期。
-
-\begin{knowledgebox}{视频生成方法的汇聚}
-在 Sora 之前，不同团队使用不同架构和训练策略，方法差异很大。Sora 之后，几乎所有团队都汇聚到了相似的方法——基于 Transformer 的扩散/Flow Matching 模型。Movie Gen 也是在这一趋势下的产物。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-扩散模型的引入和 Sora 的发布是视频生成领域的两个分水岭事件。
-
-\section{时间自编码器（Temporal Autoencoder）}
-
-\subsection{为什么需要压缩？}
-
-视频数据量极大：一段 16 秒、768$\times$768 分辨率的视频包含约 $768 \times 768 \times 30 \times 16 \approx 2.83 \times 10^8$ 个像素。直接在像素空间训练扩散模型计算上不可行，必须先进行压缩。
-
-\subsection{TAE 的设计}
-
-Movie Gen 使用\textbf{时间自编码器}（Temporal Autoencoder, TAE）将视频压缩到紧凑的潜空间：
-
-\begin{itemize}
-    \item \textbf{空间压缩}：$8 \times 8$（每个 $8 \times 8$ 像素块变成一个 token）
-    \item \textbf{时间压缩}：$8 \times$（每 8 帧变成 1 帧的 token）
-    \item 总压缩比约 $512 \times$
-\end{itemize}
-
-TAE 的训练使用了\textbf{对抗损失}（GAN Loss），这是一个重要的技术细节：
-
-\begin{importantbox}{对抗损失提升压缩率}
-传统 VAE 仅使用 L1 重建损失训练时，能实现的压缩比非常有限。VQ-GAN（2021）发现，引入 GAN 判别器的对抗损失后，解码器获得了更大的``自由度''——不需要精确重建每个像素，只需要生成看起来``真实''的结果。这使得压缩比提升了约 2 倍。
-\end{importantbox}
-
-\subsection{本章小结}
-
-时间自编码器通过 $512\times$ 的压缩比使视频扩散模型的训练成为可能，对抗损失是实现高压缩比的关键技术。
-
-\section{Flow Matching 训练框架}
-
-\subsection{什么是 Flow Matching？}
-
-Movie Gen 使用 \textbf{Flow Matching} 而非传统的 DDPM 作为训练框架。Flow Matching 的核心思想：
-
-\begin{enumerate}
-    \item 定义从噪声分布到数据分布的一条直线路径
-    \item 在路径上的任意点，训练模型预测\textbf{速度向量}（将样本从噪声推向数据的方向）
-\end{enumerate}
-
-训练目标简单明了：
-
-$$\mathcal{L} = \mathbb{E}_{t, x_0, \epsilon}\left[\| u_\theta(x_t, t, p) - v_t \|^2\right]$$
-
-其中 $v_t$ 是从含噪样本 $x_t$ 指向数据样本 $x_0$ 的速度向量，$p$ 是文本条件，$u_\theta$ 是模型预测。
-
-\subsection{推理过程}
-
-推理时，从高斯噪声出发，使用 ODE（常微分方程）求解器沿时间步序列迭代去噪：
-
-$$x_{t+\Delta t} = x_t + u_\theta(x_t, t, p) \cdot \Delta t$$
-
-Movie Gen 使用了简单的 Euler 求解器。
-
-\subsection{本章小结}
-
-Flow Matching 提供了比 DDPM 更简洁的训练框架，其速度预测目标和 ODE 求解器使推理过程直观高效。
-
-\section{模型架构：Llama 3 用于视频生成}
-
-\subsection{为什么选择 Llama 架构？}
-
-Movie Gen 使用了 \textbf{Llama 3} 的 Transformer 架构（随机初始化，不使用预训练权重）作为扩散模型的骨干网络。
-
-选择 Llama 的原因不是因为它在视频任务上有特殊优势，而是因为：
-\begin{itemize}
-    \item Meta 已经知道如何大规模训练这种架构
-    \item 超参数调优、分布式训练基础设施都已就绪
-    \item 架构的可扩展性已经在语言模型中得到验证
-\end{itemize}
-
-\begin{warningbox}{架构选择的工程考量}
-大规模模型训练是极其困难的工程问题。每次改变架构都需要重新探索超参数、训练稳定性等问题。选择已知如何扩展的架构（即使它最初是为其他任务设计的）往往是最务实的选择。
+\begin{warningbox}{成功样例不是分布级可靠性}
+视频演示能证明“至少存在一个成功输出”，不能证明对 prompt 分布、随机种子、长尾对象和复杂交互都稳定。可信评估需要固定 prompt 集、公开失败样本、多个随机种子和人类成对比较；若只展示最佳样例，就无法估计成功率。
 \end{warningbox}
 
-\subsection{三个必要的修改}
+\teachervoice{00:01:13--00:03:42，老师用三个开场 demo 区分生成质量、复杂反射和指令编辑。他强调近两年的提升不是单帧美学，而是模型开始处理运动、关系与控制。}
 
-Llama 3 是为自回归文本生成设计的，将其用于视频 Flow Matching 需要三个修改：
+\subsection{从 Make-A-Video 到 Movie Gen：什么真正改变了}
 
-\textbf{1. 交叉注意力层（文本条件注入）。}
-在自注意力层和前馈网络之间插入交叉注意力层，将文本条件注入视频生成过程。
+下面两张图把时间线和讲座结论放在一起。第一张比较 2022 与 2024 的可见差异；第二张把改进归结为统一架构与规模化，而不是某个孤立 trick。理解这段历史时，应把算法、数据、硬件、训练基础设施和评估方法视为共同变量。
 
-文本表示使用三个互补的预训练编码器：
-\begin{itemize}
-    \item \textbf{UL2}：侧重语义理解
-    \item \textbf{MetaCLIP}：侧重视觉-语言对齐
-    \item \textbf{ByT5}：字符级编码器，擅长处理细粒度文本（如拼写、特殊符号）
-\end{itemize}
+\lecturefigure{slide-150-video-generation-progress.jpg}{两年进步的直观对照：Make-A-Video 与 Movie Gen}{00:03:35}
 
-\textbf{2. adaLN（时间步条件注入）。}
-通过自适应层归一化将时间步信息注入每个 Transformer 块。
+左侧早期模型已经能生成动态内容，但主体边界、运动稳定和细节连续性明显更弱；右侧 Movie Gen 在复杂海浪、相机跟随和主体一致性上更强。图支持“能力前沿显著移动”，但无法从视觉对照单独分解增益来自架构还是训练规模。
 
-\textbf{3. 因果注意力 $\to$ 双向注意力。}
-Llama 3 使用因果掩码（只看之前的 token），但对于去噪任务，所有 token 之间都应相互可见，因此改为双向全注意力。
+\lecturefigure{slide-155-moviegen-paper-thesis.jpg}{讲座核心命题：规模化数据、计算与参数的简单 Transformer 也适用于视频}{00:05:02}
 
-\subsection{模型规模}
+这里的“简单”是相对 U-Net 级联和高度专用视频模块而言，并不意味着系统便宜。Movie Gen 仍需要 TAE、多个文本编码器、Flow Matching、分布式并行、数据清洗、渐进训练和后训练。核心简化发生在 backbone：尽量复用可预测扩展的 Transformer，而不是为每个分辨率和模态重新发明网络。
 
-Movie Gen 的最终模型达到 \textbf{30B 参数}——这是一个巨大的视频生成模型。
-
-\subsection{本章小结}
-
-Llama 3 架构仅需三个最小修改即可用于视频 Flow Matching，这证明了 Transformer 架构的通用性。
-
-\section{训练策略}
-
-\subsection{渐进式训练}
-
-Movie Gen 采用\textbf{渐进式训练}策略，逐步提升分辨率和时长：
-
-\begin{enumerate}
-    \item 先在低分辨率、短视频上训练
-    \item 逐步提升到更高分辨率和更长时长
-    \item 每个阶段继承前一阶段的权重
-\end{enumerate}
-
-\subsection{图像-视频联合训练}
-
-一个关键的训练技巧是将图像视为单帧视频，进行图像和视频的联合训练：
-\begin{itemize}
-    \item 高质量图像数据量远大于视频数据
-    \item 图像训练帮助模型学习高质量的视觉表示
-    \item 视频训练在此基础上学习时间一致性和运动
-\end{itemize}
-
-\subsection{数据的重要性}
-
-\begin{importantbox}{数据质量是核心}
-Movie Gen 的成功在很大程度上归功于高质量的训练数据。数据管道包括：
-\begin{itemize}
-    \item 严格的质量过滤（去除低质量、重复、有害内容）
-    \item 精心的文本描述（使用 LLM 为视频生成详细 caption）
-    \item 平衡的数据分布（避免过度偏向某些类型的内容）
-\end{itemize}
+\begin{importantbox}{架构统一的工程含义}
+统一架构不是“所有模态完全相同”，而是把模态专属复杂度集中在 encoder、decoder 与 conditioning interface，让主干继续使用可规模化的 Transformer blocks。这样模型、kernel、并行策略和训练基础设施能够复用，扩展方向也更清晰。
 \end{importantbox}
 
+\subsection{历史路线：专用小模型走向统一大模型}
+
+前面的样例展示结果，本节转向机制史。时间线要回答两个问题：早期方法依靠哪些专用结构，为什么 2024 年的大模型更偏好统一 Transformer。读图时不要把“新”自动等同于“优”；关键是训练规模和基础设施改变后，哪种偏置更容易持续获益。
+
+\lecturefigure{slide-174-video-generation-history.jpg}{视频生成路线：扩散、U-Net 级联与 Transformer/Flow Matching 的统一化}{00:09:39}
+
+早期 Video Diffusion、Make-A-Video 和 Imagen Video 常把 U-Net、扩散、插帧与多级超分组合成复杂 pipeline。到 Sora、Movie Gen 等路线，研究重心转向统一 token backbone、Flow Matching 和更大规模训练。变化不是所有旧模块消失，而是系统开始优先减少架构分叉。
+
+\lecturefigure{slide-175-moviegen-overview.jpg}{Movie Gen Video 的规模、任务与训练数据概览}{00:10:37}
+
+Movie Gen Video 是约 30B 参数的 joint text-to-image/text-to-video foundation model，最大上下文约 73K video tokens，对应最长 16 秒、16 fps 的视频训练设置。讲者用 $O(100\mathrm{M})$ 视频和 $O(1\mathrm{B})$ 图像描述数据量级；这些是规模级口径，不应被解读为精确公开计数。
+
+\begin{knowledgebox}{为什么联合训练图像与视频}
+图像数据数量更多、语义覆盖更广，可帮助模型学习对象、风格和构图；视频数据提供运动与时间关系。联合训练让同一 backbone 同时吸收空间和时空规律，也允许图像被视为单帧视频进入统一表示。
+\end{knowledgebox}
+
+\teachervoice{00:07:57--00:11:19，老师把路线概括为从“小规模、专用架构”转向“架构统一、简单 Transformer 和规模化”。他同时给出 30B、73K tokens、16 秒和 16 fps 的实际 workload，提醒统一不等于廉价。}
+
 \subsection{本章小结}
 
-渐进式训练和图像-视频联合训练是训练大规模视频生成模型的关键策略。
+视频生成的进步包含空间质量、时间一致性、复杂关系和可控编辑。Movie Gen 的核心命题是用可扩展 Transformer 统一 backbone，但完整系统仍依赖表示压缩、学习目标、数据、并行与评估。样例是能力证据，不是可靠性或因果世界模型的充分证明。
 
-\section{视频编辑能力}
+\section{先选择表示，再选择 Transformer}
 
-\subsection{指令驱动编辑}
+上一章解释了为什么架构趋向统一；本章回答统一之前最重要的前置问题：Transformer 到底要建模什么。原始 RGB 视频既连续又冗余，若直接按像素展开，序列长度会压垮训练。Movie Gen 用 Temporal Autoencoder（TAE，时间自编码器）把空间和时间都压缩到 latent（潜变量）空间，再把 latent patch 化为 token。
 
-Movie Gen 不仅能从文本生成视频，还能进行视频编辑：
-\begin{itemize}
-    \item 输入原始视频 + 编辑指令（如``将跑步者变成充气恐龙''）
-    \item 模型生成保持原视频结构但遵循编辑指令的新视频
-\end{itemize}
+\subsection{生成模型学习的是哪个随机变量}
+
+“学习视频分布”必须先明确随机变量 $x$ 的定义。它可以是像素、离散 code、连续 latent，或多尺度表示。下面两页从文本对比媒体，说明语言 token 几乎天然适合序列建模，而视频必须先去除大量可预测冗余。
+
+\lecturefigure{slide-177-architecture-questions.jpg}{Movie Gen 架构的三个问题：表示、学习目标与 backbone}{00:11:19}
+
+这三问构成整场课的组织方式：representation 决定 token 长度与信息损失；learning objective 决定网络预测什么；architecture 决定条件如何进入以及计算如何扩展。三者互相制约，不能单独比较“哪个 Transformer block 更强”。
+
+\lecturefigure{slide-178-representation-definition.jpg}{表示学习的起点：若要学习 $P(x)$，必须先定义 $x$}{00:11:43}
+
+文本可通过 tokenizer 映射为离散 token；视频则是 $T_0\times3\times H_0\times W_0$ 的连续张量。若把每个 RGB 值都当 token，数据维度与序列长度远超文本，且相邻像素和帧高度冗余。
+
+\lecturefigure{slide-181-text-vs-media-representation.jpg}{文本表示紧凑离散，媒体表示连续且冗余}{00:13:36}
+
+读图时先比较“语义密度”：一个词 token 可以概括复杂概念，而一个像素只表达局部颜色。媒体表示的目标不是无损压缩全部细节，而是在可接受重建误差下保留生成任务需要的对象、纹理、运动和时间结构。
+
+\begin{importantbox}{表示选择就是计算预算分配}
+更强压缩会缩短序列并降低 Transformer 成本，但可能丢失小物体、快速运动和精细纹理；更弱压缩保留信息，却把成本转移到注意力、激活与通信。表示不是数据预处理，而是生成系统的第一层架构。
+\end{importantbox}
+
+\subsection{为什么不直接生成像素}
+
+前一节说明媒体冗余，本节把冗余换算为 token 数。设输入视频为
+\[
+V\in\mathbb R^{T_0\times 3\times H_0\times W_0},
+\]
+其中 $T_0$ 是帧数，$H_0,W_0$ 是像素高宽，通道数为 3。若直接把每个位置展开，序列规模近似 $T_0H_0W_0$，即使忽略颜色通道也不可行。
+
+\lecturefigure{slide-182-latent-representation.jpg}{直接像素建模概念简单，但高分辨率视频需要复杂上采样或巨量计算}{00:15:52}
+
+Movie Gen 选择连续 latent 而非直接像素。TAE encoder 把输入映射为
+\[
+X=E(V)\in\mathbb R^{T\times C\times H\times W},
+\qquad
+\frac{T_0}{T}=\frac{H_0}{H}=\frac{W_0}{W}=8,
+\]
+其中 $C=16$ 是 latent channels。三个轴各压缩 8 倍，使时空位置数约缩小 $8^3=512$ 倍。
+
+\lecturefigure{slide-185-temporal-autoencoder.jpg}{TAE 将 RGB 视频压缩为连续时空 latent，再由 decoder 恢复像素}{00:19:17}
+
+对于 256 帧、$768\times768$ 视频，压缩后约为 $32\times96\times96$ 个时空位置；若每个位置对应一个 token，则
+\[
+N=\frac{256}{8}\cdot\frac{768}{8}\cdot\frac{768}{8}
+=294{,}912.
+\]
+论文的 73K context 还包含进一步 patchify，因此 token 数继续下降。这个例子说明“8 倍压缩”必须说明作用在哪些轴上，不能误写成总共只压缩 8 倍。
+
+\begin{knowledgebox}{TAE 如何同时兼容图像与视频}
+TAE 在二维空间卷积后增加一维时间卷积，在空间注意力后增加时间注意力。图像被视为单帧视频；通过可变长度编码和丢弃多余解码帧，同一 encoder/decoder 可以处理图像与任意长度视频。
+\end{knowledgebox}
+
+\begin{warningbox}{高压缩率不等于免费信息保留}
+重建损失低不代表所有生成属性都保留。快速运动、细线、文字、小脸和闪烁纹理可能在 latent 中被平均掉。TAE 必须同时评估空间重建、时间一致性和下游生成质量，不能只报告单帧 PSNR。
+\end{warningbox}
+
+\subsection{TAE 的损失与 adversarial loss 边界}
+
+TAE 属于 VAE 路线，但论文还加入 perceptual、discriminator 和 outlier penalty 等目标。对重建 $\hat V=D(E(V))$，可把总体目标写成
+\[
+\mathcal L_{\mathrm{TAE}}
+=\lambda_{\mathrm{rec}}\mathcal L_{\mathrm{rec}}
++\lambda_{\mathrm{perc}}\mathcal L_{\mathrm{perc}}
++\lambda_{\mathrm{adv}}\mathcal L_{\mathrm{adv}}
++\lambda_{\mathrm{KL}}\mathcal L_{\mathrm{KL}}
++\lambda_{\mathrm{OPL}}\mathcal L_{\mathrm{OPL}}.
+\]
+各 $\lambda$ 是损失权重；重建项约束内容，perceptual 项约束语义视觉相似，adversarial 项鼓励真实感，KL 项正则化 latent，OPL 惩罚异常高范数 latent dots。
+
+\begin{knowledgebox}{第一次出现：adversarial loss}
+这里的 adversarial loss 来自一个判别器，用于改善 autoencoder 的解码真实感和压缩能力；它不意味着 Movie Gen 的主生成器是 GAN。主生成器仍以 Flow Matching 训练。Q\&A 中老师强调，加入这类损失可允许 decoder 不必逐像素复制输入，从而支持更高压缩。
+\end{knowledgebox}
+
+\teachervoice{01:07:20--01:09:23，老师解释 TAE 的判别器损失来自 VQGAN 路线：像素级 L1 约束太死，adversarial loss 给重建更多感知自由度，并带来额外压缩收益；这与“用 GAN 生成视频”是两回事。}
+
+\begin{lstlisting}[language=Python,caption={视频压缩与 token accounting 的最小核算}]
+latent = temporal_autoencoder.encode(video)  # [T/8, C=16, H/8, W/8]
+tokens = patchify(latent, patch_t, patch_h, patch_w)
+sequence_length = tokens.shape[0]
+attention_pairs = sequence_length ** 2
+report(sequence_length, attention_pairs, reconstruction_error)
+\end{lstlisting}
 
 \subsection{本章小结}
 
-视频编辑能力展示了模型对视频内容的深层理解——不仅能生成，还能有意义地修改。
+Movie Gen 不直接让 Transformer 建模像素，而是先用 TAE 在时间、高度和宽度上各压缩 8 倍，再 patchify 为 token。压缩将计算变得可行，也引入重建与信息瓶颈。TAE 使用 adversarial loss 不等于主生成器是 GAN；生成 backbone 的学习目标是下一章的 Flow Matching。
+
+\section{Flow Matching：把噪声沿速度场运到视频}
+
+有了可处理的 latent，下一步是定义网络预测什么。Flow Matching（流匹配）把生成写成连续时间运输：从高斯噪声 $X_0$ 出发，沿模型学习的速度场走向数据 latent $X_1$。它与 diffusion 都学习反向生成过程，但训练目标和采样解释更接近常微分方程。
+
+\subsection{从 diffusion 直觉到速度场}
+
+上一章已经把像素压缩为可建模 latent，本节进一步回答“怎样从噪声得到这种 latent”。下面的总览图先给出共同结构：前向过程把数据和噪声连接，神经网络学习逆向路径。关键区别不是“有没有多步去噪”，而是中间路径、预测目标和数值积分方式如何定义。
+
+\lecturefigure{slide-187-flow-matching-overview.jpg}{Diffusion 与 Flow Matching 都学习从噪声返回数据的逆过程}{00:22:06}
+
+最简单的线性路径写为
+\[
+X_t=(1-t)X_0+tX_1,
+\qquad t\sim\mathcal U(0,1),
+\]
+其中 $X_0\sim\mathcal N(0,I)$ 是噪声，$X_1$ 是真实视频 latent，$t$ 是连续时间。该路径的目标速度为
+\[
+V_t=\frac{dX_t}{dt}=X_1-X_0.
+\]
+线性路径让速度目标简单，但实际训练还可改变时间采样和路径参数化。
+
+\begin{importantbox}{Flow Matching 的训练对象}
+模型不是直接预测最终视频，也不是分类 timestep；它学习在任意中间状态 $X_t$ 和条件 $c$ 下应该朝哪个方向移动。条件速度场 $v_\theta(X_t,t,c)$ 把文本、时间和当前 noisy latent 联结起来。
+\end{importantbox}
+
+\subsection{训练：随机抽一条路径上的局部监督}
+
+前一节定义了连续速度场，本节说明它如何变成可执行的 minibatch 监督。训练不需要完整模拟从 0 到 1 的轨迹；每次抽取数据、噪声和时间点，构造 $X_t$，再监督局部速度。下面的 slide 和公式把“局部回归如何拼成全局运输”展开。
+
+\lecturefigure{slide-188-flow-matching-training.jpg}{Flow Matching 训练：数据、噪声、时间采样与 velocity 回归}{00:23:58}
+
+典型损失为
+\[
+\mathcal L_{\mathrm{FM}}(\theta)
+=\mathbb E_{X_1,X_0,t,c}
+\left[\left\|v_\theta(X_t,t,c)-(X_1-X_0)\right\|_2^2\right].
+\]
+$\theta$ 是 Transformer 参数，$c$ 是文本条件，期望覆盖训练数据、噪声和时间采样。模型只看到局部状态，却通过所有时间点的监督拼出全局运输场。
+
+\begin{lstlisting}[language=Python,caption={条件 Flow Matching 的单步训练伪代码}]
+video, prompt = sample_batch()
+x1 = tae.encode(video)
+x0 = randn_like(x1)
+t = sample_time(batch_size)
+xt = (1 - t) * x0 + t * x1
+target_velocity = x1 - x0
+prediction = transformer(xt, timestep=t, text=encode_text(prompt))
+loss = mse(prediction, target_velocity)
+loss.backward()
+\end{lstlisting}
+
+\subsection{推理：ODE 离散化就是延迟预算}
+
+训练得到的是任意时间点的局部方向，真正生成样本还要把这些方向沿路径累积。本节把连续目标落到离散系统：选择哪些 timestep、使用什么 solver、运行多少次 backbone，都会同时改变轨迹误差、壁钟延迟和显存占用。
+
+训练得到速度场后，采样从 $\hat X_0\sim\mathcal N(0,I)$ 开始，求解
+\[
+\frac{d\hat X_t}{dt}=v_\theta(\hat X_t,t,c).
+\]
+最简单的一阶 Euler 更新为
+\[
+\hat X_{t_{k+1}}
+=\hat X_{t_k}+\Delta t_k\,v_\theta(\hat X_{t_k},t_k,c),
+\qquad \Delta t_k=t_{k+1}-t_k.
+\]
+$k$ 表示离散求解步，步数越多通常近似越好，但每一步都要运行一次大 Transformer。
+
+\lecturefigure{slide-189-flow-matching-inference.jpg}{Flow Matching 推理：从噪声用 ODE solver 迭代到数据 latent}{00:24:41}
+
+\begin{warningbox}{连续时间训练不等于连续计算}
+模型训练时可采样连续 $t$，实际推理仍必须选择有限时间点和 solver。少步采样降低延迟但会增加离散误差；多步采样提高成本。报告“生成一次视频”的速度时必须同时给出分辨率、帧数、solver 和步数。
+\end{warningbox}
+
+\teachervoice{00:32:28--00:33:54，课堂问答追问 denoising steps。老师说明训练时间变量是连续的，推理只采样一组离散点；更多步骤更接近目标轨迹，但直接增加 latency。}
+
+\subsection{本章小结}
+
+Flow Matching 用随机噪声与数据 latent 之间的路径构造局部速度监督，推理时通过 ODE solver 积分得到样本。公式简单不代表推理便宜：每个时间步都要运行 30B 级 backbone，离散步数因而是质量与延迟的核心旋钮。
+
+\section{把 Llama 改造成视频生成 Transformer}
+
+表示和学习目标确定后，才轮到 backbone。Movie Gen 没有把语言模型权重直接迁移到视频，而是选择熟悉的 Llama-style block 与训练基础设施，从随机初始化开始训练。为了适应条件 Flow Matching，它增加文本 cross-attention、timestep AdaLN，并把 causal GQA 改为 full bidirectional MHA。
+
+\subsection{为什么选择 Llama 形状，而不是 Llama 权重}
+
+讲者的工程判断是“选择已经知道如何扩展的形状”。Llama-style Transformer 的 kernel、并行策略、监控和故障经验都成熟；这些基础设施价值可能大于某个专用视觉模块的局部优势。下面的 llama 图是架构比喻，不是语言知识迁移证据。
+
+\lecturefigure{slide-193-llama-backbone.jpg}{把视频 latent patch 化后送入随机初始化的 Llama-style Transformer}{00:27:15}
+
+\begin{warningbox}{Movie Gen 不是“把 Llama 微调成视频模型”}
+本项目使用随机初始化的 Llama-style backbone。课堂上有人询问是否从 pretrained Llama 初始化，老师明确回答没有在该项目中尝试。不同模态和不同目标之间能否迁移，仍是开放研究问题。
+\end{warningbox}
+
+\teachervoice{00:25:12--00:27:15，老师说选择 Llama 形状的主要原因是扩展路径和基础设施已经熟悉；这并不意味着文本预训练权重被用于 Movie Gen。}
+
+\subsection{改造一：文本通过 cross-attention 进入}
+
+前一节选择了 Llama-style 主干，本节开始逐项补回生成条件。视频 token 与文本 token 长度不同，且文本不需要跟随 Flow Matching 加噪；核心问题是怎样让每个视频位置读取相关词义，又不把长 prompt 压成单一向量。Movie Gen 用三个互补文本 encoder 产生条件表示，再让视频流通过 cross-attention 读取它们。
+
+\lecturefigure{slide-194-text-conditioning.jpg}{三个文本表示拼接后，通过 cross-attention 条件化视频 Transformer}{00:29:23}
+
+对视频 hidden states $H$ 与文本表示 $P$，cross-attention 可写为
+\[
+Q=HW_Q,\quad K=PW_K,\quad V=PW_V,
+\qquad
+\operatorname{CA}(H,P)=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt d}\right)V.
+\]
+$W_Q,W_K,W_V$ 是投影矩阵，$d$ 是 head dimension。输出长度仍等于视频 token 数；文本作为条件 memory，不被同一层反向加噪。
+
+\begin{knowledgebox}{为什么需要多个 text encoders}
+不同 encoder 擅长不同尺度：有的提供全局语义，有的保留长 prompt 和词级关系，有的与视觉语义对齐。拼接多个表示增加条件容量，也增加显存、延迟和接口复杂度；其收益必须通过消融验证。
+\end{knowledgebox}
+
+\subsection{改造二：AdaLN 把时间步写入每个 block}
+
+文本路径已经回答“生成什么”，本节转向“当前去噪到哪里”。这两类条件的信息结构不同，因此不应机械共用同一接口。Movie Gen 沿用 DiT 的 Adaptive LayerNorm（AdaLN，自适应层归一化），由时间 embedding 产生 scale 与 shift，使同一 block 在不同噪声水平执行不同计算。
+
+\lecturefigure{slide-195-adaptive-layernorm.jpg}{AdaLN 用 timestep 生成每层的 scale 与 shift}{00:30:04}
+
+若 $h$ 是 token hidden state，$e_t$ 是时间 embedding，则
+\[
+\operatorname{AdaLN}(h;t)
+=\gamma(e_t)\odot\operatorname{LN}(h)+\beta(e_t),
+\]
+其中 $\gamma,\beta$ 是小网络输出，$\odot$ 是逐元素乘法。AdaLN 的成本不随文本长度增长，适合低维 timestep 条件；文本仍由 cross-attention 保留序列结构。
+
+\begin{importantbox}{条件接口按信息结构分工}
+长序列文本需要可选择的 token-to-token 读取，因此走 cross-attention；单个连续时间变量只需调制每层统计，因此走 AdaLN。把所有条件压成一个向量或全部拼成 token，都会丢失这种结构化分工。
+\end{importantbox}
+
+\subsection{改造三：从 causal GQA 到 bidirectional MHA}
+
+语言模型只能看左侧 token，因为目标是预测下一个词；Flow Matching 要同时更新整段 noisy latent，因此没有 causal 顺序。Movie Gen 使用 full bidirectional attention，并选择 MHA 而非 GQA，使每个 query head 保留自己的 key/value heads。
+
+\lecturefigure{slide-196-bidirectional-attention.jpg}{视频 Flow Matching 使用双向注意力，而不是语言模型的 causal mask}{00:30:38}
+
+\begin{knowledgebox}{第一次出现：MHA 与 GQA}
+MHA（Multi-Head Attention）为每个 query head 配置独立 K/V heads；GQA（Grouped-Query Attention）让多个 query heads 共享较少 K/V heads，主要降低 autoregressive KV cache。Movie Gen 不是逐 token 自回归生成，训练时也不依赖长期 KV cache，因此采用表达更充分的双向 MHA。
+\end{knowledgebox}
+
+\subsection{完整架构与 73K-token 系统成本}
+
+把 TAE、patchify、噪声、文本条件、timestep 与 decoder 串起来，才得到完整生成系统。读图时应从左到右追踪数据形状：视频先编码为 latent，latent 与高斯噪声形成 $X_t$，Transformer 预测速度，最后 TAE decoder 返回像素视频。
+
+\lecturefigure{slide-244-full-architecture.jpg}{Movie Gen Video 完整架构：TAE、patchify、条件 Transformer 与 decoder}{00:35:12}
+
+全注意力主项近似
+\[
+\operatorname{FLOPs}_{\mathrm{attn}}=O(LN^2d),
+\qquad
+\operatorname{Memory}_{\mathrm{attn}}=O(N^2),
+\]
+其中 $L$ 是层数，$N$ 是序列长度，$d$ 是 head dimension。$N=73{,}000$ 时，单个完整 attention map 约有 $5.3\times10^9$ 个元素，不能在单卡上朴素存储。
+
+因此训练需要多种并行：data parallel 复制模型分批处理样本；tensor parallel 切分矩阵乘法；sequence/context parallel 按 token 维度分片。这里的 sharding（分片）指把参数、激活或序列切到多张 GPU，使每卡只保存局部而不再完整复制。collectives（集合通信）包括 all-reduce、all-gather、reduce-scatter 等多 GPU 通信原语，用于汇总或交换分片结果。
+
+\begin{warningbox}{参数量不是唯一系统尺度}
+30B 参数描述权重容量，73K context 描述单样本激活与 attention，采样步数描述重复前向次数。部署成本必须同时核算权重显存、激活、临时 buffer、集合通信和 ODE steps；只报参数量会严重低估视频生成。
+\end{warningbox}
+
+\teachervoice{00:33:59--00:35:12，老师把两年进步归因于架构、数据、模型规模、compute 与硬件共同变化。完整架构的价值不是某个新 block，而是这些部分终于能沿统一系统一起扩展。}
+
+\subsection{本章小结}
+
+Movie Gen 使用随机初始化的 Llama-style backbone，而非语言权重迁移。三项关键改造是文本 cross-attention、timestep AdaLN 和双向 MHA。完整系统的真正瓶颈来自 73K-token 序列、二次 attention、多卡分片通信和多步 ODE 推理，而不只是 30B 参数。
+
+\section{数据清洗与渐进训练也是架构}
+
+前一章给出可扩展 backbone，本章解释为什么同一架构仍可能训练失败。视频规模化依赖高质量运动、视觉清晰、去重、内容筛选和细粒度 caption；训练还必须从便宜任务逐步走向长时高分辨率。数据 pipeline 与 curriculum 决定模型看见什么、以什么成本看见。
+
+\subsection{从海量视频到可训练 clip--prompt pairs}
+
+Movie Gen 的数据流程不是随机抓取后直接训练，而是逐级收窄。读图时应从左到右追踪每个过滤器解决的失败：视觉过滤去掉低质量，运动过滤去掉静止或抖动，内容过滤处理重复与采样，captioning 把相机和运动写入文本条件。
+
+\lecturefigure{slide-247-data-curation.jpg}{视频数据清洗：视觉、运动、内容过滤与细粒度 captioning}{00:39:11}
+
+若训练分布中大量视频低清、无运动、带边框或 caption 只描述主体不描述动作，模型即使扩大也只会更好地拟合错误目标。数据清洗与 scaling law 绑定：当有效数据质量变化时，validation loss 与 compute-optimal 关系也会改变。
+
+\begin{importantbox}{caption 是视频监督的一部分}
+视频 prompt 不应只写“一个人、一辆车”，还要表达动作顺序、相机运动、速度和交互。caption 缺失时间关系时，模型无法从文本监督中学会精确执行多阶段事件；这也是长 prompt 失败的重要来源。
+\end{importantbox}
+
+\begin{warningbox}{长尾出现过，不等于可以可靠控制}
+互联网规模数据可能包含某个稀有概念，但出现次数、caption 质量和上下文分布决定它是否可控。pretraining 提供覆盖，post-training 或任务数据提供稳定调用；不能把“数据里见过”当成“模型会按指令执行”。
+\end{warningbox}
+
+\teachervoice{00:35:20--00:39:11，老师直接说 scaling laws 依赖数据被清理；若数据不干净，规律不成立，输出质量也不会随规模自动改善。}
+
+\subsection{渐进 curriculum：先便宜地学，再昂贵地精炼}
+
+直接用 768p、16 秒、16 fps 训练全部阶段会浪费大量 compute，也更难稳定。Movie Gen 先用图像和低分辨率视频建立语义与基本运动，再逐步提高分辨率、长度，并分出 personalization、T2V finetuning 与 video-to-video 等路径。
+
+\lecturefigure{slide-250-progressive-training.jpg}{训练 recipe：256p 图像、联合预训练、768p 视频与任务分支}{00:40:58}
+
+可把 curriculum 抽象为一组 workload $w_k=(r_k,f_k,T_k,b_k)$，分别表示分辨率、帧率、时长和 batch。阶段目标是
+\[
+\theta_{k+1}=\operatorname{Train}(\theta_k,\mathcal D_k,w_k),
+\qquad
+\operatorname{cost}(w_{k+1})>\operatorname{cost}(w_k),
+\]
+即用上一阶段参数初始化更昂贵阶段。这里不是定理，而是工程 recipe：先以高吞吐学习广泛分布，再把预算集中到最终质量。
+
+\begin{lstlisting}[language=Python,caption={渐进式图像/视频训练的概念流程}]
+model = train(text_to_image_256p, model=None)
+model = train(joint_image_video_256_to_768p, model=model)
+video_model = finetune(text_to_video_768p_16s, model=model)
+edit_model = finetune(video_to_video_pairs, model=model)
+personalized_model = finetune(identity_conditioned_pairs, model=model)
+\end{lstlisting}
+
+\begin{knowledgebox}{73K context 如何进入训练成本}
+更长视频让 token 数近似随帧数线性增长，但全注意力计算随 $N^2$ 增长。若其他设置不变，把时长从 16 秒翻倍到 32 秒会让 token 数约翻倍、attention 主项约变为四倍；这就是长视频首先是系统问题的原因。
+\end{knowledgebox}
+
+\teachervoice{00:39:11--00:40:58，老师把训练流程解释为 convergence-speed 优化：先做便宜的 256p 图像/视频学习，再提高到 768p 和长视频，最后按任务分支后训练。}
+
+\subsection{本章小结}
+
+规模化只有在数据质量可控时才有意义。Movie Gen 用视觉、运动、内容和 caption 过滤构造训练 pairs，再用渐进 curriculum 从便宜图像任务过渡到高分辨率长视频与应用分支。数据与 curriculum 不只是外围 recipe，而是决定模型能力边界的系统组件。
+
+\section{从基础 T2V 到编辑、个性化与音频}
+
+基础模型学到的视觉规律可以支持多种应用，但不同任务需要不同输入接口与训练数据。本章用六个代表状态区分：纯文本生成关注时空 plausibility；编辑关注内容保持；个性化关注身份；音频关注跨模态同步。把它们都称为“Movie Gen”容易掩盖模型家族内部的训练差异。
+
+\subsection{模型是否真的学到了“视觉世界”}
+
+前面的架构与数据章节解释了模型怎样训练，本节回到输出，检验它究竟学到了什么。讲者用两段样例说明规模化模型能够生成相机运动、物体运动和某些物理关系。读这些图时应寻找连续性与相互作用，而不是只看单帧纹理；同时要保留证据边界：观察数据可以产生强规律拟合，不自动产生因果可干预的世界模型。
+
+\lecturefigure{slide-257-learned-visual-world.jpg}{风筝奔跑样例：主体、风筝、海滩和相机运动共同演化}{00:41:17}
+
+该片段要求模型保持人物身份与衣着，让风筝与运动方向协调，并处理镜头跟随。它展示了多因素联合生成，但不能回答风力、绳张力等隐变量是否被显式表示。
+
+\lecturefigure{slide-305-physics-sample.jpg}{泳池样例：水面、甜甜圈、树懒与饮料形成接触和浮力关系}{00:42:11}
+
+视觉上合理的接触关系说明模型学到大量统计常识。更严格的物理评估应测试反事实：改变物体质量、液体、碰撞速度或约束条件，观察结果是否稳定遵循规律，而非只在常见场景中看起来合理。
+
+\begin{warningbox}{“World model”至少有三种强度}
+弱定义是能生成视觉上合理的未来；中等定义要求对干预和反事实保持一致；强定义还要求可用于规划和预测。Movie Gen 样例支持第一层并触及第二层现象，但不能仅凭演示声称具备完整因果模拟器。
+\end{warningbox}
+
+\teachervoice{00:41:11--00:42:52，老师说模型似乎从观看视频中学到对象、运动和物理规律；他把这视为规模化的惊喜，而不是对显式物理推理的证明。}
+
+\subsection{精确编辑：生成质量之外还要守住原视频}
+
+纯文本生成只需构造一个合理世界，编辑还必须尊重已经存在的世界。本节因此把评价拆成“改对了什么”和“误改了什么”：编辑模型同时接收原视频与文本指令，必须把变化限制在目标区域和属性。下面两组四宫格展示局部替换、删除、增加和风格变换；它们比单一输出更适合检查哪些内容被保留。
+
+\lecturefigure{slide-337-precise-editing-vr.jpg}{VR 场景编辑：替换、移除头显并增加视觉效果}{00:42:54}
+
+同一输入支持多种指令，说明编辑接口能够解耦 source content 与 edit intent。评估应分为 edit fidelity 和 preservation：前者看目标变化，后者看人物、动作、背景和镜头是否无意漂移。
+
+\lecturefigure{slide-374-precise-editing-penguin.jpg}{企鹅视频编辑：服装、环境物体与铅笔画风格}{00:43:54}
+
+跨全局风格和局部对象的编辑难度不同。增加伞是局部结构修改，穿服装要求与运动同步，铅笔风格则重绘全画面但应保持场景布局。一个统一分数会隐藏这些失败模式。
+
+\begin{knowledgebox}{编辑数据为什么稀缺}
+真实世界几乎没有“同一视频编辑前/编辑后 + 精确指令”的天然 pairs。课堂提示 Movie Gen 使用自监督构造来产生训练信号。没有这种数据设计，基础 T2V 模型即使生成很强，也难以精确保持输入内容。
+\end{knowledgebox}
+
+\subsection{个性化与音频属于不同条件路径}
+
+编辑任务之后，本节继续比较两条完全不同的条件扩展：个性化视频增加 reference identity，音频生成增加 video/text-to-audio 条件。两者都扩展基础生成能力，却面对不同目标：个性化要平衡身份与动作，音频要对齐视觉事件、节奏和环境语义；因此不能用同一“视频质量”分数概括。
+
+\lecturefigure{slide-388-personalization.jpg}{个性化视频：参考人像与文本 prompt 共同决定主体和场景}{00:44:12}
+
+右上参考图提供身份信息，主视频需要在新姿态、光照和场景中保持身份。简单复制脸部纹理会导致运动僵硬；过度服从文本又会丢失身份。应同时测 identity similarity、motion quality 与 prompt adherence。
+
+\lecturefigure{slide-419-synchronized-audio.jpg}{Movie Gen Audio 根据视频与文本生成同步雷声和配乐}{00:44:43}
+
+音频模型需要知道何时发生雷电、场景情绪以及哪些声音属于画内（diegetic）或画外。讲座明确指出，前面展示的 T2V 模型本身输出静音视频；同步音频来自独立的 Movie Gen Audio 模型。
+
+\begin{importantbox}{Movie Gen 是模型家族，不是一张网络}
+基础 T2V、video editing、personalization 和 audio generation 共享研究路线，但输入、目标、数据和后训练不同。评估或部署时必须说明使用哪个模型与哪条 pipeline，不能把家族能力全部归给 30B T2V backbone。
+\end{importantbox}
+
+\teachervoice{01:11:28--01:13:20，老师最后再次澄清：课堂主模型生成静音视频，音频来自独立模型。联合音视频生成理论上可共享信息，但高质量对齐数据比单独视频更稀缺。}
+
+\subsection{本章小结}
+
+Movie Gen 家族覆盖纯生成、编辑、个性化和音频，但这些能力不来自同一训练目标。基础 T2V 展示强视觉规律拟合；编辑强调内容保持；个性化强调身份；音频强调跨模态同步。能力命名必须跟具体模型和数据路径绑定。
+
+\section{评估与 scaling：证据应该怎样读}
+
+前面展示能力，本章检查证据。视频自动指标难以同时衡量真实感、运动自然、运动完整、文本遵循和美学，因此 Movie Gen 主要依赖人类成对比较；scaling 图则探索语言模型的 compute-optimal 趋势是否能近似预测媒体模型。两类证据都很重要，也都不能过度外推。
+
+\subsection{Net Win Rate 如何计算}
+
+前面看到的是精选样例，本节转向可聚合的人类证据。结果表将 Movie Gen 与 Runway Gen3、LumaLabs、OpenAI Sora 和 Kling1.5 比较。读表顺序应是：先看指标定义，再看正负号和置信区间，最后比较同一 baseline 下不同维度，不能只截取最大的百分比或把相对偏好误读成绝对质量。
+
+\lecturefigure{slide-433-human-evaluation.jpg}{Movie Gen 对多种 prior work 的人类评测 Net Win Rate}{00:47:24}
+
+对模型 A 与 B，令第 $i$ 个样本的共识得分 $s_i\in\{-1,0,1\}$，分别表示 B 胜、平局、A 胜，则
+\[
+\operatorname{NWR}(A,B)=\frac{100}{M}\sum_{i=1}^{M}s_i.
+\]
+$M$ 是评测样本数。正值表示 A 更常被偏好，负值表示 B 更常被偏好。论文通过 bootstrap 重采样 item-level scores 构造 95\% confidence interval。
+
+\begin{warningbox}{Net Win Rate 不是绝对质量分}
+它依赖 prompt 集、比较模型版本、评审标准和人群。A 对 B 为正、B 对 C 为正，并不保证 A 对 C 的差值可相加。表中不同维度还可能冲突，例如 motion completeness 改善但 aesthetics 下降。
+\end{warningbox}
+
+\teachervoice{00:45:13--00:47:24，老师说视频自动指标仍很弱，因此使用多维人类比较。他也提醒公平比较很难：模型接口、prompt rewrite、采样设置和可访问版本都会影响结论。}
+
+\subsection{Movie Gen 与 Llama 3 scaling law 的关系}
+
+下一张图不是“视频等于文本”的证明，而是一个经验惊喜：Movie Gen 在不同 compute budget 下的 optimal model size，与 Llama 3 拟合曲线相近。它支持统一 Transformer 可能共享某些尺度规律，但数据、token 语义和目标仍然不同。
+
+\lecturefigure{slide-434-scaling-laws.jpg}{Movie Gen compute-optimal 模型规模与 Llama 3 scaling curve 的对照}{00:49:13}
+
+可用幂律形式概括 compute-optimal 参数量：
+\[
+N_{\mathrm{opt}}(C)=aC^b,
+\]
+其中 $C$ 是训练 FLOPs，$N_{\mathrm{opt}}$ 是在该预算下最优参数量，$a,b$ 由实验拟合。图中蓝点来自 Movie Gen 小规模实验，橙线来自 Llama 3；相近不意味着 $a,b$ 在所有分辨率和数据分布都恒定。
+
+\begin{importantbox}{Scaling law 的正确用途}
+Scaling law 用于在预算内选择模型/数据配置和预测趋势，不用于替代最终高分辨率评测。它要求训练 recipe、数据质量和 loss 定义相对稳定；一旦 representation、curriculum 或数据过滤改变，旧拟合可能失效。
+\end{importantbox}
+
+\teachervoice{00:47:26--00:49:13，老师把 Llama 3 曲线称为 surprisingly reasonable predictor，但没有宣称媒体和文本完全共享定律。课程结论是“值得继续测”，不是“已经证明 modality independent”。}
+
+\subsection{本章小结}
+
+Movie Gen 用多维人类成对评测弥补自动指标不足，Net Win Rate 仍受 prompt、协议和 baseline 约束。Scaling-law 对照显示统一 Transformer 的经验趋势可能跨模态复用，但它只是特定区间的拟合，需要数据质量和训练 recipe 保持可比。
+
+\section{失败、长视频与 Q\&A 的工程边界}
+
+能力和 scaling 之后，最后必须回到失败。复杂碰撞揭示模型缺乏稳定多体交互；长视频受到 token 与二次 attention 制约；reasoning 需要媒体形式的 trace 与 verifier；部署还面对 watermark、数据污染和未公开 serving architecture。本章把 Q\&A 中的口头边界融入主线。
+
+\subsection{复杂交互为什么仍会崩}
+
+评测与 scaling 说明模型在平均意义上很强，本节故意转向最不平均的部分：复杂交互失败。碰撞样例不是偶然笑料，而是一个诊断；当多个对象高速接触、遮挡并改变拓扑关系时，局部视觉 plausibility 不足以保证全局状态一致。读图时看车体是否穿透、碎片来源是否连续、碰撞前后身份是否保持。
+
+\lecturefigure{slide-460-complex-motion-failure.jpg}{失败案例：复杂车辆碰撞中出现几何和交互不一致}{00:50:04}
+
+\begin{warningbox}{视频失败常是状态管理失败}
+模型可能逐帧生成“看起来像碰撞”的纹理，却没有稳定对象状态、接触约束和事件顺序。提高单帧清晰度无法自动修复这类错误；需要更好的时空表示、数据、长期记忆、约束或自校正机制。
+\end{warningbox}
+
+\subsection{长视频首先是序列长度问题}
+
+设每秒产生 $n_f$ 个 latent tokens，时长为 $S$，则 $N\approx n_fS$。若使用全注意力，主项随时长近似
+\[
+\operatorname{cost}(S)=O((n_fS)^2d).
+\]
+把 16 秒扩为 32 秒，在其他条件不变时 token 数约翻倍，attention 主项约四倍；还要保持更长情节、角色和相机状态。
+
+\begin{knowledgebox}{长视频的三层困难}
+第一层是计算：context、激活和通信增长；第二层是数据：长视频 caption 与事件边界更难获得；第三层是建模：模型要维持身份、因果链和叙事目标。仅靠更大显存只能缓解第一层。
+\end{knowledgebox}
+
+\teachervoice{00:57:11--01:00:13，老师说 73K 已接近当时可行训练长度。若时长翻倍，序列与 attention 成本迅速增加；长电影还需要超越朴素一次性全序列生成的系统设计。}
+
+\subsection{Reasoning、verifier 与 native media generation}
+
+前一节已经定位复杂交互的状态管理错误，本节追问系统能否主动发现并修正它。讲者提出两个开放方向：其一，让视频模型在输出前发现明显错误并自校正；其二，把视频生成纳入原生多模态 LLM。两者都需要回答学习目标是否统一，以及如何验证媒体输出“正确”，而这比增加模型参数更难定义。
+
+\lecturefigure{slide-464-future-directions.jpg}{未来方向：继续 scaling、媒体 reasoning 与原生多模态生成}{00:53:37}
+
+若把生成--检查--修正写成循环，可抽象为
+\[
+y^{(k)}=G_\theta(z,c,r^{(k)}),\qquad
+e^{(k)}=V_\phi(y^{(k)},c),\qquad
+r^{(k+1)}=R(r^{(k)},e^{(k)}),
+\]
+其中 $G$ 是生成器，$V$ 是 verifier，$R$ 更新 reasoning state。困难在于视频没有像数学题那样便宜、确定的正确性判据；人类能一眼发现撞车不合理，并不等于存在可训练的自动 reward。
+
+\begin{importantbox}{媒体 reasoning 的核心瓶颈是验证}
+生成“思考文本”并不自动改善视频。必须定义可检测的错误：对象身份、动作顺序、几何、物理、文本约束或审美，并证明 verifier 与人类判断相关。否则 reasoning trace 可能只是额外 token，而非有效自校正。
+\end{importantbox}
+
+\subsection{Q\&A 的五条校正}
+
+最后的问答把架构、数据与治理边界说得更清楚。下面五条不是附录，而是理解主讲结论的必要条件。
+
+\begin{enumerate}
+  \item \textbf{Inductive bias：}CNN 在小规模或特定机器人 diffusion policy 上可能更有优势；Transformer 更容易沿成熟基础设施扩展，但辩论没有结束。
+  \item \textbf{Physics：}可硬编码先验、加入模拟数据或依赖 scale，哪条路线最好仍是开放问题；当前样例不能证明物理已解决。
+  \item \textbf{Synthetic data：}低质量生成内容进入 pretraining 会污染数据，但合成数据并非天然有害；受控 post-training 本就常用模型生成样本。
+  \item \textbf{Safety：}deepfake 与 watermarking 是独立研发和部署问题，不能由生成质量指标替代。
+  \item \textbf{Public evidence：}论文公开训练 infra 细节，课堂没有公开完整 serving architecture；不应猜测单次请求使用多少 GPU。
+\end{enumerate}
+
+\begin{knowledgebox}{“统一”应放在哪一层}
+Q\&A 中老师指出，只要新模态能编码为 token，Transformer core 可以复用；真正困难往往在表示和目标。统一主干并不要求统一 tokenizer、decoder、loss 或评估协议。
+\end{knowledgebox}
+
+\teachervoice{00:54:10--00:56:03，老师承认专用 CNN 的归纳偏置在小规模可有价值；Movie Gen 的经验是大规模 Transformer 更容易扩展、基础设施更成熟，但他明确说自己没有为争论盖棺定论。}
+
+\teachervoice{01:09:23--01:10:33，关于合成数据污染，老师区分 pretraining 中的低质量假视频与受控 post-training 数据：生成数据不是天然坏，关键是质量、目标和过滤。}
+
+\subsection{本章小结}
+
+复杂交互失败揭示视频模型的状态管理不足；长视频同时受二次计算、数据与长期一致性限制；reasoning 的关键是 verifier，而非额外文字。Q\&A 进一步校正了 Transformer、物理先验、合成数据、安全和公开系统证据的边界。
+
+\section{术语消化与总结}
+
+本讲把表示、连续生成目标、Transformer 改造、数据 curriculum 和多任务应用压在同一系统里。若只记模型名，很容易混淆哪个组件解决哪个瓶颈。先用术语表重新按“问题--机制--证据”组织，再给出端到端检查表。
+
+\subsection{高密度术语表}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{0.18\textwidth} X X}
+\toprule
+\textbf{术语} & \textbf{解决的问题} & \textbf{核心机制与课程关系} \\
+\midrule
+TAE & 像素视频序列太长 & 时间、高度、宽度各压缩 8 倍，用连续 latent 统一图像与视频。 \\
+Latent & 哪个随机变量交给生成器 & 保留生成相关信息并舍弃部分像素冗余；压缩率决定质量--成本折中。 \\
+Flow Matching & 如何从噪声生成媒体 & 学习连续时间 velocity field，推理用 ODE solver 积分。 \\
+Cross-attention & 视频 token 如何读取文本 & 视频作 query，三个文本表示作 key/value，文本保持干净条件。 \\
+AdaLN & timestep 如何进入每层 & 时间 embedding 生成 LayerNorm scale/shift，调制同一 block。 \\
+MHA & 双向时空交互 & 每个 query head 有独立 K/V heads，适合非自回归全序列更新。 \\
+GQA & 自回归 KV cache 太大 & 多个 query heads 共享 K/V；Movie Gen T2V 不依赖该优势。 \\
+Context parallelism & 73K tokens 单卡放不下 & 按 token/context 维度分片并用集合通信交换注意力信息。 \\
+Curriculum & 直接高分辨率训练太贵 & 从图像和低分辨率视频逐步提高分辨率、时长与任务复杂度。 \\
+Net Win Rate & 自动指标不足 & 人类成对偏好中 A 胜比例减 B 胜比例，并报告 bootstrap 区间。 \\
+Post-training & pretraining 覆盖不等于可控 & 用高质量任务数据提升运动、美学、编辑或身份保持。 \\
+World model & “看起来合理”到底有多强 & 需区分视觉 plausibility、反事实一致性与可规划因果模型。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{端到端工程检查表}
+
+\begin{enumerate}
+  \item \textbf{Representation：}时空压缩率、latent channels 与 patch size 是否完整报告？
+  \item \textbf{Objective：}预测 noise、velocity 还是 data；solver 与采样步数是什么？
+  \item \textbf{Conditioning：}文本 encoder、cross-attention、AdaLN 和 reference conditions 如何分工？
+  \item \textbf{Context：}分辨率、帧率、时长对应多少 tokens，attention 与激活成本多大？
+  \item \textbf{Data：}视觉、运动、内容、去重与 captioning 过滤是否可复现？
+  \item \textbf{Curriculum：}哪些阶段训练图像、低分辨率视频、高分辨率视频和任务分支？
+  \item \textbf{Evaluation：}是否同时报告失败样本、固定 prompt、人类偏好、运动与文本遵循？
+  \item \textbf{Deployment：}权重、ODE steps、多卡通信、峰值显存和 serving 证据是否公开？
+\end{enumerate}
+
+\begin{importantbox}{全讲核心结论}
+Movie Gen 的贡献可以压缩为一条系统链：用 TAE 把媒体压缩为 token；用 Flow Matching 定义连续运输目标；用随机初始化的 Llama-style 双向 Transformer 承担规模化 backbone；用数据清洗与渐进 curriculum 把 73K-token 训练变得可行；再用独立后训练扩展编辑、个性化和音频。能力提升真实存在，但复杂交互、长视频、评估、reasoning verifier 与 serving 仍是开放边界。
+\end{importantbox}
 
 \section{总结与延伸}
 
-本讲详细拆解了 Movie Gen 从架构到训练的每个技术细节。核心结论：
+\subsection{一条可迁移到其他生成系统的主线}
 
-\begin{enumerate}
-    \item \textbf{Scaling 是王道}：数据、计算、参数的扩展对简单 Transformer 在视频生成领域同样有效。
-    \item \textbf{架构简单性}：仅对 Llama 3 做了三个修改就能进行视频生成，证明了 Transformer 的通用性。
-    \item \textbf{压缩是关键}：TAE 的 $512\times$ 压缩使视频扩散训练成为可能。
-    \item \textbf{训练策略重要}：渐进式训练、图像-视频联合训练是大规模模型训练的实用技巧。
-    \item \textbf{数据决定上限}：高质量数据管道是最终生成质量的关键决定因素。
-\end{enumerate}
+本讲最可迁移的方法不是复制 Movie Gen 的模型名，而是按依赖顺序设计系统：先定义要生成的随机变量，再选择运输目标；先核算 token 长度，再选择 attention 与并行；先定义评估维度，再看样例和 scaling；最后把应用拆成基础生成、编辑、身份和音频等不同条件问题。
+
+\subsection{三个开放研究问题}
+
+第一，能否在不牺牲细粒度运动的前提下进一步压缩时空 latent 或使用稀疏/分层 attention，从而突破长视频二次成本？第二，媒体 reasoning 应产生何种中间状态，怎样构造与人类判断一致的 verifier？第三，原生音视频联合模型能否利用跨模态信息，同时避免对齐数据稀缺和任务互相干扰？
+
+这些问题共同说明，下一代视频模型不会只靠扩大 denoiser。更可能的突破来自 representation、data、attention、parallelism、verification 和 multimodal objective 的协同设计。评价新系统时，最有价值的问题不是“它能生成多炫的视频”，而是“它在哪个 workload、哪组证据和哪条成本边界上改变了 Pareto frontier”。
 
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Meta, ``Movie Gen: A Cast of Media Foundation Models'', 2024
-    \item Polyak et al., ``Movie Gen Video'', 2024
-    \item Singer et al., ``Make-A-Video: Text-to-Video Generation without Text-Video Data'', 2022
-    \item Esser et al., ``VQ-GAN: Taming Transformers for High-Resolution Image Synthesis'', 2021
-    \item Lipman et al., ``Flow Matching for Generative Modeling'', 2023
+
+\begin{itemize}[itemsep=0.2em,topsep=0.2em]
+  \item 官方录像：\url{https://www.youtube.com/watch?v=YGHF8_tf--g}
+  \item CS25 V5 课程页：\url{https://web.stanford.edu/class/cs25/past/cs25-v5/}
+  \item Movie Gen 一手论文：\url{https://ai.meta.com/static-resource/movie-gen-research-paper/}
+  \item 延伸阅读方向：Flow Matching、DiT/AdaLN、Temporal Autoencoder、context parallelism、human evaluation 与 media reasoning verification。
 \end{itemize}
 
 \end{document}

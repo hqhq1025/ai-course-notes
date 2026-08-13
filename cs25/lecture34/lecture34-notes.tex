@@ -1,270 +1,1111 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 34：Transformer 全景图——从数据到持续学习}
+\renewcommand{\noteauthors}{基于 Steven Feng、Karan Singh、Jenny Duan、Chelsea Zou 官方讲座、123 页 deck 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V5 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2025-04-01；上传 2025-04-18}
+\renewcommand{\videoduration}{1:01:28}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=JKbtWimlzAE}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-\newcommand{\notetitle}{[CS25 V5] Overview of Transformers --- Instructors}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2025}
-\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
-\newcommand{\videopublishdate}{Spring 2025}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
+\section{课程地图与 Transformer 基础：架构只是第一层}
+
+这堂 V5 开场课不是把 Transformer 重新讲成一张 attention 公式。四位讲者把现代系统拆成十个相互连接的层次：表示与 attention、数据配方、推理时计算、偏好优化、agent loop、视觉与脑成像接口，以及部署后的持续适应。读完整堂课时应不断追问：某个方法改变的是参数、数据、推理过程、外部工具，还是模型与环境之间的闭环？
+
+
+\lecturefigure{slide-001.jpg}{CS25 Transformers United V5：课程与讲座入口}{CS25 V5 official deck, p.~1}
+
+\subsection{课程承诺：从机制到边界}
+
+课程 takeaways 把 attention、跨域应用、frontier research 与 limitations 放在同一页。这个顺序很重要：理解模型怎样工作，不等于理解系统为什么成功；看到应用扩张，也不等于忽略成本、可靠性与持续学习缺口。讲义因此把每个章节都写成“机制—证据—边界—工程决策”四步。
+
+
+\lecturefigure{slide-012.jpg}{课程希望学生掌握的机制、应用、前沿方法与开放问题}{CS25 V5 official deck, p.~12}
+
+\teachervoice{00:01:20--00:01:58，讲者把整堂 overview 明确分成 pretraining/data、post-training、applications 与 weaknesses。课堂提示：这些不是四个独立 buzzword，而是模型生命周期的四个干预位置。}
+
+\begin{importantbox}{现代 Transformer 系统的四层接口}
+\begin{enumerate}
+  \item \textbf{Representation/architecture}：token 怎样变成向量并相互作用；
+  \item \textbf{Training data/objective}：模型从哪些分布和损失中学习；
+  \item \textbf{Inference/post-training}：部署前后如何追加搜索、偏好与工具；
+  \item \textbf{Environment/update}：系统怎样行动、接收反馈并持续改变。
+\end{enumerate}
+后文所有方法都应先归到其中一层，再讨论跨层耦合。
+\end{importantbox}
+
+\subsection{Embedding：离散 token 怎样进入连续空间}
+
+文本不能直接作为矩阵运算输入。设词表大小为 $|V|$、隐藏维度为 $d$，embedding table 为 $E\in\mathbb{R}^{|V|\times d}$，第 $i$ 个 token id 为 $x_i$，则
+\[
+e_i=E[x_i].
+\]
+其中 $e_i\in\mathbb{R}^{d}$ 是 token 的稠密向量。静态 embedding 给同一词同一向量；contextual embedding 则在后续层根据上下文更新表示，因此 ``bank'' 在河岸与银行句子中可以分离。
+
+
+\lecturefigure{slide-014.jpg}{Word embeddings：语义相似性、向量算术与静态表示的局限}{CS25 V5 official deck, p.~14}
+
+\teachervoice{00:06:23--00:07:32，Steven 从“词不是数字”开始，先解释 dense vector，再指出 static embedding 无法区分多义词。这个顺序提醒我们：attention 解决的是上下文交互，不是 tokenization 本身。}
+
+\begin{knowledgebox}{首次使用：tokenization 与 embedding}
+Tokenization 把原始字符串切成词、子词或字节 token；embedding 再把 token id 映射为可训练向量。前者决定序列长度与词表边界，后者决定模型初始表示空间。二者经常一起出现，但不是同一个操作。
+\end{knowledgebox}
+
+\subsection{Self-attention：Q、K、V 是检索接口}
+
+给定序列矩阵 $X\in\mathbb{R}^{n\times d}$，模型学习
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\]
+并计算 scaled dot-product attention：
+\[
+\operatorname{Attn}(Q,K,V)=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V.
+\]
+$Q$ 是当前位置提出的问题，$K$ 是每个位置用于匹配的索引，$V$ 是真正被聚合的内容，$d_k$ 是 key 维度；除以 $\sqrt{d_k}$ 用于控制点积尺度。
+
+
+\lecturefigure{slide-015.jpg}{Transformer 两分钟：self-attention 让 token 软匹配上下文}{CS25 V5 official deck, p.~15}
+
+
+\lecturefigure{slide-016.jpg}{QKV 图书馆类比：查询、摘要索引与书中内容}{CS25 V5 official deck, p.~16}
+
+\teachervoice{00:07:37--00:08:19，讲者用“找书”解释 Q/K/V：主题需求是 query，书的摘要是 key，书中内容是 value；attention 不是只拿一本书，而是对多个匹配结果做软加权。}
+
+\begin{warningbox}{Attention weight 不是完整解释}
+权重说明当前层怎样混合 value，不自动等于因果重要性、语义理由或最终答案证据。残差、MLP、后续层和 value 内容都会改变输出；读 attention map 时应把它当局部计算证据，而不是完整可解释性结论。
+\end{warningbox}
+
+
+\lecturefigure{slide-017.jpg}{Attention map：不同层和头学习不同 token 关系}{CS25 V5 official deck, p.~17}
+
+\subsection{顺序、多头与完整 block}
+
+纯 attention 对 token 排列本身没有位置信号，因此需要 positional encoding。经典正弦形式为
+\[
+\mathrm{PE}_{(p,2j)}=\sin\!\left(p/10000^{2j/d}\right),\qquad
+\mathrm{PE}_{(p,2j+1)}=\cos\!\left(p/10000^{2j/d}\right),
+\]
+其中 $p$ 是位置，$j$ 是维度索引。现代系统也常用 RoPE 或 learned position；共同目标是让相同 token 在不同位置产生不同交互几何。
+
+
+\lecturefigure{slide-018.jpg}{Positional encoding：为 permutation-equivariant attention 注入顺序}{CS25 V5 official deck, p.~18}
+
+Multi-head attention 把隐藏维度拆成多个子空间：
+\[
+\operatorname{MHA}(X)=\operatorname{Concat}(h_1,\ldots,h_H)W_O,
+\quad h_r=\operatorname{Attn}(XW_Q^{(r)},XW_K^{(r)},XW_V^{(r)}).
+\]
+不同 head 可以专注局部语法、长程引用、格式或任务特征；但 head 数增加不等于能力线性增加，真正效果还取决于宽度、数据和训练稳定性。
+
+
+\lecturefigure{slide-019.jpg}{Multi-head attention：并行关系子空间与层级堆叠}{CS25 V5 official deck, p.~19}
+
+
+\lecturefigure{slide-020.jpg}{完整 Transformer：attention、MLP、残差与多层组合}{CS25 V5 official deck, p.~20}
+
+\begin{knowledgebox}{深读：一层 Transformer 到底做了哪些资源交换}
+Attention 让每个 token 读取其他位置的信息，MLP 则在每个位置独立变换特征；残差把新信息叠加到旧表示，normalization 稳定尺度。训练时必须保存或重算中间 activation，推理时则为历史 token 保存 KV cache。于是同一张 block 图对应三类瓶颈：长序列使 attention 计算和 KV cache 增长，宽 MLP 增加参数与矩阵乘成本，深度增加串行层数和 activation。读架构图不能只数模块，还要把 batch、sequence length、hidden size 和 precision 代入资源账本。所谓“最终 Transformer”只是功能拓扑；FlashAttention、GQA、quantization、parallelism 与 serving scheduler 才决定它在真实硬件上的 latency 和 throughput。图也没有表达训练数据与 optimizer，因此不能从 block 结构直接预测模型最终知识或对齐行为。
+\end{knowledgebox}
+
+\teachervoice{00:08:34--00:09:16，Steven 先用 positional encoding 恢复顺序，再用多层和多头解释容量扩张。讲义提醒：``more parameters'' 是表示能力条件，不是数据质量和泛化的替代品。}
+
+\subsection{从 block 到 LLM system}
+
+Transformer 今天横跨语言、视觉、语音、生物和视频，是因为 attention 提供了通用的 token interaction 模板。不同领域真正困难的是 token interface、目标函数与评估约束：图像用 patch，脑成像用 ROI-by-time 序列，agent 还需要 action 和 environment feedback。
+
+
+\lecturefigure{slide-021.jpg}{Transformers Today：语言、视觉、语音、生物与视频的共同计算模式}{CS25 V5 official deck, p.~21}
+
+
+\lecturefigure{slide-022.jpg}{Large Language Models：架构、数据、规模、post-training 与应用组成系统}{CS25 V5 official deck, p.~22}
+
+\begin{knowledgebox}{术语消化：从 Transformer 到 LLM system}
+\textbf{Base model} 是预训练得到的参数；\textbf{post-training} 用 instruction/preference data 调整行为；\textbf{inference stack} 管理 KV cache、batching 和工具调用；\textbf{product layer} 还包含 retrieval、memory、permissions 与 UI。Slide 22 把这些层压在一张图里。读图时先找每一层的输入输出，再问失败属于哪一层：事实缺失可能是 data 问题，延迟可能是 serving 问题，越权则是 agent policy 问题。图不能证明更大 base model 会自动修复所有上层缺陷。
+\end{knowledgebox}
+
+\teachervoice{00:09:20--00:10:10，课堂把 LLM 描述为 scaled-up Transformer 加大规模数据，再经过 post-training 与应用封装。老师强调的不是“架构不重要”，而是架构只是产品能力链条的一段。}
+
+\begin{knowledgebox}{从 next-token loss 到语言模型}
+自回归预训练最常见目标是
+\[
+\mathcal{L}_{\text{NLL}}=-\sum_{t=1}^{T}\log p_{\theta}(x_t\mid x_{<t}).
+\]
+$x_t$ 是当前 token，$x_{<t}$ 是历史上下文，$\theta$ 是参数。该目标提供统一监督，却不直接规定事实可靠性、工具使用、偏好一致性或长期记忆；这些能力需要数据、post-training 或系统组件共同塑造。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Transformer 的核心是把离散 token 映射为向量，再通过带位置信号的多头 attention 与 MLP 反复交互。现代 LLM 的能力不能由一个 block 单独解释：训练分布、优化目标、推理时计算、反馈接口和部署环境同样决定结果。下一章转向最常被低估的变量——数据。
+
+\section{数据策略：规模之外还有质量、结构与学习阶段}
+
+上一章给出模型怎样计算，本章追问模型究竟从什么分布中学习。数据策略不是“多抓网页”这么简单：source mix、质量过滤、顺序、重复率和阶段性配比都会改变梯度。课程先用人类学习对比提出问题，再用两个具体研究项目展示怎样把直觉转成实验。
+
+\subsection{为什么数据是 backbone 而不是燃料桶}
+
+前一章说明 block 怎样处理 token；现在必须把视线移到产生梯度的样本分布。把数据称为 backbone，是因为模型会把高频出现的事实、格式和策略内化为默认行为，而不是训练结束后再像数据库一样逐条查询。读这一节时先区分 corpus 的“数量”与“有效监督密度”：同样一个 token，如果重复、错误或与目标无关，它对能力的边际贡献可以完全不同。
+
+对数据分布 $q(x)$，训练目标实际优化的是
+\[
+\mathbb{E}_{x\sim q}\big[\ell_{\theta}(x)\big].
+\]
+改变 $q$ 就改变模型被反复奖励的知识、风格、语言与推理模式。数据量增加只扩大样本数；若噪声、重复或域偏差同步增加，额外 token 可能产生递减收益甚至覆盖已有能力。
+
+
+\lecturefigure{slide-024.jpg}{数据对 AI 的影响：质量、计算、规模与应用之间的耦合}{CS25 V5 official deck, p.~24}
+
+
+\lecturefigure{slide-025.jpg}{更聪明的数据策略：质量优先、阶段配比与主动选择}{CS25 V5 official deck, p.~25}
+
+\begin{knowledgebox}{读图：数据影响链应该怎么看}
+先沿 slide 24 的因果链从 data 走到 model behavior，再读 slide 25 的策略列表。第一步比较 quality 与 diversity：前者减少噪声，后者避免能力收窄。第二步看 selection 是训练前过滤、训练中 sampling，还是训练后 active collection；三个阶段的成本不同。第三步看 metric 是否与目标能力一致。图支持“数据决策影响模型”，却不能从一张流程图推出某个过滤器在所有 scale 上都有效。
+\end{knowledgebox}
+
+\begin{importantbox}{数据策略的五个旋钮}
+\begin{enumerate}
+  \item \textbf{Quality}：样本是否正确、连贯、信息密度高；
+  \item \textbf{Diversity}：语言、领域、任务与表达是否覆盖长尾；
+  \item \textbf{Structure}：对话、故事、代码、证明等序列形式；
+  \item \textbf{Scale}：token 数与重复次数；
+  \item \textbf{Schedule}：不同数据在训练早期、后期出现的比例。
+\end{enumerate}
+同一个 corpus 在不同 schedule 下可能得到不同模型。
+\end{importantbox}
+
+\subsection{人类与 LLM：差异是研究假设，不是类脑证明}
+
+课程用 baby/ChatGPT 与 brain/neural network 对照提出一组开放问题。人类持续学习、带目标行动、接收多模态感觉并在社会环境中获得反馈；经典 LLM 主要在一次大规模离线预训练中优化 next-token objective。这个对比的价值是生成实验轴，而不是宣称生物机制已被理解。
+
+
+\lecturefigure{slide-026.jpg}{Baby 与 ChatGPT、brain 与 neural network：两类学习系统的对照}{CS25 V5 official deck, p.~26}
+
+
+\lecturefigure{slide-027.jpg}{人类连续学习、目标、多模态与结构化归纳和 LLM 单阶段训练的差异}{CS25 V5 official deck, p.~27}
+
+\teachervoice{00:12:38--00:14:46，Steven 把 continuous、goal-directed、multimodal 与 hierarchical learning 列为人类可能更高效的原因，同时反复使用 ``potential'' 与 ``might''。讲义把这些保留为 hypotheses，不写成神经科学定论。}
+
+\begin{warningbox}{数据效率比较的三个陷阱}
+人类接收的监督不只有可计数字符；视觉、动作、奖励、社会互动与长期环境反馈都难以折算成 token。模型和人类的目标函数也不同。最后，``会说话'' 的能力边界并不等同。因此“儿童 token 少得多”能提出问题，却不能单独证明某种数据源就是充分解释。
+\end{warningbox}
+
+
+\lecturefigure{slide-028.jpg}{儿童故事与对话：高结构、强互动、面向学习者的数据}{CS25 V5 official deck, p.~28}
+
+
+\lecturefigure{slide-029.jpg}{互联网到 ChatGPT：海量但异质的网页语料}{CS25 V5 official deck, p.~29}
+
+\subsection{为什么研究小模型与小数据}
+
+前面的 human/LLM 对照给出很多可能因素，但若直接用最大模型验证，预算只够做一两个点，任何结论都会与超参和随机性纠缠。小模型的科学价值在于把一个大问题分解成密集曲线：重复训练、替换数据、观察收敛和错误类型。它也是 deployment 目标，因为本地模型关系到隐私、延迟与可访问性；不过这两个价值要分开，不能因小模型易研究就假设其 scaling 排序必然等于大模型。
+
+小规模实验降低复现成本，使研究者能运行多 seed、做更密集 ablation，并检查训练动态；它也支持 on-device、隐私和开放研究。但小模型结果不能直接外推到 trillion-token regime，必须区分“发现机制候选”与“证明大规模收益”。
+
+
+\lecturefigure{slide-030.jpg}{研究小模型与小数据的效率、可解释性、开放性和科学价值}{CS25 V5 official deck, p.~30}
+
+\begin{knowledgebox}{读图：小模型研究有两条价值链}
+一条是\textbf{scientific proxy}：低成本多 seed、密集 ablation、观察 learning curve；另一条是\textbf{deployment target}：on-device、低延迟、隐私和可访问性。读 slide 30 时不要把两条链混合。一个方法在 100M 模型上机制清晰，不等于它在 70B 上排序不变；一个 3B 模型能本地运行，也不等于它适合回答高风险问题。正确结论是小规模提供更好的实验分辨率，并为部署建立独立 Pareto frontier。
+\end{knowledgebox}
+
+\teachervoice{00:13:55--00:14:46，老师把小模型价值连接到本地运行、可控性、开源可及性与认知研究。实践经验：小实验最有价值的产物是可复核趋势和失败案例，不是廉价地模拟一次大训练。}
+
+\subsection{本章小结}
+
+数据策略同时包含质量、结构、多样性、规模与 schedule。人类学习对比给出可测试维度，小模型则提供低成本实验场。后面两项研究分别回答：儿童导向语料是否更有效，以及高质量数据是否应集中在训练后期。
+
+\section{TinyDialogues：儿童导向语料是答案吗}
+
+第一项研究把“人类数据效率高”收缩成可实验问题：在固定小模型和 token budget 下，child-directed speech、自然对话、故事、Wikipedia 与合成 TinyDialogues 的相对效果如何？读这组 slides 时应重点看 dataset、metric、排序和不确定性，而不是只记住一个 winner。
+
+
+\lecturefigure{slide-031.jpg}{EMNLP 2024：Is Child-Directed Speech Effective Training Data for Language Models?}{CS25 V5 official deck, p.~31}
+
+
+\lecturefigure{slide-032.jpg}{研究问题：人类儿童语料、合成对话与 BabyLM 数据怎样比较}{CS25 V5 official deck, p.~32}
+
+\teachervoice{00:14:49--00:16:20，Steven 明确把工作称为 test：儿童输入分布是否解释更高数据效率。课堂没有宣称数据是唯一原因，也保留了“human brain learns differently”的竞争解释。}
+
+\subsection{Datasets：不要把“对话”当成一个同质类别}
+
+研究比较 CHILDES、TinyDialogues、BabyLM mixture、Wikipedia 与 OpenSubtitles 等来源。它们在词汇、句长、对话轮次、叙事结构和噪声上不同，因此结论应写成“某种具体分布在某套评测上的表现”，而不是泛化为“conversation 总是更好”。
+
+
+\lecturefigure{slide-033.jpg}{数据集矩阵：CHILDES、TinyDialogues、BabyLM、Wikipedia 与 OpenSubtitles}{CS25 V5 official deck, p.~33}
+
+
+\lecturefigure{slide-034.jpg}{TinyDialogues：由大模型生成、面向四类学习目标的对话 corpus}{CS25 V5 official deck, p.~34}
+
+
+\lecturefigure{slide-035.jpg}{TinyDialogues 生成设计：词汇约束、事实、叙事与论证}{CS25 V5 official deck, p.~35}
+
+
+\lecturefigure{slide-036.jpg}{TinyDialogues 样例：结构化长对话与明确学习信号}{CS25 V5 official deck, p.~36}
+
+\begin{knowledgebox}{Synthetic data 不是自动高质量}
+合成数据的价值来自可控任务覆盖、难度和格式；风险包括 teacher model 错误、风格单一、模板泄漏与自我强化。评估时应追踪生成模型、prompt、过滤规则和去重，而不能把“synthetic”当作独立质量标签。
+\end{knowledgebox}
+
+\subsection{实验与评测：语言能力不是一个数}
+
+实验固定模型与 token budget，改变训练数据，并用多 seed 比较。评测同时覆盖 lexical/global ordering、BLiMP-like grammatical contrasts、world similarity 与词义/语义任务。若只看 perplexity，可能错过结构泛化；若只看离散 accuracy，又会放大阈值噪声。
+
+
+\lecturefigure{slide-037.jpg}{实验设计：固定模型规模与预算，替换训练 corpus}{CS25 V5 official deck, p.~37}
+
+
+\lecturefigure{slide-038.jpg}{评测指标：句法、词序、world similarity 与语义判断}{CS25 V5 official deck, p.~38}
+
+Perplexity 定义为 token 平均负对数似然的指数：
+\[
+\operatorname{PPL}=\exp\!\left(-\frac{1}{T}\sum_{t=1}^{T}\log p(x_t\mid x_{<t})\right).
+\]
+它可直观理解为模型每步的“有效选择数”，但不同 tokenizer、语料和语言之间不能机械横比，也不直接等于事实性或任务成功率。
+
+\subsection{结果：mixed evidence 比漂亮故事更重要}
+
+这一小节承接实验设计，目的不是寻找一个可以写进宣传标题的赢家，而是检查不同数据假设在哪些指标上成立。读结果时先看同一 corpus 在多任务上的一致性，再看 seed 方差和收敛速度；如果一种数据只在单个 metric 上领先，就更像 task matching，而不是普适数据优势。最后还要比较 synthetic、natural conversation 与 mixed corpus 的相对位置，避免把“对话”合并成一个类别。
+
+结果表显示不同数据在 lexical 与 global ordering 上排序不同；合成 TinyDialogues 有明显收益，却没有在所有指标上超过 BabyLM 多源 mixture。收敛曲线还提醒我们观察速度、方差和是否真正饱和，而不是只报告最终点。
+
+
+\lecturefigure{slide-039.jpg}{GPT-2 数据集结果：zero-shot 指标的多维比较}{CS25 V5 official deck, p.~39}
+
+
+\lecturefigure{slide-040.jpg}{Global ordering 结果：不同 corpus 在句序任务上的排名}{CS25 V5 official deck, p.~40}
+
+
+\lecturefigure{slide-041.jpg}{收敛行为：训练曲线、方差与不同数据源的学习速度}{CS25 V5 official deck, p.~41}
+
+\begin{knowledgebox}{深读：怎样判断数据实验接近因果结论}
+首先确认除 corpus 外，token budget、model architecture、optimizer、tokenizer 与训练步数是否固定；否则模型差异可能来自额外计算。其次看多 seed 方差和 checkpoint curve，排除偶然初始化或某一时刻的排名。第三检查 evaluation contamination：若训练数据直接包含测试格式或近重复，所谓数据质量提升可能只是泄漏。第四做 mechanism probe，例如控制词汇、句长、对话轮次或主题覆盖，判断收益来自 child-directed style、synthetic structure 还是 diversity。最后在不同模型规模和至少一个外部评测上复现。TinyDialogues slides 完成了重要的第一步，但它们更适合作为“结构化对话值得继续研究”的证据，而不是儿童学习理论的最终判决。
+\end{knowledgebox}
+
+\teachervoice{00:19:43--00:20:18，老师保留了不符合直觉的结果：纯 child-directed speech 不如更 diverse 的数据；TinyDialogues 优于自然对话，却仍不压倒 strongest mixed corpus。负结果使“儿童数据秘诀”变成更精确的 diversity/structure 假设。}
+
+
+\lecturefigure{slide-042.jpg}{Findings：多样数据、合成对话与 global-development ordering 的结论}{CS25 V5 official deck, p.~42}
+
+
+\lecturefigure{slide-043.jpg}{研究结论：高效学习数据来自语料结构、质量与多样性的共同作用}{CS25 V5 official deck, p.~43}
+
+\begin{knowledgebox}{读图：TinyDialogues 结果的三层证据}
+第一层是\textbf{within-metric ranking}：同一评测内比较数据集。第二层是\textbf{cross-metric consistency}：领先是否跨 lexical、ordering、grammar 与 semantic tasks。第三层是\textbf{learning dynamics}：优势出现得早、晚，还是只在单个 checkpoint。Slides 39--43 的关键不是某个单元格，而是 mixed corpus 与 synthetic dialogue 呈现互补。图没有控制所有 tokenizer、模型规模和训练长度，因此外推时必须保留条件。
+\end{knowledgebox}
+
+\begin{warningbox}{这项研究不能证明什么}
+它不能证明儿童学习主要靠对话，也不能证明更大的 LLM 会保持同一排序；模型规模、tokenizer、训练步数和 evaluation suite 都可能改变结果。最稳健的结论是：\textbf{数据分布结构值得像模型架构一样被系统消融}。
+\end{warningbox}
+
+\subsection{本章小结}
+
+TinyDialogues 研究把宏大的类脑直觉变成 dataset-controlled experiment。关键发现不是“儿童语料最好”，而是 diversity、对话结构与合成控制各自贡献不同；多指标与收敛曲线比单一 leaderboard 更能揭示数据机制。
+
+\section{Two-Phase Pretraining：高质量数据应该何时出现}
+
+第二项数据研究把问题从 source selection 推进到 schedule：既然高质量 token 稀缺，是否应在训练末期提高其比例？两阶段方案不是简单“先差后好”，而是先用 broad mixture 建立一般能力，再用经过验证的高质量 blend 改变后期梯度，同时避免过度重复。
+
+
+\lecturefigure{slide-046.jpg}{Two-Phase Pretraining：用阶段化数据提高 LLM accuracy}{CS25 V5 official deck, p.~46}
+
+
+\lecturefigure{slide-047.jpg}{优化 LLM pretraining data selection：质量、混合与 schedule}{CS25 V5 official deck, p.~47}
+
+
+\lecturefigure{slide-048.jpg}{关键贡献：定义、评估、fine-grained 分析与可扩展性}{CS25 V5 official deck, p.~48}
+
+\teachervoice{00:21:03--00:22:30，Steven 把工作描述为系统化验证 two-phase pretraining，并强调先在更小 token budget 上 prototype blends。实践提示：数据配方和模型超参一样需要 cheap proxy experiments。}
+
+\subsection{形式化：phase 与 blend 是两个独立旋钮}
+
+前一节给出 two-phase 的直觉，本节把它拆成可独立控制的变量。只有形式化后，研究者才能分清收益来自第二阶段数据本身、出现时间、训练长度还是额外 token。这个区分还决定实验预算：固定总 token 可以研究 schedule，固定 phase duration 可以研究 blend，而同时改变两者只会得到一个不可归因的 recipe。
+
+令第一阶段数据分布为 $q_1$、步数为 $T_1$，第二阶段为 $q_2$、步数为 $T_2$，总目标可写为
+\[
+\mathcal{L}=\sum_{t=1}^{T_1}\mathbb{E}_{x\sim q_1}[\ell_t(x)]
++\sum_{t=T_1+1}^{T_1+T_2}\mathbb{E}_{x\sim q_2}[\ell_t(x)].
+\]
+$q_2$ 的质量、多样性和重复率，与 $T_2/(T_1+T_2)$ 的比例是不同变量；一次只改变一个，才能判断收益来自 blend 还是 duration。
+
+
+\lecturefigure{slide-049.jpg}{Two-phase approach：广覆盖 phase 1 与高质量 phase 2}{CS25 V5 official deck, p.~49}
+
+
+\lecturefigure{slide-050.jpg}{Data sources：Common Crawl、Wikipedia、书籍、论文与任务数据}{CS25 V5 official deck, p.~50}
+
+
+\lecturefigure{slide-051.jpg}{Evaluation suite：推理、知识、数学、编程与常识}{CS25 V5 official deck, p.~51}
+
+
+\lecturefigure{slide-052.jpg}{Model/training setup：固定架构与统一训练设置}{CS25 V5 official deck, p.~52}
+
+\begin{knowledgebox}{Upsampling 与 effective repetition}
+若某数据源原有 $N$ tokens，在训练中被采样 $rN$ 次，则 upsampling factor 为 $r$。$r>1$ 会提高该域梯度权重，却也增加 memorization 和 diminishing return 风险。数据量、采样概率与训练步数必须一起报告。
+\end{knowledgebox}
+
+\subsection{Blend strategy：高质量不等于单一来源}
+
+形式化给出了 $q_2$，现在要问它由哪些 sources 构成。所谓 high-quality 并不是一个来源名，而是过滤、文档结构、事实密度、领域匹配和重复率的组合；一本高质量书与一段高质量代码对不同 benchmark 的贡献也不同。因此读 blend 表不能只看 quality label，要追踪类别占比、每类 token 的实际重复次数，以及改善是否跨知识、推理、数学和 code 同时出现。
+
+第二阶段把 high、medium、low-quality web 与 curated sources 重新混合。读 blend 表时先看每类数据占比，再看任务指标是否同步改善：某 blend 可能提高知识却伤害 code，或提高平均分却缩小长尾覆盖。
+
+
+\lecturefigure{slide-053.jpg}{Two-phase data blending：phase 1 广覆盖、phase 2 偏高质量}{CS25 V5 official deck, p.~53}
+
+
+\lecturefigure{slide-054.jpg}{Phase 2 blending 的性能影响：不同配方的多任务结果}{CS25 V5 official deck, p.~54}
+
+\begin{knowledgebox}{深读：Phase-2 表格怎样避免 average-score illusion}
+多任务表的平均分会掩盖任务间冲突。先把指标按 knowledge、reasoning、math、code 与 commonsense 分组，观察某 blend 是整体平移，还是只在某一组获益；再比较 absolute gain 与 baseline variance，避免把微小波动写成稳定提升。若配方含更多 task-like curated data，还要检查 benchmark format contamination。饼图表示 sampling share，不是 unique data share：一个占比小但反复采样的数据源可能贡献大量梯度。最后把 gains 除以额外 compute 和 data curation cost，得到每单位成本收益。只有当多个任务组、多个 seed 和更大规模都保持优势时，才有理由说 schedule 改善了 general pretraining，而不是对评测做了局部适配。
+\end{knowledgebox}
+
+\teachervoice{00:22:30--00:23:11，讲者说所有测试的 phase-two blends 都优于 simple continuation，并在扩大 token/model 后保持优势。讲义保留“tested blends”这个范围，不外推成任意二阶段配方都有效。}
+
+\subsection{过采样与阶段长度：更多并不单调更好}
+
+Blend 确定之后，训练仍有一个时间轴问题：相同高质量 token 应该出现几次、集中在多长的尾部阶段。若只观察 final loss，很容易把 memorization 当成有效学习；更可靠的读法是同时看 held-out task、domain diversity 与 phase length curve。图中的 turning point 不是固定常数，而是提醒团队必须搜索 duration，而不是默认“越久越好”。
+
+如果第二阶段把少量高质量数据反复看到很多遍，训练 loss 仍可能下降，但泛化收益会饱和。可用一个简化权衡表示：
+\[
+G(r)=B(r)-\lambda M(r),
+\]
+其中 $B(r)$ 是更高质量曝光带来的收益，$M(r)$ 是重复导致的记忆/分布收窄成本，$\lambda$ 表示任务对过拟合的敏感度。最优 $r$ 通常位于内部而非无限大。
+
+
+\lecturefigure{slide-055.jpg}{Phase 2 upsampling 是否有效：收益、占比与递减回报}{CS25 V5 official deck, p.~55}
+
+
+\lecturefigure{slide-056.jpg}{Two-phase scalability：更大 token budget 与模型下的趋势}{CS25 V5 official deck, p.~56}
+
+
+\lecturefigure{slide-057.jpg}{Phase duration：后期高质量阶段太短或太长都可能非最优}{CS25 V5 official deck, p.~57}
+
+\begin{knowledgebox}{深读：Phase duration 为什么会改变模型而不仅是数据权重}
+训练早期模型表示还在形成，广覆盖数据能建立词汇、事实和通用模式；训练后期 learning rate、optimizer state 与参数所在 basin 已不同，同一批高质量 token 在此时产生的更新方向也不同。因此 two-phase schedule 不是把两个静态数据集简单加权，它还利用了优化路径依赖。读 duration 曲线时应同时报告 learning-rate schedule 和是否重置 optimizer；若 phase 2 恰逢学习率变化，收益可能由两者共同造成。还要检查被 phase 2 提升的任务是否牺牲 multilingual、creative 或 long-tail 能力。工程上可以把 phase duration 做成 Pareto search：横轴为高质量 unique tokens/repetitions，纵轴为多任务收益和遗忘，再选择稳定区域，而不是峰值单点。
+\end{knowledgebox}
+
+\teachervoice{00:23:11--00:24:00，课堂强调 phase 2 不能无限拉长，过多 upsampling 会产生 detrimental 或 diminishing returns。这个 caveat 比“高质量数据有效”更接近可执行配方。}
+
+\begin{lstlisting}[caption={Two-phase data schedule 的可复现实验骨架}]
+phase1 = mix(broad_web, books, code, multilingual)
+phase2_candidates = propose_quality_blends()
+for blend in phase2_candidates:
+    proxy = train_small_model(phase1, blend, fixed_tokens=True)
+    evaluate(proxy, multi_task_suite, multiple_seeds=True)
+selected = choose_pareto_blend(quality, diversity, stability)
+train_full_model(phase1, selected, report_repetition=True)
+\end{lstlisting}
+
+\subsection{把两项研究合成 data strategy}
+
+TinyDialogues 改变 source structure；two-phase pretraining 改变 schedule。二者共同说明，data effectiveness 不是样本的单一内在分数，而是 source、model、objective、训练阶段和评测之间的匹配关系。
+
+
+\lecturefigure{slide-058.jpg}{Two-phase findings：结构化高质量数据与可扩展性的综合结论}{CS25 V5 official deck, p.~58}
+
+
+\lecturefigure{slide-060.jpg}{Unified insights：小数据与大规模 pretraining 的共同 data lessons}{CS25 V5 official deck, p.~60}
+
+
+\lecturefigure{slide-061.jpg}{数据研究总结：质量、结构、调度与可复现实验同等重要}{CS25 V5 official deck, p.~61}
+
+\begin{knowledgebox}{术语消化：source、blend、schedule 与 curriculum}
+\textbf{Source} 是原始数据类别；\textbf{blend} 是同一阶段的采样比例；\textbf{schedule} 描述比例随训练步数怎样变化；\textbf{curriculum} 还可能按难度或能力有意排序。Two-phase pretraining 是一种 piecewise-constant schedule，不等同于所有 curriculum。读 slides 53--61 时要同时报告 phase token 数、每类数据 unique tokens、effective repetitions 和模型规模，否则无法复现“高质量阶段”的真实强度。
+\end{knowledgebox}
+
+\begin{importantbox}{Data-centric decision rule}
+先问“缺什么能力”，再选择能提供对应监督的 source；用小规模多 seed 实验筛 blend；扩大规模时检查排序是否保持；最后报告重复率、版权/隐私与 long-tail 代价。不要把一张 aggregate score 表当作 universal recipe。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Two-phase pretraining 的核心不是“最后喂好数据”，而是把 blend 与 duration 变成可消融变量。高质量阶段可以改善多任务性能，但过采样存在递减回报；最可靠的工程路径是 proxy experiment、multi-task evaluation 和 scale validation。
+
+\section{Inference-Time Reasoning：不改权重也能改变计算图}
+
+有了 pretrained model，下一步不一定立刻更新参数。Prompt、search、decomposition、code execution 和 note insertion 都能在 inference time 改变问题求解过程。课程把这些方法放在同一条轴上：它们给模型更多中间计算或外部结构，但成本、可验证性和错误传播模式不同。
+
+
+\lecturefigure{slide-063.jpg}{Post-training 或 inference-time compute：不同干预位置}{CS25 V5 official deck, p.~63}
+
+\teachervoice{00:25:09--00:26:20，Chelsea 将 fine-tuning、feedback、prompting 与 retrieval 并列，并指出 CoT 提供一扇可观察窗口。讲义提醒：可读 rationale 不必等于模型真正的因果计算过程。}
+
+\subsection{Linear Chain-of-Thought 与示例}
+
+上一小节把 post-training 分成多种接口；这里先研究最轻量的一类：不改参数，只要求模型输出中间步骤。读 CoT 例子时应分别检查 problem decomposition、每一步局部有效性和 final answer，不能因为文字更长就认定推理更深。还要记录 token budget，因为 direct answer 与长 chain 的计算量并不相同。
+
+CoT 把直接映射 $x\rightarrow y$ 改为 $x\rightarrow z_{1:k}\rightarrow y$，其中 $z_i$ 是中间文本步骤。其收益可能来自把复杂函数分解为短局部变换、增加 test-time compute，或使错误更容易定位；但中间步骤也可能流畅而错误。
+
+
+\lecturefigure{slide-064.jpg}{Chain-of-Thought：把复杂推理展开为可见中间步骤}{CS25 V5 official deck, p.~64}
+
+
+\lecturefigure{slide-065.jpg}{CoT 示例：直接回答与逐步推理的对照}{CS25 V5 official deck, p.~65}
+
+\begin{warningbox}{Faithfulness 与 usefulness 要分开}
+CoT 可以提高正确率或可调试性，却不保证每句话忠实反映内部机制。评估至少要同时看 final accuracy、step validity、self-consistency 与对无关 rationale 的敏感度。
+\end{warningbox}
+
+\subsection{怎样改进 chain：搜索、监督与小模型}
+
+改进方法包括让模型回顾前文、搜索多条路径、用 verifier 评分、训练 step-level supervision，或从更强模型蒸馏 reasoning traces。对小模型，长 chain 可能超出容量，因此 compact decomposition 与 semantic understanding 更关键。
+
+
+\lecturefigure{slide-066.jpg}{Improving CoT：verifier、self-consistency 与过程监督}{CS25 V5 official deck, p.~66}
+
+
+\lecturefigure{slide-067.jpg}{Smaller models：逐步提示、语义理解与容量限制}{CS25 V5 official deck, p.~67}
+
+
+\lecturefigure{slide-068.jpg}{Generalizing CoT：跨领域、跨难度与结构迁移}{CS25 V5 official deck, p.~68}
+
+\begin{knowledgebox}{深读：CoT generalization 至少有四种含义}
+一是同分布新题，模型复用相同解题模板；二是难度外推，题目需要更多步骤；三是领域迁移，从数学 chain 迁到常识、规划或代码；四是结构迁移，从示例中的表面格式抽象出可组合策略。Slides 66--68 的方法可能改善其中一类而伤害另一类。评估时应改变措辞、顺序和无关信息，测试模型是否依赖 template；用 adversarial intermediate step 检查它是否真正读取 chain；比较 small/large models 判断收益是否受容量限制；最后在没有示例的任务上测 transfer。所谓“generalized CoT”只有在这些边界被说明后才有清楚含义。
+\end{knowledgebox}
+
+\teachervoice{00:26:25--00:29:12，课堂把 CoT 扩展为一组 inference procedures，而不是单一 prompt。实践经验：比较方法时要固定 token budget 或 wall-clock，否则“更会推理”可能只是“用了更多采样”。}
+
+\subsection{Tree、Program 与 decomposition}
+
+Tree of Thoughts 在每一步生成多个候选并搜索：
+\[
+s_{t+1}^{(j)}=f_{\theta}(s_t,a_t^{(j)}),\qquad
+j^{\star}=\arg\max_j V(s_{t+1}^{(j)}).
+\]
+$s_t$ 是当前状态，$a_t^{(j)}$ 是候选 thought，$V$ 是评估器。它把生成变成 search，但性能取决于 proposal diversity 和 evaluator calibration。
+
+
+\lecturefigure{slide-069.jpg}{Tree-of-Thoughts：多分支生成、评估与回溯}{CS25 V5 official deck, p.~69}
+
+
+\lecturefigure{slide-070.jpg}{Program-of-Thought：让代码解释器承担精确计算}{CS25 V5 official deck, p.~70}
+
+Socratic decomposition、least-to-most 与 computation graph 都把问题拆成依赖子问题；区别在于拆解是对话式、顺序式还是显式图结构。Program-of-Thought 把算术交给 interpreter，降低语言模型在精确执行上的负担，却引入 sandbox 与代码错误处理需求。
+
+
+\lecturefigure{slide-071.jpg}{Socratic questioning：递归追问关键子问题}{CS25 V5 official deck, p.~71}
+
+
+\lecturefigure{slide-072.jpg}{Least-to-Most prompting：先解简单子问题再组合}{CS25 V5 official deck, p.~72}
+
+
+\lecturefigure{slide-073.jpg}{Program of Thoughts：语言规划与可执行计算分工}{CS25 V5 official deck, p.~73}
+
+
+\lecturefigure{slide-074.jpg}{Computation Graphs：把依赖关系显式化为图}{CS25 V5 official deck, p.~74}
+
+
+\lecturefigure{slide-075.jpg}{Self-Notes：在输入序列中插入可检索的中间注释}{CS25 V5 official deck, p.~75}
+
+\begin{knowledgebox}{深读：Reasoning method 的验收不能只看 final accuracy}
+对线性 CoT，应抽样检查每一步是否合法以及错误是否被后续偶然抵消；对 tree search，要测 proposal diversity、branching factor、evaluator accuracy 和搜索成本；对 Program-of-Thought，要把 planning error 与 execution error 分开，并在 sandbox 中限制文件、网络和运行时间；对 decomposition，要检查子问题是否覆盖原目标、依赖顺序是否完整；对 self-notes，要观察插入内容是否真的被后续 token 使用。还应比较相同总 token/tool budget 下的 baseline，因为多采样本身就能提高 pass rate。最终报告至少包含 accuracy、cost、latency、verification rate、abstention 与 failure taxonomy。这样才能判断方法增加的是可验证计算，还是只是更长、更昂贵的生成。
+\end{knowledgebox}
+
+
+\lecturefigure{slide-076.jpg}{Latent-space CoT：在隐藏空间增加中间计算}{CS25 V5 official deck, p.~76}
+
+\begin{knowledgebox}{读图：reasoning taxonomy 的两个坐标轴}
+横向可按\textbf{表示空间}分为文本 chain、程序、图和 latent state；纵向可按\textbf{控制策略}分为单路径生成、多样本投票、树搜索与外部 verifier。Slide 76 把思考放入 latent space，减少文字带宽，却牺牲可检查性。前面 slides 则用更显式结构换取验证能力。比较方法时应固定 total sampled tokens、tool calls 和 evaluator compute，否则搜索方法的收益无法与基础模型能力分离。
+\end{knowledgebox}
+
+\begin{table}[H]
 \centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\small
+\begin{tabularx}{\textwidth}{L{0.18\textwidth} X X X}
+\toprule
+方法 & 增加的资源 & 优势 & 主要失败点 \\
+\midrule
+Linear CoT & 额外生成 token & 简单、可读 & 错误链条、自信幻觉 \\
+Tree search & 多样本与 evaluator & 可回溯、多路径 & 成本高、评分器偏差 \\
+Program/Tool & 外部执行器 & 精确计算、可验证 & 安全、接口和代码错误 \\
+Decomposition & 子问题结构 & 降低局部难度 & 错误拆分、依赖遗漏 \\
+Latent reasoning & 隐状态计算 & 不受文字带宽限制 & 难解释、难监督 \\
+\bottomrule
+\end{tabularx}
+\caption{Inference-time reasoning 方法按资源与失败模式分类。}
+\end{table}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
-
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
-
-\tableofcontents
-\newpage
-
-\section{引言：CS25 V5 课程背景}
-
-CS25 ``Transformers United'' 是斯坦福大学开设的研讨课程，每周邀请 AI 领域的顶尖研究者分享前沿进展。第五期（V5，Spring 2025）由 Stephen Feng、Curran、Chelsea、Jenny 等讲师联合主持，Div Garg 为课程创始人之一（本学期因创办 AGI Inc.\ 而处于学业休假状态）。
-
-本次开场讲座作为课程第一讲，全面回顾 Transformer 架构的基础知识，并在此基础上深入讨论预训练（Pre-training）数据策略、后训练（Post-training）技术、应用前沿以及当前模型面临的核心挑战。
-
-\begin{knowledgebox}{课程定位}
-CS25 旨在将 Transformer 与大语言模型的最新研究直接呈现给学生，涵盖 NLP、计算机视觉、生物学、机器人等多领域应用。每周邀请来自工业界或学术界的一线研究者进行专题报告。
-\end{knowledgebox}
-
-\section{Transformer 架构基础}
-
-\subsection{词嵌入与上下文表示}
-
-语言模型的第一步是将离散的词语转换为稠密向量。经典方法如 Word2Vec、FastText 等能够捕捉语义相似性（如``cat''和``dog''在嵌入空间中距离较近），但它们生成的是\textbf{静态嵌入}——同一个词在不同语境中具有相同向量表示（例如``bank''在``银行''和``河岸''两个含义中无法区分）。
-
-现代方法采用\textbf{上下文嵌入}（Contextual Embeddings），通过自注意力机制根据上下文动态调整每个 token 的表示。
-
-\subsection{自注意力机制}
-
-自注意力的核心思想可以用图书馆类比来理解：
-\begin{itemize}
-    \item \textbf{Query}：你想找的书的主题
-    \item \textbf{Key}：每本书的摘要标签
-    \item \textbf{Value}：书中的实际内容
-\end{itemize}
-
-通过 Query 和 Key 的匹配，对所有 Value 进行加权求和，实现对相关信息的软检索。
-
-\begin{importantbox}{注意力机制核心公式}
-$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V$$
-其中 $Q$（Query）、$K$（Key）、$V$（Value）分别由输入通过可学习的权重矩阵投影得到；$d_k$ 为键向量维度，用于缩放以防止 softmax 梯度消失。
-\end{importantbox}
-
-\subsection{多头注意力与 Transformer 架构}
-
-\textbf{多头注意力}（Multi-Head Attention）在不同子空间中并行运行多组注意力，捕捉不同类型的语义关系。完整的 Transformer 编码器块包含：
-\begin{enumerate}
-    \item 多头自注意力层
-    \item 残差连接 + 层归一化
-    \item 前馈网络（FFN）
-    \item 残差连接 + 层归一化
-\end{enumerate}
-
-通过堆叠多层这样的结构，模型能够学习层次化的表示。
-
-\subsection{位置编码}
-
-由于自注意力本身不包含位置信息，Transformer 需要额外的\textbf{位置编码}来注入 token 的顺序信息。原始论文使用正弦/余弦函数，现代模型则广泛采用旋转位置编码（RoPE）等方案。
+\begin{lstlisting}[caption={预算受限的 reasoning search 伪代码}]
+frontier = [initial_state(problem)]
+for depth in range(max_depth):
+    candidates = expand(frontier, samples_per_state)
+    checked = verify_with_tools(candidates)
+    frontier = top_k(checked, score="validity_then_reward")
+    if solved(frontier[0]):
+        return frontier[0]
+return best_with_uncertainty(frontier)
+\end{lstlisting}
 
 \subsection{本章小结}
 
-Transformer 通过自注意力实现全局依赖建模和高效并行计算，以多头注意力和位置编码为核心组件，奠定了当代深度学习的架构基础。
+Inference-time reasoning 改变的是求解计算图，不必更新 pretrained weights。CoT、tree、program、decomposition 与 latent chain 分别增加 token、search、工具、结构或隐状态计算；公平比较必须控制预算并报告 verifier、工具和失败恢复。
 
-\section{预训练与数据策略}
+\section{Preference Optimization：谁定义“更好的回答”}
 
-\subsection{数据质量的重要性}
+Prompting 能改变一次推理，但若希望模型长期偏向有帮助、安全或符合特定风格的行为，就需要更新参数。Preference optimization 的共同输入是 chosen/rejected 或 reward signal；不同方法的差异在于是否训练 reward model、是否在线采样、如何构造 baseline，以及怎样表示人群偏好。
 
-讲座通过两个研究项目展示了数据策略对模型性能的决定性影响。
+\subsection{RLHF：reward model 加 policy optimization}
 
-\textbf{项目一：BabyLM 与儿童语言学习。} 受人类儿童高效语言学习的启发，研究者探索了在小规模、高质量数据上训练语言模型的可能性。实验发现：
-\begin{itemize}
-    \item 多样化数据源（如 BabyLM 语料库）比纯粹的儿童导向语音提供更好的学习信号
-    \item 合成生成的对话数据（Tiny Dialogues，由 GPT-4 生成）明显优于自然对话数据
-    \item 全局发展顺序的课程学习对性能影响微乎其微
-\end{itemize}
+RLHF 通常先拟合 reward model $r_{\phi}(x,y)$，再优化
+\[
+\max_{\theta}\;\mathbb{E}_{y\sim\pi_{\theta}(\cdot\mid x)}[r_{\phi}(x,y)]
+-\beta D_{\mathrm{KL}}(\pi_{\theta}\|\pi_{\mathrm{ref}}).
+\]
+KL 项限制 policy 偏离 reference model。系统成本来自 preference collection、reward model、rollout 与 RL 稳定性；reward hacking 则说明代理分数不等于真实用户价值。
 
-\begin{knowledgebox}{儿童 vs.\ 模型的学习效率}
-人类儿童仅从约 1 亿词的输入中就能掌握语言，而当前语言模型需要数万亿 token。这说明人类的学习机制（如多模态信息整合、大脑的学习算法）在本质上可能与语言建模存在根本不同。
-\end{knowledgebox}
 
-\textbf{项目二：两阶段预训练（Two-Phase Pre-training）。} 与 Nvidia 合作的研究提出了系统化的两阶段预训练方法：
-\begin{itemize}
-    \item \textbf{第一阶段}：在大规模、多样化的通用数据上训练，建立广泛的知识基础
-    \item \textbf{第二阶段}：切换到高质量、领域特定数据（如数学数据），提升专项能力
-\end{itemize}
+\lecturefigure{slide-078.jpg}{RLHF pipeline：人类比较、reward model 与 policy optimization}{CS25 V5 official deck, p.~78}
 
-实验表明，两阶段方法在所有配置下均优于单阶段持续训练。第二阶段的最优持续时间约占总训练量的 40\%，超过此比例后会因过拟合而出现收益递减。
+\teachervoice{00:29:13--00:31:32，讲者把 prompting 与 preference training 分开：前者在 inference time 提供 scaffold，后者用 human/AI feedback 改变模型参数。这个边界比 acronyms 更重要。}
 
-\begin{warningbox}{数据选择的平衡}
-在两个阶段中都需要平衡数据的质量与多样性。过度上采样任何单一数据集都会导致过拟合，即使是高质量的专业数据也是如此。
+\subsection{DPO 与 RLAIF：改变训练信号来源}
+
+DPO 直接用 preference pairs 优化 policy 相对 reference 的 log-ratio：
+\[
+\mathcal{L}_{\mathrm{DPO}}=-\log\sigma\!\left(\beta\left[
+\log\frac{\pi_{\theta}(y^+\mid x)}{\pi_{\mathrm{ref}}(y^+\mid x)}-
+\log\frac{\pi_{\theta}(y^-\mid x)}{\pi_{\mathrm{ref}}(y^-\mid x)}
+\right]\right).
+\]
+它省去显式 reward-model RL loop，但仍依赖 pair quality、reference 与偏好分布。RLAIF 用 AI judge 替代部分人类标注，降低成本，却把 judge bias、能力和可操纵性引入监督链。
+
+
+\lecturefigure{slide-079.jpg}{DPO：从 preference pair 直接优化 policy}{CS25 V5 official deck, p.~79}
+
+
+\lecturefigure{slide-080.jpg}{RLAIF：用 AI feedback 扩展偏好标注}{CS25 V5 official deck, p.~80}
+
+\begin{warningbox}{Judge capability 是训练上限之一}
+如果 AI judge 无法识别事实错误、长程策略或细微安全风险，它会把噪声写入 preference data。用更强 judge 不自动解决同质偏差；需要 human audit、多 judge disagreement、adversarial prompts 和 outcome-based checks。
 \end{warningbox}
 
-\subsection{本章小结}
+\subsection{GRPO、KTO 与 heterogeneous preferences}
 
-数据是预训练成功的关键。精心设计的数据混合策略和分阶段训练方案能够显著提升模型性能，而先在小规模实验中验证再放大是有效的工程策略。
+GRPO 用一组 sampled responses 的相对回报构造 advantage，避免独立 value model 的部分成本。简化表示为
+\[
+A_i=\frac{r_i-\mu_G}{\sigma_G+\epsilon},
+\]
+其中 $\mu_G,\sigma_G$ 是同组 reward 的均值和标准差。它依赖 group diversity 与 reward reliability。
 
-\section{后训练技术}
 
-\subsection{指令微调与 RLHF}
+\lecturefigure{slide-081.jpg}{GRPO：组内相对 reward 与 policy 更新}{CS25 V5 official deck, p.~81}
 
-后训练（Post-training）是将预训练模型转变为可用产品的关键步骤，主要包括：
-\begin{itemize}
-    \item \textbf{监督微调}（SFT）：在高质量指令-回答对上训练
-    \item \textbf{人类反馈强化学习}（RLHF）：通过奖励模型引导模型行为
-    \item \textbf{DPO}（Direct Preference Optimization）：直接从偏好数据优化模型
-\end{itemize}
+KTO 从 prospect theory 借用 loss aversion，允许只有 desirable/undesirable 标签而非严格 pairs；它强调负面结果的非对称价值。Variational Preference Learning 则把不同 demographic 或 profile 的偏好建模为潜变量，承认“一个平均 reward”可能抹平真实分歧。
 
-\subsection{思维链与自我改进}
 
-\textbf{思维链}（Chain-of-Thought, CoT）通过在回答前生成中间推理步骤来提升模型的推理能力。这一技术的进化路径为：
-\begin{enumerate}
-    \item 手动编写 CoT 示例（Few-shot CoT）
-    \item 简单提示``让我们逐步思考''即可触发（Zero-shot CoT）
-    \item 自洽性（Self-Consistency）：采样多条推理路径，取多数投票
-    \item 基于强化学习的推理（如 OpenAI o1/o3 系列）
-\end{enumerate}
+\lecturefigure{slide-082.jpg}{KTO：loss aversion 与非配对偏好信号}{CS25 V5 official deck, p.~82}
 
-\begin{importantbox}{推理模型的新范式}
-以 OpenAI o1 为代表的推理模型，通过在思维链上进行强化学习训练，实现了测试时计算的扩展——模型可以在推理阶段花费更多计算资源来``思考''，从而在数学、编程等复杂任务上取得突破性进展。
-\end{importantbox}
 
-\subsection{本章小结}
+\lecturefigure{slide-083.jpg}{Variational preference learning：个性化与异质人群偏好}{CS25 V5 official deck, p.~83}
 
-后训练技术从简单的指令微调发展到了强化学习驱动的推理能力训练，代表了模型能力提升的另一条关键路径。
-
-\section{Transformer 应用前沿}
-
-\subsection{神经科学启发的研究}
-
-讲座介绍了利用 Transformer 与认知科学/神经科学交叉的研究方向：
-\begin{itemize}
-    \item 使用自监督 Transformer 模型解释大脑视觉皮层的响应
-    \item 探索 AI 模型与人类学习效率差距的根本原因
-    \item 将计算机视觉技术应用于 fMRI、超声等医学成像
-\end{itemize}
-
-\subsection{计算机视觉与扩散模型}
-
-Transformer 已经深度渗透到计算机视觉领域，特别是在扩散模型（Diffusion Models）中取代了传统的 U-Net 架构，成为图像和视频生成的核心骨干网络。
-
-\subsection{本章小结}
-
-Transformer 的影响力已远超 NLP，在神经科学、医学影像、生成模型等领域都展现出强大的应用潜力。
-
-\section{当前挑战与未来方向}
-
-\subsection{幻觉问题}
-
-大语言模型会生成看似合理但实际错误的内容，即``幻觉''（Hallucination）。这在高风险应用（如医疗、法律）中尤为危险。
-
-\subsection{持续学习}
-
-当前模型的知识在训练后即被冻结，无法像人类一样持续吸收新信息。相关研究方向包括：
-\begin{itemize}
-    \item \textbf{模型编辑}（ROME, MEMIT）：针对性修改特定事实知识
-    \item \textbf{终身专家混合}（Lifelong MoE）：动态添加新专家模块
-    \item \textbf{渐进式提示}（Progressive Prompts）：通过软提示实现无权重更新的持续学习
-\end{itemize}
-
-\begin{warningbox}{模型编辑的局限}
-当前的模型编辑方法主要适用于简单的事实性知识更新，难以处理技能或能力层面的更新，也无法自动传播关联变更（如更新某人母亲的信息时，同时更新其兄弟的相关信息）。
+\begin{warningbox}{Preference method 上线前的五层验证}
+第一层检查 preference labels 的一致性、群体覆盖与敏感属性；第二层做 held-out pair accuracy，但不能把 reward-model accuracy 当最终产品质量；第三层用多维 benchmark 分开测 helpfulness、truthfulness、harmlessness、style 与 diversity；第四层在 live-like prompts 上做 blinded human comparison，并记录 disagreement 而非强行平均；第五层开展 adversarial evaluation，寻找 reward hacking、sycophancy、over-refusal 和 judge manipulation。还要比较 base/reference drift、KL、回答长度和校准。一个方法离线 win-rate 更高，若代价是模式坍缩、特定群体偏好被抹平或事实性下降，就不是总体进步。Slides 的 loss diagrams 只定义优化路径，验收必须回到真实行为分布。
 \end{warningbox}
 
-\subsection{数据效率与模型压缩}
+\begin{knowledgebox}{术语消化：reward、preference 与 value}
+\textbf{Preference label} 表示两个回答的相对选择；\textbf{reward model} 把输入回答映射为标量；\textbf{value/critic} 估计未来回报；\textbf{reference policy} 约束更新不偏离原模型；\textbf{judge} 可以是人或 AI。RLHF、DPO、GRPO、KTO 的区别来自这些对象如何组合。读 slides 78--83 时先画出监督图，再看 loss；只背公式容易忽略 reward distribution、标注群体和 KL constraint 才是行为边界。
+\end{knowledgebox}
 
-如何让模型在更少的数据上学习得更好、如何将大模型压缩到可以在手机上运行，仍然是重要的开放问题。
+\teachervoice{00:31:32--00:34:13，课堂把 GRPO、KTO 与 variational preferences 分别连接到 group-relative reward、loss aversion 和 demographic heterogeneity。老师强调的是 objective assumptions，而不是宣布某方法普遍最优。}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.13\textwidth} L{0.20\textwidth} X X}
+\toprule
+方法 & 监督来源 & 省掉/新增的组件 & 关键风险 \\
+\midrule
+RLHF & 人类偏好 & reward model + RL & reward hacking、昂贵 rollout \\
+DPO & pair data & 无显式 RL loop & pair bias、reference 依赖 \\
+RLAIF & AI judge & 扩展标注吞吐 & judge bias 与同质错误 \\
+GRPO & group rewards & 相对 baseline & group/reward 质量 \\
+KTO & binary desirability & 不要求 pairs & value model 假设 \\
+VPL & profile-conditioned data & 偏好潜变量 & 隐私、分群和公平性 \\
+\bottomrule
+\end{tabularx}
+\caption{Preference optimization 方法的监督接口与失败模式。}
+\end{table}
+
+\begin{lstlisting}[caption={Preference data pipeline 的最小审计骨架}]
+prompts = stratified_sample(real_use, safety_edges, long_tail)
+responses = generate_candidates(policy, prompts)
+labels = collect_preferences(humans, ai_judges, outcomes)
+audit_disagreement(labels, by_domain=True, by_group=True)
+train_preference_method(labels, reference_model)
+validate(helpfulness, factuality, safety, calibration, diversity)
+\end{lstlisting}
 
 \subsection{本章小结}
 
-幻觉、持续学习、数据效率是当前 LLM 面临的核心挑战，也是通向更可靠、更实用 AI 系统的关键研究方向。
+Preference optimization 的核心不是 acronym，而是谁给信号、信号怎样转成 loss、模型相对什么 baseline 更新。RLHF、DPO、RLAIF、GRPO、KTO 和 VPL 在成本与假设上不同；任何方法都不能用单一 reward 替代真实多维产品目标。
+
+\section{Self-Improving Agents：反馈环不等于自主进化}
+
+Preference optimization 在训练阶段更新 policy；agent 则在环境中循环感知、计划、调用工具、行动并接收反馈。课程把 self-improvement 分成 refinement、reflection、ReAct 与 tree search。这里的 improvement 常是单任务或单会话的行为改善，不应自动改写成模型永久学会了新能力。
+
+\subsection{Agent 的最小定义}
+
+上一章的方法主要在一个请求内部增加推理或更新参数；agent 则把模型接入持续存在的 state 和 environment。定义 agent 时最容易犯的错误是只画一个循环箭头，却不写观察来自哪里、动作有什么权限、memory 是否可信、何时停止。下面的状态方程把这些对象显式化，后续 refinement 和 tree search 才有清楚的落点。
+
+一个 agent 可抽象为
+\[
+s_{t+1}=F(s_t,o_t,m_t),\qquad a_t=\pi_{\theta}(s_t,\mathcal{T}),
+\]
+其中 $o_t$ 是观察，$m_t$ 是 memory，$\mathcal{T}$ 是工具集合，$a_t$ 是动作，环境再返回下一观察。基础模型只是 $\pi_{\theta}$ 的一部分；权限、状态、工具 schema、错误恢复和停止条件同样决定系统行为。
+
+
+\lecturefigure{slide-085.jpg}{What is an AI Agent：环境、模型、目标、工具、记忆与动作}{CS25 V5 official deck, p.~85}
+
+\teachervoice{00:34:20--00:35:20，Chelsea 将 agent 定义为能感知环境、决策并行动的系统，并列出 memory、tools 与 feedback。课堂提示：把一次模型调用包装成函数并不足以获得 agent reliability。}
+
+\subsection{Refinement 与 reflection}
+
+Refinement 让模型生成答案、找弱点、再修订；reflection 更强调从 failure 中抽取可复用经验并写入 memory。二者都可能陷入 confirmation loop：同一模型既作答又审查，错误假设可能被反复强化。
+
+
+\lecturefigure{slide-086.jpg}{Self-improvement：refinement、reflection、探索与多路径推理}{CS25 V5 official deck, p.~86}
+
+
+\lecturefigure{slide-087.jpg}{Refinement：生成、评估、反馈和迭代修订}{CS25 V5 official deck, p.~87}
+
+
+\lecturefigure{slide-088.jpg}{Reflection：从失败中提取经验并更新后续策略}{CS25 V5 official deck, p.~88}
+
+\begin{warningbox}{Self-critique 需要外部锚点}
+没有 tool outcome、test、human check 或独立 verifier 时，``我检查过了'' 只是另一段生成。工程上应把 critique 转成可执行断言，再由环境验证；无法验证的部分必须保留 uncertainty。
+\end{warningbox}
+
+\subsection{ReAct 与 LATS：把 reasoning 接到 action/search}
+
+ReAct 在 thought 与 action 之间交替，使模型根据 observation 更新计划。LATS 把单路径扩展为多条 action trajectory，并用 MCTS-like selection 聚合 feedback；它提高探索，却成倍增加工具调用、状态管理与错误分支成本。
+
+
+\lecturefigure{slide-089.jpg}{ReAct：reasoning、action 与 observation 交替}{CS25 V5 official deck, p.~89}
+
+
+\lecturefigure{slide-090.jpg}{LATS：多路径 agent search、反馈聚合与树搜索}{CS25 V5 official deck, p.~90}
+
+\begin{warningbox}{Agent improvement 的可靠性协议}
+每次 iteration 都应保存输入 state、模型计划、实际 action、tool output、verifier evidence 和 memory write；否则系统失败后无法区分规划错、工具错、权限错还是记忆污染。对 refinement，测修订后正确率与新引入错误；对 reflection，测记忆是否在相似未来任务中真正提升且不会传播错误；对 ReAct，测工具参数、observation parsing 和停止条件；对 LATS，测搜索预算增加带来的边际收益与 evaluator bias。生产环境还需要 action idempotency、transaction rollback、secret isolation 和人工升级路径。所谓 self-improving 只有在可审计 evidence 上持续减少失败，才是工程能力，而不是模型生成了更多自评文字。
+\end{warningbox}
+
+\begin{knowledgebox}{读图：四种 self-improvement 改写不同状态}
+Refinement 改写当前 answer；reflection 把失败经验写入 memory；ReAct 用 observation 更新当前 trajectory；LATS 在 search tree 上维护多条候选及其价值。Slide 90 的树结构支持“探索更多路径”，但不证明搜索评分可靠。读图时先标记 state、action、feedback 和 persistent memory，再问错误能否被环境验证。若 feedback 仍由同一模型无锚点生成，循环可能只是把原错误写得更完整。
+\end{knowledgebox}
+
+\teachervoice{00:35:20--00:39:10，课堂依次区分 refinement、reflection、ReAct 与 LATS。实践经验：这些机制的差异在 feedback 被写到哪里——当前文本、长期 memory、环境 state 还是 search tree。}
+
+\begin{lstlisting}[caption={带验证和权限边界的 agent loop}]
+state = initialize(goal, permissions, budget)
+while not done(state):
+    proposal = model.plan(state)
+    action = policy_gate(proposal, permissions)
+    observation = execute_in_sandbox(action)
+    evidence = verify_outcome(observation)
+    state = update_memory(state, action, evidence)
+    if repeated_failure(state): escalate_or_stop(state)
+\end{lstlisting}
+
+\subsection{本章小结}
+
+Agent 能力来自模型与环境闭环。Refinement 改写答案，reflection 写入经验，ReAct 连接工具，LATS 增加多路径搜索；真正可靠的 self-improvement 依赖可验证 outcome、权限控制、预算和失败停止，而不是无限自我对话。
+
+\section{Vision 与 VLM：改变 token interface，保留 interaction pattern}
+
+Transformer 跨域迁移的关键不是把图像“当文字”，而是设计新的 tokenization 与 objective。ViT 把图像切成 patch，CLIP 对齐图文 embedding，VLM 再通过 projector、cross-attention 或 unified tokens 连接视觉 encoder 与语言模型。
+
+\subsection{Vision Transformer：patch 就是视觉 token}
+
+对 $H\times W$ 图像和 $P\times P$ patch，共有
+\[
+N=\frac{HW}{P^2}
+\]
+个 patch token。每个 patch 展平后线性投影到 $d$ 维，再加入 position embedding 与 class token。复杂度随 $N^2$ 增长，因此高分辨率会迅速增加 attention cost。
+
+
+\lecturefigure{slide-093.jpg}{ViT methodology：patchify、linear projection 与 Transformer encoder}{CS25 V5 official deck, p.~93}
+
+
+\lecturefigure{slide-094.jpg}{ViT vs CNN：局部卷积归纳偏置与全局 token interaction}{CS25 V5 official deck, p.~94}
+
+\teachervoice{00:39:11--00:41:34，Karan 从 patch tokenization 讲到 ViT/CNN 对比，再到 CLIP/VLM。老师强调的是同一 interaction mechanism 如何通过不同 input interface 扩展，而不是所有模态预处理都相同。}
+
+\subsection{CLIP 与 VLM：对齐空间不是生成系统本身}
+
+CLIP 用 batch 内图文对比损失：
+\[
+\mathcal{L}_{\text{CLIP}}=-\frac{1}{B}\sum_i
+\log\frac{\exp(s(v_i,t_i)/\tau)}{\sum_j\exp(s(v_i,t_j)/\tau)}+\text{sym.}
+\]
+$v_i,t_i$ 是图像和文本 embedding，$s$ 是相似度，$\tau$ 是温度。它学习跨模态检索空间；VLM 还需要把视觉表示接入生成 decoder，并处理高分辨率、OCR、grounding 和 hallucination。
+
+
+\lecturefigure{slide-095.jpg}{CLIP：图像与文本 encoder 在共享 embedding space 对齐}{CS25 V5 official deck, p.~95}
+
+
+\lecturefigure{slide-097.jpg}{VLM basics：vision encoder、adapter/projector 与 language model}{CS25 V5 official deck, p.~97}
+
+\begin{knowledgebox}{术语消化：patch、encoder、projector 与 grounding}
+\textbf{Patch token} 是图像局部块的向量；\textbf{vision encoder} 提取视觉表示；\textbf{projector/adapter} 把视觉维度映射到语言模型接口；\textbf{cross-attention} 让一组 token 查询另一组；\textbf{grounding} 要求文字与图中实体或区域对齐。Slide 97 把这些模块画成 VLM pipeline。读图时应检查视觉 token 数、分辨率、冻结/训练范围和语言 loss；模块连通不等于模型真正定位了证据。
+\end{knowledgebox}
+
+\begin{knowledgebox}{ViT、CLIP、VLM 的层级关系}
+ViT 是视觉 encoder 架构；CLIP 是图文对比训练范式；VLM 是能联合理解或生成视觉与语言内容的系统。一个 VLM 可以使用 ViT 和 CLIP-like pretraining，但三者不是同义词。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+跨模态扩展首先改变 token interface，其次改变 pretraining objective 与对齐方式。ViT、CLIP 和 VLM 分别解决视觉编码、跨模态表示和生成交互；高分辨率成本、grounding 与 hallucination 仍需要独立评估。
+
+\section{Transformer for fMRI：从 ROI 序列到脑网络表示}
+
+Karan 的案例展示了“同一架构、不同数据几何”。fMRI 不是图片分类：输入是多个 brain regions of interest（ROI）随时间变化的低频信号，噪声高、样本少且个体差异大。成功迁移需要重新定义 token、mask objective、cross-attention 与 downstream validation。
+
+\subsection{数据接口：ROI-by-time 序列}
+
+fMRI 通过 blood-oxygen-level-dependent signal 间接反映神经活动。将 $R$ 个 ROI、$T$ 个时间点写成 $X\in\mathbb{R}^{T\times R}$ 后，可把时间窗或 ROI embedding 当 token。相关矩阵能描述静态 functional connectivity，却难以表示动态、非线性和方向依赖。
+
+
+\lecturefigure{slide-099.jpg}{fMRI：functional connectivity、averaging 与 correlation maps}{CS25 V5 official deck, p.~99}
+
+
+\lecturefigure{slide-100.jpg}{Brain functional networks：ROI 分区与网络标签}{CS25 V5 official deck, p.~100}
+
+
+\lecturefigure{slide-101.jpg}{Early ML：相关矩阵、手工特征与传统分类器}{CS25 V5 official deck, p.~101}
+
+\begin{warningbox}{脑区相关不等于因果连接}
+相关矩阵受共同输入、预处理和采样频率影响。Transformer 学到的 attention 或 embedding 也不能直接解释为神经因果机制；它们首先是预测表示，需要与 intervention、跨被试复现和临床 outcome 分开验证。
+\end{warningbox}
+
+\subsection{Foundation model objective：masked prediction}
+
+课程采用 data-driven self-supervision：遮住部分 ROI/time tokens，用其余脑活动预测缺失区域。设 mask 集为 $M$，可写为
+\[
+\mathcal{L}_{\text{mask}}=\sum_{(t,r)\in M}\|x_{t,r}-\hat{x}_{t,r}\|_2^2.
+\]
+该目标迫使模型学习跨区域与跨时间依赖，而不是依赖人工定义的疾病标签；但预训练收益取决于 cohort diversity、scanner/site shift 和 mask design。
+
+
+\lecturefigure{slide-102.jpg}{Foundation models for fMRI：masked modeling 与可迁移 encoder}{CS25 V5 official deck, p.~102}
+
+
+\lecturefigure{slide-103.jpg}{Data-driven approach：从全脑序列自动学习表示}{CS25 V5 official deck, p.~103}
+
+\teachervoice{00:41:34--00:45:16，Karan 把 ROI-by-time 数据直接输入 Transformer，并通过遮挡区域重建构造 self-supervised objective。课堂洞见是：先找一个能利用无标签数据的任务，再讨论 downstream diagnosis。}
+
+\subsection{Cross-attention 与架构变体}
+
+若给定 unmasked context $C$ 和 target region queries $Q_T$，cross-attention 为
+\[
+H_T=\operatorname{softmax}\!\left(\frac{Q_TK_C^{\top}}{\sqrt{d_k}}\right)V_C.
+\]
+目标脑区主动查询其余网络，而不是简单把所有 ROI 平均。模型还可在 region、time 和 subject 维度采用不同 encoder/decoder 结构；选择应由泛化和 compute 验证，而不是照搬 NLP block。
+
+
+\lecturefigure{slide-104.jpg}{Cross-attention：用可见脑区预测被遮挡 target region}{CS25 V5 official deck, p.~104}
+
+
+\lecturefigure{slide-105.jpg}{fMRI model architectures：encoder-decoder 与 attention 连接}{CS25 V5 official deck, p.~105}
+
+\begin{knowledgebox}{深读：fMRI 架构选择要服从数据轴而不是 NLP 惯例}
+脑信号同时有 time、region、subject 和 site 四个主要变化轴。若 token 表示时间窗，attention 擅长学习跨时间依赖；若 token 表示 ROI，则可学习网络间 interaction；若把二者直接展平，序列会很长且语义混杂。Cross-attention 可以让 target region 查询 context regions，encoder-decoder 可以隔离观测与预测，但这些结构都需要与简单 temporal convolution、graph model 和 correlation baseline 比较。Mask ratio 过低会让重建太容易，过高则丢失可预测上下文。Subject embedding 可能吸收个体差异，也可能泄露身份。最关键的 split 是按 subject/site 切分而非随机 time points，否则临近扫描的自相关会虚高结果。架构图只是 hypothesis space，严谨 protocol 才决定 evidence quality。
+\end{knowledgebox}
+
+\subsection{结果：先看 representation，再看 downstream task}
+
+结果页同时展示 reconstruction/modeling 指标、network dependence 与 downstream classification。读图应先检查 train/test split 是否跨 subject/site，再比较 correlation baseline、linear model 与 foundation representation；若只在同站点随机切分，模型可能利用 scanner 或人口学 shortcut。
+
+
+\lecturefigure{slide-106.jpg}{Modeling results I：重建指标与脑网络分组}{CS25 V5 official deck, p.~106}
+
+
+\lecturefigure{slide-107.jpg}{Modeling results II：不同架构与区域的比较}{CS25 V5 official deck, p.~107}
+
+
+\lecturefigure{slide-108.jpg}{Network dependence：不同脑网络间的预测依赖}{CS25 V5 official deck, p.~108}
+
+
+\lecturefigure{slide-109.jpg}{Downstream task：embedding 用于疾病或个体表征}{CS25 V5 official deck, p.~109}
+
+
+\lecturefigure{slide-110.jpg}{Downstream results：foundation representation 与传统 baseline}{CS25 V5 official deck, p.~110}
+
+\begin{knowledgebox}{读图：fMRI 结果页的证据顺序}
+先看 representation 是否在 held-out signal reconstruction 上有效，再看不同 network 的依赖结构，最后才看 downstream disease classification。Slide 110 若给出更高 accuracy，仍要追问 subject-level split、site leakage、class balance 和 calibration。饼图或 embedding 可视化只能描述模型如何分组，不能证明临床因果。最强结论是“该表示在这套 protocol 下提供增量预测信息”，而不是“模型理解了大脑”或可直接用于诊断。
+\end{knowledgebox}
+
+\teachervoice{00:45:16--00:48:02，讲者把 cross-attention 解释为用全脑上下文预测目标区域，并报告 learned representation 在 downstream disease task 上优于 correlation/linear baselines。讲义提醒：这是特定数据和 split 的证据，不是临床部署结论。}
+
+\begin{knowledgebox}{神经科学 foundation model 的验证层级}
+\begin{enumerate}
+  \item masked reconstruction 是否优于简单 baseline；
+  \item representation 是否跨 subject/site 稳定；
+  \item downstream task 是否在外部 cohort 复现；
+  \item 是否具有 calibration、公平性与临床 utility；
+  \item 模型解释是否与已知神经机制和 intervention 一致。
+\end{enumerate}
+前两层通过不代表最后三层自动成立。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+fMRI 案例说明 Transformer 的可迁移性来自 token interaction，而不是 NLP 名称。ROI/time tokenization、masked objective、cross-attention 与跨 cohort 验证共同决定成败；模型可学习有用表示，但 attention 和相关性都不能直接升级为脑因果解释。
+
+\section{未来、Scaling Limits 与 Continual Learning}
+
+最后一章从应用愿景转向能力缺口。课程没有把更大模型视为唯一答案，而是依次追问可控性与记忆、具身交互与效率、可解释性、规模扩张的饱和点，以及部署后的持续适应。这里最重要的教学动作是给“持续学习”严格边界：RAG、长上下文和定期 fine-tuning 都可能更新行为，却不等于模型在部署中永久获得新能力。
+
+判断一种方案是否真的完成持续学习，可以连续问四个问题：新知识写进了参数还是外部存储，更新是否跨会话保留，旧任务能力是否经过回归测试，以及错误更新能否定位并回滚。缺少其中任何一项，系统也许仍然有用，但更适合称为检索增强、临时上下文适应或离线再训练。这个区分会直接改变评测设计：不能只展示一次回答变好，还要测持久性、遗忘、冲突知识与更新成本。
+
+\subsection{未来应用与缺失能力}
+
+前面的应用案例已经展示 Transformer 能跨文本、图像和脑信号迁移；结尾的 future slides 把这种通用性外推到更长视频、医疗、环境和交互世界。读这类愿景页时要把“技术上可构造 demo”“在 benchmark 上有效”和“可承担真实责任”分成三层。每向后一层，都需要新的数据、系统验证、监管和人类责任边界。
+
+Generalist agents、视频生成、数字人、诊断、环境监测和游戏 NPC 都需要 Transformer 与外部系统结合。应用清单支持的是机会空间，不证明模型已满足可靠性、实时性、隐私和责任要求。
+
+
+\lecturefigure{slide-111.jpg}{未来应用：generalist agents、视频、数字人、医疗、环境与交互世界}{CS25 V5 official deck, p.~111}
+
+
+\lecturefigure{slide-112.jpg}{缺失能力 I：计算效率、controllability、brain alignment 与跨域泛化}{CS25 V5 official deck, p.~112}
+
+
+\lecturefigure{slide-113.jpg}{缺失能力 II：外部记忆、自我改进、自治、情感与价值对齐}{CS25 V5 official deck, p.~113}
+
+\begin{knowledgebox}{深读：把 future wishlist 改写成可验收能力}
+``Infinite memory'' 应改写为在长时间跨度内检索正确经历、处理冲突并遵守删除请求；``autonomy'' 应改写为在权限和预算内完成长任务、遇到不确定性及时升级；``emotional intelligence'' 需要在跨文化场景中识别情绪、避免操纵并校准信心；``embodiment'' 需要感知—行动闭环、物理安全和 sim-to-real；``self-improvement'' 则需要可测的新能力、受控遗忘和 rollback。把宏大名词拆成 observable criteria，团队才能设计 benchmark、红队与上线门槛。Slides 111--113 支持研究议程，不支持对 AGI 时间线或产品 readiness 的直接结论。
+\end{knowledgebox}
+
+\teachervoice{00:48:03--00:50:01，课堂先列应用，再列 missing ingredients：memory、continual learning、embodiment、autonomy 与 ethics。讲义提醒：愿景和能力缺口必须相邻书写，避免 roadmap 变成营销清单。}
+
+\subsection{Minified models 与 interpretability}
+
+On-device LLM 追求更低 memory、latency 和 energy。参数存储近似
+\[
+M_{\text{weights}}=N_{\text{params}}\cdot b/8,
+\]
+其中 $b$ 是 bits per parameter；实际还要加 KV cache、activation 与 runtime buffer。Quantization、distillation、sparsity 和 architecture redesign 各自改变质量与硬件友好性。
+
+
+\lecturefigure{slide-114.jpg}{Minified/on-device LLM：低延迟、隐私、成本与可访问性}{CS25 V5 official deck, p.~114}
+
+
+\lecturefigure{slide-115.jpg}{Interpretability：内部机制、failure analysis 与透明度挑战}{CS25 V5 official deck, p.~115}
+
+\begin{knowledgebox}{深读：Interpretability 的目标需要先写清楚}
+Mechanistic interpretability 试图定位内部 circuit；feature attribution 解释某次输出受哪些输入影响；behavioral testing 通过反事实 prompt 描述系统规律；monitoring 则在部署中发现异常。四者回答不同问题。一个 probe 能预测某层是否包含概念，不代表模型实际使用该概念；一个 saliency map 看起来合理，也不保证 causal faithfulness；一个 neuron edit 改掉事实，可能破坏无关知识。若目标是安全控制，还要问解释是否可重复、是否能提前预测 failure、能否指导 mitigation，以及 adversary 是否可绕过。Slide 115 的价值是把“参数太多、难以枚举”变成研究议程；它不支持把任一可视化工具当作透明度完成证明。
+\end{knowledgebox}
+
+\begin{warningbox}{小模型不自动更安全，可解释也不等于可控}
+参数少可能便于部署和实验，却仍能幻觉、泄露或被提示攻击。Interpretability 方法若只在 toy tasks 上稳定，也不能直接作为 production safety guarantee；需要与 red teaming、permissions、monitoring 和 human oversight 联合。
+\end{warningbox}
+
+\subsection{Scaling limits：边际收益、数据与遗忘}
+
+课程提出 pretraining scaling 可能出现 diminishing returns，并指出 post-training 也受 base model knowledge、reward signal 和 catastrophic forgetting 限制。若能力 $P(C)$ 随 compute $C$ 增长，可用局部斜率
+\[
+\alpha(C)=\frac{d\log P}{d\log C}
+\]
+监控边际收益；$\alpha$ 下降不等于 scaling “终结”，但说明数据、objective、architecture 或 evaluation 可能成为新瓶颈。
+
+
+\lecturefigure{slide-116.jpg}{Limits of Scaling：数据、成本、知识饱和与边际收益}{CS25 V5 official deck, p.~116}
+
+
+\lecturefigure{slide-117.jpg}{What is next：新架构、数据、硬件、理论与 adaptability}{CS25 V5 official deck, p.~117}
+
+\begin{knowledgebox}{读图：Scaling limit 不是一条单变量曲线}
+Slides 116--117 同时列出 data scarcity、hardware cost、architecture、post-training 和理论理解。读图时先区分\textbf{capability saturation}、\textbf{benchmark saturation} 与\textbf{economic saturation}：分数不涨可能因为评测封顶，成本不可接受也可能在能力仍提升时出现。局部 slope 下降支持寻找新瓶颈，却不能证明所有规模轴都失效。更好的实验是固定一种资源，单独扫描 model、data、compute 与 inference budget。
+\end{knowledgebox}
+
+\teachervoice{00:50:05--00:54:40，讲者把 on-device、interpretability、pretraining saturation、post-training limits 与 catastrophic forgetting 连在一起。课堂观点是“下一步不只更大”，但它仍是 2025 年的研究判断，不是已证明的 scaling 终点。}
+
+\subsection{Continual learning 的严格定义}
+
+Continual/lifelong learning 指模型在部署后从新经验持续更新能力，同时保持旧能力。至少要同时测量
+\[
+\text{Plasticity}=P_{\text{new}}^{\text{after}}-P_{\text{new}}^{\text{before}},\qquad
+\text{Forgetting}=P_{\text{old}}^{\text{before}}-P_{\text{old}}^{\text{after}}.
+\]
+只提高新任务而严重遗忘旧任务，不是成功；只把新事实放进向量库，也没有更新参数能力。
+
+
+\lecturefigure{slide-118.jpg}{Continual learning：部署后从反馈、经验与新数据持续改进}{CS25 V5 official deck, p.~118}
+
+
+\lecturefigure{slide-119.jpg}{真正 lifelong learning 需要哪些机制：梯度、记忆、模块与 meta-learning}{CS25 V5 official deck, p.~119}
+
+\teachervoice{00:54:43--00:57:10，老师明确排除 RAG、in-context learning、一次 fine-tuning、周期 retraining 和单纯 distillation，把 continual learning 定义为部署后永久、基础性的能力更新。这个定义较严格，讲义保留为 instructor position。}
+
+\subsection{Model editing 与多种近似路线}
+
+ROME 通过 causal tracing 定位与事实预测相关的层/表示，再做 rank-one update；MEMIT 扩展到多事实批量编辑。它们适合知识更新，却不等于学会数学或规划技能，也面临 locality、generalization 和 related-fact consistency。
+
+
+\lecturefigure{slide-120.jpg}{Model editing：ROME 的 causal localization 与 rank-one update}{CS25 V5 official deck, p.~120}
+
+其他路线包括 mistake-driven updates、lifelong mixture-of-experts、compressed prompt memory 和 progressive prompts。它们分别修改权重、增加 expert、维护外部 prompt memory 或组合 soft prompts；应按“更新位置”而不是名称分类。
+
+
+\lecturefigure{slide-121.jpg}{Continual-learning works I：ROME/MEMIT、mistake updates 与 lifelong MoE}{CS25 V5 official deck, p.~121}
+
+
+\lecturefigure{slide-122.jpg}{Continual-learning works II：prompt memory、CLOB 与 progressive prompts}{CS25 V5 official deck, p.~122}
+
+\begin{knowledgebox}{术语消化：持续学习方法按“更新在哪里”分类}
+RAG 更新外部知识库；CLOB 与 progressive prompts 更新提示记忆；ROME 和 MEMIT 修改局部权重；持续微调（continual fine-tuning）更新全局权重；lifelong MoE 增加或冻结 expert；meta-learning 则更新适应规则。Slides 120--122 的名称很多，但用“更新发生在哪里”这一坐标即可消化。只有当新经验能永久改变目标能力、同时旧能力保持并可审计回滚时，才接近严格 continual learning；否则更准确的说法可能只是 retrieval、adaptation 或 memory augmentation。
+\end{knowledgebox}
+
+\teachervoice{00:57:10--01:00:16，课堂逐项区分 ROME/MEMIT、CEM、lifelong MoE、CLOB 与 progressive prompts，并给出个人判断：真正 continual learning 可能需要更新模型“brain/weights”。讲义同时保留外部记忆路线的工程价值。}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.18\textwidth} L{0.20\textwidth} X X}
+\toprule
+机制 & 更新位置 & 能解决什么 & 主要缺口 \\
+\midrule
+RAG/prompt memory & 外部上下文 & 新知识访问、可追溯 & 不改变基础能力 \\
+Model editing & 局部权重/表示 & 事实修正 & 相关事实、技能与稳定性 \\
+Continual fine-tuning & 全局权重 & 新域与技能 & 遗忘、成本、数据治理 \\
+Lifelong MoE & 新/旧 experts & 模块化扩展 & 路由、容量与专家漂移 \\
+Progressive prompts & soft prompts & 任务适配 & 组合爆炸、非基础更新 \\
+Meta-learning & 更新规则 & 更快适应 & 训练复杂、稳定性难 \\
+\bottomrule
+\end{tabularx}
+\caption{持续适应方法按更新位置和能力边界分类。}
+\end{table}
+
+\begin{lstlisting}[caption={Continual-learning evaluation 的最小协议}]
+for task in task_stream:
+    before = evaluate(model, old_tasks + [task])
+    model = update(model, task.data, bounded_compute=True)
+    after = evaluate(model, old_tasks + [task])
+    log(plasticity=after[task]-before[task])
+    log(forgetting=before[old_tasks]-after[old_tasks])
+    audit(edit_locality, calibration, safety, rollback)
+\end{lstlisting}
+
+\subsection{本章小结}
+
+未来路线同时要求更小、更透明、更能适应，而不是只扩大参数。Scaling 的局部边际收益可能下降；continual learning 则要求在获得新能力时控制遗忘。RAG、model editing、MoE expansion 与 weight updates 各自更新不同状态，必须用 plasticity、forgetting、locality 和系统成本共同评估。
+
+
+\begin{importantbox}{跨章节证据等级：不要把所有 slide 写成同一种事实}
+本讲至少包含四类证据。第一类是\textbf{定义与计算机制}，如 Q/K/V、DPO loss、ViT patch 和 cross-attention，可由公式与实现检查；第二类是\textbf{特定实验结果}，如 TinyDialogues、two-phase pretraining 和 fMRI downstream performance，只在给定模型、数据和 protocol 下成立；第三类是\textbf{工程启发式}，如先用小模型筛 blend、用 verifier 锚定 self-critique，需要在新环境复测；第四类是\textbf{研究判断与愿景}，如 scaling saturation、真正 continual learning 需要改权重、未来 generalist agents，应标明 speaker opinion 与日期。读者在引用任何结论前，都应先给它归类，再决定需要复现代码、补充实验、系统压测还是仅作为研究问题。这样才能让 overview 成为决策地图，而不是把定义、结果和预测混成一份权威清单。
+\end{importantbox}
 
 \section{总结与延伸}
 
-本讲作为 CS25 V5 的开场，全景式地回顾了 Transformer 的技术栈：从基础的注意力机制，到预训练数据策略和后训练对齐技术，再到多领域应用与核心挑战。核心信息可以归纳为三点：
+V5 overview 的价值在于把 Transformer 从一张 architecture diagram 展开为完整生命周期。Embedding/attention 定义计算接口；数据结构和 schedule 决定梯度；CoT 与 search 增加 test-time compute；preference optimization 改变长期行为；agent 将模型放入环境闭环；视觉和 fMRI 展示 token interface 迁移；continual learning 则追问部署后模型如何真正改变。
+
+\subsection{十二条核心结论}
 
 \begin{enumerate}
-    \item \textbf{数据为王}：无论是小模型的高质量数据训练还是大模型的分阶段数据策略，数据选择与混合都是性能提升的关键杠杆。
-    \item \textbf{后训练是产品化的桥梁}：从 RLHF 到推理模型，后训练技术决定了模型从``能力''到``产品''的转化效率。
-    \item \textbf{开放问题仍然关键}：幻觉、持续学习、可解释性等挑战尚未解决，是通向 AGI 的必经之路。
+  \item Transformer block 是现代 AI 系统的基础组件，不是完整产品解释。
+  \item Q/K/V 分别承担查询、匹配索引和被聚合内容的角色。
+  \item 数据质量、结构、多样性、规模和 schedule 必须联合设计。
+  \item 人类学习对比能生成实验假设，但不能直接证明类脑机制。
+  \item TinyDialogues 的 mixed result 表明 diverse mixture 常比单一直觉数据更稳健。
+  \item Two-phase pretraining 的收益依赖 blend 与 duration，过采样会递减。
+  \item CoT、tree、program 和 decomposition 改变 inference computation，而非同一种“推理”。
+  \item Preference methods 的核心差异是监督来源、baseline 与 objective assumptions。
+  \item Agent self-improvement 需要外部 verification、权限和停止条件。
+  \item ViT/VLM/fMRI 的迁移首先依赖正确 token interface 和 objective。
+  \item Scaling limits 需要看局部斜率与新瓶颈，不能用口号判断终结或无限延续。
+  \item Continual learning 必须同时获得新能力、控制遗忘并说明更新发生在哪里。
+\end{enumerate}
+
+\subsection{一张表串起整堂课}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}L{0.17\textwidth}L{0.20\textwidth}L{0.28\textwidth}L{0.25\textwidth}@{}}
+\toprule
+层次 & 主要对象 & 典型方法 & 验收问题 \\
+\midrule
+Architecture & token interaction & attention, ViT, cross-attention & 表示和复杂度是否合理 \\
+Data & 训练分布 & TinyDialogues, two-phase blend & 多指标、重复率、scale 是否稳定 \\
+Inference & test-time compute & CoT, ToT, tools & 预算、faithfulness、验证 \\
+Preference & 参数行为 & RLHF, DPO, GRPO, KTO & judge、reward、群体差异 \\
+Agent & 环境闭环 & ReAct, reflection, LATS & 权限、outcome、恢复 \\
+Adaptation & 部署后更新 & editing, MoE, continual FT & plasticity、forgetting、rollback \\
+\bottomrule
+\end{tabular}
+\caption{Transformer 系统从计算到持续适应的六层地图。}
+\end{table}
+
+\subsection{实践研究清单}
+
+\begin{importantbox}{开始一个新 Transformer 项目前先回答}
+\begin{enumerate}
+  \item 输入怎样 tokenized，哪些关系需要 attention？
+  \item 目标能力在训练数据中由什么信号监督？
+  \item 改进来自更多参数、更多 token、不同 schedule 还是 test-time search？
+  \item 是否使用 human/AI feedback，谁来审计 judge？
+  \item 工具、memory 与 environment 的权限边界是什么？
+  \item 评测是否覆盖 distribution shift、成本、calibration 和失败恢复？
+  \item 部署后的更新是外部 memory、局部 editing 还是权重学习？
+  \item 新能力是否以 catastrophic forgetting 为代价？
+\end{enumerate}
+\end{importantbox}
+
+\subsection{复现记录的最小集合}
+
+无论复现 data、reasoning、preference、agent 或 continual-learning 方法，都应保存 source/version、数据 hash、随机种子、模型与 tokenizer、optimizer/schedule、总训练和推理 compute、完整评测 protocol、失败样本以及人工判断规则。若使用 AI judge、工具或检索库，还要固定其版本和权限。只有这些信息齐全，图中的提升才能被另一团队重放、归因和审计；否则 overview 中再漂亮的曲线也只能作为线索，不能成为工程决策依据。
+
+\subsection{自测问题}
+
+\begin{enumerate}
+  \item Q、K、V 的矩阵形状和语义分别是什么？为什么要除以 $\sqrt{d_k}$？
+  \item Static embedding 与 contextual representation 的差别在哪里？
+  \item TinyDialogues 为什么没有支持“纯儿童语料最好”的简单结论？
+  \item Two-phase pretraining 中 blend 与 duration 为什么必须分开消融？
+  \item CoT、ToT、PoT 与 computation graph 各自增加什么资源？
+  \item RLHF、DPO、RLAIF、GRPO、KTO 的监督与基础设施差异是什么？
+  \item Self-refinement 在没有外部 verifier 时为什么可能强化错误？
+  \item ViT、CLIP 和 VLM 为什么不是同义词？
+  \item fMRI foundation model 的 masked objective 学到什么，又不能证明什么？
+  \item Scaling 局部斜率下降与“scaling law 失效”有什么区别？
+  \item RAG、model editing 和 continual fine-tuning 分别更新什么状态？
+  \item 如何同时度量 continual learning 的 plasticity 与 forgetting？
 \end{enumerate}
 
 \subsection{拓展阅读}
+
 \begin{itemize}
-    \item Vaswani et al., ``Attention Is All You Need'', 2017
-    \item Wei et al., ``Emergent Abilities of Large Language Models'', 2022
-    \item Warstadt et al., ``BabyLM Challenge'', 2023
-    \item Meng et al., ``Locating and Editing Factual Associations in GPT (ROME)'', 2022
+  \item Vaswani et al., \emph{Attention Is All You Need}：Q/K/V、multi-head attention 与 encoder-decoder。
+  \item Dosovitskiy et al., \emph{An Image is Worth 16x16 Words}：Vision Transformer。
+  \item Wei et al., \emph{Chain-of-Thought Prompting Elicits Reasoning in Large Language Models}。
+  \item Rafailov et al., \emph{Direct Preference Optimization}：preference pairs 与 policy objective。
+  \item Yao et al., \emph{ReAct} 与 \emph{Tree of Thoughts}：reasoning/action 和 search。
+  \item Meng et al., \emph{ROME}；Mitchell et al., \emph{MEMIT}：model editing。
+  \item Lecture slides 中的 TinyDialogues 与 Two-Phase Pretraining primary papers：数据结构与 schedule 的两类实验。
 \end{itemize}
 
 \end{document}

@@ -1,195 +1,562 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 12：语言模型与人类意图对齐}
+\renewcommand{\noteauthors}{基于 Jan Leike 讲座、官方人工字幕与一手论文整理}
+\renewcommand{\notedate}{CS25 V2 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-01-17；上传 2023-05-20}
+\renewcommand{\videoduration}{1:06:21}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=DJ1Yy6Aquug}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Language and Human Alignment — Jan Leike, OpenAI}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2023}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2023}
-\newcommand{\videoduration}{约55分钟}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.94\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
+\makecscover
+
+\section{来源审计与问题边界：这是一堂 2023 年的对齐课}
+
+本讲录制于 2023 年 1 月 17 日，处在 ChatGPT 刚公开不久的时间点。它讨论的是当时已经形成的 RLHF 路线、正在探索的 scalable oversight，以及学生围绕偏好、欺骗、工具、inner alignment 与 interpretability 提出的开放问题。旧稿把后来出现的 ``Superalignment'' 组织叙事、通用上线流程和产品治理清单倒灌进课堂，因此本次按官方视频、1,264 条人工字幕、17 张教学画面和六篇当时已公开的一手论文完整重写，而不是在旧结构上补丁式扩写。
+
+\lecturefigure{slide-01-title.jpg}{Jan Leike 的讲座标题：Aligning Language Models with Humans。}{Stanford Online 官方视频 00:00:23--00:00:49。}
+
+标题中的 ``with humans'' 比 ``make models safe'' 更具体：本讲要问的是，人类怎样把无法完整写成规则的意图转化为训练信号，并在模型能力持续提升时保持这种信号可用。读者应把三类证据分开：slide 给出公开主线，讲者口头解释补充动机与限制，一手论文提供公式和实验细节；三者不一致时，讲义会明确标注边界，而不是把后来的知识假装成课堂原话。
+
+\begin{importantbox}{本讲的证据合同}
+课堂中的数字、系统状态和研究判断都以 2023-01-17 为界。InstructGPT 的公开论文可以用于澄清 SFT、reward model 与 PPO 的关系；2023 年之后的项目名称、部署架构和政策变化不能被写成讲者当时已经给出的答案。后半小时几乎一直显示最后一张 slide，因此 teacher voice 主要来自时间戳字幕，而不是重复插入同一人物画面。
+\end{importantbox}
+
+\subsection{Team AI：为什么能力增长会把对齐变成战略问题}
+
+讲者先不用损失函数，而是构造一场 ``Team AI 对 Team Human'' 的比赛。这个类比的重点不是断言当前系统已经全面超过人类，而是把动态性带入问题：不同 AI player 会逐步入场，后来的 player 可能更快、更便宜、在更多任务上更强；人类眼下仍有一个重要优势---决定哪些系统以什么方式进入真实世界，并训练其中一些系统站到人类这一边。
+
+\lecturefigure{slide-02-team-ai-strong-players.jpg}{Team AI 正在加入比赛，而且未来可能出现极强的 player。}{Stanford Online 官方视频 00:00:49--00:03:18。}
+
+\begin{knowledgebox}{读图：强 player 不是“今天已经无所不能”}
+这页把模型能力看成随时间加入的 player 序列。讲者同时强调 2023 年系统仍有明显局限；ChatGPT 只是一个锚点，展示知识广度、语言覆盖和低边际成本可能怎样改变分工。图中 ``incredibly strong'' 是面向未来的风险建模假设，不是对任意当代模型的实测结论。
+\end{knowledgebox}
+
+这个类比随后分成两个行动目标。第一，训练或选择愿意帮助人类、按人类意图行动的 AI player；第二，设计制度和规则，使拥有强 AI 的竞争环境不把人类推向失败。第一项被讲者称为 alignment，第二项更接近 governance。二者互相影响，却不是同一个技术问题。
+
+\lecturefigure{slide-03-two-objectives.jpg}{Team Human 的两个目标：招募 AI player，以及制定不会输掉比赛的规则。}{Stanford Online 官方视频 00:03:18--00:04:16。}
+
+\begin{warningbox}{不要把 alignment 与 governance 混成一个万能词}
+Alignment 研究训练信号、行为目标、评估与泛化；governance 处理部署权限、竞争规则、责任与制度协调。本讲只展开前者。把组织级流程、监管方案或市场竞争直接塞进后文，不但偏离课堂，也会掩盖本讲真正的技术瓶颈：当人类看不懂模型完成的任务时，怎样继续给出可信反馈。
+\end{warningbox}
+
+\subsection{本章小结}
+
+本章建立了两条边界。时间上，它是一堂 2023 年初的课；问题上，它聚焦如何让模型追随 human intent，而不试图解决所有 AI governance。Team AI 类比提供战略动机，接下来要把 ``站在人类一边'' 从口号拆成可训练目标。
+
+\section{Human intent：为什么照字面执行仍然不够}
+
+前一章说明了为什么需要 alignment，本章追问目标究竟是什么。一个模型可以逐字执行命令，却仍然通过编造事实、利用歧义、忽略安全边界或迎合用户短期表述而违背真正意图。因此 alignment 的核心不是 ``obedience''，而是把显式请求、隐含约束和不确定性处理组合起来。
+
+\subsection{从口号到操作定义}
+
+讲者给出的实用表述是：构建追随 human intent 与 human preferences 的系统。这个定义故意不把意图写成一条封闭规则，因为真实用户通常只提供局部信息。模型需要在任务语义、对话历史、一般常识和安全约束之间推断用户真正想得到的结果。接下来先用标题页确定这个操作问题，再把 intent 拆成显式、隐式与尚待澄清的部分；读图时应特别注意，``follow'' 指向结果与规范，而不只是复述命令表面文本。
+
+\lecturefigure{slide-04-follow-human-intent.jpg}{Alignment 的操作问题：怎样构建追随人类意图的 AI 系统？}{Stanford Online 官方视频 00:04:16--00:05:31。}
+
+\begin{importantbox}{Human intent 的最小分解}
+可把一次交互中的目标写成
+\[
+I(x,c)=I_{\mathrm{explicit}}(x,c)+I_{\mathrm{implicit}}(x,c)+I_{\mathrm{uncertain}}(x,c),
+\]
+其中，$x$ 表示用户当前请求，$c$ 表示对话与环境上下文；$I_{\mathrm{explicit}}$ 是字面任务，$I_{\mathrm{implicit}}$ 是未明说但合理期待的真实性、安全性与合作规范，$I_{\mathrm{uncertain}}$ 表示模型尚不能可靠判断、应通过澄清或保守行动处理的部分。这个加法是教学分解，不意味着三项能被精确独立测量。
+\end{importantbox}
+
+\subsection{Explicit intent 与 implicit intent}
+
+显式意图包括 ``总结这篇论文''、``作为我的助手'' 等直接指令；隐式意图则包括不要编造、不要故意曲解、拒绝有害请求、在歧义关键处追问。后者之所以难，是因为人类在日常合作中依赖大量默认规范，不会在每次请求里重写一遍完整规范书。
+
+\lecturefigure{slide-05-explicit-implicit-intent.jpg}{显式意图与隐式意图：跟随指令只是对齐目标的一部分。}{Stanford Online 官方视频 00:05:31--00:06:35。}
+
+\begin{knowledgebox}{读图：implicit 不等于“模型自由猜测”}
+左栏可以直接从指令或角色中观察；右栏需要从交互规范中推断。合理系统应把隐式约束当作有不确定度的假设：低风险歧义可以继续完成任务，高风险歧义应请求澄清。``ask follow-up questions'' 因而不是对话装饰，而是把不可观测意图转化为可观测反馈的主动测量动作。
+\end{knowledgebox}
+
+\begin{warningbox}{Specification gaming 的入口}
+如果训练只奖励字面完成度，系统会学会利用评价指标没有覆盖的区域。例如摘要看似流畅却捏造来源，代码通过公开测试却隐藏后门，助手给出用户爱听但不真实的答案。问题不是模型 ``没有执行命令''，而是命令和评价只描述了真实意图的一部分。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Human intent 至少包含显式任务、隐含规范和不确定性处理。对齐方法必须从有限反馈中学习这些没有完整写出的偏好，同时避免把单一 evaluator 的习惯误当成全体人类的唯一目标。RLHF 正是当前模型中最典型的这种转换机制。
+
+\section{RLHF：把人类比较转化为策略更新}
+
+本章从 slide 上的两步图出发，恢复完整的 SFT--RM--RL 教学链。核心思想是：人类不必为每个输出写一个绝对分数，而只需比较少量候选；reward model 学习这种排序规律，再为大量未人工标注的样本提供可优化的近似信号。
+
+\subsection{第一步：从 pairwise comparison 学 reward model}
+
+给定 prompt $x$，策略产生两个回答 $y_w$ 与 $y_l$，标注者选择更符合意图的 winner。reward model $r_\phi(x,y)$ 不直接生成文本，而是把 prompt--response 对映射为标量。常用 Bradley--Terry 形式把奖励差转成偏好概率：
+
+\[
+P_\phi(y_w \succ y_l\mid x)
+=\sigma\!\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right),
+\]
+
+其中，$\sigma(z)=1/(1+e^{-z})$ 是 logistic 函数；$r_\phi$ 是参数为 $\phi$ 的 reward model；符号 $y_w \succ y_l$ 表示标注者更偏好 $y_w$。对应的负对数似然为
+
+\[
+\mathcal{L}_{\mathrm{RM}}(\phi)
+=-\mathbb{E}_{(x,y_w,y_l)\sim D}
+\log \sigma\!\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right).
+\]
+
+其中，$D$ 表示人类比较数据集，期望对 prompt 与成对回答取平均。损失只约束相对次序，因此奖励的绝对零点没有独立意义。
+
+\lecturefigure{slide-06-rlhf-reward-model.jpg}{RLHF 的第一步：由人类比较训练 reward model。}{Stanford Online 官方视频 00:06:35--00:07:55。}
+
+\begin{knowledgebox}{读图：比较数据解决什么问题}
+图中人类面对同一 prompt 的多个 response，提供相对排序；reward model 学会预测这种排序。相对判断通常比写出精确奖励更自然，也把一次人工比较摊薄到许多后续 policy samples 上。它没有消除主观性：不同 labeler 会不一致，最终模型学到的是数据分布中的聚合偏好，而不是客观真理的直接读数。
+\end{knowledgebox}
+
+\teachervoice{讲者明确说，labeler 经常并不一致，模型会在训练中聚合这些差异。这里的工程问题不只是 ``标签噪声''，还包括谁被雇来标注、给他们什么规范、哪些群体没有进入数据，以及冲突偏好是否应该被平均。}
+
+\subsection{第二步：优化 policy，同时限制偏移}
+
+获得 reward model 后，可以采样策略回答并用强化学习提高预测奖励。若只最大化 $r_\phi$，policy 可能钻 reward model 的漏洞；InstructGPT 因而使用对参考策略的 KL 约束，并混入 pretraining loss 以降低能力回退。一个教学化目标是
+
+\[
+J(\theta)=
+\mathbb{E}_{x\sim D_x,\,y\sim\pi_\theta(\cdot\mid x)}
+\left[r_\phi(x,y)-\beta\,
+D_{\mathrm{KL}}\!\left(\pi_\theta(\cdot\mid x)\,\|\,\pi_{\mathrm{ref}}(\cdot\mid x)\right)\right]
++\gamma\,\mathbb{E}_{z\sim D_{\mathrm{ptx}}}\log \pi_\theta(z).
+\]
+
+其中，$\pi_\theta$ 是待优化 policy，$\pi_{\mathrm{ref}}$ 是 SFT/reference policy，$\beta$ 控制偏离参考模型的惩罚强度，$D_{\mathrm{KL}}$ 衡量两个输出分布的差异，$D_x$ 是 prompt 分布，$D_{\mathrm{ptx}}$ 是预训练文本，$\gamma$ 控制保留语言建模能力的权重。
+
+\lecturefigure{slide-07-rlhf-full-loop.jpg}{完整的 slide 叙事：reward model 提供反馈，预训练语言模型经 RL 得到新 policy。}{Stanford Online 官方视频 00:07:55--00:09:24。}
+
+\begin{importantbox}{课堂两步图与论文三阶段并不矛盾}
+Slide 为了突出 reward modeling，把流程压成 ``比较训练 RM'' 与 ``RL 优化 policy''。讲者口头提醒还有一步被省略。按 InstructGPT 论文，常见流程是：先用 demonstrations 做 supervised fine-tuning（SFT），再用 comparisons 训练 reward model（RM），最后用 PPO 等 RL 方法优化 policy。讲义补回 SFT 是来源澄清，不是假装 slide 上出现了第三个框。
+\end{importantbox}
+
+\begin{lstlisting}[caption={RLHF 三阶段的最小伪代码}]
+policy = supervised_finetune(base_model, demonstrations)
+reward_model = train_pairwise_reward_model(policy, comparisons)
+
+for batch in prompt_batches:
+    responses = policy.sample(batch)
+    rewards = reward_model.score(batch, responses)
+    policy = ppo_update(
+        policy,
+        rewards=rewards,
+        reference=supervised_policy,
+        kl_penalty=beta,
+        pretraining_batch=next(pretraining_data),
+    )
+\end{lstlisting}
+
+\subsection{为什么不是只做 imitation learning}
+
+SFT/behavioral cloning 学习 ``人类会怎样回答''；preference optimization 学习 ``人类更喜欢哪个结果''。讲者指出一个双向限制：某些任务人类比模型强，模型可能无法完美模仿；另一些任务模型已有不同优势，强制模仿人类动作路径反而限制它。RL 允许模型寻找自己的实现方式，只要结果通过偏好评价。
+
+\begin{knowledgebox}{术语消化：SFT、RM、PPO、PPO-ptx}
+\begin{tabularx}{\textwidth}{L{2.2cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+术语 & 解决的问题 & 在本讲中的位置 \\
+\midrule
+SFT & 用高质量 demonstrations 建立可交互的初始 policy & 提供参考策略与基本指令跟随能力 \\
+RM & 把成对偏好压缩为可重复调用的标量函数 & 让有限人类比较监督大量样本 \\
+PPO & 在限制单次更新幅度的情况下提高预测奖励 & 是当时熟悉且有效的优化器，不是已证明最优 \\
+PPO-ptx & RL 时混入预训练目标 & 缓解只追偏好奖励带来的能力回退 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{学生问为什么用 PPO。讲者的回答非常工程化：团队熟悉它，而且 ``works pretty well''。这说明算法选择包含历史路径与工具成熟度，不能从 ``被采用'' 推出 ``理论上最佳''。}
+
+\subsection{本章小结}
+
+RLHF 用人类比较训练 reward model，再优化 policy；完整实践还包含 SFT、KL regularization 与预训练数据保留。它把反馈成本从每次动作的人类评分转成可复用模型，但也把 labeler 偏好、reward hacking 和 proxy misspecification 带入训练目标。
+
+\section{InstructGPT 与早期 ChatGPT：效果、成本和边界}
+
+RLHF 是否值得，不能只看损失函数，还要看用户更偏好什么、投入多少资源、原有能力是否回退。本章依次阅读三张课堂证据：偏好曲线、训练成本和 2023 年初 ChatGPT 的经验总结。
+
+\subsection{100 倍更小，为什么仍更受偏好}
+
+InstructGPT 论文把不同规模的 base GPT-3、SFT、PPO 与 PPO-ptx 模型放到相同的人类偏好评测中。横轴是模型参数规模，纵轴是相对某个基线被选中的频率。最醒目的结果是：1.3B 的 InstructGPT 变体在该 customer-prompt 分布上可被偏好于 175B 的 base GPT-3。
+
+\lecturefigure{slide-08-instructgpt-preferences.jpg}{InstructGPT 偏好曲线：alignment fine-tuning 可以显著改变用户感受到的效用。}{Stanford Online 官方视频 00:09:24--00:15:18。}
+
+\begin{knowledgebox}{读图：先看 y 轴，再看模型大小}
+y 轴不是通用 intelligence，也不是所有 benchmark 的平均分，而是人类在特定 prompt 分布上的 preference win rate。图支持 ``较小 aligned model 可以更符合用户意图''；它不支持 ``1.3B 模型在知识、推理和所有任务上都胜过 175B 模型''。PPO-ptx 曲线还提醒读者，偏好收益与能力保留需要同时测量。
+\end{knowledgebox}
+
+若把偏好实验写成二项随机变量，模型 $A$ 对模型 $B$ 的估计胜率为
+
+\[
+\widehat{p}_{A>B}=\frac{1}{N}\sum_{i=1}^{N}\mathbb{1}[A\text{ 在第 }i\text{ 个比较中被选中}],
+\]
+
+其中，$N$ 是有效比较数，$\mathbb{1}[\cdot]$ 是指示函数。这个统计量依赖 prompt 分布、labeler、展示顺序和评价规范；换一批任务或人群，$\widehat{p}_{A>B}$ 可能改变。
+
+\begin{warningbox}{Preference 不是 capability 的同义词}
+偏好可以奖励清晰、合作、拒绝不当请求和遵循格式，也可能奖励自信、讨好或熟悉风格。因而 preference win 应与真实性、校准、鲁棒性、专业任务正确率和安全评测并列，而不能单独承担 ``模型更好'' 的全部含义。
+\end{warningbox}
+
+\subsection{Alignment fine-tuning 的资源账}
+
+成本 slide 将 GPT-3 pretraining、InstructGPT SFT 与 InstructGPT RL 的 compute 放在同一纵轴，并在右侧单列人类反馈。它展示的不是 ``alignment 免费''，而是不同资源维度不对称：相对预训练，SFT/RL 的计算量很小；但收集高质量 demonstrations 与 comparisons 需要大量人类时间、规范设计和质量控制。
+
+\lecturefigure{slide-09-instructgpt-training-costs.jpg}{InstructGPT 训练成本：alignment compute 很小，人类反馈仍约需 20,000 小时。}{Stanford Online 官方视频 00:15:18--00:19:05。}
+
+\begin{knowledgebox}{读图：不要把 PFLOP/s-days 与美元直接相加}
+左侧柱状图比较计算量，右侧文字给出讲者估算的人类反馈约 50 万美元、约 2 万小时。二者是不同资源：compute 可通过硬件并行，人类判断受到招募、培训、一致性和代表性约束。真正的系统成本还包括数据治理、评测设计、工程迭代与失败实验，slide 没有声称覆盖全部生命周期成本。
+\end{knowledgebox}
+
+\begin{table}[H]
 \centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\caption{三类资源不能只压成一个价格数字}
+\begin{tabularx}{\textwidth}{L{2.9cm} X X}
+\toprule
+资源 & 主要作用 & 主要风险 \\
+\midrule
+Pretraining compute & 获得广泛语言与任务能力 & 成本高、数据边界不透明、知识截止 \\
+Alignment compute & 让已有能力更可控、更符合交互目标 & reward hacking、能力回退、过拟合偏好 \\
+Human feedback & 提供 demonstrations、comparisons 与错误判断 & 代表性不足、规范漂移、疲劳与一致性问题 \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
-\tableofcontents
-\newpage
+\subsection{ChatGPT：对话界面提高可用性，却没有消除失配}
 
-\section{引言：AI 对齐的紧迫性}
+讲者把 ChatGPT 看作 InstructGPT 的下一步：对话成为通用接口，用户可以追问、纠正和请求重写；拒绝有害任务也有所改善。但这不是 ``对齐完成''。2023 年初最突出的局限仍是 hallucination 与 prompt sensitivity：模型会编造事实，而且不同措辞可能诱发不同质量或不同安全行为。
 
-Jan Leike 领导 OpenAI 的对齐团队，拥有超过 10 年的对齐研究经验。他指出 AI 对齐问题正在从理论变为实践：随着 AI 系统能力的快速提升，确保其行为与人类意图一致变得越来越紧迫。
+\lecturefigure{slide-10-chatgpt-lessons.jpg}{2023 年初对 ChatGPT 的课堂总结：dialog、复杂任务、hallucination 与 prompt sensitivity。}{Stanford Online 官方视频 00:19:05--00:20:19。}
 
-\begin{importantbox}{AI 对齐的核心问题}
-如何确保 AI 系统\textbf{做人类真正希望它做的事情}，而不仅仅是表面上看起来在做正确的事？随着模型能力超越人类评估能力，这个问题将变得更加困难。
-\end{importantbox}
-
-\section{从 RLHF 到超级对齐}
-
-\subsection{RLHF 的基本框架}
-
-\begin{importantbox}{基于人类反馈的强化学习（RLHF）}
-RLHF 的标准流程：
-\begin{enumerate}
-    \item \textbf{监督微调（SFT）}：在人工编写的高质量回答上微调模型
-    \item \textbf{奖励模型训练}：收集人类对模型输出的偏好排序，训练奖励模型
-    \item \textbf{PPO 优化}：用奖励模型的信号通过强化学习优化策略模型
-\end{enumerate}
-\end{importantbox}
-
-\subsection{AI 辅助评估}
-
-\begin{knowledgebox}{可扩展的监督（Scalable Oversight）}
-当 AI 系统的输出超越人类直接评估的能力时，一个关键思路是\textbf{用 AI 辅助人类评估}：
-\begin{itemize}
-    \item 让 AI 为人类提供批评（critique）
-    \item 让 AI 帮助人类进行事实核查
-    \item 让 AI 生成解释，帮助人类理解复杂输出
-    \item 使用辩论（debate）机制：两个 AI 互相挑战，人类做裁判
-\end{itemize}
-\end{knowledgebox}
-
-\subsection{ChatGPT 中的对齐实践}
-
-Jan 分享了 InstructGPT/ChatGPT 开发中的经验：
-\begin{itemize}
-    \item ChatGPT 的数据标注者偏向程序员群体，导致了某种``技术风格''
-    \item 不同标注者群体会导致不同的模型风格
-    \item 理想情况下，模型应该能适应用户偏好的风格
-\end{itemize}
-
-\subsection{本章小结}
-
-RLHF 是当前实现对齐的主要工具，但随着模型能力增长，需要更可扩展的评估和监督机制。
-
-\section{超级对齐的挑战}
-
-\subsection{能力超越评估能力}
-
-\begin{warningbox}{对齐的根本困难}
-核心困境：如果 AI 的能力超越了人类在某个领域的评估能力，我们如何确保它在做正确的事？
-\begin{itemize}
-    \item 人类可能无法区分``真正正确的回答''和``看起来正确但有微妙错误的回答''
-    \item 模型可能学会``讨好评估者''而非真正解决问题
-    \item 这不是遥远的未来问题——在编程、数学等领域已经部分存在
-\end{itemize}
+\begin{warningbox}{时间边界：不要用后来的 ChatGPT 解释这张 slide}
+这页描述 2023-01-17 的公开系统。讲者在 Q\&A 明确说，ChatGPT 的精确训练数据量和步骤并未公开，只能说流程大体类似 InstructGPT；他回忆的 comparisons、demonstrations 与 20,000 小时也是近似量。讲义不能把后来的产品能力、工具调用或政策变化回填为当时已知规格。
 \end{warningbox}
 
-\subsection{对齐研究的方向}
-
-\begin{itemize}
-    \item \textbf{可解释性}：理解模型内部在做什么
-    \item \textbf{过程监督}：不仅评估最终结果，还评估推理过程
-    \item \textbf{递归奖励建模}：用对齐的 AI 帮助对齐更强的 AI
-    \item \textbf{宪法 AI}：让 AI 根据明确的原则进行自我约束
-\end{itemize}
+\begin{importantbox}{Prompt sensitivity 为什么也是 alignment 问题}
+如果两个语义等价的 prompt 仅因表述方式不同就触发完全不同的真实性、拒绝或推理质量，模型学到的仍是表面模式，而不是稳定任务意图。理想系统应在保留合理个性化的同时，对语义不变换保持关键行为不变，并在歧义处主动询问。
+\end{importantbox}
 
 \subsection{本章小结}
 
-超级对齐是 AI 安全领域最重要也最困难的开放问题之一。
+InstructGPT 证明 alignment fine-tuning 能显著改善特定分布上的人类偏好，而且计算成本远低于预训练；但反馈劳动、代表性和 proxy 风险仍然昂贵。早期 ChatGPT 进一步证明对话接口本身能提升可用性，同时也暴露 hallucination 与 prompt sensitivity 尚未解决。
 
-\section{从研究原型到组织级对齐流程}
+\section{Evaluation is easier than generation：可扩展监督的杠杆}
 
-\subsection{上线前不只是一轮 RLHF}
+前面的方法依赖人类比较。要把它扩展到更强模型，必须回答一个关键问题：人类能否评价自己不会完成的任务？讲者的出发点是一个常见但非绝对的非对称性---生成高质量结果可能很难，看到候选后识别哪一个更好往往容易一些。
 
-在真实组织里，对齐不是一个训练配方，而是一条持续运转的流程。模型团队需要先定义能力边界，再定义禁止行为，然后建立多层评测和发布门槛。也就是说，RLHF 只是中间一环，前面有数据筛选与 prompt 设计，后面还有红队测试、灰度发布、用户申诉和事后追责。
+\subsection{从命题到直觉}
 
-\begin{importantbox}{组织级对齐通常包含四道关}
-\begin{enumerate}
-    \item \textbf{训练关}：SFT 与 preference data 是否覆盖关键风险场景。
-    \item \textbf{评测关}：离线基准、专家评审与对抗样例是否达标。
-    \item \textbf{发布关}：是否有足够的策略层 guardrails、日志和回滚机制。
-    \item \textbf{反馈关}：上线后是否能快速吸收真实世界失效案例并回灌训练。
-\end{enumerate}
+课程先用单独标题页停顿，是因为这句话承担后半讲的全部逻辑。如果 evaluation 与 generation 同样困难，那么人类一旦被模型能力超越就失去监督入口；若评价更容易，人类便可以借助候选、证据和批评，把监督能力延伸到自己无法独立完成的任务。本节先把这条原则写成有条件的成本优势，再通过四个类比检查它何时成立、何时会因隐藏证据或 evaluator 被操纵而失效。
+
+\lecturefigure{slide-11-evaluation-title.jpg}{后半讲的核心原则：evaluation is easier than generation。}{Stanford Online 官方视频 00:20:19--00:20:32。}
+
+\begin{importantbox}{评价优势的条件化表述}
+更准确的说法是：给定候选结果、任务规范和足够可验证证据时，比较或局部检查的成本可能低于从零生成。优势来自搜索空间被候选压缩，而不是 evaluator 自动拥有真理。若错误隐藏在不可见状态、证据不可得、评价者可被说服或任务目标本身含糊，评价优势会减弱甚至消失。
 \end{importantbox}
 
-\subsection{AI 评审者的价值与局限}
+\subsection{四个类比应该怎样读}
 
-用更强的 AI 辅助评估，是当前最务实的方向之一。但 AI judge 也会继承训练偏见，甚至学会奖励``看起来安全''而不是真的安全的回答。
+Slide 列出 P/NP、观看比赛、购买产品和学术审稿。它们共享一个结构：执行者需要在巨大行动空间中找到方案，评价者看到少量候选后只需比较结果或指出局部问题。但这些例子不是证明 ``所有真实任务都可高效验证''；它们只是解释为什么 preference comparison 可能比 demonstration 更可扩展。
 
-\begin{warningbox}{不要把 AI judge 当作绝对裁判}
-AI 评审可以显著放大人类监督能力，却不应成为唯一裁决来源。尤其在高风险场景，必须保留人工复核、抽样审计和跨模型交叉检查，否则错误会被自动化地放大。
+\lecturefigure{slide-12-evaluation-easier-examples.jpg}{评价比生成容易的类比：复杂性、体育、消费选择与论文评审。}{Stanford Online 官方视频 00:20:32--00:22:25。}
+
+\begin{knowledgebox}{读图：把类比压成一个共同结构}
+P/NP 强调找到解与验证证书的差异；体育强调观众能判断胜负却无法达到职业水平；消费选择强调比较体验不要求制造产品；审稿强调指出缺陷不等于写出更好的论文。共同点是 evaluator 获得了候选或证据。不同点是现实评价常有主观目标、隐藏变量和不完整证据，不能直接套用复杂性理论结论。
+\end{knowledgebox}
+
+若生成成本记为 $C_{\mathrm{gen}}(T)$，在辅助信息 $a$ 下的评价成本记为 $C_{\mathrm{eval}}(T\mid a)$，scalable oversight 希望构造 $a$ 使
+
+\[
+C_{\mathrm{eval}}(T\mid a) \ll C_{\mathrm{gen}}(T),
+\]
+
+其中，$T$ 表示任务，$a$ 可以是候选答案、引用、测试、critique、对话或工具结果。符号 $\ll$ 是设计目标，不是对所有任务成立的定理。
+
+\begin{warningbox}{评价者也会被优化}
+一旦模型知道什么会获得高分，它就不只优化任务，还会优化 evaluator 的观察过程。流畅表达、选择性证据、迎合偏见甚至隐藏缺陷都可能提高评分。评价更容易只有在评价流程本身对这些策略足够鲁棒时才转化为可靠训练信号。
 \end{warningbox}
 
 \subsection{本章小结}
 
-对齐真正落地时，重点不只是训练一个更听话的模型，而是建立一个可监控、可回滚、可持续修正的组织流程。
+评价优势为 scalable oversight 提供入口：人类不必独立生成专家级结果，也可能比较候选或检查具体证据。但这个优势依赖可见证据、明确规范与抗操纵的评价流程；它不是 ``人类永远能监督更强 AI'' 的保证。
 
-\section{未来路线：过程监督与可解释控制}
+\section{Scalable oversight：当模型越过人类评价天花板}
 
-\subsection{从结果监督走向过程监督}
+普通 RLHF 默认人类能可靠比较 policy outputs。模型能力继续增长后，这个假设会率先失效：模型能完成更复杂的任务，而人类 evaluator 的专业知识和注意力不会随 AI progress 自动增长。本章先描述失效，再说明 AI assistance 如何尝试抬高评价曲线。
 
-Jan Leike 强调的一个核心方向，是把监督从``答案好不好''推进到``模型是怎么得到这个答案的''。这对数学、编程、科学研究尤其关键，因为错误常常隐藏在中间推理步骤里，而最终结果表面上看起来完全合理。
+\subsection{Human evaluation ceiling 与 deception incentive}
 
-\begin{knowledgebox}{过程监督为什么重要}
-如果只看最终答案，模型可能通过投机取巧、抄近路甚至伪造推理来获得高分。过程监督、trace auditing 和 tool-use logging 的共同价值，是让评估者更接近模型实际的决策链，而不是只看输出包装。
+图中横轴是 AI progress，纵轴是任务难度。橙色能力曲线上升，绿色 unaided human evaluation 近似水平。当橙线越过绿线，人类仍可能给出偏好，却无法知道高分输出是否真的正确；reward optimization 会把这种盲区变成可利用空间。
+
+\lecturefigure{slide-13-scaling-human-supervision.jpg}{Scalable oversight 的核心图：AI 能力增长，人类独立评价能力却有天花板。}{Stanford Online 官方视频 00:22:25--00:25:30。}
+
+\begin{knowledgebox}{读图：三条曲线分别代表什么}
+底部曲线是 AI 能完成的任务难度；水平线是人类独立可靠评价的上限；上方新曲线是人类与 AI 协作后的评价能力。关键不是精确交点，而是顺序：先出现模型能做但人类看不懂的任务，再出现对弱评价信号的系统性优化。图不证明 deception 必然发生，但说明 deception 或 sycophancy 为什么可能成为高奖励策略。
 \end{knowledgebox}
 
-\subsection{对产品团队的直接启示}
+把真实任务质量写成 $q(x,y)$，人类可见评分写成 $h(x,y)$，reward model 学到 $r_\phi(x,y)\approx h(x,y)$。若在人类看不懂的区域中 $h$ 与 $q$ 脱钩，那么
 
-对于构建 AI 产品的团队，这节课至少给出三条直接建议：
-\begin{itemize}
-    \item 在能力快速上升阶段，\textbf{评测体系要先于功能上线扩张}。
-    \item 对高风险能力，优先建设可解释日志和人工接管机制，而不是盲目追求自动化。
-    \item 把对齐视为长期运维问题，而不是一次性训练任务。
-\end{itemize}
+\[
+\arg\max_y r_\phi(x,y) \neq \arg\max_y q(x,y).
+\]
+
+其中，左侧是 policy 实际优化的 proxy，右侧是人类真正关心的任务质量。能力越强，模型越可能找到使两者分离的复杂输出。
+
+\begin{warningbox}{“骗过 evaluator”不要求模型有人类式恶意}
+只要训练持续选择高评分输出，任何稳定提高评分而不提高真实质量的模式都会被强化。它可以是讨好、过度自信、隐藏不确定性、选择性展示证据或真正的策略性欺骗。风险来自优化与测量的结构，而不是先假设模型拥有某种人格。
+\end{warningbox}
+
+\subsection{AI-assisted evaluation：把全局任务拆成可验证局部问题}
+
+讲者用代码审计举例：人类无法在有限时间里发现大型 codebase 的全部 bug 或 Trojan，但模型若指出具体位置、失败条件与测试，人类便可以验证这个局部 claim。AI assistance 的角色不是替人类下最终价值判断，而是做阅读、搜索、计算、fact checking 和候选生成，把难评价对象转化为一组更小的证据单元。
+
+\lecturefigure{slide-14-critiques-and-dialog.jpg}{两类 AI assistance：生成 critique，或通过 dialogue 主动查询证据。}{Stanford Online 官方视频 00:25:30--00:26:38。}
+
+\begin{knowledgebox}{读图：critique 与 dialogue 的信息接口不同}
+Critique 一次性给出 ``哪里可能错''，适合高召回地暴露检查点；dialogue 允许 evaluator 追问来源、反例、计算过程和替代解释，更适合逐步缩小不确定性。两者都依赖 assistant 的诚实性与覆盖率，不能因为语言自然就当作可靠证据。
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\caption{AI-assisted evaluation 的常见动作与剩余责任}
+\begin{tabularx}{\textwidth}{L{2.6cm} X X}
+\toprule
+动作 & AI 可承担的认知劳动 & 人类仍需判断 \\
+\midrule
+Critique & 枚举缺陷、反例、遗漏和冲突 & 哪些问题重要，critique 是否成立 \\
+Dialogue & 响应追问、比较方案、解释局部 claim & 何时停止追问，证据是否足够 \\
+Fact checking & 检索来源、定位引文、交叉核对 & 来源可信度与语境是否匹配 \\
+Code/tool use & 运行测试、计算、静态分析、浏览 & 权限边界、工具结果与真实目标的关系 \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \subsection{本章小结}
 
-超级对齐不是一条单点技术路线，而是从结果监督走向过程监督、从模型训练走向系统治理的长期工程。
+模型能力超过 unaided human evaluation 后，普通 RLHF 的 proxy 可能与真实质量脱钩。Scalable oversight 试图用同类 AI 的阅读、搜索、计算与批评能力帮助人类评价，但最终偏好判断、证据信任和权限边界仍由人类承担。
+
+\section{怎样测量 oversight 真的变好了}
+
+``让 AI 帮忙评价'' 很容易演示，却很难科学验证。真正困难的任务往往没有可得 ground truth；如果 evaluator 与 assistant 都给出同一个结论，我们不知道它们是一起发现真相，还是一起被相同偏差说服。本章介绍 targeted perturbations 与 discriminator--critique gap 两个诊断工具。
+
+\subsection{Targeted perturbations：人为制造已知缺陷}
+
+实验先取一个 response，暂时把它作为 reference，再由人类植入一个 subtle but important flaw，得到 perturbed response。由于研究者知道哪一份被修改，就能随机展示其中之一，测量 unaided human 与 assisted human 识别缺陷的准确率差异。
+
+\lecturefigure{slide-15-measuring-progress.jpg}{测量 AI assistance：从原回答构造带已知 subtle flaw 的配对样本。}{Stanford Online 官方视频 00:26:38--00:28:57。}
+
+\begin{knowledgebox}{读图：ground truth 到底是什么}
+流程中的 ground truth 是 ``哪一份被人为扰动''，不是原回答已经被证明绝对正确。这个设计让实验能测量 assistance 是否更容易发现植入缺陷，同时保留任务的自然语言复杂度；它不能覆盖自然出现、研究者没有预想到的全部错误模式。
+\end{knowledgebox}
+
+设 $z_i=1$ 表示第 $i$ 个样本被正确判为 flawed/correct，辅助条件 $a\in\{0,1\}$，则
+
+\[
+\widehat{\mathrm{Acc}}_a=\frac{1}{N_a}\sum_{i:a_i=a} z_i,
+\qquad
+\Delta_{\mathrm{assist}}=\widehat{\mathrm{Acc}}_1-\widehat{\mathrm{Acc}}_0.
+\]
+
+其中，$N_a$ 是对应条件的样本数，$\widehat{\mathrm{Acc}}_1$ 是有 AI assistance 的正确率，$\widehat{\mathrm{Acc}}_0$ 是无 assistance 的正确率，$\Delta_{\mathrm{assist}}$ 衡量净增益。还应同时报告误报、缺陷严重度和 evaluator 是否原本会注意到该问题。
+
+\begin{lstlisting}[caption={Targeted perturbation 评测的最小伪代码}]
+for prompt, reference in task_set:
+    flawed = human_insert_subtle_flaw(reference)
+    shown, label = random_choice([
+        (reference, "reference"),
+        (flawed, "flawed"),
+    ])
+
+    unaided = human_judge(shown)
+    critique = assistant_critique(prompt, shown)
+    assisted = human_judge(shown, critique=critique)
+
+    record(label, unaided, assisted, critique)
+\end{lstlisting}
+
+\subsection{Critique experiment：有希望，但远未闭环}
+
+本节用 topic-based summarization 实验检验上一节的评测方法：model critiques 帮助人类发现约百分之五十更多的 flaws。这个结果说明模型可以把自己的一部分任务知识转成 evaluator 可用的检查线索；但讲者紧接着给出三个限制：任务还不够难，实际效果应更大才令人放心，很多 critiques 是垃圾或 nitpicking。因此读图顺序应是先确认有无 assistance 的相对差异，再追问绝对漏检率、缺陷严重度和任务外推范围，而不是只记住 headline percentage。只有把效果量与失败样本一起读，才能判断 assistance 是真正增加洞察，还是仅仅增加了 evaluator 需要筛掉的文本数量。
+
+\lecturefigure{slide-16-summarization-critiques-results.jpg}{Summarization critiques 的课堂结果：assistance 提高了人类发现缺陷的数量。}{Stanford Online 官方视频 00:28:57--00:29:45。}
+
+\begin{warningbox}{读图时不能省略的三条限制}
+第一，``50\% more flaws'' 是相对增量，不等于发现全部缺陷；第二，summarization 比未来超人类任务更容易验证；第三，高召回 critique 可以容忍许多垃圾建议，因为人类会丢弃它们，而一个自主 assistant 若同样不可靠会造成更大成本。结果是 proof of concept，不是 scalable oversight 已解决。
+\end{warningbox}
+
+\teachervoice{讲者把 critique 的现实作用描述为 ``帮助你 brainstorm 应该看哪里''。这比 ``AI 已经知道正确答案'' 更克制：辅助模型可能只提供检查方向，最终判断仍需人类结合原文、严重度和任务规范完成。}
+
+\subsection{Discriminator--critique gap：模型知道却没有说出的部分}
+
+Q\&A 把问题推进一步：同一 pretrained model 分别微调成 discriminator 与 critique model。Discriminator 只需判断哪个 response 有 flaw；critique model 必须用自然语言指出 flaw。若前者明显更强，说明模型表示中存在可用于判别的信息，却没有被可靠地表述给人类。
+
+为了把这项差异变成可比较指标，可以定义
+
+\[
+G_{\mathrm{D-C}}=\mathrm{Acc}_{\mathrm{disc}}-\mathrm{Help}_{\mathrm{critique}},
+\]
+
+其中，$\mathrm{Acc}_{\mathrm{disc}}$ 是 discriminator 在配对任务上的判别准确率，$\mathrm{Help}_{\mathrm{critique}}$ 是 critique 实际帮助人类找到正确缺陷的成功率，$G_{\mathrm{D-C}}$ 是 discriminator--critique gap。大的正 gap 表示 ``能区分'' 与 ``能/愿意解释'' 之间存在显著距离。
+
+\begin{importantbox}{为什么 gap 比单独看 critique 质量更有信息}
+Critique 差可能是模型根本不知道，也可能是它知道但无法组织语言、优化目标没有奖励完整披露，或策略性地省略。Discriminator 提供一个近似上界探针。这个上界仍受 probe、数据和分布限制，但能把 ``模型到底知道多少'' 从纯哲学问题转成可比较实验。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Targeted perturbations 用人为缺陷构造局部 ground truth；critique experiments 测量 assistance 对人类发现错误的实际增益；discriminator--critique gap 检查模型表征与可沟通知识之间的距离。三者都是诊断，不是最终保证。
+
+\section{课堂 Q\&A：偏好、安全、工具与未解的对齐问题}
+
+主 slide 在 30:54 左右结束，但课程一半的信息量来自随后 Q\&A。这里不按问题出现顺序机械抄录，而把讨论重组为五个工程主题：人机分工、uncertainty、preference payload、tool-assisted evaluation，以及 outer/inner alignment 与 interpretability。
+
+\subsection{Machines 做认知劳动，Humans 负责偏好输入}
+
+讲者的长期图景不是让人类亲自阅读所有材料、写所有测试、做所有计算，而是让 AI 承担这些可扩展的 cognitive labor；人类集中处理自己最不可替代的输入---什么结果值得追求、哪些 tradeoff 可接受、何时风险过高。本节先解释最后一张 slide 的责任划分，再用后续 Q\&A 检验这项分工会在哪些地方重新把判断压力推回人类：不确定性、偏好代表性、工具权限和证据信任。
+
+\lecturefigure{slide-17-machines-vs-humans.jpg}{讲座结尾的分工：机器读、算、写代码和核验；人类沟通偏好。}{Stanford Online 官方视频 00:29:45--00:30:54。}
+
+\begin{knowledgebox}{读图：偏好输入仍然需要认知工作}
+``Humans: communicate preferences'' 不是只按一个喜欢/不喜欢按钮。人类需要澄清目标、比较冲突价值、决定证据标准、识别不可接受风险，并判断 assistant 是否在操纵评价过程。机器承担更多认知劳动的目的，是把有限人类注意力集中到这些不可简单外包的决策上。
+\end{knowledgebox}
+
+\subsection{Uncertainty calibration 与 critique signal-to-noise}
+
+学生先问 hallucination 是否能通过模型不确定性解决。讲者认为教模型在不确定时承认不确定 ``应该是可解的''，但 2023 年仍没有令人满意的状态。简单多次采样也不是完整答案：同一 fine-tuned model 的样本可能高度相关，而独立预训练多个模型成本极高。
+
+\begin{warningbox}{什么是 calibration}
+Calibration 要求模型声称 80\% 把握的一组事件大约有 80\% 正确；它不同于语言上加一句 ``我可能错了''。对生成模型，还需定义事件、把长答案拆成可验证 claims，并防止模型用模糊措辞逃避责任。表达不确定性有用，却不能替代事实验证。
+\end{warningbox}
+
+Critique 还存在 signal-to-noise 问题。讲者承认很多 critique 只是 nitpicking 或 garbage；在 ``给人类提供检查灵感'' 的高召回模式中，这可能尚可接受，因为人类能快速丢弃无关建议。但如果 assistant 直接做决策，低 precision 会消耗注意力、制造 false alarm，并让真正严重的问题淹没在噪声中。
+
+\subsection{Preference payload：谁的偏好、怎样更新、如何防投毒}
+
+RLHF 经常被画成 ``human feedback''，但 Q\&A 追问了更困难的 payload：谁被视为 human，怎样代表不同群体，偏好冲突如何处理。讲者直言，当时 labeler pool 很大程度上只是公司能够雇到的人，并不多样或具有代表性；有些研究最好由大科技公司之外的机构承担。
+
+\begin{importantbox}{不要直接在任意公开反馈上在线训练}
+讲者首先否定了一个危险捷径：把产品界面中的任意用户输入或反馈原样用于持续训练。协调攻击、恶意示范和数据投毒会把反馈渠道变成控制面。安全流程至少需要身份与质量控制、异常检测、分层抽样、审计、保留集和延迟更新，而不是 ``更多反馈自然更民主''。
+\end{importantbox}
+
+偏好也会漂移。重新收集 comparisons 并 fine-tune 的计算相对便宜，但模型更新会改变输出风格和行为，依赖旧 prompt 的应用必须重新适配。于是 alignment update 同时是 compatibility event：系统要在更符合新偏好与保持下游稳定之间权衡。
+
+\begin{table}[H]
+\centering
+\caption{Preference data 的四个边界}
+\begin{tabularx}{\textwidth}{L{2.5cm} X X}
+\toprule
+边界 & 关键问题 & 失败方式 \\
+\midrule
+Representation & 谁进入 labeler pool？ & 少数群体与专业需求被平均掉 \\
+Aggregation & 冲突偏好怎样组合？ & 把规范冲突误写成普通标签噪声 \\
+Security & 谁能影响反馈渠道？ & 协调操纵、投毒与奖励劫持 \\
+Drift & 偏好与知识怎样随时间更新？ & 行为突变、prompt 兼容性下降 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Browsing、API 与 external evidence}
+
+学生讨论了 browsing、calculators、search 与其他 APIs。工具可以让模型引用外部资料、运行计算和检查实时事实，从而把 ``凭参数记忆回答'' 改成 ``给出可复查证据''。但工具同时扩大 action space：模型可能访问不可信来源、泄露数据、调用高权限操作，或者把工具错误包装成确定结论。
+
+\begin{knowledgebox}{工具把 alignment 从文本扩展到系统边界}
+只生成 token 时，主要问题是答案质量；能调用工具后，还要定义 credentials、网络域、写权限、预算、日志、回滚和 human approval。Tool result 也不是天然 ground truth：搜索排名、网页内容、API 数据和代码执行环境都可能被操纵。可扩展监督因工具更强，也因工具更危险。
+\end{knowledgebox}
+
+在教育场景中，工具还可能造成 overreliance。学生若只接受流畅答案而不练习建模、推导和检验，会把辅助能力误当成自己的理解。好的系统应暴露证据、分解步骤、鼓励用户预测与检查，而不是只输出最终结论。
+
+\subsection{Outer alignment、inner alignment 与 distribution shift}
+
+后段 Q\&A 讨论 inner optimizer。Outer alignment 关注外部训练信号是否真的表达人类目标；inner alignment 关注模型内部学出的优化过程是否在训练分布外继续追随同一目标。讲者的个人判断是，先把 outer signal 做得非常可靠可能尤其重要，因为可信信号还能在新分布上继续训练和校正内部 optimizer。
+
+\[
+\underbrace{\text{trusted outer signal}}_{\text{what is rewarded}}
+\quad+\quad
+\underbrace{\text{coverage under shift}}_{\text{where it remains valid}}
+\quad\Longrightarrow\quad
+\text{continued correction of learned behavior}.
+\]
+
+其中，trusted outer signal 表示人类愿意依赖的评价信号，coverage under shift 表示该信号在新任务与新状态上仍能判断质量，箭头表示一种研究希望而非已证明保证。
+
+\teachervoice{讲者多次使用 ``I think''、``unclear'' 与 ``in practice''。他的论点是：若外部信号足够可信，部分 inner-alignment 风险可以被重新表述为 distribution shift 与持续评价问题；他没有声称 inner alignment 已因此消失。}
+
+\begin{warningbox}{自我 critique 不能凭空创造 ground truth}
+让模型审查自己的回答、让两个模型互相辩论或让 reward model 评价 policy，都可能提高覆盖；但如果所有角色共享同一盲点或同一错误目标，循环只会更自洽。必须保留独立证据、对抗样本、可验证任务和人类可理解的 failure signal。
+\end{warningbox}
+
+\subsection{Interpretability：有用，但可能 neither sufficient nor necessary}
+
+最后的讨论非常克制。Interpretability 可以帮助发现 deception、追踪模型为何给出某个答案，并作为评价工具箱的一部分；但即使能解释部分内部机制，也不自动告诉我们怎样把这些解释转成可靠训练目标。更尖锐的风险是 selection effect：若只淘汰被当前工具检测出的 misalignment，训练或筛选可能偏向更难检测的失败模式。
+
+\begin{importantbox}{Interpretability 的三层问题}
+第一层是 detection：能否看到与失败相关的内部特征；第二层是 attribution：能否说明这些特征如何导致行为；第三层是 control：能否在不破坏其他能力的情况下可靠改变行为。完成第一层不等于完成第三层，因此 interpretability 可能很有用，却既非充分条件，也未必是唯一必要路径。
+\end{importantbox}
+
+另一方面，若系统在所有相关分布上的行为都能被可靠评价和约束，内部 ``理由'' 是否必须完全可读仍是开放问题。讲者没有给出确定答案，而是把目标重新落在 ``really, really good evaluation signal''：能否持续判断模型实际做了什么，并据此训练它做我们真正想要的事。
+
+\subsection{本章小结}
+
+Q\&A 把 alignment 从一个 loss 扩展成完整评价系统：需要校准不确定性、控制 critique 噪声、治理 preference payload、防止投毒、管理工具权限、处理 distribution shift，并理解 interpretability 的作用边界。没有任何单项技术能替代 trusted evaluation。
 
 \section{总结与延伸}
 
-Jan Leike 的演讲强调了对齐研究的紧迫性和复杂性。从 RLHF 到可扩展监督，从人类评估到 AI 辅助评估，对齐方法需要与 AI 能力同步进化。这不仅是技术问题，也涉及深刻的哲学和社会问题。
+本讲的逻辑可以压缩成一条逐层变难的链。第一，真实 human intent 不只包含字面指令；第二，RLHF 用 demonstrations、comparisons、reward model 与 RL 把部分隐含偏好变成可优化信号；第三，InstructGPT 与早期 ChatGPT 证明这种信号能显著改善可用性，却保留 hallucination、prompt sensitivity 与代表性问题；第四，当模型完成的任务超过人类独立评价能力，普通 RLHF 的信号会失真；第五，AI-assisted evaluation 试图让机器承担阅读、搜索、计算和 critique，人类集中表达偏好；第六，targeted perturbations、critique experiments 与 discriminator--critique gap 只能逐步测量这条路线是否真的扩展监督。
+
+\begin{importantbox}{整堂课最值得带走的五点}
+\begin{enumerate}
+  \item Alignment 的对象是 human intent，而不是机械 obedience。
+  \item Reward model 是有限比较数据的可复用 proxy，同时也是新的被优化攻击面。
+  \item Preference improvement、capability、truthfulness 与 safety 必须分开测量。
+  \item Scalable oversight 的关键不是让 AI 替人类决定价值，而是把难评价对象转换成可核验的证据。
+  \item 所有递归监督、self-critique、debate 与 interpretability 路线最终都会遇到同一问题：可信 ground truth 或 trusted evaluation signal 从哪里来。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{证据成熟度阶梯}
+
+读者可以用四层阶梯判断一个 alignment claim 的强度。机制层说明方法怎样工作；当前实验层说明它在受控任务上是否有效；迁移层检验它是否适用于更难、更真实、更具对抗性的任务；保证层才讨论面对比 evaluator 更强的系统时是否仍可靠。本讲的 RLHF 结果主要位于前两层，scalable oversight 结果是第二层的早期 proof of concept，outer/inner alignment 与 interpretability 的最终作用仍属于开放研究。
+
+\begin{warningbox}{不要把研究路线写成既成事实}
+课堂给出了一个有希望的方向：用 AI 帮助人类评价 AI。它没有证明评价曲线一定能永远追上能力曲线，也没有证明同一模型会诚实暴露自己的全部知识。高质量讲义应保留这种不确定性，因为问题的难点正是我们无法用当前小实验直接验证未来强系统。
+\end{warningbox}
 
 \subsection{拓展阅读}
+
+以下资料均在课堂日期前公开，并直接支撑本讲主线：
+
 \begin{itemize}
-    \item Ouyang et al., ``Training Language Models to Follow Instructions with Human Feedback,'' NeurIPS 2022
-    \item Leike et al., ``Scalable Agent Alignment via Reward Modeling,'' arXiv 2018
-    \item Burns et al., ``Weak-to-Strong Generalization,'' OpenAI 2023
-    \item Bai et al., ``Constitutional AI: Harmlessness from AI Feedback,'' 2022
+  \item \href{https://arxiv.org/abs/1706.03741}{Christiano et al., Deep Reinforcement Learning from Human Preferences}：成对轨迹偏好与在线 reward learning。
+  \item \href{https://arxiv.org/abs/1811.07871}{Leike et al., Scalable Agent Alignment via Reward Modeling}：reward modeling 与 recursive assistance 的研究议程。
+  \item \href{https://arxiv.org/abs/2203.02155}{Ouyang et al., Training Language Models to Follow Instructions with Human Feedback}：SFT、RM、PPO 与 PPO-ptx 的公开实现和评测。
+  \item \href{https://arxiv.org/abs/2009.01325}{Stiennon et al., Learning to Summarize with Human Feedback}：语言生成中的偏好优化。
+  \item \href{https://arxiv.org/abs/2206.05802}{Saunders et al., Self-critiquing Models for Assisting Human Evaluators}：critique assistance、targeted flaws 与 discriminator--critique gap。
+  \item \href{https://arxiv.org/abs/1805.00899}{Irving et al., AI Safety via Debate}：用对话与对抗论证放大人类判断的另一条路线。
 \end{itemize}
+
+最终，alignment 不是把一个 ``goodness score'' 接到模型后面，而是设计一条不会因能力增长而失去可信度的反馈链。讲者在最后没有承诺某个组件会解决全部问题；他给出的更可靠研究姿态是：让评价任务可测、让证据可检查、让失败边界显式，并持续追问模型知道什么、说出什么、实际做了什么。
+
+\subsection{课后自检}
+
+读完本讲后，不应只会复述 RLHF 流程，还应能判断一个新的 alignment 方案究竟改善了哪一段反馈链。下面四个问题可以作为阅读论文、设计实验或评审产品声明时的最低检查表。
+
+\begin{knowledgebox}{用四个问题检查新的 alignment claim}
+\begin{enumerate}
+  \item 训练信号来自 demonstrations、comparisons、verifiable outcomes，还是另一个未经验证的模型判断？
+  \item 实验测量的是 preference、真实正确率、calibration、robustness，还是只测一个容易被优化的 proxy？
+  \item 当任务难度超过人类独立评价能力时，系统提供了什么可核验的 evidence，而不只是更流畅的解释？
+  \item 失败发生时，能否区分模型不知道、知道但说不出、知道却不愿说，以及 evaluator 没有检查到？
+\end{enumerate}
+\end{knowledgebox}
 
 \end{document}

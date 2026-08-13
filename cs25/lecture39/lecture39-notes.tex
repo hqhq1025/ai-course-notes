@@ -1,242 +1,734 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 39：用于药物发现的多模态世界模型}
+\renewcommand{\noteauthors}{基于 Eshed Margalit（Noetik.ai）Stanford CS25 V5 官方讲座与人工字幕整理}
+\renewcommand{\notedate}{CS25 V5 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2025-05-20；上传 2025-06-13}
+\renewcommand{\videoduration}{1:11:02}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=8kXIaUM3h1E}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{Eshed Margalit, Stanford CS25 V5 official recording, #3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \normalsize
+  \setlength{\parskip}{0.25em}
 }
-
-\newcommand{\notetitle}{[CS25 V5] Multimodal World Models for Drug Discovery --- Eshed Margalit, Noetik}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2025}
-\newcommand{\videochannel}{Stanford CS25: Transformers United V5}
-\newcommand{\videopublishdate}{Spring 2025}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{从世界模型到多模态学习}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+这场课不是把 Transformer 生硬地套到癌症数据上，而是从一个更通用的问题出发：当现实由多个传感器共同观测、行动又会改变未来时，模型应该怎样形成可用于模拟的内部状态？癌症只是这个问题最困难也最有价值的实例之一。讲义因此先建立 world model（世界模型）与 multimodality（多模态）的操作性定义，再进入具体架构和生物数据。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{
-\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par
-}
-\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{本讲的三段任务与读者契约}
 
-\tableofcontents
-\newpage
+课堂路线由三部分组成：多模态机制、癌症场景、以及仍在推进中的未来系统。这里的顺序很重要：若不先理解“为什么融合”，后面的 H\&E、蛋白和 RNA 只会变成名词列表；若不理解临床问题，架构图又会失去任务约束。读者应始终追踪同一条主线：每种新数据或新模块究竟减少了哪一种不确定性，又是否改变了可执行的实验选择。
 
-\section{引言：用 AI 构建癌症的世界模型}
+\lecturefigure{slide-038-agenda.jpg}{课程路线：多模态机制、癌症语境与未来工作}{00:01:47}
 
-Eshed Margalit 在斯坦福完成了神经科学 PhD（研究灵长类视觉系统），目前是 Noetik 的 ML 科学家。Noetik 是一家 AI-native 生物科技创业公司，专注于利用多模态 Transformer 进行癌症药物发现。
+读图时先看三段之间的依赖。第一段提供 translation、disambiguation 和 fusion 的语言；第二段把这些概念映射到肿瘤数据；第三段才讨论更大模型、反事实模拟和可解释性。它不是三个互不相干的专题，而是一条“定义问题—构造数据—训练模拟器—检验边界”的链。
 
-本讲的核心论点是：\textbf{多模态机器学习}不仅是 AI 研究的前沿方向，癌症生物学更是一个独特且极其丰富的多模态学习基底——其数据的多样性和复杂性为基础 ML 研究提供了难得的研究场景。
+\lecturefigure{slide-040-audience-assumptions.jpg}{听众假设：懂 Transformer 基础，但不预设癌症免疫学背景}{00:02:37}
 
-\begin{knowledgebox}{讲者背景}
-Eshed 的学术训练是计算神经科学，而非癌症免疫学。他的广泛兴趣在于理解复杂生物系统如何被组装、如何正常工作、以及如何失灵。这种跨领域视角是本讲的重要特色。
-\end{knowledgebox}
+这张假设页直接决定讲义的粒度。后文会保留 English technical terms，却在第一次出现时解释 H\&E、spatial transcriptomics、imputation、counterfactual 和 calibration。相反，自注意力不会从矩阵乘法的最底层重讲，而是集中解释不同模态进入 $Q/K/V$ 后发生了什么。
 
-\section{世界模型框架}
+\lecturefigure{slide-056-talk-goals.jpg}{讲者希望建立的三层说服目标}{00:04:17}
 
-\subsection{什么是世界模型？}
+第一层主张是多模态 Transformer 仍有大量开放设计空间；第二层主张是癌症生物学恰好提供了高维、空间化、跨尺度的数据 substrate；第三层才是 Noetik 是否已经接近药物发现价值。三层证据强度不同：架构机制可以由公式和实验说明，癌症数据的研究价值可以由测量结构说明，而治疗价值必须经过湿实验、动物研究和临床验证。
 
-AI 的一个统一目标是构建\textbf{世界模型}（World Model）——一个能够模拟世界未来状态的系统：
-\begin{itemize}
-    \item 基于对世界当前状态的观测
-    \item 预测如果执行某个动作，世界将如何变化
-\end{itemize}
+\teachervoice{00:01:05--00:04:17，老师强调前半段即使脱离癌症也应独立有用；他真正想说服听众的首先是“多模态机器学习仍然很有创造空间”，而不是先接受某个公司的产品叙事。}
 
-这个框架天然是多模态的——人类通过视觉、听觉、触觉等多种感官来感知世界并做出决策。最好的世界模型应当能够整合所有这些模态的信息。
-
-\subsection{多模态学习的两种动机}
-
-\begin{importantbox}{翻译 vs.\ 互补}
-\begin{enumerate}
-    \item \textbf{多模态翻译}：将一种模态的信息转换为另一种模态（如图像描述、语音转文字）
-    \item \textbf{多模态互补}：不同模态提供关于同一现实的\textbf{互补}信息，组合后能提供单一模态无法达到的预测能力
-\end{enumerate}
-Noetik 更关注第二种——癌症生物学中，不同数据模态揭示肿瘤的不同方面，只有组合起来才能做出有效的治疗预测。
+\begin{importantbox}{讲义的证据分层}
+后文将明确区分三类陈述：\textbf{机制定义}说明模型怎样计算；\textbf{研究结果}说明某个数据集和实验中观察到什么；\textbf{临床主张}需要超出讲座的因果与安全验证。把三者混写，是理解 AI for Science 时最危险的错误之一。
 \end{importantbox}
 
-\subsection{本章小结}
+\subsection{世界模型：观测、行动与未来状态}
 
-世界模型框架为多模态学习提供了统一的思考方式，而多模态互补（而非仅仅是翻译）是癌症药物发现的关键需求。
+世界模型并不等于“有一个大的 latent space”。课堂给出的定义强调干预条件：模型接收当前观测，还要能回答采取某个动作后世界将怎样变化。一个只做静态分类的网络可以学习丰富表示，却未必构成可用于规划的世界模型。下面先把观测、动作和未来状态写成条件分布，再解释为什么多个传感器必须在这个分布里共同出现。
 
-\section{癌症免疫学速成}
+\lecturefigure{slide-059-world-model-definition.jpg}{世界模型的操作性定义：由传感器观测与动作共同条件化未来}{00:05:35}
 
-\subsection{免疫治疗的基本原理}
+可把图中的关系写成
+\[
+p_\theta(s_{t+1}\mid o_{\le t}^{(1:M)},a_t),
+\]
+其中 $s_{t+1}$ 是未来状态，$o_{\le t}^{(1:M)}$ 表示截至时刻 $t$ 来自 $M$ 个模态的观测，$a_t$ 是候选动作，$\theta$ 是模型参数。真正用于决策时，我们比较的不是一个无条件未来，而是不同动作诱导的未来分布。
 
-\begin{knowledgebox}{癌症免疫治疗核心思想}
-人体免疫系统本身具有检测和摧毁癌细胞的能力，但肿瘤会进化出逃避或抑制免疫系统的机制。免疫治疗的目标是\textbf{消除这些免疫逃逸机制}，帮助免疫细胞恢复其抗肿瘤功能。
-\end{knowledgebox}
-
-\subsection{药物发现的两个方向}
-
-\begin{enumerate}
-    \item \textbf{发现新药物}：找到前所未有的治疗手段
-    \item \textbf{精准匹配}：许多已有药物在临床试验中因为患者响应不一而``失败''——并非药物无效，而是缺乏将正确药物匹配给正确患者的能力
-\end{enumerate}
-
-两个方向都需要一个能够模拟``给定患者生物学数据，如果施用某种药物，肿瘤是否会消退''的世界模型。
-
-\subsection{本章小结}
-
-癌症免疫治疗的关键在于理解肿瘤微环境中免疫系统与肿瘤的复杂交互，多模态数据为此提供了前所未有的观察窗口。
-
-\section{Noetik 的多模态数据平台}
-
-\subsection{四种数据模态}
-
-Noetik 从人类肺部肿瘤标本（约 1mm 直径的组织核心）中获取四种空间对齐的数据模态：
-
-\textbf{1. H\&E 染色图像。} 最常见的病理学染色，类似 RGB 图像，能够显示组织的大体形态学特征。优点是廉价、易获取、数据量大。
-
-\textbf{2. 16-plex 蛋白质免疫荧光面板。} 通过 16 种荧光抗体检测不同蛋白质，类似``16 通道的 RGB 图像''。能够区分 T 细胞（绿色）、B 细胞（蓝色）、肿瘤细胞（红色）等。
-
-\textbf{3. 空间转录组学。} 在组织空间位置上测量基因表达谱——对于约 1000 个基因，我们知道每个空间位置的表达水平。
-
-\textbf{4. 单细胞 RNA 测序（scRNA-seq）。} 提供单个细胞级别的基因表达信息，可以精确识别细胞类型和状态。
-
-\begin{importantbox}{空间对齐的关键价值}
-这四种模态是在\textbf{同一组织样本}上空间对齐采集的。这类似于 RGB 和深度图像的配对——不同模态观察的是同一现实的不同侧面，使得跨模态学习成为可能。
+\begin{importantbox}{World model 的最小判据}
+模型至少要回答“在当前证据下，如果采取动作 $a$，未来状态会怎样变化”。只有观测编码，没有行动条件或状态转移，就更适合称为 representation model，而不是完整的世界模型。
 \end{importantbox}
 
+\lecturefigure{slide-063-multimodal-perception.jpg}{视觉、音频与文本共同支持行动前的查询}{00:07:00}
+
+圆环路口例子把抽象定义落到直觉：摄像头告诉你车辆位置，麦克风告诉你不可见方向的接近速度，文本可能提供“这个路口高峰期危险”的先验。模型要回答“现在走入路口会发生什么”，必须把不同格式、不同噪声和不同时间尺度的证据合并，而不是简单多数投票。
+
+\lecturefigure{slide-064-modality-fusion.jpg}{多模态学习的核心动作：让不同传感器的信息发生可训练交互}{00:07:17}
+
+黄色箭头表示 fusion（融合）：不同模态不只是各自编码后在末端拼分数，而是允许一个流改变另一个流的表示。若把融合后的隐变量记为 $z$，一个通用写法是
+\[
+p(y\mid o^{(1)},\ldots,o^{(M)})
+=\int p(y\mid z)\,p_\theta(z\mid o^{(1)},\ldots,o^{(M)})\,\mathrm{d}z.
+\]
+$z$ 不是必须显式存在的单个向量；它可以是一组 token、多个层级的 cross-attention 状态，或由条件归一化调制的整条计算路径。
+
+\begin{knowledgebox}{为什么多模态不是“输入更多”}
+输入通道增加并不自动产生多模态推理。关键在于模型是否学会：哪些证据可互相翻译，哪些证据只能共同消除歧义，哪些模态在某个样本中缺失，以及不同传感器的误差如何传播到最终行动。
+\end{knowledgebox}
+
 \subsection{本章小结}
 
-Noetik 构建了独特的多模态癌症数据平台，四种空间对齐的数据模态为训练世界模型提供了丰富的信息基础。
+本章建立了后续统一语言：世界模型是动作条件下的未来模拟器，多模态学习是让多个观测流形成可用于该模拟的联合状态。癌症任务的难点并非“把图像和表格都喂进去”，而是找到正确的观测层级、融合位置、预测目标与验证闭环。
 
-\section{多模态 Transformer 架构}
+\section{Translation、Disambiguation 与融合机制}
 
-\subsection{模态特定的 Tokenization}
+有了世界模型目标，下一步不是立即挑架构，而是先问多模态究竟提供什么信息。课堂给出一个极有用的二分法：translation（翻译）寻找模态间共享内容，disambiguation（消歧）利用一个模态中额外的信息补足另一个模态。这个区分会直接决定损失函数和融合位置。
 
-每种数据模态需要不同的 tokenization 策略：
-\begin{itemize}
-    \item \textbf{H\&E 图像}：使用预训练的病理学视觉编码器（如 UNI、Virchow 等基础模型）
-    \item \textbf{蛋白质荧光}：类似图像但通道数不同，需要适配的编码器
-    \item \textbf{空间转录组}：基因表达向量的空间排列
-    \item \textbf{单细胞数据}：每个细胞是一个高维向量
-\end{itemize}
+\subsection{两种多模态价值：共享事实与互补证据}
 
-\subsection{跨模态注意力}
+翻译式任务假设两个模态描述同一底层事实，因此可以由一边预测另一边；消歧式任务则承认某些事实只存在于其中一个模态，联合观察才足以决定答案。真实系统往往同时包含两者。为了避免把二者混成“融合后效果更好”，下面分别追踪共享信息、模态独有信息以及它们对目标后验分布的不同作用。
 
-核心架构思想是让不同模态的 token 通过 Transformer 的自注意力机制相互交流。由于它们是空间对齐的，相同位置上不同模态的 token 自然形成互补的信息源。
+\lecturefigure{slide-065-translation.jpg}{Translation：两个模态共享较大信息交集}{00:07:47}
 
-\subsection{预训练任务设计}
+Venn 图中的交集代表可跨模态恢复的内容。例如图像中的“红色车辆”可以对应文本中的同一对象；语音和字幕也可表达近似语义。训练目标通常鼓励对应样本靠近、非对应样本分开，或直接生成另一模态。
 
-一个关键的设计决策是预训练任务的选择：
-\begin{itemize}
-    \item \textbf{跨模态预测}：给定一种模态的输入，预测另一种模态的表示
-    \item \textbf{掩码建模}：随机遮挡部分 token，利用其他模态的信息来重建
-    \item \textbf{对比学习}：学习跨模态的对齐表示
-\end{itemize}
+\lecturefigure{slide-066-translation-vs-disambiguation.jpg}{Translation 与 disambiguation 的几何差别}{00:08:18}
 
-\begin{warningbox}{H\&E 的陷阱}
-H\&E 染色图像虽然数据量最大、最易获取，但它只提供形态学信息。如果模型过度依赖 H\&E，可能会忽视蛋白质和基因表达层面的关键信号。多模态学习的目标正是超越任何单一模态的局限。
+右图强调现实状态比任一单独观测更大。蓝色和黄色各自覆盖现实的一部分，灰色区域是共享部分；若任务只关注灰色，translation 足够；若答案依赖蓝色或黄色独有区域，就需要 disambiguation。癌症数据尤其如此：H\&E 可见形态，RNA 可见表达程序，两者重合但绝不等价。
+
+\lecturefigure{slide-067-translation-example.jpg}{翻译式多模态学习：跨模态建立统一样本表示}{00:08:50}
+
+图中的生成式人物示例带着一个重要警告：不同模态可能在风格或表面上对齐，却没有捕获底层因果结构。一个模型能从文字生成看似相关的图，并不证明它理解了现实状态；translation 的成功首先说明共享信息可恢复。
+
+\lecturefigure{slide-068-disambiguation.jpg}{Disambiguation：一个模态提供另一个模态没有的事实}{00:08:57}
+
+消歧要求模型允许“非对称证据”。当相机看不到警报声来源时，音频不是图像的翻译，而是增加了新的世界状态约束。数学上可用条件熵说明其价值：若
+\[
+H(Y\mid X_1,X_2)<H(Y\mid X_1),
+\]
+则模态 $X_2$ 在给定 $X_1$ 后仍提供关于目标 $Y$ 的额外信息。
+
+\lecturefigure{slide-069-disambiguation-example.jpg}{电影场景示例：看见奔跑并不能决定危险类型}{00:09:43}
+
+只看人物奔跑，可能是火灾、追逐、演习或喜剧；音效、对白和环境线索才让模型更新假设。读这张图时不要把“融合”理解成特征数量增加，而应问：哪个模态让哪些候选解释失去概率质量？这正是后文空间邻域帮助判断细胞状态的逻辑。
+
+\teachervoice{00:07:18--00:09:31，老师反复区分 translation 与 disambiguation：前者强调模态间同一事实，后者强调一边含有另一边没有的关键信息。这个区分是整场课的主轴。}
+
+\begin{warningbox}{一个常见误区：共享 embedding 就等于理解}
+对齐损失可以让图文配对在向量空间相近，却可能丢掉对行动关键、但只在单一模态存在的信息。若世界模型只保留交集，它会在最需要互补证据的场景中过度自信。
+\end{warningbox}
+
+\subsection{五类融合路线}
+
+确定信息角色后，才进入架构选择。课堂列出五类方案，但明确说明这不是完备分类：它们可以组合，也可能只是在不同层、不同计算预算下实现相似的条件化。为了进行公平比较，不能只看模块名字，而要同时检查融合发生得多早、保留了多少局部细节、缺失模态怎样处理，以及序列长度带来的计算代价。
+
+\lecturefigure{slide-070-fusion-options.jpg}{五类融合：对齐、拼接、cross-attention、额外 token 与条件归一化}{00:10:59}
+
+从早到晚可把这些方法放在一条谱系上：输入级拼接最早，独立编码后对齐最晚；cross-attention 在中间显式交换信息；bonus/CLS token 与 adaptive LayerNorm 则把模态信息压缩为控制信号。融合越早，细粒度交互越充分，但计算成本和缺失模态处理也越复杂。
+
+\lecturefigure{slide-072-contrastive-embedding.jpg}{方案一：对比学习把配对模态拉到共享空间}{00:13:33}
+
+以 CLIP 类目标为例，批内正配对 $(i,i)$ 应比负配对 $(i,j)$ 相似。一个对称损失可写为
+\[
+\mathcal{L}_{\mathrm{clip}}
+=-\frac{1}{2N}\sum_{i=1}^{N}\left[
+\log\frac{e^{s_{ii}/\tau}}{\sum_j e^{s_{ij}/\tau}}
++\log\frac{e^{s_{ii}/\tau}}{\sum_j e^{s_{ji}/\tau}}
+\right],
+\]
+其中 $s_{ij}$ 是两个编码器输出的相似度，$\tau$ 是温度。它擅长检索和共享语义，却不自动保留所有局部细节。
+
+\lecturefigure{slide-073-direct-concatenation.jpg}{方案二：在共享空间网格上直接拼接输入}{00:14:30}
+
+RGB 与深度图像逐像素对齐时，拼接非常自然：每个位置直接拥有颜色与距离通道。它的前提是模态具有共同采样单位和可靠 registration（配准）。若 RNA spot、细胞边界和 H\&E patch 的空间坐标不一致，直接拼接会把测量误差误当成生物差异。
+
+\lecturefigure{slide-074-cross-attention-examples.jpg}{方案三：Cross-attention 在两个 token 流之间建立查询}{00:15:35}
+
+图中列出视觉语言和多流 Transformer 的常见用法。Cross-attention 的关键不在“多了一个 attention 模块”，而在角色分工：一个流发出 query，另一个流提供 key/value。这样可以让细胞 token 查询周围组织，或让图像 patch 查询基因表达上下文。
+
+\lecturefigure{slide-076-multihead-self-attention.jpg}{回顾多头自注意力：同一序列内生成 $Q/K/V$}{00:16:01}
+
+Self-attention 对输入 $X$ 计算
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\]
+\[
+\operatorname{Attn}(X)=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_h}}\right)V.
+\]
+$d_h$ 是每个 head 的维度。多个 head 允许不同关系并行建模，但所有信息仍来自同一 token 集合。
+
+\lecturefigure{slide-077-cross-attention-mechanism.jpg}{Cross-attention：query 来自一个流，key/value 来自另一个流}{00:16:18}
+
+若 $X$ 是目标流、$Y$ 是条件流，则
+\[
+Q=XW_Q,\qquad K=YW_K,\qquad V=YW_V.
+\]
+输出长度跟随 $X$，内容却由 $Y$ 中可检索信息调制。方向不能随意忽略：让 H\&E 查询 RNA 与让 RNA 查询 H\&E，计算成本、输出粒度和缺失模态行为都不同。
+
+\begin{knowledgebox}{Collective fusion 设计问题}
+选择融合层时至少要问：token 数量是否相差几个数量级？空间坐标是否一一对应？哪个流需要保留输出分辨率？是否允许某个模态缺失？训练时可见、部署时不可见的模态是否会造成 information leakage？
+\end{knowledgebox}
+
+\subsection{Token 条件与 Adaptive LayerNorm}
+
+有时不需要所有 token 两两交互，而只需让一个紧凑条件改变主干网络的计算。额外 token 和 adaptive LayerNorm 都属于这种“控制信号”思路：前者进入注意力序列，后者直接改变归一化后的尺度与偏置。进一步的问题是压缩后的条件是否仍保留稀有局部信号，以及节省的注意力成本是否会以表达能力下降为代价。
+
+\lecturefigure{slide-079-cls-token-fusion.jpg}{方案四：用额外 token 向主干注入模态或类别条件}{00:17:54}
+
+图中一边展示 Vision Transformer 的 CLS token，另一边展示把文本 token、图像 token 或条件 token 拼入序列。额外 token 的优点是复用标准 Transformer；缺点是信息必须先被压缩，且长序列注意力成本可能很高。若一个 token 代表整块肿瘤微环境，它能否保留稀有细胞信号需要实证检验。
+
+\lecturefigure{slide-080-adaptive-layernorm.jpg}{方案五：Adaptive LayerNorm 让条件控制每层特征尺度与偏移}{00:19:24}
+
+LayerNorm 先对隐藏向量标准化，再施加可学习参数。Adaptive LayerNorm 令参数由条件 $c$ 生成：
+\[
+\operatorname{AdaLN}(h;c)=\gamma(c)\odot
+\frac{h-\mu(h)}{\sqrt{\sigma^2(h)+\epsilon}}+\beta(c).
+\]
+条件网络输出尺度 $\gamma(c)$ 与偏移 $\beta(c)$；它们可来自另一模态、时间步或空间邻域。该方法不增加主序列长度，通常比全量 cross-attention 更省算力，但条件信息会被压缩到调制参数中。
+
+\lecturefigure{slide-082-fusion-summary.jpg}{融合方案回看：没有单一方法垄断所有任务}{00:20:18}
+
+总结页最值得读的是“everything is just token soup”这句半玩笑式判断：很多方法最终都在决定哪些信息变成 token、何时混合、何时压缩。课堂问答进一步指出，adaptive LayerNorm 的条件网络本身也可以包含 cross-attention；因此这些名词不是互斥宗派，而是可组合组件。
+
+\begin{lstlisting}[language=Python,caption={多模态融合器的统一伪代码：显式保留缺失模态与方向}]
+def fuse(target_tokens, context_tokens, context_available):
+    if not context_available:
+        return target_tokens
+    context_summary = context_encoder(context_tokens)
+    target_tokens = cross_attention(
+        queries=target_tokens,
+        keys=context_tokens,
+        values=context_tokens,
+    )
+    scale, shift = condition_to_layernorm(context_summary)
+    return adaptive_layernorm(target_tokens, scale, shift)
+\end{lstlisting}
+
+\teachervoice{00:20:18--00:21:31，课堂提问追问 cross-attention 与 LayerNorm 的关系。老师的回答是：条件分支可以很复杂，甚至先做 cross-attention 再生成缩放与偏移；真正需要比较的是表达能力、参数量与计算效率。}
+
+\begin{warningbox}{架构名称不是实验结论}
+“使用 cross-attention”无法说明模型是否学会了正确融合。必须检查缺失模态、错配坐标、单模态捷径、不同患者外推和干预后稳定性。结构图只定义了可能的信息通路，不证明通路被正确使用。
 \end{warningbox}
 
 \subsection{本章小结}
 
-多模态 Transformer 通过模态特定的编码器和跨模态注意力，将不同类型的生物学数据统一到一个共享的表示空间中。
+Translation 与 disambiguation 是比架构名更稳定的分析工具。对比学习强调共享信息，拼接依赖强配准，cross-attention 允许方向性查询，额外 token 和 adaptive LayerNorm 则把条件压缩成控制信号。实际系统可混合使用它们，但必须围绕任务中的信息缺口与部署约束做选择。
 
-\section{药物发现应用}
+\section{把癌症重写成世界模型问题}
 
-\subsection{虚拟实验模拟}
+前两章仍然适用于机器人、视频或语音。本章开始说明为什么肿瘤生物学不是随意挑选的应用：它既是一个多尺度动态系统，又拥有多个互补但昂贵的传感器。临床真正关心的不是“这张图属于哪类”，而是“给这个患者某个治疗后，肿瘤会不会发生有利变化”。
 
-最终目标是构建一个能够进行``虚拟实验''的世界模型：
+\subsection{宏观世界与肿瘤世界的对应}
 
-$$\text{输入：患者多模态数据} + \text{药物候选} \to \text{输出：治疗效果预测}$$
+从街景到肿瘤，结构保持不变：现实状态不可完全观察，传感器给出部分证据，行动改变未来，查询决定模拟目标。不同之处在于肿瘤的状态变量横跨患者、器官、组织、细胞和分子多个尺度。下面通过宏观世界、免疫微环境和患者模拟器三张图，逐步把抽象组件映射到可测量对象与临床问题。
 
-这使得研究者可以在\textbf{in silico}（计算模拟中）快速筛选大量药物-患者组合，大幅降低实际实验成本。
+\lecturefigure{slide-092-macroscopic-world-model.jpg}{宏观世界模型：摄像头、麦克风和文本共同回答行动查询}{00:22:46}
 
-\subsection{实验优先级的确定}
+这张回顾页提醒我们，world model 的价值来自闭环：传感器不是为了收集越多越好，而是为了回答行动相关查询。若一个模态昂贵但不会改变治疗排序，它的边际价值可能很低；若一个稀有测量能区分两个治疗响应完全相反的亚群，它就非常关键。
 
-即使有完美的模拟器，也不能无限制地运行模拟。确定实验优先级需要：
-\begin{itemize}
-    \item 领域专家的假设驱动（``我们认为肿瘤通过 X 机制逃逸免疫，让我们测试阻断 X 的药物''）
-    \item 未来可能由 AI 科学家 Agent 驱动的自动实验设计
-\end{itemize}
+\lecturefigure{slide-094-cancer-immunology.jpg}{一页癌症免疫学：肿瘤与免疫系统在微环境中持续互动}{00:25:04}
+
+图中彩色细胞不是装饰。Tumor microenvironment（肿瘤微环境）包含肿瘤细胞、T 细胞、B 细胞、巨噬细胞和基质等；免疫系统既可能识别并清除异常细胞，也可能被肿瘤抑制、排斥或重编程。治疗响应因此依赖细胞类型、空间位置、状态和信号通路的组合。
+
+\begin{knowledgebox}{第一次出现：肿瘤免疫治疗}
+Cancer immunotherapy（癌症免疫治疗）不是直接毒杀所有肿瘤细胞，而是尝试解除免疫抑制、增强识别或改变免疫细胞功能。相同药物在不同患者上反应差异巨大，正是患者条件世界模型想解释的对象。
+\end{knowledgebox}
+
+\lecturefigure{slide-095-patient-simulator.jpg}{理想目标：从患者组织出发模拟治疗后的组织级响应}{00:25:20}
+
+图中把患者组织送入 world model，再询问“给药后肿瘤会消退吗”。可形式化为
+\[
+p_\theta(R\mid X_{\text{patient}},a_{\text{drug}}),
+\]
+其中 $R$ 是响应，$X_{\text{patient}}$ 是患者多模态状态，$a_{\text{drug}}$ 是药物干预。这个公式看似简单，真正困难的是 $X$ 不可完整测量、药物作用时间很长、训练数据缺少随机干预，而且临床响应标签稀缺。
+
+\lecturefigure{slide-096-dataset-scale.jpg}{讲座时点的数据规模：患者、切片、像素与空间测量共同增长}{00:25:21}
+
+数字页必须按时间理解：它描述 2025 年 5 月讲座时的研究快照，不是 2026 年现状。更重要的不是具体计数，而是层级差异：约千级患者、千级切片、海量像素和空间点位意味着“样本量”不能只按患者数或 token 数单独评价。患者独立性决定泛化，细胞与像素决定局部统计精度。
+
+\teachervoice{00:22:46--00:25:23，老师把问题压缩成一句临床查询：如果把某个治疗给这个患者，肿瘤会不会消退？这比“做一个癌症基础模型”更能约束数据与验证。}
+
+\begin{warningbox}{世界模型不等于临床决策系统}
+即使模型能预测组织变化，仍需考虑毒性、剂量、药代动力学、患者合并症和不确定性。组织级模拟是候选证据，不是直接处方。讲义中的“药物发现”应理解为发现与排序假设的一段流程。
+\end{warningbox}
 
 \subsection{本章小结}
 
-多模态世界模型为癌症药物发现提供了从``逐个实验''到``大规模模拟筛选''的范式转变。
+肿瘤生物学可被重写为一个部分可观测、可干预、多尺度的动态系统。真正目标是患者条件下的治疗响应，而不是静态分类。这个目标要求模型同时处理互补模态、空间结构、有限患者数量和极强的因果验证需求。
+
+\section{构建空间对齐的多模态癌症数据}
+
+模型能力的上限先受数据工程限制。Noetik 的路线不是只下载公共图片，而是在同一患者组织上执行多种测量，并尽量保留空间对应关系。本章沿着样本制备、成像、配准和数据层级，解释为什么这种数据既昂贵又适合多模态建模。
+
+\subsection{从组织样本到数字切片}
+
+数据流水线从真实肿瘤组织开始。每一步都可能引入批次效应、形变、信号漂移或缺失，因此后续模型不能把所有差异都解释为生物机制。为了理解最终 token 的来源，下面沿着组织处理、微阵列、H\&E、免疫荧光和数据平台依次查看每个物理步骤怎样留下统计痕迹。
+
+\lecturefigure{slide-097-tissue-processing.jpg}{组织样本进入自动化处理与切片流程}{00:25:22}
+
+图中嵌入视频展示实验室处理，而右侧保留讲座时点的数据计数。样本必须固定、切片、染色并数字化；同一组织在不同 assay 中可能经历不同物理处理。若配准不准，模型看到的“同一位置”可能实际上来自不同细胞群。
+
+\lecturefigure{slide-104-tissue-microarray.jpg}{组织微阵列：在载玻片上组织大量小型 tissue core}{00:25:31}
+
+Tissue microarray 把来自不同患者或区域的小圆柱状组织核心排列在同一载玻片上，便于批量染色和扫描。它提高吞吐量，但每个 core 只覆盖肿瘤的一小部分，不能代表整个患者。多 core 设计是在成本与空间异质性之间折中。
+
+\lecturefigure{slide-108-he-tissue-cores.jpg}{H\&E 组织核心：低成本、广覆盖的形态学入口}{00:25:36}
+
+H\&E 是 hematoxylin and eosin（苏木精--伊红）染色。苏木精主要让细胞核呈蓝紫色，伊红让胞质和基质呈粉红色。它廉价、临床常规且历史数据丰富，但只能间接反映细胞类型和分子状态，不能读取所有蛋白或基因表达。
+
+\lecturefigure{slide-119-multimodal-core-grid.jpg}{同一组织核心在多种染色与成像通道下形成配对数据}{00:25:49}
+
+这一网格显示多模态数据真正的价值：不是随机找一张 H\&E 和一张免疫荧光，而是尽可能让不同测量对应同一患者、相近区域。这样的配对支持 translation；模态独有信号又支持 disambiguation。配准误差、切片间差异和组织损耗必须进入误差预算。
+
+\lecturefigure{slide-125-data-platform-ui.jpg}{数据平台将多患者、多核心和多通道组织成可浏览对象}{00:25:57}
+
+界面截图说明数据不是一张“超大图”，而是层级数据库：患者包含切片，切片包含 core，core 包含空间位置，位置又有图像、蛋白和基因读数。训练切分必须在患者层完成；若同一患者的相邻 core 分到训练和测试，指标会因患者特异纹理泄漏而虚高。
+
+\lecturefigure{slide-129-immunofluorescence.jpg}{多重免疫荧光显示细胞类型与蛋白标志物的空间组合}{00:26:04}
+
+Multiplex immunofluorescence（多重免疫荧光）用多种带荧光标签的抗体检测蛋白标志物。颜色可帮助识别 T 细胞、B 细胞、巨噬细胞或肿瘤区域，但颜色只是可视化；模型输入通常是各通道的连续强度和分割结果。抗体特异性与成像饱和会限制解释。
+
+\begin{warningbox}{第一类数据泄漏：患者与切片不能混切}
+空间相邻 patch 极其相似。若按 patch 随机切分，模型可能记住患者、扫描仪或染色批次，而不是学习可泛化生物规律。评估应优先采用 held-out patient，并单独报告跨批次与跨机构表现。
+\end{warningbox}
+
+\subsection{四种模态与空间转录组}
+
+课堂随后把数据归纳为四类：H\&E、蛋白成像、空间转录组和遗传测序。它们观察的是同一系统的不同层面，成本、分辨率与生物含义均不相同。这里的核心问题不是把四种文件格式统一，而是维护 patient--core--cell--gene 的层级索引，并知道每种测量在哪个空间与生物尺度上有效。
+
+\lecturefigure{slide-134-multimodal-dataset.jpg}{四类模态：H\&E、蛋白、空间转录组与遗传测序}{00:29:19}
+
+H\&E 提供形态，蛋白面板提供细胞表型，spatial transcriptomics（空间转录组）测量带坐标的 RNA 表达，genetic sequencing（遗传测序）提供突变等信息。前两者像图像，后两者更像稀疏高维计数和患者级属性；统一 token 化必须尊重这种差异。
+
+\begin{knowledgebox}{第一次出现：Spatial transcriptomics}
+空间转录组同时测量“某些基因表达了多少”和“这些表达发生在组织的哪里”。与普通 bulk RNA 相比，它保留空间；与单细胞 RNA 相比，它的测量单元可能覆盖多个细胞，分辨率和基因覆盖取决于 assay。
+\end{knowledgebox}
+
+\lecturefigure{slide-135-spatial-transcriptomics.jpg}{空间转录组全景：组织形态上叠加大量细胞与表达位置}{00:29:42}
+
+远看是一块组织，近看却包含数量巨大的点位和细胞。读图要携带三个层级：组织结构决定邻域，细胞类型影响基线表达，局部信号通路改变状态。若把所有细胞打散为无序表格，会丢失免疫细胞是否进入肿瘤、是否围绕坏死区聚集等关键信息。
+
+\lecturefigure{slide-153-live-zoom.jpg}{实时缩放到细胞级：宏观纹理由海量局部测量组成}{00:30:47}
+
+实时 demo 的意义不是展示缩放技术，而是让“序列长度”具象化。一个 core 可含成千上万细胞，每个细胞又有上千基因计数；若全部展开为 token，自注意力的二次复杂度无法直接承受。系统必须采样、分块、压缩或采用层级注意力。
+
+\lecturefigure{slide-175-gene-overlay.jpg}{在组织空间上叠加基因表达与细胞身份}{00:31:16}
+
+叠加后的标签帮助研究者把分子信号映射回空间生态。这里容易出现因果错觉：某基因在某区域高表达，可能因为该区域细胞组成不同，而不一定是同一种细胞发生状态变化。模型需要同时控制 cell type、neighborhood 和 patient context。
+
+\lecturefigure{slide-177-patient-cores-gene-table.jpg}{每位患者有多个 core，每个细胞对应高维基因读数}{00:32:09}
+
+这张摘要图把数据张量化：患者 $p$ 下有 core $c$，core 中有细胞 $i$，每个细胞含基因计数向量 $x_{p,c,i,g}$。层级结构意味着有效样本量随问题而变：预测某个基因的局部分布可利用许多细胞，预测新患者治疗响应仍主要受患者数限制。
+
+\begin{importantbox}{数据层级决定统计单位}
+不能用“有数十亿 token”掩盖“只有约千名患者”。细胞级任务与患者级任务的独立样本数不同；任何声称临床泛化的指标都应明确切分单位、患者数量和置信区间。
+\end{importantbox}
+
+\teachervoice{00:25:23--00:32:10，老师用整段实验室视频强调数据集不是现成资产：组织制备、扫描、配准和多 assay 都是系统的一部分。随后通过不断缩放让听众看到 patient--core--cell--gene 的规模爆炸。}
+
+\subsection{本章小结}
+
+多模态癌症建模首先是数据对齐问题。H\&E 廉价而间接，蛋白成像更接近细胞表型，空间转录组保留位置与表达，遗传测序提供患者级变异。它们的组合支持翻译与消歧，但也引入配准误差、批次效应、患者泄漏和层级样本量错觉。
+
+\section{Masked Modeling、空间上下文与虚拟细胞}
+
+有了高维空间数据，下一问是如何把它变成训练任务。课堂选择 masked modeling：随机隐藏部分基因计数，让模型根据可见基因和上下文恢复它们。这个目标既能在没有治疗标签时利用大规模观测数据，也为后面的 prompt、imputation 与 counterfactual 提供统一接口。
+
+\subsection{从基因计数到 token}
+
+“Autoencoder”一词容易让人想到压缩整张图再重建像素；这里更接近 masked language modeling：基因身份和计数被离散或嵌入成 token，模型只预测被遮蔽部分。下面先明确 token、mask 和条件变量，再讨论为什么计数分布、基因顺序与部署时可见信息都会改变训练目标的含义。
+
+\lecturefigure{slide-179-masked-autoencoder.jpg}{Masked autoencoding：token 化、部分遮蔽、Transformer 主干与解码}{00:32:36}
+
+流程从 gene/count 表开始，经 tokenization 与 partial masking 进入主干，最后恢复 masked tokens。若遮蔽集合为 $\mathcal{M}$、可见集合为 $\bar{\mathcal{M}}$，目标可写为
+\[
+\mathcal{L}_{\mathrm{mask}}
+=-\sum_{j\in\mathcal{M}}
+\log p_\theta(x_j\mid x_{\bar{\mathcal{M}}},c),
+\]
+其中 $c$ 可包含空间邻域、患者或其他模态。损失函数的分布形式应匹配 count data，而不是默认高斯像素误差。
+
+\lecturefigure{slide-182-token-masking.jpg}{把 gene/read 对变成序列，并对部分计数施加 MASK}{00:34:06}
+
+图中每个 token 同时携带基因身份与读数。基因顺序本身没有自然语言那样的句法，因此 positional encoding 需要谨慎：可按固定 gene vocabulary 排列，也可把基因作为集合处理。若读数被粗暴离散，稀有但重要的表达变化可能丢失；若保留连续值，输出分布与归一化又更复杂。
+
+\lecturefigure{slide-184-prompted-inference.jpg}{推理时用少量已知基因作为 prompt，预测其余读数}{00:34:57}
+
+课堂把已知标志物写成提示，例如“这是一个 T cell，并给出若干 marker”，其余位置全部 mask。模型输出不是自由文本，而是条件基因表达分布。Prompt 在这里表示结构化测量条件，不能直接套用语言模型中自然语言指令的所有直觉。
+
+\begin{lstlisting}[language=Python,caption={掩码基因建模：只在隐藏位置计算监督信号}]
+def masked_gene_step(gene_ids, counts, context, mask):
+    visible_counts = counts.clone()
+    visible_counts[mask] = MASK_VALUE
+    hidden = transformer(gene_ids, visible_counts, context)
+    predicted_distribution = decoder(hidden[mask], gene_ids[mask])
+    return count_negative_log_likelihood(
+        predicted_distribution, counts[mask]
+    )
+\end{lstlisting}
+
+\begin{warningbox}{Perplexity 不适合被无解释地搬到计数预测}
+Perplexity（PPL）是交叉熵的指数，即 $\operatorname{PPL}=\exp(\text{cross-entropy})$，可直观理解为“每个位置的有效选项数”，但它依赖离散输出空间。基因计数若使用连续或负二项分布，应报告相应 likelihood、校准和生物误差，而不是只给一个语言模型式 perplexity。
+\end{warningbox}
+
+\subsection{空间邻域作为 disambiguation}
+
+单个细胞的少量 marker 可能对应多个状态；邻近细胞、组织区域和微环境提供额外证据。课堂把八个近邻压缩成一个条件 token，再通过 adaptive LayerNorm、额外 token 或 cross-attention 注入主干。这个设计把前面的 disambiguation 具体化：目标细胞自身是待解释流，空间生态是减少歧义的条件流。
+
+\lecturefigure{slide-186-spatial-neighborhood-conditioning.jpg}{空间邻域经过 Transformer bottleneck 后条件化目标细胞}{00:36:25}
+
+若目标细胞表示为 $h_i$，邻域为 $\mathcal{N}(i)$，可写成
+\[
+c_i=f_\phi\!\left(\{h_j:j\in\mathcal{N}(i)\}\right),\qquad
+\hat{x}_{i,\mathcal M}=g_\theta(h_i,c_i).
+\]
+$f_\phi$ 是邻域编码器，$c_i$ 是压缩条件。压缩形成 information bottleneck：提高效率，却可能遗漏稀有邻居或远距离结构，因此邻域大小和聚合方式是实验变量。
+
+\teachervoice{00:35:05--00:36:24，老师说团队试过 adaptive LayerNorm、追加 token 和 cross-attention，“它们都能工作，有些只是更高效”。更稳定的结论是空间上下文显著降低 backbone loss，而不是某个融合名称获胜。}
+
+\begin{importantbox}{空间上下文为什么能消歧}
+如果一个细胞只表达有限 marker，单看自身可能无法区分状态；若周围七个细胞都呈细胞毒 T 细胞特征，该邻域会改变后验概率。这里的多模态不是不同文件格式，而是“目标细胞自身”与“空间生态”两种信息源。
+\end{importantbox}
+
+\subsection{大规模虚拟细胞推理}
+
+训练完成后，系统可以在患者组织的许多位置反复设置条件，询问“若某类细胞位于这里，它可能表达什么”。这些推理被称为 virtual cell simulations，但它们仍是模型条件预测，不是实验室中真正生成的细胞。
+
+\lecturefigure{slide-192-virtual-cell-inference.jpg}{在组织空间中批量查询虚拟细胞表达状态}{00:37:26}
+
+左侧是真实组织，中央选择空间位置和邻域，右侧逐步填充某基因的预测。讲者报告当时已运行十亿量级查询，这说明推理吞吐量很高；但查询数不是独立生物证据数。大量相关位置共享同一患者、同一模型偏差和相似邻域。
+
+\lecturefigure{slide-194-virtual-cell-model.jpg}{虚拟细胞模型总览：从组织位置、prompt 到基因表达图}{00:37:59}
+
+总览图把“prompt + neighborhood + backbone + decoder”连成闭环。正确读法是：模型在特定条件下生成一张假设性表达地图；错误读法是：模型已经观测到了未来细胞。任何下游药物排序都需要模型不确定性、对照基因和实验复核。
+
+\lecturefigure{slide-197-cellporter-ui.jpg}{Cellporter 界面把虚拟细胞预测组织成可探索工具}{00:39:49}
+
+界面允许研究者选择组织、细胞或基因并比较预测。工具化很重要，因为科学家需要快速形成可检验假设；但 UI 的流畅性不会提高模型证据等级。应在界面中暴露置信区间、训练分布距离、测量缺失和实际验证状态，而不只显示漂亮热图。
+
+\subsection{反事实敲除：从预测到假设生成}
+
+Counterfactual（反事实）问题改变一个输入条件，再比较输出。这里通过假设性 gene knockout 观察组织预测如何变化。它比静态相关图更接近干预思维，但模型内部干预仍不等于现实生物干预。
+
+\lecturefigure{slide-199-gene17-knockout.jpg}{Gene 17 敲除后的空间预测变化}{00:39:59}
+
+图中左侧是组织位置，右侧柱状图比较不同输出的变化。首先应看零点两侧：蓝色与红色表示预测下降或上升；其次要看效应是否集中于特定区域和细胞类型。若模型只学到共表达相关性，敲除输入 token 也可能产生看似合理但非因果的级联。
+
+\lecturefigure{slide-205-gene20-knockout.jpg}{另一基因敲除产生不同的空间与输出模式}{00:40:52}
+
+第二个例子说明反事实不是固定模板：不同基因应影响不同位置和下游读数。比较多个 intervention 可帮助发现候选机制，并检查模型是否对所有扰动都给出同质反应。真正验证仍需 CRISPR、药物处理或其他实验改变现实系统。
+
+反事实差异可记为
+\[
+\Delta_k(x)=
+\mathbb{E}_\theta[Y\mid X=x,\operatorname{do}_{\text{model}}(G_k=0)]
+-\mathbb{E}_\theta[Y\mid X=x].
+\]
+这里特意写成 $\operatorname{do}_{\text{model}}$：它是模型中的输入干预，不应与现实因果图上的 $\operatorname{do}$ 混为一谈。
+
+\begin{warningbox}{Model counterfactual 不是 causal effect}
+模型敲掉一个 gene token 后的变化，只说明模型如何使用该信息。要声称生物因果效应，还需真实干预、混杂控制、重复实验和跨患者验证。模型反事实最适合作为实验优先级工具。
+\end{warningbox}
+
+\begin{lstlisting}[language=Python,caption={虚拟细胞反事实：保留患者与邻域，只改变候选干预}]
+def virtual_cell_counterfactual(patient, location, prompt, intervention):
+    neighborhood = load_spatial_neighbors(patient, location)
+    baseline = model.predict(prompt, neighborhood)
+    modified_prompt = apply_intervention(prompt, intervention)
+    counterfactual = model.predict(modified_prompt, neighborhood)
+    return counterfactual - baseline
+\end{lstlisting}
+
+\teachervoice{00:38:42--00:43:34，课堂问题追问样本是否足够、怎样验证。老师没有把训练 loss 当作终点，而是强调 held-out patient、定向测量与后续实验；这正是虚拟细胞结果的证据边界。}
+
+\subsection{本章小结}
+
+Masked modeling 把基因计数学习转为条件恢复任务，空间邻域提供消歧信息，虚拟细胞推理把同一模型变成大规模查询接口。反事实敲除可用于生成假设，但其输出属于模型内条件变化，必须经过现实干预才能升级为因果证据。
+
+\section{从廉价 H\&E 翻译到丰富分子表征}
+
+上一章使用同一类基因数据内部的 mask 和空间上下文。本章回到 translation：能否用临床中廉价、普遍的 H\&E 图像，预测昂贵且稀缺的空间转录组或蛋白测量？若成功，模型可把历史病理数据转为更丰富的患者表示；若失败，也可能产生极具迷惑性的伪分子图。
+
+\subsection{多模态补全的训练任务}
+
+Imputation（补全）指根据已观测变量估计缺失变量。它不是简单复制平均值，而是学习条件分布，并且应明确预测不确定性。这里的缺失模态是昂贵 molecular assay。下面从成本轴、条件架构和整模态 mask 三个角度检查：模型是否真的模拟了临床部署时只有 H\&E 的信息条件。
+
+\lecturefigure{slide-213-multimodal-imputation.jpg}{用廉价、普遍的 H\&E 推断昂贵、稀有的分子模态}{00:43:48}
+
+图中成本轴揭示任务价值：H\&E 易获得，空间分子测量昂贵。若模型只在配对数据上训练，却部署到不同医院、不同染色流程或不同肿瘤类型，translation 可能崩溃。因此价值来自跨域泛化与校准，而不只是配对样本重建。
+
+\lecturefigure{slide-215-he-conditioned-model.jpg}{H\&E 编码器条件化 masked gene-count 模型}{00:44:27}
+
+架构把 H\&E patch 编码成条件，再与基因 token 主干结合。H\&E-specific encoder 负责视觉特征，主干负责 count prediction。这个分工允许同一个基因模型在有无图像时运行，但也可能让视觉编码器学习染色批次捷径。
+
+\lecturefigure{slide-218-cross-modal-translation.jpg}{把基因输入全部 mask，迫使模型仅凭 H\&E 预测分子读数}{00:45:00}
+
+当所有 gene tokens 都被 mask，输出完全依赖 H\&E 条件。此时任务从 disambiguation 变成更纯粹的 translation。若仍保留少量真实基因读数，模型则在 translation 与 disambiguation 之间移动：图像给出形态先验，已测 marker 修正不确定性。
+
+\begin{importantbox}{部署时可获得什么，训练目标就应模拟什么}
+如果临床部署只有 H\&E，评估时必须把分子输入全部隐藏；若部署允许少量 marker，就应测不同 marker 预算下的性能曲线。训练时偷看完整分子模态会制造不可部署的上限。
+\end{importantbox}
+
+\subsection{预测图与误差结构}
+
+最终结果不能只看一张颜色相似的热图。应比较真实测量、插值 baseline、模型预测，并按基因、患者、区域和细胞类型分解误差。进一步还要问：形态上不可识别的分子状态是否对应更宽的不确定区间，模型是否在跨医院与跨染色批次时仍保持校准。
+
+\lecturefigure{slide-224-gene-expression-prediction.jpg}{从 H\&E 预测细胞类型与 KRT19 等基因的空间表达}{00:46:28}
+
+左侧是 H\&E，中间是细胞类型或 overlay，右侧是预测表达。首先比较大尺度结构是否一致，再检查边界、稀有区域和局部峰值。形态与表达相关时模型可能表现很好，但同形异质的分子状态仍可能无法从 H\&E 确定。
+
+\lecturefigure{slide-225-imputation-accuracy.jpg}{不同基因的补全难度显著不同}{00:47:16}
+
+三行对比真实检测、插值和模型预测。某些基因具有清晰形态对应，预测较好；另一些基因几乎不可由 H\&E 唯一确定。平均指标会掩盖这种差异，因此需要 gene-wise calibration：模型应知道自己对哪些目标缺乏可识别信息。
+
+若真实值为 $y$、预测分布均值为 $\hat y$、标准差为 $\hat\sigma$，校准不只要求误差小，还要求
+\[
+\Pr\left(|y-\hat y|\leq 1.96\hat\sigma\right)\approx 0.95.
+\]
+区间覆盖率应在 held-out patient、不同中心和不同基因上分别报告。
+
+\begin{warningbox}{形态可预测性有上限}
+若两个组织区域在 H\&E 上近似相同，却有不同 RNA 状态，任何只看 H\&E 的模型都无法可靠区分。此时正确输出应是高不确定性，而不是用训练集平均模式生成一张平滑热图。
+\end{warningbox}
+
+\lecturefigure{slide-234-representation-pipeline.jpg}{从 H\&E 经模型补全丰富表示，再连接治疗假设}{00:50:01}
+
+这张综合图把 translation 的工程价值说清：先从廉价 H\&E 构造高维患者表征，再把表征用于检索、分层或药物假设。中间任何一步都可能放大偏差。模型补全不是实际测量的无损替代；它更像一个可扩展、带不确定性的虚拟 assay。
+
+\teachervoice{00:43:46--00:48:40，老师强调不同基因的预测质量并不一致，并展示真实检测、插值和模型输出。课堂结论不是“从 H\&E 恢复一切”，而是找出哪些分子信息能被形态可靠约束。}
+
+\begin{knowledgebox}{第一次出现：Calibration}
+Calibration（校准）要求置信度与真实正确率匹配。模型若对不可辨认基因仍给出窄区间，就算平均误差尚可，也会误导实验排序。AI for Science 中“不知道自己不知道”通常比偶尔的大误差更危险。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+跨模态 imputation 把 H\&E 的规模优势转化为分子假设，但其上限由可识别信息决定。可靠系统必须在患者级切分上比较真实测量、简单 baseline 和模型预测，按基因报告误差与校准，并把补全结果视为虚拟 assay 而非真实实验。
+
+\section{走向大规模多模态 Transformer}
+
+前面的模型分别处理空间基因、H\&E 条件或局部邻域。下一阶段要把这些模块放进同一患者表示，并允许模型在不同模态间翻译、消歧和模拟干预。本章比较单模态与多模态架构，随后解释一个多模态 counterfactual demo。
+
+\subsection{统一数据与统一主干}
+
+统一模型的诱惑是让所有数据都进入一个大 Transformer；真正难点却是 token 数量、缺失模式、分辨率和监督信号极不均衡。若设计不当，最便宜或 token 最多的模态会支配训练。下面先用单模态模型建立可诊断 baseline，再观察共享层是否真正带来跨模态增益，而不是只增加参数量。
+
+\lecturefigure{slide-237-dataset-synthesis.jpg}{数据汇总：H\&E、蛋白、空间转录组与遗传信息}{00:50:19}
+
+这张页与前面的四模态页相似，但角色不同：前者用于介绍数据，当前页用于决定模型输入。H\&E 和蛋白是稠密空间图像，空间转录组是稀疏位置上的高维计数，遗传信息更接近患者级条件。统一前必须明确各自的 tokenization 与 mask policy。
+
+\lecturefigure{slide-238-unimodal-transformer.jpg}{单模态 Transformer：一个输入流对应一个预测头}{00:50:25}
+
+单模态路线易训练、易诊断，也适合作为 baseline。它能回答“仅凭这一模态能学到什么”，帮助测量新增模态的边际价值。若多模态模型只比最佳单模态略好，可能说明数据对齐不足、融合未生效，或新增模态本身不含任务信息。
+
+\lecturefigure{slide-240-multimodal-transformer.jpg}{多模态 Transformer：多个编码流汇入共享融合层和输出空间}{00:51:21}
+
+图中多种颜色代表不同模态 token，中央 multimodal layers 负责交互。输出可重建任一模态，也可预测治疗相关目标。训练时要平衡不同损失，否则容易出现“重建 H\&E 很好、关键分子任务很差”的目标错配。
+
+\begin{knowledgebox}{Masking policy 是隐含课程设计}
+遮蔽哪些 token、遮蔽多少、是否整模态缺失，决定模型被迫学习什么。随机遮少量基因主要学习局部相关；整块遮掉一个模态才真正训练跨模态 translation；同时遮空间区域则更接近组织补全与远距离推理。
+\end{knowledgebox}
+
+\subsection{多模态反事实模拟}
+
+统一模型的核心承诺是：改变一个模态或干预条件后，其他模态的预测也应一致更新。这比单独生成一张表达图更接近世界模型，但仍需要严格验证干预是否遵循真实机制。为了读懂接下来的 demo，需要固定患者与空间上下文，只比较被修改条件前后的联合输出，并把图像变化与可测实验终点对应起来。
+
+\lecturefigure{slide-241-counterfactual-architecture.jpg}{多模态 counterfactual：改变输入模态并观察联合预测变化}{00:52:00}
+
+左侧输入包含组织图像、空间测量和可能的治疗条件，中间是共享模型，右侧输出多模态患者表示。理想情况下，模型能回答“若改变该基因或治疗，蛋白、RNA 和组织状态将怎样共同变化”。模型若只做静态补全，则不具备这种一致的状态转移。
+
+\lecturefigure{slide-247-counterfactual-results.jpg}{反事实 demo 的最终状态：输入改变后输出地图出现空间差异}{00:53:36}
+
+读图先看哪些输入被固定，再看被修改模态和输出差异。红绿区域显示预测方向，但不直接代表疗效。可靠验证需要已知 perturbation 数据：把真实干预前信息输入模型，比较模型预测与干预后测量，而不是只判断图是否“像生物学”。
+
+\begin{lstlisting}[language=Python,caption={实验优先级：把模型效应、不确定性与现实验证成本同时纳入}]
+def rank_experiments(candidate_interventions, patient_context):
+    ranked = []
+    for intervention in candidate_interventions:
+        effect, uncertainty = world_model.simulate(
+            patient_context, intervention
+        )
+        novelty = compare_with_existing_evidence(intervention)
+        cost = wet_lab_cost(intervention)
+        score = expected_value(effect, uncertainty, novelty, cost)
+        ranked.append((score, intervention))
+    return sorted(ranked, reverse=True)
+\end{lstlisting}
+
+\begin{importantbox}{模拟器与实验选择器是两个系统}
+世界模型估计“如果做 $a$ 会怎样”；scientist 或 agent 决定“哪个 $a$ 值得做”。即使模拟器完美，穷举所有组合也不现实。实验价值还取决于新颖性、可验证性、成本与安全。
+\end{importantbox}
+
+\subsection{本章小结}
+
+大规模多模态 Transformer 需要协调异构 token、缺失模态、masking policy 和多目标损失。单模态模型是必要 baseline；统一模型的增量价值应体现在更好的 translation、disambiguation 与干预一致性上。Counterfactual demo 是候选机制生成器，不是临床疗效证明。
+
+\section{进行中的研究：RNA、可解释性与层级瓶颈}
+
+讲座最后没有把系统包装成完成品，而是展示几项进行中的工作：直接建模原始 RNA、寻找模型内部生物特征，以及设计从患者到分子的层级信息瓶颈。它们共同说明下一代系统的难点不只是参数更多，而是怎样压缩又不丢失关键尺度。
+
+\subsection{原始 RNA 与学习曲线}
+
+原始 count data 噪声大、维度高、零值多，还受测序深度影响。训练曲线下降只能证明目标函数被优化，不能自动证明 learned representation 对药物发现有用。这里应把优化指标、患者外推、细胞状态恢复与真实实验命中率分开，避免把同一条 loss curve 当作所有科学价值的代理。
+
+\lecturefigure{slide-251-raw-rna-training.jpg}{原始 RNA transcript 数据上的训练进展与曲线}{00:55:36}
+
+图中左侧空间样本与右侧曲线把数据和优化并置。评估应同时观察 held-out likelihood、细胞类型分离、跨患者稳定性和下游实验命中率。若只优化随机 mask，模型可能擅长恢复高表达 housekeeping genes，却忽略稀有治疗通路。
+
+\subsection{模型内部是否出现可解释生物特征}
+
+课堂借用了前一讲“大语言模型的生物学”思路：能否在多模态癌症模型中找到对应免疫、细胞应激或上皮--间质转化的内部 feature？这不是给每个 neuron 随便命名，而是要把激活、富集、空间分布和干预联系起来。下面的单 feature 案例与 feature atlas 应被当作候选机制目录，而不是已经完成验证的生物本体。
+
+\lecturefigure{slide-256-feature-interpretation.jpg}{从模型 feature 的高激活样本与基因集合推断生物语义}{00:56:18}
+
+图中展示某个 feature 的 top cores、相关基因和语义摘要。证据链应包括：feature 在哪些样本激活、哪些基因贡献最大、空间上出现在哪里、在不同患者是否稳定，以及增强或抑制 feature 是否按预测改变输出。语言模型生成的标签只能作为候选解释。
+
+\lecturefigure{slide-257-feature-atlas.jpg}{多个 learned features 对应免疫、应激、增殖与组织程序}{00:56:38}
+
+特征图谱显示模型可能把复杂生物状态分解为可重用方向，例如 interferon response、cell proliferation 或 immune trafficking。一个 feature 可能混合多个程序，一个程序也可能分散在多个 feature 中；因此稀疏性和可读性之间存在权衡，不能把标签当作唯一真相。
+
+\begin{warningbox}{自动标签不是机制发现}
+LLM 根据 top genes 写出“干扰素反应”很方便，但它可能复述数据库常识，也可能忽略相反证据。可靠解释需要预注册的富集分析、跨 cohort 复现、空间定位和干预验证。
+\end{warningbox}
+
+\subsection{患者到分子的层级瓶颈}
+
+最终架构必须同时处理患者、器官、肿瘤微环境、细胞邻域、单细胞和分子。若所有 token 全连接，计算不可承受；若压缩过早，稀有但决定治疗响应的信号会消失。核心问题因此从“模型要多大”转向“查询需要哪一级信息、何时汇聚、何时允许高层目标重新访问细节”。
+
+\lecturefigure{slide-258-multimodal-bottlenecks.jpg}{大规模多模态系统的三个核心问题：瓶颈、任务与 masking policy}{00:57:54}
+
+左侧层级从 patient 延伸到 molecules，中央问“如何构造 information bottleneck”，右侧问预测目标与 mask。工程上可采用局部编码、pooling、稀疏 attention、memory token 或检索；科学上必须检查被压缩的信息是否包含稀有细胞、克隆亚群和空间边界。
+
+\lecturefigure{slide-259-tumor-world-model.jpg}{最终愿景：多传感器观察肿瘤，并回答患者条件治疗查询}{00:58:01}
+
+结尾图回到起点：癌症生物学是隐藏状态，免疫荧光、H\&E 和转录组是传感器，药物是动作，问题是治疗后状态。真正闭环还需要把预测送入实验、获得新测量、更新模型，并记录失败假设。没有这个反馈循环，“world model”容易退化为静态多模态编码器。
+
+\teachervoice{00:54:13--00:58:40，老师把 RNA 训练和 feature 分析明确称为进行中的工作，并把最终难题归结为：在哪些尺度放置 bottleneck、预测什么、遮蔽什么。讲义因此不把 demo 写成成熟临床系统。}
+
+\begin{importantbox}{Hierarchical world model 的设计原则}
+局部层学习细胞与邻域，组织层聚合空间生态，患者层整合遗传与临床条件；信息应按查询需要逐级上行，也允许高层目标向下选择细节。固定一次性 pooling 往往无法服务所有治疗问题。
+\end{importantbox}
+
+\subsection{本章小结}
+
+进行中的研究揭示了统一系统的三个前沿：用合适分布直接建模原始 RNA，在模型内部寻找可验证的生物 feature，以及跨患者到分子尺度设计层级 bottleneck。参数规模只是资源，真正的科学问题仍是任务、信息路径和验证。
+
+\section{证据边界、Q\&A 与闭环研究系统}
+
+58 分钟后的画面主要是讲者与听众，但内容不是可删的闲聊。问答集中挑战数据规模、健康对照、因果验证、商业转化和 AI scientist。它把前面漂亮的模型图重新放回现实约束，是判断讲义是否可信的关键部分。
+
+\subsection{样本量、健康对照与分布外问题}
+
+听众首先追问患者数是否足够。回答的重点不是给出万能阈值，而是区分任务：细胞级重建可从大量局部测量受益，患者级疗效外推仍受独立患者和干预标签限制。另一个根本缺口是健康人通常不会接受肿瘤活检，因此训练分布天然偏向患病组织。
+
+\teachervoice{00:58:43--01:02:52，老师承认 patient-level 样本规模与健康对照都是限制。缺少健康组织不仅影响预防问题，也会让模型难以学习从健康到癌变的完整状态转移。}
+
+\begin{warningbox}{Missing not at random}
+健康数据缺失不是随机缺失，而是由临床流程决定：健康人通常不会被取组织。这意味着简单补全无法恢复未观测人群分布；需要外部 cohort、低侵入测量、纵向数据或明确的选择偏差模型。
+\end{warningbox}
+
+\subsection{从模型预测到生物因果与临床价值}
+
+药物发现链条至少包含 target hypothesis、实验干预、机制复核、毒性、安全性和临床疗效。世界模型可以缩小候选空间，却不能跳过后续阶段。若模型建议一个靶点，最有价值的下一步通常不是再生成更多解释文字，而是设计能区分竞争机制的实验。
+
+\teachervoice{01:03:21--01:06:01，课堂讨论把“发现靶点”与“证明安全有效”分开。老师强调模型输出仍需现实实验，商业化或临床成功不能由虚拟预测直接推出。}
+
+\begin{importantbox}{最强验证是能失败的预测}
+好的世界模型应在实验前给出方向、效应大小和不确定性；实验结果不符时，必须记录并更新模型。只展示成功热图、事后挑选可解释案例，会把科学系统变成不可证伪的演示。
+\end{importantbox}
+
+\subsection{为什么完美模拟器仍需要 scientist 或 agent}
+
+即使模拟器能廉价运行十亿次，也必须有人定义值得模拟的干预。组合空间巨大，很多实验虽能产生变化，却不提供新知识或不可在现实中验证。实验选择是一个 active learning 与 decision-making 问题，而不是纯推理吞吐问题。
+
+\teachervoice{01:06:01--01:07:34，老师说即使拥有完美的患者模拟器，也需要 agent 告诉它什么值得模拟。领域专家往往已经有首批高价值假设；模拟器的作用是更快比较与筛选。}
+
+\teachervoice{01:07:43--01:10:07，老师对 AI scientist 保持开放但克制：规模未必是当前瓶颈，现有 agent 也未显著优于专家快速提出的实验；但仍值得测试闭环工具。}
+
+\begin{knowledgebox}{AI scientist 的合理职责边界}
+近期更可行的角色包括检索已有证据、提出对照、调用模拟器、量化不确定性、生成实验排程和记录失败。是否能独立提出突破性机制，需要通过盲评、前瞻实验和与专家基线比较，而不是用生成文本的流畅度判断。
+\end{knowledgebox}
+
+一个可审计闭环应包含：数据版本、模型版本、候选干预、预测区间、选择理由、实验结果和失败分析。只有把负结果也送回训练，系统才可能逐步修正世界模型，而不是不断放大确认偏差。
+
+\subsection{术语集中消化}
+
+本讲跨越机器学习与生物学，最后用一张表把高密度术语放回各自解决的问题，避免只记住名称。
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{0.18\textwidth} X X}
+\toprule
+\textbf{术语} & \textbf{解决的问题} & \textbf{核心机制与课程关系} \\
+\midrule
+World model & 行动后未来怎样变化 & 对当前多模态观测和候选动作建模未来状态分布。 \\
+Translation & 模态间共享事实如何迁移 & 用一模态预测另一模态或对齐共享表示，如 H\&E 到基因表达。 \\
+Disambiguation & 单模态歧义如何消除 & 利用另一模态独有信息更新后验，如空间邻域帮助判断细胞状态。 \\
+Cross-attention & 两个 token 流如何定向交互 & Query 来自目标流，key/value 来自条件流。 \\
+Adaptive LayerNorm & 不增加长序列时如何注入条件 & 条件网络生成归一化尺度与偏移，控制主干每层计算。 \\
+H\&E & 低成本观察组织形态 & 临床常规染色，覆盖广但分子信息间接。 \\
+Spatial transcriptomics & 基因表达发生在哪里 & 同时保留表达量与组织坐标，连接分子状态和空间生态。 \\
+Imputation & 昂贵或缺失模态如何估计 & 学习条件分布并报告不确定性，不能当作真实测量的无损替代。 \\
+Counterfactual & 改变输入后模型预测怎样变化 & 用于候选干预排序；模型内变化不等于现实因果效应。 \\
+Calibration & 置信度是否可信 & 预测区间应在 held-out patient 与不同基因上具有正确覆盖率。 \\
+Information bottleneck & 如何压缩海量多尺度 token & 在效率与稀有信号保留之间选择患者、组织、邻域和细胞级表示。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{本章小结}
+
+问答补全了系统的真实边界：患者级样本有限、健康对照非随机缺失、模型反事实需要实验验证、模拟器不会自动选择有价值的问题。科学 agent 最合理的近期角色是组织证据和闭环工具，而不是用语言流畅度替代实验设计。
 
 \section{总结与延伸}
 
-本讲展示了 Transformer 在医疗健康领域的深远应用潜力。核心信息：
+\subsection{一条贯穿整场课的设计链}
+
+本讲可以压缩成八步：先把任务写成动作条件未来预测；区分 translation 与 disambiguation；选择融合方向；构建空间对齐数据；用 masked modeling 学习条件分布；以 H\&E 等廉价模态做带校准的 imputation；用统一模型提出反事实；最后通过实验和失败数据更新世界模型。任何一步被省略，系统都可能从科学工具退化为漂亮演示。
+
+\begin{importantbox}{核心结论}
+多模态世界模型的价值不在“把更多数据塞进更大 Transformer”，而在于把不同传感器的互补信息组织成可检验的干预预测。模型必须知道何时能翻译、何时需要消歧、何时信息根本不可识别，并把不确定性带入实验选择。
+\end{importantbox}
+
+\subsection{工程上最值得带走的检查表}
 
 \begin{enumerate}
-    \item \textbf{多模态互补是关键}：癌症生物学中不同数据模态提供互补信息，组合后的预测能力远超任何单一模态。
-    \item \textbf{世界模型框架}：将药物发现建模为世界模拟问题，使得 AI 可以快速筛选治疗方案。
-    \item \textbf{独特的研究基底}：癌症生物学数据的多样性为基础 ML 研究提供了丰富的实验场景。
-    \item \textbf{跨学科是趋势}：神经科学、免疫学、机器学习的交叉是推动创新的核心动力。
+  \item \textbf{任务：}预测目标是否对应真实决策，而非仅仅容易优化？
+  \item \textbf{切分：}是否按患者、中心与时间切分，避免空间与批次泄漏？
+  \item \textbf{融合：}新增模态究竟提供 translation 还是 disambiguation？
+  \item \textbf{缺失：}训练时是否模拟部署时的整模态缺失与测量预算？
+  \item \textbf{校准：}是否按基因、患者与域报告不确定性覆盖？
+  \item \textbf{反事实：}是否用真实 perturbation 数据检验方向与效应大小？
+  \item \textbf{闭环：}失败实验是否被记录并用于更新模型？
 \end{enumerate}
 
+\subsection{开放问题}
+
+第一，如何在 patient--organ--tissue--cell--molecule 层级间动态分配计算，而不是固定压缩？第二，如何区分 H\&E 中可识别的分子状态与根本不可识别的状态？第三，如何让模型 counterfactual 与真实因果干预对齐？第四，如何在缺乏健康组织和随机治疗数据时建模选择偏差？第五，scientist agent 的价值应如何通过前瞻实验而不是文本 benchmark 评估？
+
+这些问题共同指向一个更严格的 AI for Science 标准：模型不仅要生成合理答案，还要暴露证据来源、分布距离、预测区间和可失败的实验承诺。世界模型的终点不是一张更逼真的热图，而是一个能被现实持续纠正的研究系统。
+
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Chen et al., ``Towards a General-Purpose Foundation Model for Computational Pathology (UNI)'', Nature Medicine, 2024
-    \item Vorontsov et al., ``Virchow: A Million-Slide Digital Pathology Foundation Model'', 2024
-    \item Ha \& Schmidhuber, ``World Models'', 2018
+
+\begin{itemize}[itemsep=0.2em,topsep=0.2em]
+  \item Stanford CS25 V5 课程页：\url{https://web.stanford.edu/class/cs25/past/cs25-v5/}
+  \item 本讲官方录像：\url{https://www.youtube.com/watch?v=8kXIaUM3h1E}
+  \item 方法关键词：CLIP（共享表示）、Masked Autoencoder（遮蔽学习）、cross-attention（定向融合）、adaptive LayerNorm（条件调制）。评估时优先寻找患者级留出、真实干预、校准和跨中心复现。
 \end{itemize}
 
 \end{document}

@@ -1,733 +1,943 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
-}
+\renewcommand{\notetitle}{Lecture 25：Retrieval Augmented Language Models}
+\renewcommand{\noteauthors}{基于 Douwe Kiela 课堂讲座、49 个课堂 teaching states 与原始论文整理}
+\renewcommand{\notedate}{CS25 V3 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2023-12-05；上传 2024-01-25}
+\renewcommand{\videoduration}{1:19:26}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=mE7IDf2SmJg}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth,height=0.54\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
-
-\newcommand{\notetitle}{[CS25] Retrieval Augmented Language Models --- Douwe Kiela}
-\newcommand{\noteauthors}{Douwe Kiela 讲座整理}
-\newcommand{\notedate}{2026年4月3日}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{2023}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=mE7IDf2SmJg}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{导论：RAG 是系统问题，不是“搜一下再拼 Prompt”}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+Douwe Kiela 的讲座从语言模型历史出发，逐层增加 retrieval、reranking、fusion、joint training、active retrieval 与 tool use。整场课的核心不是某个产品化 pipeline，而是一个研究问题：外部知识怎样进入生成过程，哪些组件应被冻结或训练，证据何时检索、如何排序、在哪里融合，以及系统怎样证明输出真正受证据约束。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\lecturefigure{slide-01-title.jpg}{Retrieval Augmented Language Models 课堂标题页}{Stanford 课堂视频 00:01:39}
 
-\tableofcontents
-\newpage
-
-%% --- 正文内容开始 --- %%
-
-\section{引言：检索增强的系统视角}
-
-\subsection{讲者与演讲脉络}
-
-Douwe Kiela 登台时直接说 ``Retrieval augmentation is one of the topics right now in our field''（00:01:28），并在 00:01:55 用 ``If you thought OpenAI, I'm angry with you'' 强调语言模型的历史根基。1991 年的 neural language model 已经提出了分解概率的思路，今天的大模型不过是 ``old idea + scale''。讲者借此把检索增强框定为工程上的可追溯性和治理能力。
-
-\begin{knowledgebox}{语言模型的历史根基}
-早期 work 已经涵盖概率分解、词嵌入与神经结构。把当下 LLM 视为 ``old idea + scale''，有助于把关注点从品牌转到 traceability 和 instrumentation。
+\begin{knowledgebox}{读图：标题中的 Augmented 改变模型边界}
+普通 language model 把主要知识压进参数；retrieval-augmented language model 在推理或训练时访问外部文档、向量索引、搜索引擎或其他工具。增强的不只是输入长度，而是可更新的 non-parametric memory 与模型之间的接口。
 \end{knowledgebox}
 
-\subsection{讲座结构与期待}
-
-整场讲座按照三条主线展开：先讨论为什么必须引入检索，再拆解堆栈与模型，然后落地观测与治理。00:05:00 以后反复出现 ``retrieval pipeline''、``cache''、``hallucination''，表明讲者意在构建 retrieval + generation 的闭环。
-
-\begin{importantbox}{事实性 vs 创造性}
-要让对话既有 imagination 又有 accuracy，必须把检索过程显式写入 pipeline：知识线（检索、增强、证据）负责 truth，生成线负责 fluency，这种平衡是 Contextual AI 的核心。
+\begin{importantbox}{本讲的统一问题}
+设输入为 $x$、外部语料为 $\mathcal{D}$、检索器为 $R$、生成器为 $G$，最简流程是
+\[
+z_{1:k}=R(x,\mathcal{D}),\qquad
+y=G(x,z_{1:k}).
+\]
+真正困难发生在两个等号内部：$R$ 怎样学习“对 $G$ 有用”的证据，$G$ 是否会使用 $z_{1:k}$，以及整个系统怎样在质量、成本、更新和可信度之间取舍。
 \end{importantbox}
+
+\subsection{证据边界与阅读方法}
+
+本讲发生在 2023 年 12 月。讲者对 DRAGON、vector database、retrieval hardware 与未来产业结构的判断保留为课堂时间点意见；RAG、REALM、FiD、RETRO、Atlas、RePlug 等机制则回到原论文解释。旧稿中的 dashboard、incident runbook、gate dropout、drift monitor 和地域治理并无课堂证据，全部移除。
 
 \subsection{本章小结}
 
-本章通过历史与结构勾勒出检索增强的系统视角，为后续工程、治理与评估奠定基础。
+RAG 的教学主线是从“外部文档进入 prompt”走向“检索、表示、融合与生成共同优化”。后续章节先说明为什么需要外部记忆，再用 train/test taxonomy 比较架构，最后讨论 RAG 2.0 的系统化方向。
 
-\section{为什么需要检索增强}
+\section{为什么需要 Retrieval Augmentation}
 
-\subsection{LLM 的记忆边界}
+课程先把 retrieval 放回 language modeling 的历史，而不是从某个 2023 年产品名开始。这样做能区分三个层次：autoregressive objective 很旧，规模带来新能力，instruction tuning 修复人机接口，而 retrieval 处理的是知识更新、证据来源与可控记忆。
 
-Kiela 反复强调参数化模型的 ``aging'': facts bake 进 weights 之后无法快速更新，只能通过 retrain；这就导致 facts 发生变化时模型依赖 hallucination。讲者指出 truths 需要通过外部知识库立刻引入，retrieval 是唯一 viable 的机制。
+\subsection{语言模型不是近几年才出现}
 
-\begin{importantbox}{参数化记忆 vs 非参数化记忆}
+Age of Language Models slide 用一个简单句子说明 next-token factorization：预测 ``going'' 时，前面的 ``Where are we'' 是 context。下一页展示 1991 年 neural language modelling 工作，提醒读者语言模型与神经网络结合已有数十年历史。
+
+\lecturefigure{slide-02-age-of-language-models.jpg}{语言模型把序列概率分解为逐 token 条件概率}{Stanford 课堂视频 00:02:21}
+
+\begin{importantbox}{Autoregressive factorization}
+对 token 序列 $w_{1:T}$，自回归语言模型写成
+\[
+p(w_{1:T})=\prod_{t=1}^{T}p(w_t\mid w_{<t}).
+\]
+$w_{<t}$ 是位置 $t$ 之前的上下文，模型只需反复估计下一个 token 的条件分布。LLM 的参数规模和训练数据巨大，但这个概率分解本身并不新。
+\end{importantbox}
+
+\lecturefigure{slide-03-elman-1991-neural-lm.jpg}{课堂展示的 1991 年 neural language modelling 论文}{Stanford 课堂视频 00:02:57}
+
+\begin{knowledgebox}{读图：历史页服务于概念校准}
+这张扫描页不是要求记住旧网络结构，而是提醒：distributed lexicon、neural sequence processing 与概率语言建模早已存在。今天的突破来自规模、优化、硬件、数据和 interface 的共同演化，不能把整段历史缩成某家公司“发明语言模型”。
+\end{knowledgebox}
+
+\teachervoice{Kiela 开玩笑说，如果认为 OpenAI 发明了语言模型，他会生气。这个幽默在教学上承担了校准作用：autoregressive idea 很旧，LLM 的新颖性主要来自 scale 与现代训练栈。}
+
+\subsection{Next-token prediction 与“坏掉的用户界面”}
+
+Next Word Prediction slide 把系统画成 input--generator--output，并指出 plain sequence-to-token 的问题之一是 broken user interface。用户过去需要构造奇怪 prompt 才能让模型执行任务；ChatGPT 式 instruction tuning 与 alignment 让人能够直接表达意图。
+
+\lecturefigure{slide-04-next-word-prediction.jpg}{Plain next-word prediction 的简单结构与界面问题}{Stanford 课堂视频 00:04:30}
+
+\begin{knowledgebox}{读图：模型 objective 与用户 objective 不同}
+预训练只要求预测语料中的下一 token，用户却希望模型遵循命令、拒绝危险请求、保持格式并完成任务。Prompting、instruction fine-tuning 与 RLHF 是 interface alignment：它们让模型更容易被调用，但没有自动解决知识陈旧、证据缺失或事实错误。
+\end{knowledgebox}
+
+\teachervoice{讲者把 ChatGPT 的关键贡献概括为“fix the user interface”。人更擅长直接说想要什么，而不是猜测哪个奇怪 prompt 能触发行为；instruction data 在普通网页语料中又非常稀少。}
+
+\subsection{把输出 elicitation 修好之后，仍然有五类缺口}
+
+Eliciting Outputs slide 把 prompt、instruction tuning 与 alignment 放在 generator 之前，右侧列出 hallucination、attribution、staleness、revisions 与 customization。这五项不是同一个错误率，而是分别对应事实、来源、时间、可更新性与用户/组织边界。
+
+\lecturefigure{slide-05-eliciting-outputs.jpg}{输出 elicitation 改善后仍然存在的模型缺口}{Stanford 课堂视频 00:06:09}
+
+\begin{knowledgebox}{术语消化：五类问题不能混成“准确率”}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+问题 & 表现 & Retrieval 可能提供什么 \\
+\midrule
+Hallucination & 输出与可接受事实源冲突 & 提供显式证据，但生成器仍可能忽略 \\
+Attribution & 无法指出来源 & 返回文档 ID、段落和时间戳 \\
+Staleness & 参数知识过时 & 替换或刷新 index，而不重训全部模型 \\
+Revision & 错误事实难以精确更正 & 修改文档或访问策略 \\
+Customization & 不同组织需要不同知识边界 & 切换私有/领域 index 与权限 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\begin{warningbox}{检索到证据不等于 grounded generation}
+Retriever 可能找到正确文档，generator 仍可能引用错段落、混入参数记忆或完全忽略证据。因此至少要分别评估 retrieval quality、evidence utilization 与 final answer correctness。
+\end{warningbox}
+
+\teachervoice{讲者强调，尤其在 strict accuracy requirements 的 enterprise 场景，模型高置信地“make up stuff”、不给 attribution、不能快速修订和定制，都会阻止真实部署。}
+
+\subsection{Contextualization：外部记忆进入生成器}
+
+Contextualization architecture 增加 documents、document encoder、retriever、query encoder 与 context。用户输入不再只进入 generator，也形成 query；retriever 从外部文档集合中找证据，再把结果与 prompt 一起交给模型。
+
+\lecturefigure{slide-06-contextualization-architecture.jpg}{Documents--retriever--context--generator 的基础 RAG 架构}{Stanford 课堂视频 00:06:48}
+
+\begin{knowledgebox}{第一使用语表：Retriever、Index、Embedding、Context}
+\begin{tabularx}{\textwidth}{L{0.17\textwidth}>{\raggedright\arraybackslash}X}
+\toprule
+术语 & 含义 \\
+\midrule
+Document chunk & 从文档切出的可检索单位，粒度决定召回与上下文成本 \\
+Embedding & 把 query 或 chunk 映射为向量，以便计算相似度 \\
+Index & 支持查找的数据结构，可为倒排索引、向量索引或混合索引 \\
+Retriever & 根据 query 从 index 返回候选 chunk 与分数 \\
+Context & 最终提供给 generator 的证据文本，不等同于整个 index \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\lecturefigure{slide-07-two-paradigms.jpg}{Closed-book/open-book 与 parametric/semi-parametric 两组范式}{Stanford 课堂视频 00:07:48}
+
+\begin{importantbox}{Parametric 与 non-parametric memory}
+Parametric memory 是模型权重中通过训练形成的统计知识，更新通常需要继续训练；non-parametric memory 是可直接读写或替换的文档、数据库、索引与缓存。RAG 常被称为 semi-parametric，因为生成器有参数，而外部 memory 可在测试时变化。
+\end{importantbox}
+
+\subsection{为什么 external index 能缓解部分问题}
+
+Why does this solve the issues slide 给出两条直接收益：替换 index 可以 customization、避免 staleness、修订错误；grounding 可以减少 hallucination，并提供 citation 与 attribution。注意用词是“less”而非“zero”。
+
+\lecturefigure{slide-08-why-retrieval-solves-issues.jpg}{外部 index 对定制、更新与 grounding 的帮助}{Stanford 课堂视频 00:08:57}
+
+\begin{knowledgebox}{读图：可更新性来自状态位置变化}
+若事实只存在于权重中，修正需要训练与重新部署；若事实位于 index，更新路径变成 document update $\rightarrow$ re-index $\rightarrow$ 下一次 retrieval。代价是系统必须管理文档版本、权限、chunking 和检索一致性。
+\end{knowledgebox}
+
+\begin{warningbox}{外部知识库不是自动真相库}
+Index 可能包含错误、冲突、过期或恶意内容。RAG 把“模型是否记错”部分转化成“系统信任什么数据源、如何排序与引用”；它提高可控性，却把数据治理和 source selection 变成显式责任。
+\end{warningbox}
+
+\teachervoice{课堂提醒，index 可换、事实可修订、来源可引用，但 generator 仍可能不理会 context。检索增强真正要求 retriever 与 generator 之间建立有效接口。}
+
+\subsection{一张架构图会产生许多研究问题}
+
+Many Questions slide 围绕基础图追问：系统如何学习、扩展与预处理，怎样编码和检索文档，又该如何设计 prompt 并验证答案。它把 RAG 从单一 trick 展开为完整的系统设计空间，也为后面按 train/test、representation 和 fusion 分类做准备。
+
+\lecturefigure{slide-09-many-questions.jpg}{RAG 基础架构周围的学习、扩展、检索与验证问题}{Stanford 课堂视频 00:09:57}
+
+\begin{importantbox}{RAG 的六个设计轴}
 \begin{enumerate}
-\item \textbf{知识过时}：训练截止内容无法修改
-\item \textbf{幻觉失控}：无证据时模型会强势输出
-\item \textbf{审计缺失}：参数没有 provenance
+  \item \textbf{Corpus}：哪些文档可被访问，谁维护版本与权限；
+  \item \textbf{Chunking}：如何切分、重叠、保留层级；
+  \item \textbf{Representation}：sparse、dense、late interaction 或 hybrid；
+  \item \textbf{Retrieval policy}：何时检索、取多少、是否多跳；
+  \item \textbf{Fusion}：拼 prompt、cross-attention、decoder fusion 或 token-level memory；
+  \item \textbf{Learning/evaluation}：哪些组件有梯度，怎样区分检索与生成错误。
 \end{enumerate}
-检索增强把外部 knowledge base 视为 `non-parametric cache'，在 inference 时补全参数化 memory 的盲区。
 \end{importantbox}
-
-\subsection{RAG 工作流与知识保障}
-
-\begin{table}[H]
-\centering
-\caption{RAG 工作流拆解}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-阶段 & 核心任务 & 输出 \\
-\midrule
-检索 & BM25 / dense / vector search & top-k 文档 + score + source ID \\
-增强 & 拼接文档、附上 citation metadata & 强化 prompt（含 evidence tokens） \\
-生成 & LLM 基于 evidence 生成 & 高置信回答 + 引用 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{可审计的 RAG Pipeline}
-每个阶段都需记录 timestamp 与 hash：检索记录 score 与来源，增强记录文档顺序，生成记录最终 citation。hallucination 发生时可以精准回溯是哪一层 misaligned。
-\end{knowledgebox}
 
 \subsection{本章小结}
 
-检索增强的存在直接源于 LLM 的记忆瓶颈，RAG 三步让整条链路都具备 traceable knowledge control。
+Retrieval augmentation 主要补充可更新、可归因和可定制的外部记忆。它没有改变 next-token objective，也不会自动保证生成忠实；因此需要把 corpus、index、retriever、fusion、generator 和 evaluation 当作一套系统来设计。
 
-\section{检索堆栈}
+\section{Train Time 与 Test Time：哪些组件真正被训练}
 
-\subsection{稀疏与密集检索}
+理解 RAG 论文最有效的方法，不是按年份背模型名，而是问两个问题：训练时更新什么，测试时运行什么。Frozen RAG、RePlug、RAG、REALM 和 Atlas 的核心差异，都能映射到 language model、query encoder、document encoder、reranker、index 与 prompt 的更新边界。
 
-Kiela 回顾 BM25 与 DPR：前者在记忆关键词之余 latency 可控，后者抓住语义。多数团队采用 `BM25 upstream + dense rerank` 的混合架构：稀疏检索提供 candidate pool，密集 reranker 提升 precision。
+\subsection{训练与推理要分开列账}
 
-\begin{knowledgebox}{稀疏与密集的互补}
-稀疏检索提供 recall，密集检索提供 semantic alignment。pipeline 中把 BM25 做 candidate，再交给 DPR reranker，1~2ms 内即可交付高质量文档。
+Train Time and Test Time slide 左侧询问是否更新 LM、query encoder、document encoder、是否一次更新全部，以及是否从零预训练；右侧询问系统是否是 frozen model、retrieval 如何变化、不同例子是否使用不同或同一 index。
+
+\lecturefigure{slide-10-train-test-time.jpg}{RAG 在训练期与推理期的选择矩阵}{Stanford 课堂视频 00:10:54}
+
+\begin{knowledgebox}{读图：同一个组件可能在训练时冻结、推理时仍参与}
+``Frozen'' 指参数不更新，不等于组件不运行。Frozen retriever 仍会搜索，frozen generator 仍会生成；index 也可能在不训练 encoder 的情况下更新文档。论文比较时必须同时标注 parameter update、index refresh 与 inference calls。
 \end{knowledgebox}
 
-\subsection{向量索引与 reranker}
+\begin{importantbox}{参数与状态的分层}
+令参数集合为
+\[
+\Theta=\{\theta_G,\theta_Q,\theta_D,\theta_R\},
+\]
+分别代表 generator、query encoder、document encoder 与 reranker；令 $I_t$ 表示时刻 $t$ 的 index 状态。训练可以更新 $\Theta$ 的子集，部署可以只替换 $I_t$。参数学习与知识库更新是两条不同生命周期。
+\end{importantbox}
 
-FAISS / ScaNN / Milvus 等解决大规模向量索引问题。Kiela 特别强调 index maintenance：一旦 encoder 更新就要 rebuild，否则会出现 `index drift`。candidate pool 之后用 cross-encoder reranker + contextual rerank prompt 可校正 raw dot-product 的无序性。
+\subsection{Frozen RAG：不训练也能得到强基线}
 
-\begin{warningbox}{向量更新带来的 drift}
-若 encoder 升级后忘记 rebuild index，新旧 embeddings distribution mismatch，就会让 reranker 逐渐选出 semantically unrelated 文档，hallucination 频出。
+Frozen RAG slide 把 no training 与 in-context learning 放在一起：用现成 retriever 或 vector database 找文档，把文档拼进 prompt，再调用冻结 LLM。它实现快、适合 black-box API，但 retriever 和 generator 并未为彼此优化。
+
+\lecturefigure{slide-11-frozen-rag.jpg}{Frozen RAG：retriever 与 LLM 通过 prompt 松耦合}{Stanford 课堂视频 00:11:57}
+
+\begin{knowledgebox}{读图：Frozen RAG 的工程价值与研究局限}
+价值在于模块可替换、无需模型权重、可快速接入私有文档；局限在于 retrieval score 不一定等于 generator utility，chunk 排名与 prompt 位置可能错配，generator 也可能依赖参数记忆覆盖证据。
+\end{knowledgebox}
+
+\begin{warningbox}{Frozen 不等于便宜}
+每个请求仍需 embedding、search、reranking、prompt tokens 与 generation。若 top-$k$ 过大，输入 token 成本和 latency 可能超过检索收益；若 top-$k$ 太小，关键证据可能丢失。
 \end{warningbox}
 
-\subsection{本章小结}
+\teachervoice{Kiela 把 frozen RAG 称为 ``In-Context Learning only''，并反复指出它是很强的实用起点，却也是各组件独立训练的 Frankenstein system。}
 
-检索堆栈是 `BM25 + dense + rerank` 的交响，需要 index maintenance 与 drift monitoring，才能兼顾 recall 与 precision。
+\subsection{Contextualization via Retrieval：先训练哪一边}
 
-\section{运行蓝图与日志}
+下一张 architecture slide 用红框突出 documents、document encoder、retriever 与 query encoder，表示先让 retrieval side 适应任务。Generator 仍可冻结，训练信号则来自检索监督、最终答案 likelihood 或 reranking objective。
 
-\subsection{检索与生成流水线}
+\lecturefigure{slide-12-contextualization-via-retrieval.jpg}{先 contextualize retrieval side 的架构路径}{Stanford 课堂视频 00:12:09}
 
-Kiela 把 retrieval + generation 看作一条流水线：query 经过 embedding、检索、重排、增强、生成五个阶段。每个阶段都需要 instrumentation 层层打点，比如 embedding stage 的 norm drift，retrieval stage 的 top-k entropy，增强 stage 的 concatenation order。
-
-\begin{table}[H]
-\centering
-\caption{流水线层级与 observability checkpoint}
-\begin{tabular}{p{0.22\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-阶段 & 关注点 & 数据记录 \\
-\midrule
-Embedding & query/key norm drift & mean norm, variance trend \\
-Retrieval & top-k score distribution & logits, entropy, top-k churn \\
-Enhance & document order & concat sequence + metadata tags \\
-Generate & final tokens & citation IDs, confidence \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{流水线可观测性}
-把每个阶段打点写入同一个 dashboard，可以在 entropy drift 发生前 5~10 checkpoint 发现 `radius collapse`，便于快照 reroute。
-\end{knowledgebox}
-
-\subsection{日志 pipeline 与 incident runbook}
-
-Contextual AI 把 instrumentation 写入 runbook：每个 retrieval incident 都记录 timestamp、top-k churn、entropy drop magnitude 和 reroute action。incident log 需要记录 `evidence ID + dump` 以便 future QA。
-
-\begin{importantbox}{incident runbook 模板}
-1) 记录 incident 时间与 source；2) 写入 entropy/top-k/logits；3) 追踪 evidence ID；4) 触发 reroute 或 temperature raise 并写入 action note。
-\end{importantbox}
-
-\subsection{本章小结}
-
-运行蓝图与日志让 retrieval pipeline 成为可监控的流水线，incident runbook 提供可复现的处理步骤。
-
-\section{端到端检索增强模型}
-
-\subsection{REALM 与预训练}
-
-REALM 在 pre-training 阶段把 retrieval 直接并入 MLM：每次掩码预测都检索 documents，让 generator 训练时就习惯 evidence。Kiela 指出这种 joint training 有强 gradient，但每次 update 需要重新 encode 整个 corpus，cost 显著。
-
-\begin{knowledgebox}{REALM 的可观测性}
-REALM 中 retrieval loss 与 generator loss 联动，必须同步监控 retrieval accuracy 与 MLM perplexity，才能判断 gradient 来自 retriever 或 generator。
-\end{knowledgebox}
-
-\subsection{RAG 变体：Sequence / Token / Hybrid}
-
-Lewis 等人提出 Sequence 与 Token 两种变体：Sequence 每轮检索一次，Token 每 token 重检。Kiela 在 00:10:05 强调 Token 比较适用于法律 / 医疗任务，但 cost 极高。Hybrid 通过 cache + token fallback 提供折中。
-
-\begin{table}[H]
-\centering
-\caption{RAG 变体对比}
-\begin{tabular}{p{0.25\textwidth} p{0.25\textwidth} p{0.25\textwidth} p{0.2\textwidth}}
-\toprule
-变体 & 检索频率 & 生成一致性 & 推理成本 \\
-\midrule
-Sequence & 每轮一次 & 高 & 低 \\
-Token & 每 token & 最高 & 极高 \\
-Hybrid & Token + cache & 接近 token & 可控 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{importantbox}{变体选择指南}
-需要在成本与 facts 之间 balance？Sequence + cache 是 default，当 confidence 低时再触发 token reroute；高风险任务（法律/医疗）可直接选择 Token 或 Hybrid despite cost。
-\end{importantbox}
-
-\subsection{Atlas 与 FiD 案例}
-
-Atlas 证明 11B 带检索模型可以击败 540B PaLM，说明检索是部分替代 scale 的路径；FiD 则把每个文档独立 encode，再在 decoder 中 fuse，能够处理数百段的 evidence。
-
-\begin{warningbox}{FiD 的成本陷阱}
-FiD 在 decoder 中融合数十个 snippet，推理显存与 latency 都翻倍。工业实践通常使用 `document filtering + short-circuit rerank` 来控制规模。
-\end{warningbox}
-
-\subsection{本章小结}
-
-端到端检索增强模型在 pre-training 与 inference 间都要兼顾 cost、gradient 与 instrumentation，变体提供不同 tradeoff。
-
-\section{训练与治理}
-
-\subsection{训练阶段的 observability checklist}
-
-Kiela 建议训练时记录 `retrieval entropy`、`top-k diversity`、`cache hit ratio`，并用 `synthetic query batches` 验证 search failure。dashboard 还应统计 `gate dropout logging` 与 entropy drift。
-
-\begin{knowledgebox}{训练 observability 三层}
-Signal layer：retrieval logits/entropy；Aggregation layer：按 retriever/reranker 汇总；Control layer：temperature/mix ratio 自动调节 retrieval weight。
-\end{knowledgebox}
-
-\subsection{QA 与真相治理}
-
-Contextual AI 的 `truth path` 把检索与生成写入 runbook：调整 temperature 时记录 KL divergence；top-k churn 触发 reroute experiment；每次上线前用 evidence recall 工具校验输出。
-
-\begin{importantbox}{治理流程}
-1) 记录 temperature spike + KL divergence；2) 检查 top-k churn 与 evidence overlap；3) 触发 reroute + human-in-the-loop audit；4) 存档 incident log 以便 future drift 复盘。
-\end{importantbox}
-
-\subsection{本章小结}
-
-训练与治理结合 instrumentation 与 runbook，让检索增强在 production 中可追踪、可重复。
-
-\section{Benchmark 与运营指标}
-
-\subsection{关键指标与报警}
-
-Kiela 把 entropy drift、top-k churn 与 retrieval lag 视为最重要的 operational signals，它们直接映射到 `temperature`、`cache freshness`、`reroute` 控制杠。entropy drift 一旦下降 10\%，说明 attention 变得过尖，这时必须 raise temperature 或 reroute low-capacity experts。
-
-\begin{table}[H]
-\centering
-\caption{Benchmark 指标与工程行动}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-指标 & 解释 & 工程行动 \\
-\midrule
-Entropy drift & softmax entropy 降幅 & raise temperature / increase dropout \\
-Top-k churn & top-k tokens 的 churn rate & inspect retrieval quality and reroute experiment \\
-Retrieval lag & latency 上升 & prewarm cache / rerank threshold \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{Benchmark 到运营的桥梁}
-把 benchmark 指标映射成 production alerts：entropy drift → temperature schedule 变更，top-k churn → reroute experiment，retrieval lag → caching action。
-\end{knowledgebox}
-
-\subsection{对比与复盘}
-
-Contextual AI 会把 benchmark logs 与 incident log 串联进行复盘：每次 reroute 后检查 entropy、top-k、retrieval lag 是否同步恢复，避免 repeated drift。
-
-\begin{importantbox}{复盘矩阵}
-将 incident 按 temperature、entropy、top-k、latency 四个维度矩阵化，能快速定位是 retrieval failure 还是 generation drift。
-\end{importantbox}
-
-\subsection{本章小结}
-
-Benchmark 观测指标是把实验室的几何 intuition 转到生产的关卡，通过 table 与 incident matrix 实现即时报警与复盘。
-
-\section{部署与推理}
-
-\subsection{推理成本与延迟 trade-off}
-
-Contextual AI 的 production pipeline 把 generator flops、retrieval latency、rerank cost 与 IO overhead 一起纳入 `latency budget`，并以 entropy drift 作为 pre-alarm：entropy precipitously drop 意味 attention 太尖锐，需要 raise temperature，否则 downstream hallucination 会爆发。
-
-\begin{table}[H]
-\centering
-\caption{推理阶段成本权衡}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-策略 & 影响 & 监控指标 \\
-\midrule
-低 temperature & attention 更尖锐 & entropy drop, top-k hit ↑ \\
-高 temperature & overlap 更大 & latency + GPU usage ↑ \\
-Dynamic reroute & reroute low-capacity experts & latency spikes + reroute frequency \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{importantbox}{推理阶段的 trade-off}
-在 inference 中监控 entropy 变化比 loss 更快，可以在 entropy slide 触发 reroute 或 temperature raise，避免 degradation；同时把 latency budget 与 evidence quality 绑在一起，才是真正的 cost control。
-\end{importantbox}
-
-\subsection{多轮交互与缓存治理}
-
-多轮 prompt 重复时可以 rely on cache hits；Kiela 认为 cache invalidation policy 是 production 中最棘手的部分，很多 team 把 `cache age` 作为 slow alarm，超过阈值就 refresh retriever。
-
-\begin{warningbox}{缓存 drift}
-缓存节省 latency 但过期文档会把 stale knowledge ``烤入''回答，务必持续监控 cache freshness 和 reroute frequency。
-\end{warningbox}
-
-\subsection{本章小结}
-
-部署层把 retrieval latency、temperature、cache age 与 reroute event 一起观察，把 inference cost 看作 retrieval + generation 的组合，有 evidence 才算胜利。
-
-\section{时间线与字幕侧写}
-
-\subsection{关键时间节点}
-
-讲义在 00:00--04:00 重新界定语言模型历史，00:05:00--12:00 介绍 retrieval pipeline 与 geometric viewpoint，12:00--25:00 讲述 instrumentation 与 governance，25:00+ 进入 QA/playbook。把时间戳写在笔记里，能让 reviewer 快速定位视频片段。
-
-\begin{table}[H]
-\centering
-\caption{时间线与工程关注点}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-时间戳 & 内容 & 工程提醒 \\
-\midrule
-00:00--04:00 & 语言模型的历史与事实化动机 & 建立 `knowledge control` mindset \\
-04:00--12:00 & 检索堆栈与 retrieval pipeline & 确保 BM25 + dense recall/precision \\
-12:00--25:00 & instrumentation 与 control loop & 记录 entropy drift + reroute action \\
-25:00--30:00 & QA/runbook 演练 & 运行 synthetic batch 与 incident log \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{字幕同步的价值}
-把关键 timecode 添加入笔记，可以在缺乏 slides 时仍然回溯每段提到的 `geometry`、`control loop`、`QA` 细节，增强业务 review 的效率。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-时间线与字幕侧写把视频里的逻辑墙化为结构化工程 checkpoints，便于 QA 和审查团队快速追溯事件。
-
-\section{字幕节选与重点 quotes}
-
-\subsection{00:00--04:00：设定历史视角}
-
-开场 00:00--04:00 重申 ``language models 是 old idea''，Kiela 把观众拉回 1991 年的 neural learner，强调 ``parameters cannot be updated fast enough''。这一段的工程提醒是：建立 `knowledge control` mindset，避免把模型当 black box。
-
-\begin{importantbox}{起点的工程声明}
-即便现有 LLM 强大，讲者提醒我们它们基于 old ideas，因此必须搭配 `non-parametric cache` 才能继续保持 facts。
-\end{importantbox}
-
-\subsection{04:00--12:00：retrieval pipeline 与 geometry}
-
-这一阶段聚焦 retrieval stack，将 attention 视为 retriever + generator 流水线，强调 BM25 + dense combination，并用 geometry 解释 why softmax approximates high-dimensional overlap。
-
-\begin{knowledgebox}{字幕提醒}
-字幕提到 ``retrieval pipeline'', ``cache'', ``hallucination'' 等关键词，强化了 softmax 与 SDM geometry 之间的联系，提醒我们把 instrumentation 拆解为 pipeline 各阶段。
-\end{knowledgebox}
-
-\subsection{12:00--25:00：观测与治理}
-
-从 12:00 开始的段落围绕 instrumentation 与 control loop，讲述 temperature annealing、gate dropout 与 entropy drift 的 3-layer stack，以及 evidence-driven runbook 的演练步骤。
-
-\begin{warningbox}{不要只盯着 loss}
-字幕中 `attention drift`、`top-k churn` 的频繁出现提醒我们：只看 loss 无法察觉 entropy collapse，必须在 dashboard 中同时监控 entropy 与 retrieval metrics。
-\end{warningbox}
-
-\subsection{25:00--尾声：QA 与 runbook}
-
-末尾 25:00+ 进入 QA 与 runbook demo，包括 synthetic batch 验证、temperature spike 实验与 gate dropout logging，体现 production-ready 的治理节奏。
-
-\subsection{本章小结}
-
-\label{sec:subtitle}
-字幕节选强化了每个时间段的工程意图：设定事实性 mindset →structuring retrieval pipeline →observability \& governance →QA/runbook。
-
-\section{案例研究与工业实践}
-
-\subsection{Contextual AI 的落地}
-
-Kiela 在 00:25:35 提到的 `control loop` 包括 temperature annealing、load balancing loss、expert dropout 与 gradient clipping。搭配 instrumentation dashboard（entropy、top-k、retrieval lag），形成 `truth path`，对外宣称 evidence recall 率 > 90\%。
-
-\begin{knowledgebox}{Evidence-driven control loop}
-让 entropy drift、top-k churn 与 retrieval lag 触发 alarm，可提前 5~10 个 checkpoint 发起 reroute experiment，从而避免 downstream hallucination。
-\end{knowledgebox}
-
-\subsection{观测与运行手册}
-
-Kiela 分享的 runbook 包含三步演练：1) synthetic query batch + entropy logging；2) temperature spike experiment + load balancing loss；3) gate dropout logging + gradient replay。每次 incident 记录 timestamp 与 evidence ID，方便 future drift analysis。
-
-\begin{importantbox}{RAG Runbook 三步}
-1) Run synthetic batch logging entropy/top-k；2) Simulate temperature spike and observe load balancing loss；3) Log gate dropout + gradient change。只有把这三步写进 runbook，才能把课堂 insight 迁移到 production。
-\end{importantbox}
-
-\subsection{本章小结}
-
-案例研究表明：RAG 不只是模型结构，而是一整套 observability + governance 文化，retrieval metrics 与 generation metrics 被绑在同一个 incident log。
-
-\section{Implementation Q\&A}
-
-\subsection{Temperature scheduling}
-
-Kiela 在 00:13:10 提到 `temperature annealing gives us control over overlap`：前 10k steps 线性降温，然后根据 entropy 低于 0.4 nat 时 raise temperature 0.05。记录 temperature-entropy pairing 使每次复现都可追踪。
-
-\begin{importantbox}{可重复的 schedule}
-记录每次 temperature change 与 corresponding entropy、loss 组合，避免随意的 heuristic tweak。
-\end{importantbox}
-
-\subsection{监控 cerebellum wiring 与 gate dropout}
-
-00:25:45 提到 ``cerebellum is old, widely conserved''，工程上把 Purkinje cell activity 映射 gate dropout，记录 dropout ratio + gate smoothing + frequency 是关键 instrumentation 变量。
-
-\begin{knowledgebox}{Gate dropout instrumentation}
-把 gate dropout ratio、gate smoothing frequency 与 downstream loss 写到 dashboard，可以快速判断是 hardware failure 还是 attention collapse。
-\end{knowledgebox}
-
-\subsection{多模态 drift 探测}
-
-在视觉 token 上监控 top-k churn，若 patch entropy 呈 microp plateau 就触发 reroute；这个 policy 也可扩展到 non-language tokens。
-
-\begin{warningbox}{跨模态 drift 的特异性}
-视觉 token norm 分布更不稳定，容易比语言 token 提前突破 entropy threshold，需要在 dashboard 中嵌入 modality-specific alarms。
-\end{warningbox}
-
-\subsection{本章小结}
-
-Implementation Q\&A 把讲座问答转化为 three concrete checkpoints：temperature schedule、gate dropout instrumentation、cross-modal drift alarms。
-
-\section{治理演练与复盘}
-
-\subsection{Synthetic query 演练}
-
-Contextual AI 的 runbook 要求每次 temperature change 前执行 synthetic query batch，记录 top-k entropy 与 softmax entropy，并对比 drift 前后的 gate dropout ratio。
-
-\begin{itemize}
-\item 生成 synthetic query（含 low-resource token）
-\item 运行 current config，记录 top-k churn 与 entropy
-\item 比对 previous checkpoint，若 entropy drop > 0.1 nat 就 raise temperature
-\item 写入 incident log，标注 evidence ID
-\end{itemize}
-
-\begin{knowledgebox}{Synthetic query 的作用}
-通过 controlled queries 模拟 drift，可以在实际 production 发生前把 gate collapse 逼出来，并把 evidence log 写入 dashboard。
-\end{knowledgebox}
-
-\subsection{Incident review 表格}
-
-\begin{table}[H]
-\centering
-\caption{Incident 决策回顾}
-\begin{tabular}{p{0.3\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-事件 & 触发条件 & 复盘行动 \\
-\midrule
-Entropy drop & entropy < 0.4 & raise temperature + reroute \\
-Top-k churn spike & top-k 变动 > 20\% & inspect retriever + rerank policy \\
-Cache age 超阈值 & cache age > 30 min & refresh reranker + log \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{warningbox}{复盘的重点}
-复盘要同时考虑 entropy/top-k/cache age，避免只 focus 在 loss 曲线上，幕后的 drift 可能早就已出现。
-\end{warningbox}
-
-\subsection{本章小结}
-
-治理演练把模型的理论假设转成可执行的 incident log，复盘表格提供 structured 回顾，避免重复犯错。
-
-\section{跨语言与地域化治理}
-
-\subsection{多语言 keyframes}
-
-讲者在 00:01:48 用 poll 引出 ``谁发明了语言模型''，提醒我们语言模型有 deep roots。面对 multilingual scenario，retrieval pipeline 需要维护 language-specific index（各语言 BM25 + dense）以及 language-aware reranker。
-
-\begin{importantbox}{语言特定 instrumentation}
-为每种语言保留 entropy drift、top-k churn 记录，可以在 multi-lingual deployment 中快速定位哪个语言发生 drift，避免 global thresholds 覆盖 minority language。
-\end{importantbox}
-
-\subsection{地域化知识库治理}
-
-Contextual AI 对 enterprise client 会用 `energy \& policy compliance` 语料，不同地区对 evidence 有不同合规要求；需要把 evidence ID 与 region tag 一起写 log。
-
-\begin{knowledgebox}{地域化 evidence log}
-在 incident log 中加入 region tag 与 compliance tag，可以快速回答 ``这个 output 有无满足当地 policy''。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-跨语言与地域化治理要求我们把 instrumentation 拆成 language-specific、region-specific 的两层，才能让 enterprise deployment 具备可信度与合规性。
-
-\section{附录：字幕原文摘要}
-
-\subsection{00:00--04:00：历史与事实锚点}
-
-字幕中的 ``language models are old idea'' 和 ``parameters cannot be updated fast enough'' 强调 facts 必须靠检索和 evidence。我们在笔记中提到的 `knowledge control`，正来源于这一段话。
-
-\begin{quote}
-``If you thought OpenAI, I'm angry with you'' —提醒我们 language models 不是 recent hype，而是 decades-old idea。
-\end{quote}
-
-\subsection{04:00--12:00：retrieval pipeline details}
-
-字幕反复提到 ``retrieval pipeline'' 与 ``cache''，强调 pipeline 的每个 stage 需要 instrumentation。我们把 `embedding norm`、`top-k entropy` 等 log 写入 same dashboard，就是为了响应这一段的提醒。
-
-\begin{knowledgebox}{字幕直接引用}
-``retrieval pipeline'', ``cache'', ``hallucination'' 均出现在 04:00--12:00，说明这一阶段是设计 instrumentation 的窗口。
-\end{knowledgebox}
-
-\subsection{12:00--25:00：control loop}
-
-字幕里 ``temperature annealing gives us control over overlap''、``attention drift'' 都指向 `entropy` 与 `reroute` 的控制回路。我们在 QA section 的 runbook 里把这些关键行动写成三步，正好对应这一段的工程思路。
-
-\begin{warningbox}{字幕原声提醒}
-``Attention drift'' 与 ``gate dropout'' 的同时出现说明，只靠 loss 监控不能发现 drift，必须 instrument both noise and entropy signals。
-\end{warningbox}
-
-\subsection{25:00--尾声：QA / runbook}
-
-字幕末尾 `synthetic query`、`temperature spike`, `gate dropout logging` 提供了演练提示。Implementation Q\&A 的三点 checklists 就是我们将这些 runbook steps 工程化的结果。
-
-\subsection{本章小结}
-
-附录摘录字幕原文，帮助 reviewer 直接关联视频 quote 与本笔记的工程措施，确保每个 major decision 都能被 trace back to the video.
-
-\section{下一步与实践任务}
-
-\subsection{Operational follow-ups}
-
-根据讲座内容，我们可以列出以下行动项：
-
-\begin{itemize}
-\item 把 entropy、top-k、retrieval lag 三条曲线放入统一 dashboard
-\item 为每个 incident 记录 evidence ID、region tag 与 remediation steps
-\item 设定 temperature annealing schedule（前 10k 线性降温，entropy < 0.4 nat 时 raise 0.05）
-\item 定期运行 synthetic batch + gate dropout logging，验证 reroute policy
-\end{itemize}
-
-\subsection{Research follow-ups}
-
-讲者提到的 open problems 推向实践即是 future research agenda：低资源 multi-modal drift detection、cross-lingual reroute policies、SDM geometry 的 instrumentation metrics。
-
-\subsection{本章小结}
-
-本章列出 actionable follow-ups 与 research agenda，以便后续迭代与会议复盘。
-
-\section{附录 B：实施清单}
-
-\subsection{Checklist}
-
-下面的 checklist 把本讲提到的 instrumentation/gov steps 串联：
+\begin{knowledgebox}{三种常见 retriever supervision}
 \begin{enumerate}
-\item 设立 entropy/top-k/retrieval lag dashboard
-\item 每次 temperature change 联系 KL divergence
-\item 维护 language-specific index 与 region-tagged evidence log
-\item 实施 synthetic query batch + gate dropout logging
-\item 记录 incident time + evidence ID + remediation action
-\item 把 top-k churn 视为 reroute trigger
-\item 对 low-resource config 开启 automatic temperature raise
-\item Multi-modal deployment 加入 modality-specific entropy
-\item 每个 response 带 evidence ID \& policy tag
-\item 维护 control layer：temperature/mix ratio automation
+  \item \textbf{Direct relevance labels}：query--positive passage pairs 与 hard negatives；
+  \item \textbf{Answer-containing heuristic}：文档是否包含答案字符串，便宜但噪声大；
+  \item \textbf{Generator-derived signal}：哪份文档让正确答案 likelihood 更高，更贴近最终任务但计算更贵。
 \end{enumerate}
-
-\subsection{本章小结}
-
-实施清单给出具体可执行的 action，方便团队在复训或 deployment 时直接对照。
-
-\section{运营仪表与工具}
-
-\subsection{Dashboard 总览}
-
-Contextual AI 的仪表盘分为 three layers：Signal（entropy、logits）、Aggregation（per head \& language）与 Control（temperature、reroute actions）。每层有 dedicated cards 供 on-call 轮班查看。
-
-\begin{table}[H]
-\centering
-\caption{仪表盘卡片示例}
-\begin{tabular}{p{0.25\textwidth} p{0.35\textwidth} p{0.35\textwidth}}
-\toprule
-卡片 & 显示内容 & 作用 \\
-\midrule
-Entropy heatmap & head-wise entropy & 监控 attention sharpness \\
-Top-k churn trend & top-k turnover ratio & 发现 drift 来源 \\
-Retrieval lag & latency over time & 评估 retrieval cost \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{knowledgebox}{部署仪表板}
-把 entropy/top-k/retrieval lag 放入同一 dashboard，可以在 drift 初期同步看到多个 signal，Avoid one-signal bias。
 \end{knowledgebox}
 
-\subsection{与治理体系集成}
-
-仪表盘与 governance 系统整合后，任何 `entropy drop` 自动 push alert to runbook，若 reroute action 触发，会 automatically log event 与 evidence ID。
-
-\begin{warningbox}{不要让 alert 成为噪音}
-每个 alert 都应该附加 severity、timestamp 与 remediation step，否则 on-call 会忽略 signal。
-\end{warningbox}
+\teachervoice{课堂的 taxonomy 不是“训练或不训练”二选一，而是逐项询问 LM、query encoder、document encoder、reranker 与 index。后续所有模型都可以放回这张表定位。}
 
 \subsection{本章小结}
 
-运营仪表与工具从 signal → aggregation → control 全链路覆盖，把 instrumentation 数据与治理流程联动。
+RAG 架构需要同时报告 parameter updates、index refresh 与 inference behavior。Frozen RAG 用最少训练快速获得能力；更紧耦合的方法则让 retriever 或 generator 接收最终任务信号，代价是训练复杂度、索引刷新和计算成本上升。
 
-\section{扩展案例：多模态企业部署}
+\section{Retrieval Stack：Sparse、Dense、Late Interaction 与 Hybrid}
 
-\subsection{Scenario 描述}
+检索器决定 generator 能看到哪些证据。课堂从传统 sparse retrieval 讲到 dense bi-encoder、vector database、ColBERT late interaction，再以 SPLADE、DRAGON 与 hybrid search 收束。不同表示不是简单的“新方法淘汰旧方法”，而是 exact match、semantic match、效率与可更新性的取舍。
 
-某 enterprise LLM 必须同时支持中文、英文、视觉 prompt。Contextual AI 在同一 platform 上分别部署 BM25 + dense retriever，并在 cross-modal rerank stage 绑定 modality-specific metrics。
+\subsection{Sparse Retrieval：词项空间中的精确匹配}
 
-\begin{itemize}
-\item 中文/英文各自的 entropy 与 top-k logs
-\item 视觉 patch entropy + patch-level top-k churn
-\item Modality-specific reroute policy：visual drift → trigger patch rerank + temperature raise
-\end{itemize}
+Sparse retrieval slide 展示 TF-IDF、BM25 与 DrQA。文档向量的维度对应词项，大多数维度为零，因此称为 sparse；query 与 document 共享词项时获得高分，品牌名、编号、专有名词和代码 token 往往受益。
 
-\subsection{治理策略}
+\lecturefigure{slide-13-sparse-retrieval.jpg}{TF-IDF、BM25 与传统 sparse retrieval}{Stanford 课堂视频 00:15:03}
 
-在 enterprise context 中还要加上 compliance verification：every answer 附带 evidence ID \& policy tag，logging pipeline 需要同步把 `region`、`language`、`evidence` 写入 same file。
+\begin{importantbox}{BM25 的核心直觉}
+对 query $Q$ 与文档 $D$，BM25 可写为
+\[
+\operatorname{BM25}(D,Q)=\sum_{q\in Q}\operatorname{IDF}(q)
+\frac{f(q,D)(k_1+1)}{f(q,D)+k_1\left(1-b+b\frac{|D|}{\operatorname{avgdl}}\right)}.
+\]
+$f(q,D)$ 是词频，$\operatorname{IDF}$ 提高稀有词权重，长度归一化避免长文档仅因词多而占优。它不理解深层语义，却对 exact lexical evidence 强而高效。
+\end{importantbox}
 
-\begin{importantbox}{cross-modality instrumentation}
-把 visual/audio/text entropy 并列监控，可以在 `modality-specific drift` 发生时自动 reroute 到 different expert or fallback to safe mode。
+\teachervoice{Q\&A 中讲者用 Apple 与 pear 解释 dense retrieval 的风险：品牌名需要精确匹配时，不希望“语义相近”把公司 Apple 扩成水果 pears。}
+
+\subsection{Dense Retrieval：把 query 与 passage 投入共享向量空间}
+
+Dense retrieval slide 展示 ORQA 与 DPR。Query encoder 和 passage encoder 生成低维 dense embeddings，再用 dot product 或 cosine similarity 排序。它可以召回词面不同但语义相关的 passage，但 representation 是否适合当前 generator 和 domain 取决于训练。
+
+\lecturefigure{slide-14-dense-retrieval.jpg}{ORQA/DPR 的 dense bi-encoder retrieval}{Stanford 课堂视频 00:16:48}
+
+\begin{importantbox}{Dense similarity 与 MIPS}
+设 query embedding 为 $e_q\in\mathbb{R}^d$，文档 embedding 为 $e_i$，常用分数为
+\[
+s(q,d_i)=e_q^\top e_i
+\quad\text{或}\quad
+\cos(e_q,e_i)=\frac{e_q^\top e_i}{\|e_q\|\,\|e_i\|}.
+\]
+Maximum Inner Product Search（MIPS）是在大规模 index 中近似寻找最高内积向量；FAISS 等库用量化、分桶或图结构降低穷举成本。
+\end{importantbox}
+
+\lecturefigure{slide-15-vector-database.jpg}{Vector database：在十亿级 embedding 上做 similarity search}{Stanford 课堂视频 00:17:45}
+
+\begin{knowledgebox}{读图：Vector database 存的是可搜索表示}
+它通常负责写入 embedding、建立 ANN index、过滤 metadata、执行 top-$k$ search 与更新。数据库不会替模型决定 chunk 是否可信，也不会保证 semantic similarity 等于 task relevance；这些仍取决于 encoder、corpus 与 downstream objective。
+\end{knowledgebox}
+
+\subsection{ColBERT：从单向量压缩到 token-level late interaction}
+
+Bi-encoder 把整个 query 和 passage 各压成一个向量，效率高但可能丢失细粒度匹配。ColBERT 保留每个 token 的 contextual embedding，预先编码文档，查询时对每个 query token 找最匹配的 document token，再聚合分数。
+
+\lecturefigure{slide-16-colbert-late-interaction.jpg}{ColBERT 从 representation interaction 到 late interaction}{Stanford 课堂视频 00:17:51}
+
+\begin{importantbox}{MaxSim late interaction}
+设 query token embeddings 为 $Q_1,\ldots,Q_m$，document token embeddings 为 $D_1,\ldots,D_n$，ColBERT 的典型分数是
+\[
+s(q,d)=\sum_{i=1}^{m}\max_{1\le j\le n} Q_i^\top D_j.
+\]
+每个 query token 都能找到最相关的 passage token，因此比单向量表达更细；代价是 index 更大、查询计算更多。
+\end{importantbox}
+
+\subsection{SPLADE、DRAGON 与 Hybrid Search}
+
+SOTA slide 用 SPLADE 表示 learned sparse expansion：模型给 query/doc 扩展相关词项，同时仍可使用倒排索引；DRAGON 用 progressive data augmentation 和 hard negatives 训练 generalized dense retriever。课堂最后强调 developer practice 常把 sparse 与 dense 结果融合。
+
+\lecturefigure{slide-17-retrieval-sota-splade-dragon.jpg}{SPLADE、DRAGON 与 hybrid search 的课堂综述}{Stanford 课堂视频 00:24:57}
+
+\begin{knowledgebox}{读图：Sparse meets dense 的两种路径}
+SPLADE 把 semantic expansion 写回高维 sparse vocabulary；hybrid search 则保留独立 BM25 与 dense retriever，再融合排名。前者共享一个 learned sparse representation，后者允许不同系统各自更新和过滤。
+\end{knowledgebox}
+
+\begin{importantbox}{Reciprocal Rank Fusion}
+给多个检索器 $r\in\mathcal{R}$，文档 $d$ 的融合分数可写为
+\[
+\operatorname{RRF}(d)=\sum_{r\in\mathcal{R}}\frac{1}{c+\operatorname{rank}_r(d)},
+\]
+其中 $c$ 是平滑常数。RRF 不要求不同 retriever 的原始分数同尺度，只利用排名，因此是实用的 hybrid baseline。
+\end{importantbox}
+
+\begin{lstlisting}[caption={Sparse recall + dense rerank 的两阶段检索}]
+def hybrid_retrieve(query, corpus, top_k=8):
+    sparse_candidates = bm25.search(query, limit=200)
+    dense_scores = dense_encoder.score(query, sparse_candidates)
+    reranked = sort_by_score(sparse_candidates, dense_scores)
+    return reranked[:top_k]
+\end{lstlisting}
+
+\teachervoice{讲者当时称 DRAGON/DragonPlus 是很好的 off-the-shelf dense retriever，并观察开发者普遍采用 hybrid search。讲义保留这是 2023 年课堂判断，不把它写成 2026 年永久排名。}
+
+\subsection{本章小结}
+
+Sparse retrieval 强在 exact terms 与成熟倒排索引，dense retrieval 强在语义召回，ColBERT 用更大 index 换取 token-level interaction，hybrid search 则把多种信号融合。选择 retriever 要从 query 类型、domain、index 规模、更新频率和 generator utility 出发。
+
+\section{让 Retriever 适应 Frozen Generator}
+
+有了强 retriever，下一步仍不是结束：通用 relevance score 未必等于某个 generator 的 usefulness。课堂用 RePlug 与 in-context RALM 展示两条中间路线——保持 generator 冻结，利用其 likelihood 或最终任务 loss 训练 retriever/reranker。
+
+\subsection{Contextualizing the Retriever for the Generator}
+
+架构页用火焰标记 retrieval side：目标是让 query encoder 和 retriever 找到“能让这个 generator 更好回答”的文档，而不仅是通用语义相似文档。若 generator 是 GPT-4 式 black-box API，训练接口会受到可见 log-probability 与调用成本限制。
+
+\lecturefigure{slide-18-contextualizing-retriever-for-generator.jpg}{针对 frozen generator 优化 retrieval side}{Stanford 课堂视频 00:25:24}
+
+\begin{knowledgebox}{三种 generator access level}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+访问级别 & 可用信号 & 可训练范围 \\
+\midrule
+Text-only API & 最终文本、可能有评分器 & 黑盒搜索、偏好优化、外部 reranker \\
+Log-probability API & 正确答案 likelihood；perplexity（交叉熵的指数，可理解为每 token 的有效候选数，越低越好） & RePlug 式 generator-aware retriever \\
+Full weights & 梯度、hidden states、attention & Joint retriever--generator training \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{RePlug：用语言模型 likelihood 监督 retriever}
+
+RePlug 对 top-$k$ 文档归一化 retrieval scores，再分别把每份文档交给 frozen LM，观察正确 continuation 的 likelihood。训练目标让 retriever distribution 接近 generator utility distribution，因此无需反向传播进入 generator。
+
+\lecturefigure{slide-19-replug.jpg}{RePlug 用 frozen LM likelihood 对齐 retrieval distribution}{Stanford 课堂视频 00:26:42}
+
+\begin{importantbox}{RePlug 的 distribution matching}
+令 retriever 对文档的概率为
+\[
+p_R(d_i\mid x)=\operatorname{softmax}(s_R(x,d_i)),
+\]
+令 frozen LM 在文档 $d_i$ 条件下对目标 $y$ 的分数归一化为 $p_G(d_i\mid x,y)$。训练可最小化
+\[
+\mathcal{L}_{\text{RePlug}}=D_{\mathrm{KL}}\!\left(p_G(\cdot\mid x,y)\,\|\,p_R(\cdot\mid x)\right).
+\]
+Retriever 学到哪份文档能降低 LM perplexity，而 generator 参数保持不变。
+\end{importantbox}
+
+\teachervoice{Kiela 称 RePlug 的想法 ``super simple'' 且适用于多种 generator，只要能够获得 perplexity 或 token likelihood。关键是训练 dense encoder，而不是修改黑盒 LM。}
+
+\subsection{In-Context RALM：BM25 召回，learned reranker 精排}
+
+In-Context RALM slide 展示更朴素的 frozen RAG：先用 BM25 找候选，把文档放进 context；随后训练一个 reranker，使高排名文档更能提高冻结 LM 对目标 token 的概率。Stop-gradient 阻止 LM 参数更新，梯度只进入 rank function。
+
+\lecturefigure{slide-20-in-context-ralm.jpg}{BM25 加 trained reranker 的 In-Context RALM}{Stanford 课堂视频 00:26:48}
+
+\begin{knowledgebox}{读图：Recall 与 precision 分工}
+BM25 用低成本扩大候选集合，reranker 在较小集合上使用更昂贵的 cross-encoder 或 task-aware score。这样保留 exact lexical recall，同时让最终排序靠近 generator objective；但若 BM25 没召回关键文档，reranker 无法补救。
+\end{knowledgebox}
+
+\subsection{Retrieve--Rerank--Generate 的显式三阶段管线}
+
+最后一张架构图在 retriever 与 context 之间加入绿色 reranker。这个额外组件让系统可以独立控制 recall depth、reranking depth 和 final context size，也带来新的 calibration 与 latency 问题。
+
+\lecturefigure{slide-21-retrieve-rerank.jpg}{Documents--retriever--reranker--generator 三阶段架构}{Stanford 课堂视频 00:28:39}
+
+\begin{importantbox}{三种集合大小不要混淆}
+设初始 corpus 大小为 $N$，retriever 返回 $k_r$ 个候选，reranker 保留 $k_c$ 个 context chunks，通常
+\[
+N\gg k_r\ge k_c.
+\]
+$k_r$ 太小会损害 recall，太大增加 reranking cost；$k_c$ 太大增加 prompt cost 与 Lost-in-the-Middle 风险，太小则可能缺证据。
+\end{importantbox}
+
+\begin{warningbox}{Reranker 分数仍不是事实可信度}
+Reranker 衡量 query/task relevance，不自动判断来源是否权威、是否过期或是否被 prompt injection 污染。Production corpus 还需要 source policy、metadata filters 和访问控制。
+\end{warningbox}
+
+\teachervoice{课堂把这一阶段描述为“slowly progressing”到更适配生成任务的系统：先不碰 generator，通过 BM25、dense retriever 或 BERT reranker 把 gradients 引入 retrieval pipeline。}
+
+\subsection{本章小结}
+
+RePlug 和 in-context RALM 都在 frozen generator 条件下学习 retrieval side。前者对齐 retriever 与 LM likelihood distribution，后者用 BM25 recall 加 learned reranker。它们是 frozen RAG 与 fully joint training 之间的重要中间层。
+
+\section{Contextualizing the Whole System：从松耦合到共同优化}
+
+前一章仍把 generator 冻结，只训练 retrieval side。课堂接着把红框扩展到 retriever、context 与 generator，追问为什么要让彼此独立训练的组件勉强拼接。RAG、FiD、kNN-LM、RETRO 等方法的差异可以沿两条轴阅读：证据在何时检索，以及生成器在何处融合证据。
+
+\subsection{Contextualization of Both}
+
+架构页把 query encoder、retriever、context 与 generator 同时放入红框，表示最终任务 loss 可以影响更多组件。Joint training 的理想是让 retriever 找到 generator 真正会用的文档，让 generator 学会在证据不足或冲突时采取可预测行为。
+
+\lecturefigure{slide-22-contextualization-both.jpg}{Retriever 与 generator 共同 contextualize 的架构}{Stanford 课堂视频 00:30:06}
+
+\begin{knowledgebox}{读图：Joint 不一定意味着每步同步更新全部参数}
+大规模 document encoder 无法在每个 batch 后立刻重编码整个 corpus，因此实际系统常冻结部分参数、异步刷新 index、只更新 query side，或交替训练 retriever 与 generator。Joint objective 描述信号耦合，implementation 可以是近似的。
+\end{knowledgebox}
+
+\teachervoice{讲者的核心批评是：如果 retriever、document encoder 与 generator 都在不同目标上独立训练，它们只是被迫合作。更好的方向是让 gradients 或 task signal 尽可能贯穿整套系统。}
+
+\subsection{Original RAG：对 latent document 做 marginalization}
+
+RAG architecture slide 展示 query encoder 从 Wikipedia index 取 top documents，generator 对每个 document 计算输出概率，再把 document 作为 latent variable 边缘化。它比直接拼接所有文档更明确地区分 retrieval probability 与 generation probability。
+
+\lecturefigure{slide-23-rag-architecture.jpg}{Lewis et al. RAG 的 retriever--generator 架构}{Stanford 课堂视频 00:30:51}
+
+\begin{knowledgebox}{读图：Document 是 latent variable}
+系统没有把一份 retrieved document 当作确定真相，而是对多个 $z$ 加权。Retriever 提供 $p_\eta(z\mid x)$，generator 提供 $p_\theta(y\mid x,z)$；两者共同决定答案，retriever 的概率也能收到最终 task loss。
+\end{knowledgebox}
+
+\subsection{RAG-Sequence 与 RAG-Token}
+
+Equation slide 区分两种 marginalization。RAG-Sequence 为整段输出选择同一 latent document；RAG-Token 允许每个 output token 从不同 document mixture 获得支持。后者更灵活，也需要更多检索/融合计算并更难解释整段来源。
+
+\lecturefigure{slide-24-rag-equations.jpg}{RAG-Sequence 与 RAG-Token 的概率分解}{Stanford 课堂视频 00:31:27}
+
+\begin{importantbox}{两种 RAG likelihood}
+RAG-Sequence 近似为
+\[
+p(y\mid x)=\sum_{z\in\operatorname{top}k}p_\eta(z\mid x)
+\prod_{t=1}^{T}p_\theta(y_t\mid x,z,y_{<t}),
+\]
+而 RAG-Token 把求和放进每个 token：
+\[
+p(y\mid x)=\prod_{t=1}^{T}\sum_{z\in\operatorname{top}k}
+p_\eta(z\mid x)p_\theta(y_t\mid x,z,y_{<t}).
+\]
+$\eta$ 是 retriever 参数，$\theta$ 是 generator 参数。两者的来源解释粒度不同。
+\end{importantbox}
+
+\subsection{Freezing Suboptimal：表格与 Frankenstein 隐喻}
+
+Ablation table 比较 BM25、DPR、RAG 与 generator/retriever 是否冻结。课堂结论不是“某一列数字永远最佳”，而是 independent freezing 通常损失任务性能；组件越能接收共同目标信号，越可能形成有效协作。本节把 benchmark table 与随后出现的 Frankenstein 隐喻放在一起，先读控制实验，再解释错配机制。
+
+\lecturefigure{slide-25-freezing-suboptimal-results.jpg}{RAG ablation：冻结 retriever 或 generator 的影响}{Stanford 课堂视频 00:31:51}
+
+\begin{knowledgebox}{读表：先看控制变量，再看绝对分数}
+比较行时要确认 generator size、retrieval corpus、training data 与 evaluation metric 一致。表格支持“冻结会限制适配”这一方向性结论，却不证明所有 jointly trained RAG 都优于所有 frozen RAG；数据规模与模型强度仍会改变结果。
+\end{knowledgebox}
+
+\lecturefigure{slide-26-frankenstein-rag.jpg}{课堂用 Frankenstein 形容独立训练组件的拼接}{Stanford 课堂视频 00:32:15}
+
+\begin{warningbox}{Frankenstein 问题的三种错配}
+\begin{enumerate}
+  \item \textbf{Score mismatch}：retriever relevance 不等于 generator utility；
+  \item \textbf{Representation mismatch}：chunk 粒度与 generator attention/fusion 不匹配；
+  \item \textbf{Objective mismatch}：retrieval benchmark、language modeling 与 downstream task 分别优化。
+\end{enumerate}
+Joint training 的价值是减少错配，不是消除数据错误或推理错误。
+\end{warningbox}
+
+\teachervoice{讲者在 ablation table 上叠加 Frankenstein 头像，明确说“whole point of RAG: freezing is suboptimal”。这个玩笑揭示真正观点：各组件能运行，不代表它们是一套经过共同优化的系统。}
+
+\subsection{FiD：在 Decoder 中融合多 passage 表示}
+
+Fusion-in-Decoder 独立编码每个 retrieved passage 与 question，再让 decoder cross-attend 所有 passage representations。它避免把长文档在 encoder 输入端直接拼接，允许每个 passage 先形成自己的表示。
+
+\lecturefigure{slide-27-fid.jpg}{Fusion-in-Decoder 的多 passage encoding 与 decoder fusion}{Stanford 课堂视频 00:33:21}
+
+\begin{knowledgebox}{读图：Fusion location 决定计算形状}
+Early fusion 在 encoder 前拼接文本，简单但长度快速增长；FiD 让 encoder 对 passage 并行，decoder 才融合，open-domain QA 表现强。它主要改进 evidence fusion，并不自动训练 retriever。
+\end{knowledgebox}
+
+\subsection{kNN-LM：推理时在 datastore 中寻找相似 hidden state}
+
+kNN-LM 把训练语料 token 的 hidden representation 与 next token 存入 datastore。推理时用当前 context representation 检索近邻，得到 non-parametric token distribution，再与 parametric LM distribution 插值。
+
+\lecturefigure{slide-28-knn-lm.jpg}{kNN-LM 的 hidden-state datastore 与最近邻预测}{Stanford 课堂视频 00:33:42}
+
+\begin{importantbox}{Parametric 与 kNN distribution 插值}
+若 $p_{LM}(w\mid x)$ 是模型分布，$p_{kNN}(w\mid x)$ 是近邻投票分布，则
+\[
+p(w\mid x)=\lambda p_{kNN}(w\mid x)+(1-\lambda)p_{LM}(w\mid x).
+\]
+$\lambda$ 控制外部 memory 影响。Datastore 可以更新或换域，但查询每个 token 会增加 latency 与存储带宽。
+\end{importantbox}
+
+\subsection{RETRO：从预训练开始让模型依赖外部 memory}
+
+RETRO 把训练序列切成 chunks，为每个 chunk 检索邻近文本，并通过 chunked cross-attention 注入 decoder。它不只是 inference-time prompt augmentation，而是在 pretraining 中让模型学会利用大规模 external memory。
+
+\lecturefigure{slide-29-retro-architecture.jpg}{RETRO 的 chunk retrieval 与 cross-attention 架构}{Stanford 课堂视频 00:35:27}
+
+\begin{knowledgebox}{读图：Causality 与 chunk boundary}
+当前 chunk 的生成只能使用允许的历史与 retrieved neighbors，不能泄漏未来 token。Chunk size、neighbor count 和 retrieval latency 共同决定 memory coverage 与训练成本；文档切分因此成为模型架构的一部分。
+\end{knowledgebox}
+
+\begin{importantbox}{参数与 datastore 的容量分工}
+若 parametric model 规模为 $P$、external datastore token 数为 $M$，系统容量不再只由 $P$ 衡量。RETRO 的观点是用较小 $P$ 配合大 $M$ 获得更强 factual recall；但每次访问 $M$ 产生额外 search 与 cross-attention 成本。
+\end{importantbox}
+
+\subsection{RETRO++ 与混合架构}
+
+RETRO++ slide 展示在 RETRO 基础上结合 in-context RAG 风格的混合系统，并用结果表讨论参数规模和任务性能。它说明 architecture space 不是 frozen versus joint 的二元分类，retrieval 可以同时出现在 pretraining 与 inference context。
+
+\lecturefigure{slide-30-retro-plus-plus.jpg}{RETRO++：pretraining retrieval 与 in-context retrieval 的组合}{Stanford 课堂视频 00:37:24}
+
+\begin{knowledgebox}{读表：Hybrid architecture 需要报告两类 retrieval}
+应分别说明预训练 datastore、测试时 index、是否同一 corpus、是否更新 retriever、以及 generator 是否见过相同 retrieval format。否则“用了 RETRO++”不足以复现实验或比较成本。
+\end{knowledgebox}
+
+\subsection{Contextualization All the Way}
+
+最后一张 architecture slide 把 retrieval side 与 generator 全部圈入红框，作为进入 REALM/Atlas 的转场。它代表目标：不仅把文档放进 context，还要联合考虑 representation、retrieval objective、fusion 与 language-model training。
+
+\lecturefigure{slide-31-contextualization-all-the-way.jpg}{从局部适配走向端到端 contextualization}{Stanford 课堂视频 00:38:00}
+
+\begin{importantbox}{架构比较的四问}
+看到任何 RAG 模型，先问：
+\begin{enumerate}
+  \item retrieval 发生在 pretraining、fine-tuning 还是 inference？
+  \item retriever/document encoder/generator 哪些参数更新？
+  \item evidence 在 prompt、encoder、decoder 还是 token distribution 中融合？
+  \item index 何时重建，训练与部署 corpus 是否一致？
+\end{enumerate}
+这四问比只记模型名称更能迁移到新系统。
+\end{importantbox}
+
+\teachervoice{课堂从 RAG、FiD、kNN-LM 到 RETRO 的顺序，是在逐步展示 retrieval 能进入不同层级：输入 context、decoder attention、token distribution 或 pretraining architecture。}
+
+\subsection{本章小结}
+
+Joint RAG 把 documents 视为 latent variables，让最终任务信号影响 retrieval 与 generation。FiD 改变 fusion location，kNN-LM 在 token distribution 层融合 memory，RETRO 从预训练开始使用 external datastore。系统设计需要同时描述 retrieval timing、fusion point、updated parameters 与 index lifecycle。
+
+\section{REALM 与 Atlas：端到端愿景中的工程近似}
+
+Fully joint training 面临一个物理约束：document encoder 一变，整个 corpus embedding 都可能需要重算。REALM 和 Atlas 的重要性不仅在模型结果，也在它们如何用异步更新、近似目标和多种 retriever losses 让大规模系统可训练。
+
+\subsection{REALM：异步刷新外部知识表示}
+
+REALM slide 展示 masked language model、knowledge retriever 与 knowledge-augmented encoder。它在 pretraining 中根据 masked token likelihood 学 retrieval，同时通过异步 index refresh 处理 document embeddings 随参数变化的问题。
+
+\lecturefigure{slide-32-realm.jpg}{REALM 的 knowledge retriever 与异步 index 更新}{Stanford 课堂视频 00:40:30}
+
+\begin{importantbox}{REALM 的 latent retrieval objective}
+对 masked target $y$ 与 input $x$，可写成
+\[
+p(y\mid x)=\sum_{z\in\operatorname{top}k}p_\eta(z\mid x)
+p_\theta(y\mid x,z).
+\]
+Retriever 没有直接 passage label，也能从 masked-token likelihood 获得信号；top-$k$ 与 stale index 使训练成为近似。
+\end{importantbox}
+
+\begin{lstlisting}[caption={异步 document-index refresh 的训练骨架}]
+for step, batch in enumerate(training_data):
+    docs = index.search(query_encoder(batch))
+    loss = retrieval_augmented_loss(batch, docs)
+    update(query_encoder, generator, loss)
+    if step % refresh_interval == 0:
+        new_vectors = document_encoder.encode(corpus_snapshot)
+        index.swap_in(new_vectors)
+\end{lstlisting}
+
+\begin{warningbox}{Stale index 是优化误差来源}
+训练时 query encoder 已更新，而 index 仍由旧 document encoder 产生，retrieval distribution 会滞后。Refresh 太频繁代价巨大，太慢则 signal mismatch；异步重建是在 freshness 与 throughput 之间取舍。
+\end{warningbox}
+
+\teachervoice{Kiela 说 REALM ``really visionary''，同时指出其 downside：系统复杂、仍是 BERT-style encoder，而且 index 更新必须异步。赞美与限制需要一起保留。}
+
+\subsection{Atlas：Retriever 可以用哪些目标学习}
+
+Atlas Deep Dive 第一页列出 retriever updates：FiD-style attention distillation、EMDR$^2$、likelihood distillation 与 leave-one-out。它们都尝试回答“哪份 passage 对 generator 有贡献”，但使用不同 proxy。
+
+\lecturefigure{slide-33-atlas-retriever-objectives.jpg}{Atlas retriever 的四类训练目标}{Stanford 课堂视频 00:41:15}
+
+\begin{knowledgebox}{术语消化：Atlas loss functions}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}>{\raggedright\arraybackslash}X}
+\toprule
+目标 & 核心信号 \\
+\midrule
+Attention distillation & 用 FiD decoder 对 passage 的 attention 作为 teacher score \\
+EMDR$^2$ & 对 latent documents marginalize，使 answer likelihood 训练 retriever \\
+Likelihood distillation & 比较每份 document 对目标 sequence likelihood 的贡献 \\
+Leave-one-out & 移除某 document 后 loss 变差多少，估计边际贡献 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{Retriever Update Derivations}
+
+第二页放大 Atlas 论文中的公式和示意图，强调 retriever score 与 generator likelihood 的结合。Dense retriever 的 top-$k$ selection 不可直接对离散检索求导，因此方法通常在候选集合上定义可微分 surrogate。
+
+\lecturefigure{slide-34-atlas-retriever-continued.jpg}{Atlas retriever update 的论文公式与示意}{Stanford 课堂视频 00:42:09}
+
+\begin{importantbox}{Surrogate objective 的边界}
+对已检索候选 $\mathcal{Z}_k$，常见形式是
+\[
+\mathcal{L}=-\log\sum_{z\in\mathcal{Z}_k}
+p_\eta(z\mid x)p_\theta(y\mid x,z).
+\]
+梯度能重排 $\mathcal{Z}_k$ 内文档，却不能直接学习从未被召回的文档；初始 retriever recall 仍决定上限。
+\end{importantbox}
+
+\subsection{Loss Function Comparison}
+
+Atlas Loss Functions table 比较 closed-book、no joint pre-training、FiD distillation、EMDR$^2$、perplexity distillation、LOO 等方法在 64-shot、1024-shot 与多个任务上的表现。不同 loss 没有在所有列统一获胜，说明 retriever supervision 与数据规模相互作用。
+
+\lecturefigure{slide-35-atlas-loss-functions.jpg}{Atlas 不同 retriever loss 的 few-shot 结果}{Stanford 课堂视频 00:42:36}
+
+\begin{knowledgebox}{读表：不要用单列平均值替代机制分析}
+先看 closed-book 与 retrieval 的整体差距，再比较 no-joint-pretraining 和各 retriever loss；同时观察 64-shot 与 1024-shot 是否改变排名。表格更适合支持“retrieval 与 joint training 有价值”，而不是宣布一个 loss 永久最优。
+\end{knowledgebox}
+
+\subsection{Atlas Pretraining：语言任务与检索共同训练}
+
+Atlas pretraining slide 列出 prefix LM、masked LM、title-to-section generation 等 pretext tasks，并比较 joint 与 fixed retriever。它说明 retrieval-augmented pretraining 需要选择既训练语言能力、又迫使模型利用外部文档的任务。
+
+\lecturefigure{slide-36-atlas-pretraining.jpg}{Atlas 的 joint pretraining tasks 与结果表}{Stanford 课堂视频 00:43:33}
+
+\begin{knowledgebox}{读图：Pretext task 要避免模型走捷径}
+若 target 可从 local context 直接预测，模型可能忽略 retrieved passages。Title-to-section、masked spans 或 knowledge-intensive objectives 让外部 evidence 更有用；但数据构造也可能引入 answer leakage。
+\end{knowledgebox}
+
+\subsection{更新 Query Side 还是 Full Retriever}
+
+Update-results slide 比较 standard fine-tuning、top-100 reranking、query-side fine-tuning 与 fixed retriever，在 64-shot/1024-shot 下的结果。课堂 Q\&A 进一步指出：对 Natural Questions、FEVER 等 narrow knowledge-intensive tasks，强 DPR index 加 query-side update 可能足够；更广 general language modeling 可能需要 document-side adaptation。
+
+\lecturefigure{slide-37-atlas-retriever-update-results.jpg}{Atlas retriever 更新策略的结果比较}{Stanford 课堂视频 00:44:42}
+
+\begin{knowledgebox}{读表：Query-only 的适用条件}
+当 corpus representation 已与任务相近，query encoder 主要学习如何进入现有 index；若 domain、chunk semantics 或 language distribution 改变，固定 document embeddings 可能成为瓶颈。部署时应先测 recall failure 属于 query 还是 corpus representation。
+\end{knowledgebox}
+
+\teachervoice{Q\&A 中讲者没有给出“永远更新哪一边”的答案：知识密集小数据任务可只动 query side，扩展到 general LM 或新 domain 时 document encoder 更可能需要改变。}
+
+\subsection{Atlas versus Closed-Book}
+
+最后的 scaling table 比较 Atlas 与 closed-book 模型在 5-shot、multi-task 与 full transfer 下的表现。Retrieval 让较小参数模型访问更大 external memory，因此参数量不再是唯一知识容量指标。
+
+\lecturefigure{slide-38-atlas-vs-closed-book.jpg}{Atlas 与 closed-book 模型的 few-shot/transfer 比较}{Stanford 课堂视频 00:45:06}
+
+\begin{importantbox}{Model size 与 system capacity 分开报告}
+RAG 系统至少应报告 generator parameters $P_G$、retriever parameters $P_R$、index size $M$、retrieval calls $C_R$ 和 input tokens $T_C$。只说“770M model”会隐藏外部 datastore 与 online compute。
 \end{importantbox}
 
 \subsection{本章小结}
 
-扩展案例示范了多模态与多语言的实际对接路径：结合 modality-specific instrumentation 与 compliance labeling，使 RAG pipeline 在 enterprise deployment 中可靠运行。
+REALM 与 Atlas 表明 joint RAG 需要工程近似：异步 index refresh、候选集合 surrogate、query-only updates 与多种 distillation objectives。端到端不是一句口号，而是明确哪些 signal 穿过哪些组件，以及计算上为什么必须截断。
 
-\section{开放问题与研究方向}
+\section{Open Questions：何时检索、怎样扩展、证据是否被使用}
 
-\subsection{低资源与小模型场景}
+课堂在 Atlas 后进入开放问题，并穿插学生 Q\&A。这里的重点从“哪个架构更强”转向动态 policy、scaling、legal-risk motivation、context position、tool use 与 instruction tuning。很多问题直到今天仍不能用单一 benchmark 回答。
 
-Kiela 提到低资源或 edge device 上，attention head 数目减少时 mix 路由容易 collapse，因此必须保留 `cache age` 报警，与 retrieval entropy 绑定调整 temperature，还要引入 `cold-start reroute` policies。
+\subsection{RAG 与 Long Context 不是完全相反}
 
-\begin{warningbox}{低资源 drift 策略}
-在 small model 场景，entropy < 0.2 nat 可能意味着 MoE 路由 collapse，建议同时开启 temperature raise 与 synthetic reroute，以防 few-shot drift。
-\end{warningbox}
+学生问超长 context 是否会取代 RAG。讲者回答，把整本 Harry Potter 放进 context 只为寻找猫头鹰名字非常低效；而长上下文方法为了扩展 attention 往往引入 sparsity，本质上也在选择少量相关连接。
 
-\subsection{跨模态与概念空间扩展}
-
-SDM 的概念空间在多模态下同样成立：视觉 patch embedding 的 norm 分布不稳定，容易引起 entropy drift，因此需要对 visual retrieval 额外设置 `modality-specific monitoring`。
-
-\begin{knowledgebox}{跨模态的指标扩展}
-把 visual patch entropy、audio token entropy 与 textual entropy 并列到 dashboard，可以监控 modality-specific drift，让 cross-modal attention 也保持 SDM 近似的稀疏性。
+\begin{knowledgebox}{Long context 与 retrieval 的共同问题}
+两者都要决定“哪些 token 值得计算”。Long context 把选择放在 attention pattern 或 cache 管理中，RAG 把选择放在 external index；最终都面对 relevance、latency、position bias 与 evidence verification。
 \end{knowledgebox}
 
+\teachervoice{课堂判断是：如果长上下文真正扩到巨大规模，它会越来越像 sparse/non-parametric retrieval，而不是无代价地对所有 token 做 full attention。}
+
+\subsection{When to Retrieve：把检索变成策略}
+
+每个 token 都检索会浪费 compute，只在开头检索一次又可能错过后续知识需求。FLARE 让模型根据生成置信度或未来内容主动决定何时搜索、搜索什么，使 retrieval 从固定 pipeline 变成 sequential policy。
+
+\lecturefigure{slide-39-when-to-retrieve.jpg}{FLARE 与 active retrieval：决定何时、为何检索}{Stanford 课堂视频 00:56:36}
+
+\begin{importantbox}{Retrieval policy 的成本目标}
+令动作 $a_t\in\{\text{retrieve},\text{continue}\}$，检索成本为 $c_R$，错误成本为 $c_E$，可优化
+\[
+\mathbb{E}\!\left[\sum_t c_R\mathbf{1}(a_t=\text{retrieve})
++c_E\mathbf{1}(\hat y\ne y)\right].
+\]
+Policy 要学习在信息价值高于检索成本时调用工具，而不是把更多 retrieval calls 当作天然更好。
+\end{importantbox}
+
+\subsection{How to Train at Scale}
+
+Scale slide 讨论 full async update、query-only update、TRIME/近似方法，以及用 BM25 构造相似 batch 后做 in-batch training。Index 越大，document-side full refresh 越贵，因此 hard-negative sampling、memory bank 与 reranker 成为重要近似。
+
+\lecturefigure{slide-40-training-at-scale.jpg}{大规模 retriever training 的 in-batch 与 memory 方法}{Stanford 课堂视频 00:57:39}
+
+\begin{knowledgebox}{读图：In-batch negatives 节省什么}
+一个 batch 中其他 documents 可作为 negatives，避免每个 query 单独搜索大量负例；memory bank 扩大负例集合。风险是 false negatives：语义相关文档被当成负例，会扭曲 representation。
+\end{knowledgebox}
+
+\subsection{SILO：把 legal-risk motivation 放进架构}
+
+SILO 提出在较安全、许可更清晰的数据上训练 parametric model，再在测试时从 non-parametric datastore 访问更广内容。课堂把它视为应对 copyright provenance 与 legal risk 的优雅方向，但并未声称 index 中的内容因此免于法律责任。
+
+\lecturefigure{slide-41-silo-legal-risk.jpg}{SILO：用 non-parametric datastore 隔离部分训练数据风险}{Stanford 课堂视频 00:58:45}
+
+\begin{warningbox}{Architecture 不会自动解决法律问题}
+Datastore 仍需考虑授权、访问、日志、删除、输出引用和用户数据；retrieved content 也可能被模型改写。SILO 的研究价值是把训练数据与 test-time knowledge 分离，便于替换和审计，不是法律结论。
+\end{warningbox}
+
+\teachervoice{讲者把 SILO 与当时针对模型训练数据来源的诉讼联系起来，强调 parametric model 可以在 public-domain 数据上训练，再从更高风险 index 检索。讲义保留其 motivation，并明确不把它升级为合规保证。}
+
+\subsection{Lost in the Middle：检索正确也可能使用失败}
+
+Lost-in-the-Middle slide 的曲线显示 relevant document 位于 context 开头或结尾时更易被使用，放在中间性能下降。若 generator 完全遵守 retriever ranking，位置变化不应如此显著；这证明 evidence placement 与 attention behavior 是独立 failure mode。
+
+\lecturefigure{slide-42-lost-in-middle.jpg}{Relevant passage 在长 context 中间时容易被忽略}{Stanford 课堂视频 01:00:45}
+
+\begin{knowledgebox}{读图：U-shaped curve 说明什么}
+横轴是 relevant document 在 20 个 retrieved documents 中的位置，纵轴是任务表现。开头/结尾高、中间低，说明模型具有 position bias。它不证明中间文档永远无效，而是要求 reranking、context packing 与 evaluation 同时考虑位置。
+\end{knowledgebox}
+
+\begin{warningbox}{Retrieval recall 与 answer grounding 要分层测}
+可记录：关键 evidence 是否进入 top-$k$、是否进入最终 prompt、位于什么位置、答案是否引用它、输出是否与 evidence 一致。只看 final exact match 无法定位是 search、packing 还是 generation 失败。
+\end{warningbox}
+
+\subsection{Toolformer：Retrieval 是更一般的 Tool Use}
+
+Toolformer slide 把 search API 放在 calculator、calendar、translation 等工具集合中。Language model 可以学习何时插入 API call、读取返回值并继续生成；retrieval 因而是 tool augmentation 的一个实例。
+
+\lecturefigure{slide-43-toolformer.jpg}{Toolformer：语言模型自监督学习调用外部工具}{Stanford 课堂视频 01:01:57}
+
+\begin{knowledgebox}{读图：从 RAG 到 Agent 的接口变化}
+固定 RAG 每个请求都调用检索；tool-using LM 可以选择 search、calculator 或其他 API。系统新增 action selection、argument generation、tool error handling 与 permission boundary，问题从静态 architecture 扩展为 sequential decision making。
+\end{knowledgebox}
+
+\teachervoice{讲者说，active web search 不一定访问自有 index；更一般地，LM 是 tool user，retrieval 只是众多工具之一，而真正学习动作选择可能需要 RL。}
+
+\subsection{Self-RAG：Retrieve、Generate、Critique}
+
+Self-RAG 让单一 LM 生成 reflection tokens，决定是否检索、评估 evidence relevance、生成答案并 critique support/utility。它试图把 active retrieval 与自我评价纳入同一训练框架。本节承接 Toolformer 的动作选择，并进一步追问同一个模型如何判断证据质量与答案支持度。
+
+\lecturefigure{slide-44-self-rag.jpg}{Self-RAG 的主动检索与 reflection 流程}{Stanford 课堂视频 01:02:15}
+
+\begin{importantbox}{Self-reflection 仍需外部评测}
+Critique token 是模型预测，不是事实 oracle。系统应分别验证 retrieval decision、source relevance、claim support 与 final utility；模型自评可作为 feature，却不能取代 held-out labels、human review 或可执行 verifier。
+\end{importantbox}
+
+\begin{lstlisting}[caption={Active retrieval 与 evidence verification 循环}]
+state = initialize(question)
+while not state.finished and state.steps < max_steps:
+    if policy.needs_evidence(state):
+        docs = search(state.query)
+        docs = rerank_and_filter(docs, source_policy)
+        state.add_evidence(docs)
+    draft = generator.continue_answer(state)
+    verdict = verify_claims(draft, state.evidence)
+    state = revise_or_finish(state, draft, verdict)
+return state.answer
+\end{lstlisting}
+
+\subsection{Instruction Tuning the Entire RAG System}
+
+Instruction-tuning slide 对比 InstructRetro 与 RA-DIT：过去指令数据主要训练 generator，retriever 不一定理解“比较、引用、只使用指定来源”等任务意图。Dual instruction tuning 同时适配 retrieval 与 generation，使整套系统遵循 instruction。
+
+\lecturefigure{slide-45-instruction-tuning.jpg}{InstructRetro 与 RA-DIT：对 RAG system 做 instruction tuning}{Stanford 课堂视频 01:03:03}
+
+\begin{knowledgebox}{Instruction 对 Retriever 也有语义}
+``Give a counterargument''、``use peer-reviewed sources'' 与 ``summarize this document'' 需要不同 evidence。若 retriever 只看 topic similarity，可能返回主题相关却不满足 task operator 的文档；instruction-aware query representation 可减少这种错配。
+\end{knowledgebox}
+
+\subsection{Advanced Frozen RAG：Developer Community 的实用创新}
+
+即使不做 joint training，开发者也构建了 child-parent recursive retriever、hybrid search/RRF、zero-shot LLM reranker 与 HyDE。HyDE 先让模型生成 hypothetical document，再用它的 embedding 搜真实文档，课堂称其为“用 hallucination 修复 hallucination”的有趣想法。
+
+\lecturefigure{slide-46-advanced-frozen-rag.jpg}{Advanced Frozen RAG 的层级检索、融合、reranking 与 HyDE}{Stanford 课堂视频 01:04:30}
+
+\begin{knowledgebox}{术语消化：四个 advanced frozen patterns}
+\begin{tabularx}{\textwidth}{L{0.25\textwidth}>{\raggedright\arraybackslash}X}
+\toprule
+模式 & 机制 \\
+\midrule
+Child-parent retrieval & 用小 chunk 精确召回，再扩展到父段落提供完整 context \\
+Hybrid/RRF & 合并 BM25 与 dense ranking，兼顾 exact 和 semantic match \\
+LLM reranker & 让强 LM 在小候选集上比较 relevance，成本较高 \\
+HyDE & 先生成 hypothetical answer/document，再用其 embedding 检索真实证据 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\begin{warningbox}{HyDE 的 hypothetical text 不是证据}
+它只用来构造更丰富的 query representation；最终回答仍应引用真实 retrieved documents。若直接把 hypothetical document 当事实，会把 retrieval query expansion 变成自证循环。
+\end{warningbox}
+
+\teachervoice{讲者一方面批评 frozen RAG 的 Frankenstein 属性，另一方面肯定 LlamaIndex、LangChain、Chroma、Weaviate 等开发者生态做出的实用创新。研究方向与工程 baseline 可以同时成立。}
+
 \subsection{本章小结}
 
-开放问题提供下一代 RAG 的方向：低资源下的 entropy control、多模态的 modality-specific metric 以及 cross-modal reroute 都值得持续探索。
+Open questions 集中在 policy 与系统边界：何时检索、怎样扩展 retriever、如何处理 legal-risk motivation、怎样保证证据真正被 generator 使用，以及 retrieval 如何成为 tool use。Frozen RAG 仍有强工程技巧，但 joint learning 与可分层 evaluation 决定其上限。
 
-\section{术语速查}
+\section{Future：Evaluation、Multimodal RAG 与 RAG 2.0}
 
-\begin{description}
-\item[RAG] Retrieval-Augmented Generation，把检索与生成串联。
-\item[Cache freshness] cache 中文档的新鲜度指标，保证 facts 不过期。
-\item[Entropy drift] softmax/attention entropy 的下降速度，是 hallucination 预警信号。
-\item[Top-k churn] top-k tokens 在训练或推理中的 turnover，用以检测 drift。
-\item[Load balancing loss] 防止 attention 被少数 expert 垄断。
-\item[Gate entropy] MoE/attention gate logits 的 entropy，低 entropy 意味 collapse。
-\item[Retrieval lag] 同一请求在不同 checkpoint 之间的 retrieval latency 变化。
-\end{description}
+最后部分把课程收束到系统研究议程：从零 joint pretraining 仍不足，scaling law、chunker、encoder、database、synthetic data 与 evaluation 都可学习或重新设计；RAG 还可跨越文本进入图像和多模态；最终目标是优化整个 cost--quality system。
+
+\subsection{Open Questions：还有哪些层没有被优化}
+
+Open Questions slide 询问 joint pretraining、scaling laws、reranker/chunker、bi-encoder 之外的表示、database convergence、synthetic data 与 evaluation。它说明“RAG 已解决”远非事实，现有系统仍大量依赖手工切分和弱代理指标。
+
+\lecturefigure{slide-47-open-questions.jpg}{RAG 的 joint training、chunking、database 与 evaluation 开放问题}{Stanford 课堂视频 01:07:36}
+
+\begin{knowledgebox}{RAG Evaluation 的分层矩阵}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+层级 & 指标示例 & 典型盲点 \\
+\midrule
+Retrieval & Recall@$k$, MRR, nDCG & relevance label 不等于 generator utility \\
+Packing & evidence coverage、position & 忽略 duplicate 与 token budget \\
+Generation & correctness、citation、faithfulness & 正确答案可能来自参数记忆 \\
+System & latency、cost、freshness、access control & 平均值掩盖尾延迟与高风险错误 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{讲者批评当前 RAG evaluation 很弱：downstream performance 看不到 retrieval 在哪里出错，把 retrieval accuracy 与 LM accuracy 做 harmonic mean 也缺少可靠数据集支持。}
+
+\subsection{Vector Database 会不会并入普通 Database}
+
+在口头开放问题中，讲者怀疑专用 vector database 是否会长期独立存在：BM25 更高效，reranker 可能补足语义；传统数据库正在加入向量检索能力，向量数据库厂商也在补充 sparse retrieval 与 metadata filtering。这是 2023 年的产业判断，应作为架构趋势讨论，而不能当作当前市场事实。
+
+\begin{warningbox}{不要把课堂预测写成产品结论}
+数据库实现、硬件、索引算法和供应商能力变化很快。讲义只保留抽象问题：未来系统是否需要统一管理 sparse、dense、metadata、transactions 与 access control，而不声称某类产品已消失或胜出。
+\end{warningbox}
+
+\subsection{Multimodal RAG}
+
+Multimodal slide 展示 cross-modal retrieval augmentation 与 visual question answering pipeline。文本 query 可以检索图像、图像可以检索文本，或者 vision pipeline 先生成结构化描述，再把结果交给 frozen LM。
+
+\lecturefigure{slide-48-multimodal-rag.jpg}{Cross-modal retrieval 与 multimodal retrieval-augmented LM}{Stanford 课堂视频 01:08:45}
+
+\begin{knowledgebox}{读图：Multimodal RAG 需要对齐三种空间}
+系统至少要对齐 query representation、retrieved modality representation 与 generator input representation。图像相似不等于回答相关，caption 也可能丢失视觉细节；因此需要 cross-modal retriever、modality adapter 和 task-level evaluation。
+\end{knowledgebox}
+
+\begin{warningbox}{视觉检索结果也可能成为错误证据}
+相似图片可能来自不同时间、地点或对象，OCR/caption 可能出错。Multimodal grounding 需要 provenance、时间与实体核对，不能因为“有图”就提高证据等级。
+\end{warningbox}
+
+\teachervoice{Kiela 把 multimodality 视为自然延伸：为什么 RAG 只停留在 text？他引用 LENS 与 cross-modal work，强调 frozen LM 也能通过外部 vision pipeline 获得视觉能力。}
+
+\subsection{RAG 2.0：Systems over Models}
+
+最终 slide 用四点收束：systems over models、optimize it all、trade cost and quality、zero-shot domain generalization。RAG 2.0 不是一个固定图，而是一种 optimization stance：retriever、chunker、reranker、generator、index、data 与 serving 不应被永久分割。
+
+\lecturefigure{slide-49-rag-2-0.jpg}{RAG 2.0：从 frozen components 转向 systems-over-models}{Stanford 课堂视频 01:10:12}
+
+\begin{importantbox}{Cost--Quality 的系统目标}
+可把部署目标抽象为
+\[
+\max_{\Theta,I,\pi}\;
+Q(\Theta,I,\pi)
+-\lambda_L L(\Theta,I,\pi)
+-\lambda_C C(\Theta,I,\pi)
+-\lambda_R R(\Theta,I,\pi),
+\]
+其中 $Q$ 是任务质量，$L$ 是 latency，$C$ 是 compute/storage cost，$R$ 是风险或不可信输出；$\pi$ 包含 retrieval policy。只优化 LM accuracy 不能决定系统最优解。
+\end{importantbox}
+
+\teachervoice{讲者把 RAG 2.0 概括为 ``systems over models''，甚至建议反向传播到 chunker。核心不是所有模块必须同时更新，而是任何手工边界都应接受“是否可学习、是否值得优化”的检验。}
+
+\subsection{Closing Q\&A：Hybrid、Fine-tuning 与 Retrieval Hardware}
+
+最后 Q\&A 给出三个实践判断。第一，BM25 可先 cast a wide net，再用 dense reranker 收窄。第二，domain adaptation 最终会组合 retrieval、fine-tuning 与 adapters，而不是永远二选一。第三，讲者提到 dedicated retrieval hardware 的产业可能性，但没有给出可公开验证的型号或 benchmark，因此只记录为 speaker speculation。
+
+\begin{knowledgebox}{Retrieval 与 Fine-tuning 解决不同状态}
+Fine-tuning 改变 parameters，适合行为、格式、领域表示与稳定技能；retrieval 改变 per-request evidence，适合频繁更新、私有数据与 attribution。RAG 2.0 可以在领域任务上 fine-tune 整个 retrieval-augmented system，同时保留可更新 index。
+\end{knowledgebox}
+
+\teachervoice{讲者明确说，最终大家可能会把 retrieval、end-to-end fine-tuning 和 adapters 全部结合起来。真正问题变成怎样高效组合，而不是争论只能选择一种。}
+
+\subsection{Hallucination、Generic Error 与 Ground Truth}
+
+课程最重要的 spoken-only 段落出现在最后四分钟。讲者不满领域把所有错误都叫 hallucination：普通计算错误、误解问题与 evidence contradiction 应分开；hallucination 至少需要相对于某个 ground truth 或 retrieved evidence 定义。
+
+\begin{importantbox}{三类失败的区分}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+类型 & 判定 & 例子 \\
+\midrule
+Generic error & 输出不满足任务答案或计算规则 & 算错数、漏约束、格式错误 \\
+Unsupported claim & 没有足够 evidence 支持 & index 无相关来源却给出确定陈述 \\
+Evidence contradiction & 输出与选定 ground truth/source 冲突 & 文档说 A，答案声称非 A \\
+\bottomrule
+\end{tabularx}
+\end{importantbox}
+
+\begin{warningbox}{Ground truth 选择本身是系统决策}
+Index 可以只允许 peer-reviewed papers，也可以包含 arXiv、企业文档或开放网页；不同 source policy 会给出不同“可信事实”。RAG 让这一选择显式化，但错误或恶意 source 仍会让 grounded answer 错误。
+\end{warningbox}
+
+\teachervoice{讲者说，frozen GPT-4 即使接入 RePlug 仍可能忽略 evidence；若把知识全部移到外部 index、模型只负责语言与 reasoning，理论上更容易强制 grounding，但这是方向性极限而非已经实现的保证。}
+
+\teachervoice{他进一步说，creative writing 有时需要“hallucinate”，而 factual task 要更强 grounding；理想系统应有 grounding knob。Temperature 只改变 sampling distribution，即使低温也可能稳定地产生错误，不能充当 grounding control。}
 
 \subsection{本章小结}
 
-术语速查整理了 RAG pipeline 的指标 vocabulary，方便 engineering/QA 团队沟通。
+Future RAG 需要联合 evaluation、database、multimodal retrieval、chunking、instruction 与 serving。RAG 2.0 的最终观点是优化整套 system，并清楚指定 source of truth、grounding strength、cost 和 risk；检索与 fine-tuning 是互补工具，temperature 不是事实性开关。
 
 \section{总结与延伸}
 
-讲座中的 `retrieval + generation + instrumentation` 多次回归，下面总结表汇总主题、洞察与工程启发：
+这堂课用一条连续谱组织了 retrieval-augmented language models：从 frozen BM25/vector search，把文档拼进 prompt；到 RePlug/reranker 让 retrieval 适配 frozen LM；再到 RAG、REALM、Atlas 与 RETRO 让 task signal 进入更多组件；最后把 retrieval 推广为 active tool use、multimodal memory 与 systems-over-models。
 
-\begin{table}[H]
-\centering
-\caption{总结表}
-\begin{tabular}{p{0.25\textwidth} p{0.3\textwidth} p{0.35\textwidth}}
-\toprule
-主题 & 技术洞察 & 工程启发 \\
-\midrule
-LLM 历史与记忆边界 & 参数化模型 aging & 用非参数化 cache 补知识 \\
-RAG Pipeline & 检索/增强/生成必须可审计 & 每阶段记录 evidence metadata \\
-检索堆栈 & BM25 + dense + rerank & 把 index drift 写进 monitoring \\
-端到端模型 & REALM/RAG/Atlas/FiD 提供多个 tradeoff & 结合 cache 与 reroute 控制成本 \\
-部署治理 & latency + entropy + cache age & 把 inference cost 视作 retrieval + generation 的组合 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\subsection{统一比较框架}
+
+任何 RAG 系统都可以用五元组描述：corpus/index $I$、retrieval policy $\pi$、retriever parameters $\theta_R$、fusion mechanism $F$、generator parameters $\theta_G$。比较论文或产品时，应报告这五项的训练状态、部署状态与成本，而不是只说“用了 RAG”。
+
+\begin{importantbox}{本讲的十条可执行结论}
+\begin{enumerate}
+  \item 把 hallucination、generic error 与 evidence contradiction 分开评测；
+  \item 同时报告 retrieval recall、evidence position、utilization 与 final correctness；
+  \item exact entity 优先保留 sparse signal，语义召回再用 dense/late interaction；
+  \item Frozen RAG 是强 baseline，但要记录 score/objective mismatch；
+  \item 选择 RePlug、reranker 或 joint training 取决于 generator access level；
+  \item 报告哪些参数更新、index 何时刷新、corpus 是否变化；
+  \item 控制 $k_r$、$k_c$ 与 context position，避免盲目扩大 prompt；
+  \item Active retrieval 要优化 information value 与 retrieval cost；
+  \item Fine-tuning 改行为与表示，retrieval 改 per-request evidence，两者可组合；
+  \item Source policy、provenance、permissions 与 evaluation 属于 RAG architecture。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{复现实验时应该记录什么}
+
+至少记录 corpus snapshot、license/provenance、chunk size/overlap、embedding model、index type、retriever top-$k$、reranker、context packing、generator version、prompt、updated parameters、index refresh cadence、latency/cost 和 evaluation set。缺少这些信息，即使模型名称相同也难以复现。
+
+\begin{warningbox}{不要把 2023 年课堂快照写成 2026 年产品事实}
+本讲对 off-the-shelf retriever、vector database、hardware 与产业趋势的评价发生在 2023-12-05。讲义保留机制与历史判断，不据此断言 2026 年的当前产品能力、市场格局或法律结论。
+\end{warningbox}
 
 \subsection{拓展阅读}
-\begin{itemize}
-\item Lewis et al., ``Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks'', 2020
-\item Guu et al., ``REALM: Retrieval-Augmented Language Model Pre-Training'', 2020
-\item Izacard et al., ``Atlas: Few-shot Learning with Retrieval Augmented Language Models'', 2022
-\item Izacard \& Grave, ``Leveraging Passage Retrieval with Generative Models for Open Domain QA'' (FiD), 2021
-\end{itemize}
 
-\subsection{本章小结}
+建议按机制顺序阅读：DPR/ColBERT 理解 retrieval representation；RAG/FiD 理解 evidence marginalization 与 fusion；kNN-LM/RETRO 理解 non-parametric memory 如何进入 language modeling；REALM/Atlas 理解 joint training 的近似；RePlug/In-Context RALM 理解 frozen generator；FLARE/Self-RAG/Toolformer 理解 active retrieval 与 tool use；SILO/Lost-in-the-Middle 理解数据边界与 evidence utilization。
 
-总结段落把历史、堆栈、评估与部署治理整理成可执行 playbook，为后续深化提供线索。
+\subsection{最终小结}
 
-%% --- 正文内容结束 --- %%
+Retrieval augmentation 的价值不只是“给模型更多文本”，而是把知识状态、更新、来源与计算从单一参数模型中拆出来。高质量 RAG 必须让 retriever、context、generator 与 source policy 对齐，并用分层 evaluation 证明：正确证据被找到、被放在可用位置、被生成器真正使用，最终输出也满足任务和 ground truth。
 
 \end{document}

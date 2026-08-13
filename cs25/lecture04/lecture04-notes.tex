@@ -1,231 +1,652 @@
 \documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
 
-% Basic packages
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\renewcommand{\notetitle}{Lecture 04：Decision Transformer——把离线强化学习重构为条件序列建模}
+\renewcommand{\noteauthors}{基于 Aditya Grover 讲座、官方手动字幕与 Decision Transformer / CQL / D4RL 原始论文整理}
+\renewcommand{\notedate}{CS25 V1 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-13}
+\renewcommand{\videoduration}{1:20:42}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=w4Bw8WYL8Ps}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-% Highlight boxes
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
-
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
-}
-
-% Listings
-\lstset{
-    language=Python,
-    basicstyle=\ttfamily\small,
-    keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black},
-    commentstyle=\color{green!60!black},
-    breaklines=true,
-    frame=single,
-    numbers=left,
-    numberstyle=\tiny\color{gray},
-    captionpos=b,
-    extendedchars=false
-}
-
-\newcommand{\notetitle}{[CS25] Decision Transformer / RL — Aditya Grover}
-\newcommand{\noteauthors}{基于 Aditya Grover 在 Stanford CS25 公开讲座整理}
-\newcommand{\notedate}{2021年06月03日}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2021年06月03日}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://web.stanford.edu/class/cs25/recordings/}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{来源审计：本讲真正要改变的是 RL 的问题表述}
 
-\ifdefempty{\videocoverpath}{}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+本讲介绍的不是一个“把 Transformer 当作 policy network”的局部架构替换，而是一种更根本的重新表述：把固定数据集中的轨迹写成 token 序列，把期望回报写成条件，再用 causal Transformer 完成动作预测。这样做的价值不只在模型结构，还在于它把训练目标从不稳定的动态规划更新转向了熟悉的监督学习损失；相应地，它也继承了序列模型对数据支持、context length 和条件外推的限制。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{来源、时间边界与日期冲突}
 
-\tableofcontents
-\newpage
+这份讲义以 Stanford Online 官方视频、官方手动英文字幕、视频中恢复的 24 张教学 slide、Decision Transformer 原始论文与官方代码为主要证据。Stanford CS25 V1 课程页把本场列在 2021 年 10 月 11 日，论文属于 NeurIPS 2021；但视频中的标题页写着 ``October 11, 2022''，而公开视频上传日期又是 2022 年 7 月 13 日。三者互相冲突，因此本文把课程日程和论文出版记录作为历史锚点，同时明确保留画面中的日期异常，不为来源自动“修正事实”。
 
-\section{引言：Transformer 统一决策制定}
+\lecturefigure{slide-01-title.jpg}{讲座标题页：Decision Transformer 把 reinforcement learning 表述为 sequence modeling。}{Stanford Online 官方视频 00:06；画面日期与课程页、上传日期存在冲突，见来源审计。}
 
-Aditya Grover 来自 UCLA（与 UC Berkeley 合作），介绍了将 Transformer 应用于强化学习的开创性工作——\textbf{Decision Transformer}。
-
-Transformer 自 2017 年提出以来，已在多个领域取得突破：自然语言处理（GPT、BERT）、计算机视觉（ViT）、蛋白质折叠（AlphaFold）、代码生成（Codex）。一个自然的问题是：\textbf{能否用 Transformer 统一决策制定（decision making）？}
-
-\begin{importantbox}{核心洞察}
-Decision Transformer 将强化学习重新定义为\textbf{序列建模问题}：给定过去的状态、动作和奖励序列，预测下一步应该采取的动作。这完全绕开了传统 RL 中的价值函数估计和策略梯度。
-\end{importantbox}
-
-\section{传统强化学习回顾}
-
-\subsection{RL 的基本框架}
-
-强化学习的标准设置：
-\begin{itemize}
-    \item 智能体在环境中按策略 $\pi$ 选择动作
-    \item 每步获得奖励 $r_t$，目标是最大化累积回报 $R = \sum_{t} \gamma^t r_t$
-    \item 核心方法：Q-learning（价值函数）、Policy Gradient（策略梯度）
-\end{itemize}
-
-\subsection{离线 RL 的挑战}
-
-\begin{knowledgebox}{在线 RL vs. 离线 RL}
-\begin{itemize}
-    \item \textbf{在线 RL}：智能体边探索边学习，可以与环境交互
-    \item \textbf{离线 RL}：仅从预先收集的固定数据集学习，不再与环境交互
-    \item 离线 RL 更实用（避免昂贵的环境交互），但面临\textbf{分布偏移}问题
-\end{itemize}
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-传统 RL 方法依赖价值函数估计或策略梯度，在离线设置下面临诸多挑战。Decision Transformer 提出了一种全新的范式。
-
-\section{Decision Transformer：将 RL 重构为序列建模}
-
-\subsection{核心框架}
-
-\begin{importantbox}{Decision Transformer 的序列表示}
-将一条轨迹表示为 token 序列：
-$$\tau = (\hat{R}_1, s_1, a_1, \hat{R}_2, s_2, a_2, \ldots, \hat{R}_T, s_T, a_T)$$
-其中 $\hat{R}_t = \sum_{t'=t}^{T} r_{t'}$ 是从时刻 $t$ 开始的\textbf{累积回报}（return-to-go）。
-
-在推理时，通过设定期望的 $\hat{R}_1$ 来\textbf{条件化}生成——告诉模型"我希望获得多高的总回报"，模型便会生成相应质量的动作序列。
-\end{importantbox}
-
-\subsection{架构细节}
-
-\begin{itemize}
-    \item 使用 GPT 架构（因果 Transformer，仅向左注意力）
-    \item 每个时间步有三个 token：return-to-go $\hat{R}_t$、状态 $s_t$、动作 $a_t$
-    \item 使用时间步嵌入（而非标准位置嵌入）
-    \item 训练目标：给定历史序列，预测下一个动作
-\end{itemize}
-
-\begin{knowledgebox}{为什么用 return-to-go 而不是即时奖励？}
-即时奖励 $r_t$ 告诉模型"刚才发生了什么"，而 return-to-go $\hat{R}_t$ 告诉模型"未来还能获得多少回报"。后者提供了\textbf{目标信号}，使模型在推理时可以通过设定高 return-to-go 来引导行为。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Decision Transformer 的核心创新是将 RL 问题转化为条件序列生成问题，用 GPT 架构直接学习"高回报 $\rightarrow$ 好动作"的映射。
-
-\section{实验结果与分析}
-
-\subsection{离线 RL 基准测试}
-
-在 Atari 和 OpenAI Gym 环境上，Decision Transformer 与最先进的无模型离线 RL 方法（如 CQL）表现相当甚至更优：
-
-\begin{itemize}
-    \item \textbf{Atari}：在多个游戏中达到或超过专家水平
-    \item \textbf{OpenAI Gym}：在 HalfCheetah、Hopper、Walker2d 等任务上有竞争力
-    \item \textbf{Key-to-Door}：在需要长期信用分配的稀疏奖励任务上表现出色
-\end{itemize}
-
-\subsection{关键优势：长期信用分配}
-
-\begin{importantbox}{稀疏奖励下的优势}
-在 Key-to-Door 环境中，智能体必须先拿到钥匙，再开门，中间有一段空白阶段。传统 RL 在这种稀疏奖励设置下难以进行信用分配，而 Decision Transformer 通过 return-to-go 条件化天然地处理了这个问题——高 return-to-go 直接指向"拿钥匙$\rightarrow$开门"的成功轨迹。
-\end{importantbox}
-
-\subsection{条件化生成的灵活性}
-
-通过改变推理时的目标 return-to-go，可以控制行为的质量：
-\begin{itemize}
-    \item 高 return-to-go $\rightarrow$ 最优行为
-    \item 中等 return-to-go $\rightarrow$ 次优但可行的行为
-    \item 这提供了一种直观的"旋钮"来控制智能体的表现
-\end{itemize}
-
-\subsection{本章小结}
-
-Decision Transformer 在离线 RL 基准上表现出色，特别是在稀疏奖励和长期规划方面具有天然优势。
-
-\section{讨论与局限}
-
-\subsection{与传统 RL 的比较}
-
-\begin{warningbox}{Decision Transformer 不是万能的}
-\begin{itemize}
-    \item 目前主要在\textbf{离线}设置下验证，在线 RL（需要探索）的效果尚待研究
-    \item 性能受限于训练数据的质量——如果数据中没有好的轨迹，模型也无法生成好的行为
-    \item 对于需要精确价值估计的任务，传统方法可能更合适
-\end{itemize}
+\begin{warningbox}{来源冲突不能靠猜测消失}
+当课程页、视频元数据和 slide 文字发生冲突时，正确做法是记录冲突、说明采用哪一个时间锚点，并把技术结论限制在不依赖该冲突的部分。这里可以确认的是：核心论文为 NeurIPS 2021 工作，公开视频由 Stanford Online 发布；无法仅凭标题页断言实际录制年份。
 \end{warningbox}
 
-\subsection{未来方向}
+\subsection{本讲的三个核心问题}
 
-\begin{itemize}
-    \item 将 Decision Transformer 扩展到\textbf{在线 RL}场景
-    \item 与其他序列模型（如 RNN、State Space Models）的比较
-    \item 多模态决策：结合视觉、语言和动作
-    \item 更大规模的预训练和迁移学习
-\end{itemize}
+阅读全文时应持续追踪三个问题。第一，为什么传统 RL 的训练和扩展经常比 language modeling 更脆弱？第二，return-to-go 如何把“我想得到多高回报”变成一个可输入的控制条件？第三，实验中哪些提升来自序列建模本身，哪些仍依赖离线数据的覆盖、筛选和 benchmark 设计？这三个问题共同决定 Decision Transformer 是概念突破、工程工具，还是被过度概括的口号。
+
+\begin{importantbox}{本讲学习目标}
+完成本讲后，读者应能：
+\begin{enumerate}
+  \item 写出 MDP、return-to-go 与 Decision Transformer token sequence；
+  \item 解释 causal mask、timestep embedding、context length 与 non-Markov conditioning；
+  \item 从训练到 rollout 手算一次 target return 的更新；
+  \item 区分 requested return、realized return、logged-data support 与 extrapolation；
+  \item 解释 percent behavior cloning、CQL、sparse reward、credit assignment 和 critic 实验；
+  \item 说明为什么 offline RL 的成功不能直接推出 online RL 已经解决。
+\end{enumerate}
+\end{importantbox}
 
 \subsection{本章小结}
 
-Decision Transformer 提出了 RL 的全新范式，但仍有诸多开放问题，特别是在在线学习和探索方面。
+本讲的历史来源存在可见日期冲突，但技术主线清楚：以 NeurIPS 2021 的 Decision Transformer 为核心，讨论如何将 offline RL 重构为 conditional sequence modeling。后续每个结果都必须同时检查模型机制、数据支持和评价方式。
+
+\section{从 sequential data 到 sequential decision making}
+
+在进入 RL 公式之前，先理解讲者为什么从语言、视觉、蛋白质和代码生成讲起。这些领域的共同经验不是“Transformer 无所不能”，而是大规模监督或自监督序列建模通常拥有相对平滑的 loss、成熟的正则化手段和可复用的训练基础设施。讲者真正想迁移到决策问题中的，是这种训练接口与规模化路径。
+
+\subsection{Transformer 成功的共同抽象}
+
+语言、图像 patch、蛋白质残基和代码 token 看似不同，但都可以被表示为序列，并通过 masked prediction 或 autoregressive prediction 学习条件分布。读下面的 slide 时，先不要比较各模型的具体参数量；应先观察它们如何把领域对象变成 token，以及如何用同一类 next-token machinery 建模。
+
+\lecturefigure{slide-02-transformers-for-sequential-data.jpg}{Transformer 已被用于语言、视觉、蛋白质与代码等多类 sequential data。}{Stanford Online 官方视频 01:40。}
+
+\begin{knowledgebox}{读图：共同点不是输入模态，而是训练接口}
+图中的 GPT-3、ViT、AlphaFold 与代码模型并不共享相同的输入语义，却都把复杂对象编码为可组合的表示，并通过大批量梯度优化学习条件关系。讲者借这组例子提出一个工程问题：如果决策轨迹也能转成序列，是否可以复用更稳定的训练目标、优化器和 scaling recipe？这是一项研究假设，不是由这些成功案例自动推出的定理。
+\end{knowledgebox}
+
+\subsection{稳定扩展为什么重要}
+
+规模化模型的优势不仅是“参数更多”。更关键的是，当数据和计算预算增加时，训练行为是否可预测，失败能否定位，正则化是否成熟，以及 loss 是否能在无需复杂 bootstrap 的情况下稳定下降。RL 的困难往往不是表达能力不足，而是目标、数据分布和 policy 改变彼此耦合，使训练系统持续追逐自己生成的新分布。
+
+\lecturefigure{slide-03-scalable-models-stable-training.jpg}{大规模 sequence model 的训练曲线通常更平滑，工程上更容易扩展。}{Stanford Online 官方视频 02:20；slide 引用 Kaplan et al. 2020。}
+
+\teachervoice{讲者强调，stable training dynamics 对 practitioner 很重要：只要有更多数据和计算，就能逐步扩大模型并观察相对平滑的 loss 改善。Decision Transformer 的动机之一，是把这种“可训练性”带入 decision making，而不是只追求一个新的网络模块。}
+
+\begin{warningbox}{稳定 loss 不等于稳定决策质量}
+监督损失下降只能说明模型更好地拟合训练分布中的动作条件分布。真实环境回报还取决于 rollout 产生的状态分布、错误累积、目标回报是否可达以及环境随机性。后文必须单独测量 realized environmental return，不能用训练 loss 代替 policy evaluation。
+\end{warningbox}
+
+\subsection{从感知到行动}
+
+感知模型输出标签、文本或表示；决策模型的输出会改变环境，并决定下一步将看到什么。这个闭环让 sequential decision making 比静态预测多出 distribution shift 和 credit assignment。讲者用“装有视觉和语言知识的圆柱体”指向机器人，不是为了说机器人只差一个 Transformer，而是为了强调 perception knowledge 必须最终转成 action sequence。
+
+\lecturefigure{slide-04-sequential-data-to-sequential-decision.jpg}{研究问题从 sequential data 进一步转向 sequential decision making。}{Stanford Online 官方视频 03:10。}
+
+\begin{importantbox}{核心转向}
+静态序列建模学习 $p(x_t\mid x_{<t})$；决策序列建模需要学习
+\[
+p(a_t\mid \text{goal},s_{\le t},a_{<t},r_{<t}),
+\]
+其中动作 $a_t$ 会改变未来状态 $s_{t+1}$。因此“tokenization 相似”并不消除 closed-loop control 的风险，只是提供了一种统一的函数逼近和训练接口。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Decision Transformer 的出发点是训练范式迁移：把 RL 轨迹转成序列，希望复用 sequence modeling 的稳定目标与规模化能力。但决策具有闭环反馈，不能仅凭静态领域的成功证明方法有效，必须进入 MDP、离线数据和真实 rollout 评价。
+
+\section{强化学习与 offline RL：数据从哪里来}
+
+这一节建立最少但完整的 RL 背景。读者需要区分 state、action、reward、return、policy 与 dataset support；如果这些概念混在一起，后文很容易把 return-to-go 当成已知未来，或误以为 offline RL 完全消除了探索问题。
+
+\subsection{MDP、policy 与 cumulative return}
+
+标准 Markov decision process（MDP）可以写成 $\mathcal{M}=(\mathcal{S},\mathcal{A},P,r,\gamma)$。在状态 $s_t\in\mathcal{S}$ 下，policy $\pi(a_t\mid s_t)$ 选择动作 $a_t\in\mathcal{A}$；环境按 transition kernel $P(s_{t+1}\mid s_t,a_t)$ 转移，并产生 reward $r_t$。学习目标是最大化期望折扣回报：
+\[
+J(\pi)=\mathbb{E}_{\tau\sim\pi}\left[\sum_{t=1}^{T}\gamma^{t-1}r_t\right],
+\qquad 0<\gamma\le 1.
+\]
+这里 $\tau=(s_1,a_1,r_1,\ldots,s_T,a_T,r_T)$ 是 trajectory；$\gamma$ 是 discount factor，用于降低远期奖励权重或保证无限时域求和稳定。
+
+\lecturefigure{slide-05-background-reinforcement-learning.jpg}{RL 闭环：agent 依据 state 选择 action，environment 返回 reward 和下一状态。}{Stanford Online 官方视频 04:00。}
+
+\begin{knowledgebox}{术语消化：RL 中最容易混淆的量}
+\begin{tabularx}{\textwidth}{L{2.8cm} X X}
+\toprule
+术语 & 解决的问题 & 与本讲的关系 \\
+\midrule
+reward $r_t$ & 当前一步得到的标量反馈 & rollout 后用于更新剩余 return-to-go \\
+return $G_t$ & 从时刻 $t$ 起的累计未来 reward & 训练数据中可由完整轨迹回算 \\
+policy $\pi$ & 给定信息时如何选择 action & Decision Transformer 通过 action prediction 隐式实现 policy \\
+value / critic & 估计状态或动作的长期价值 & 原方法不依赖 critic 训练 actor，但后文展示可改为 critic target \\
+credit assignment & 判断早期动作应为远期结果承担多少责任 & Key-to-Door 用跨阶段稀疏 reward 检验 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{Offline RL 的固定数据集}
+
+在线 RL 可以在训练期间持续与环境交互；offline RL（离线强化学习）只使用预先收集的固定数据集
+\[
+\mathcal{D}=\{\tau^{(i)}\}_{i=1}^{N},
+\]
+其中轨迹可能来自随机 policy、训练到一半的 policy、专家 policy 或多个 policy 的混合。固定数据降低了真实机器人、医疗或工业系统中的交互成本与风险，却带来更尖锐的问题：模型可能在 rollout 中访问数据集几乎没有覆盖的 state-action 区域。
+
+\lecturefigure{slide-06-background-offline-rl.jpg}{Offline RL 只使用预先记录的 logged interactions，不进行新的 trial-and-error。}{Stanford Online 官方视频 05:20。}
+
+\begin{importantbox}{Dataset support（数据支持）}
+若数据集在某个状态 $s$ 附近几乎没有动作 $a$ 的样本，就很难可靠估计执行该动作后的结果。模型可以输出语法上合理的 action，但不能凭函数逼近自动创造反事实证据。Offline RL 的核心不是“有一个大数据集”就足够，而是数据是否覆盖部署时需要的行为与状态分布。
+\end{importantbox}
+
+\begin{warningbox}{Distribution shift 的两层含义}
+第一层是训练数据由 behavior policy $\mu$ 产生，而部署使用 learned policy $\pi$；第二层是一次小动作误差会把 agent 推入新状态，后续预测继续在更陌生的输入上运行。Decision Transformer 避免了显式 Bellman backup，却没有让这两层分布偏移自动消失。
+\end{warningbox}
+
+\subsection{为什么讲者说 RL “不扩展”}
+
+2021 年前后的大型 language model 已达到百亿到千亿参数，而常见 RL policy 往往小得多、训练波动也更明显。slide 把差距归因于 RL objective 的不稳定性，这一判断应理解为课程动机：bootstrap target、on-policy distribution change、exploration 和 reward scale 都会增加优化难度；它不是说参数量本身就能衡量 policy 智能。
+
+\lecturefigure{slide-07-motivating-challenge-rl-does-not-scale.jpg}{课程动机：当时的大语言模型远大于常见 RL policy，且训练更稳定。}{Stanford Online 官方视频 07:00。}
+
+\begin{knowledgebox}{读图：先比较训练接口，再比较参数量}
+左侧文字比较了 model scale，右侧曲线比较 training stability。真正支持 Decision Transformer 的论点是：如果 action prediction 可以使用标准 MSE 或 cross-entropy，便能复用监督学习的优化与正则化工具。图中并没有证明“模型越大，控制越好”，也没有控制环境、数据量、action space 和评价预算，因此不能把参数差距解释成单一因果关系。
+\end{knowledgebox}
+
+\teachervoice{老师强调，offline benchmark 中的数据通常来自在线 RL agent 的 replay buffer，例如训练到中等水平时保存的交互。算法接口可以对数据来源保持 agnostic，但实验结论不能忽略 collection policy；数据的质量和覆盖会直接影响模型能学到什么。}
+
+\subsection{本章小结}
+
+RL 的目标是最大化真实环境中的累计回报；offline RL 则在固定 logged trajectories 上学习 policy。固定数据消除了训练期的新交互，却放大 dataset support 与 distribution shift。Decision Transformer 接下来改变的是训练表述，不是这些统计约束。
+
+\section{Decision Transformer：轨迹如何变成 token sequence}
+
+有了 offline dataset，完整轨迹在训练时已经记录了未来 reward，因此可以回算每个时刻的 return-to-go，并把它与 state、action 交错排列。关键是理解：训练时 return-to-go 来自已完成轨迹；部署时则由用户或系统设定一个目标，再随着实际 reward 逐步扣减。
+
+\subsection{Return-to-go 是目标条件，不是“偷看未来”}
+
+对有限时域任务，未折扣 return-to-go 定义为
+\[
+\widehat{R}_t=\sum_{t'=t}^{T}r_{t'}.
+\]
+若需要折扣，可使用
+\[
+\widehat{R}^{(\gamma)}_t=\sum_{t'=t}^{T}\gamma^{t'-t}r_{t'}.
+\]
+符号 $t$ 表示当前 timestep，$T$ 表示 episode 终点，$r_{t'}$ 是未来第 $t'$ 步真实 reward，$\gamma$ 是 discount factor。训练阶段可以从日志中计算该量；推理阶段只能指定 desired return，并根据已经获得的 reward 更新剩余目标。
+
+\begin{importantbox}{Return-to-go 与即时 reward 的区别}
+即时 reward $r_t$ 回答“刚才发生了什么”；return-to-go $\widehat{R}_t$ 回答“从现在到结束，这条轨迹总共还会得到多少回报”。Decision Transformer 用后者作为条件，使同一个模型可以在不同目标回报下生成不同动作分布。
+\end{importantbox}
+
+\subsection{三类 token 与 causal Transformer}
+
+一条长度为 $T$ 的轨迹被排列为
+\[
+\tau=(\widehat{R}_1,s_1,a_1,\widehat{R}_2,s_2,a_2,\ldots,\widehat{R}_T,s_T,a_T).
+\]
+每个 timestep 贡献三个 token：return、state 与 action。它们先经过各自的 embedding，再与共同的 timestep embedding 相加，送入 causal Transformer。模型在 action 位置输出 $\widehat{a}_t$；causal mask 保证预测只能使用当前及之前的信息。
+
+\lecturefigure{slide-08-decision-transformer-architecture.jpg}{Decision Transformer 架构：return、state、action 交错输入，causal Transformer 在 action 位置解码动作。}{Stanford Online 官方视频 12:56；对应 Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：沿着一次 action prediction 追踪信息}
+先从底部的 $\widehat{R}_t,s_t,a_t$ 看起。蓝、绿、橙色块表示不同 token type 的 embedding；位置上方的 causal Transformer 聚合长度为 $K$ 的历史；最上方 linear decoder 只在需要的 hidden state 上预测动作。图中 $a_t$ 已作为历史 token 出现在后续位置，但预测当前 $a_t$ 时不能看见它本身，这由输入错位与 causal mask 保证。
+\end{knowledgebox}
+
+\begin{warningbox}{不要把 target return 当作保证}
+输入 $\widehat{R}_1=100$ 只表达“希望生成与高回报轨迹一致的动作”，并不意味着环境最终一定返回 100。模型可能缺乏相应数据、遇到随机 transition，或在闭环中累积误差。requested return 和 realized return 必须分开记录。
+\end{warningbox}
+
+\subsection{Conditional sequence modeling 的概率视角}
+
+从函数逼近角度，模型学习的是
+\[
+p_{\theta}(a_t\mid \widehat{R}_{\le t},s_{\le t},a_{<t}).
+\]
+参数 $\theta$ 表示 Transformer 与 embedding/decoder 的全部可训练参数。与只看当前 state 的 Markov policy 相比，这个条件分布显式保留历史；与普通 behavior cloning 相比，它还把 desired return 作为条件，用于区分同一状态附近的不同质量行为。
+
+\begin{knowledgebox}{术语消化：本节四个关键概念}
+\begin{tabularx}{\textwidth}{L{3.0cm} X X}
+\toprule
+术语 & 机制 & 容易误解之处 \\
+\midrule
+causal mask & 阻止位置访问未来 token & 不等于模型只看当前 state \\
+timestep embedding & 标记轨迹中的时间位置 & 与 token-type embedding 解决不同问题 \\
+context length $K$ & 每次预测保留的历史窗口 & 更长不必然更好，会增加计算和数据需求 \\
+conditional generation & 用目标回报选择行为分布 & 不是可达性证明，也不是万能 task identifier \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Decision Transformer 把 return、state、action 交错成 causal sequence，并学习在历史与目标回报条件下预测 action。Return-to-go 在训练中由日志回算，在部署中是可更新的目标条件；它提供控制接口，但不保证目标可达。
+
+\section{Forward pass：embedding、历史与非 Markov 条件}
+
+架构图容易给人一种“只要把三种 token 串起来即可”的错觉。实际上，embedding 如何组合、哪些 hidden state 用于解码、context window 包含什么，以及是否允许历史影响同一 state 的动作，都会改变学习到的函数。本节把 slide 和课堂 Q\&A 还原成可实现的 forward pass。
+
+\subsection{输入、输出与 context window}
+
+模型输入是长度不超过 $K$ 个 timestep 的局部轨迹窗口；若按 token 计数，则最多包含约 $3K$ 个 return/state/action token。输出是对应 action 位置的预测序列：
+\[
+(\widehat{a}_1,\widehat{a}_2,\ldots,\widehat{a}_T)
+=f_{\theta}(\widehat{R}_{1:T},s_{1:T},a_{1:T-1}).
+\]
+这里右侧不含真实的当前 action $a_T$，否则会产生 label leakage。训练实现通常通过 shift 或选择特定 hidden positions 避免泄漏。
+
+\lecturefigure{slide-09-forward-pass.jpg}{Forward pass：输入 return/state/action 序列，输出预测 action，并在长度 $K$ 的 context 上计算 attention。}{Stanford Online 官方视频 14:56。}
+
+\begin{importantbox}{Context length 的计算代价}
+标准 self-attention 对 token 数的时间和中间矩阵开销近似为 $O((3K)^2)$。增大 $K$ 可以提供更长历史，却会增加显存、延迟与优化难度。后文的 $K=1$ ablation 检验历史是否真正贡献性能，而不是只把更大模型当作答案。
+\end{importantbox}
+
+\subsection{Embedding 相加与 concatenation 不等价}
+
+设 state embedding、token-type embedding 与 timestep embedding 分别为 $e_s(s_t)$、$e_{\mathrm{type}}$ 和 $e_t(t)$，一种实现是
+\[
+x_t^{(s)}=e_s(s_t)+e_{\mathrm{type}=s}+e_t(t).
+\]
+相加要求各向量维度相同，相当于在同一表示空间中平移；concatenation 则扩大维度，再由后续层学习如何组合。二者都可表达信息，但参数量、几何结构和 inductive bias 不同。
+
+\teachervoice{课堂 Q\&A 专门追问了“加法还是拼接”。讲者回答：两者是不同的函数编码选择；原实现采用 addition，并观察到它更合适。讲义提醒：不要把 embedding 相加理解成丢失身份，token type 和 timestep 仍通过可学习向量进入表示。}
+
+\subsection{代码层面的 forward pass}
+
+前面的公式说明了 token 由哪些向量相加，却还没有回答实现中如何把三条时间序列交错、怎样保证当前 action 不泄漏，以及 decoder 应读取哪个 hidden position。原 slide 用代码片段补上这条数据流。下面的等价伪代码依次展开 embedding、stacking、causal attention 与 action head；它只表达机制，不绑定具体 repository API，也不隐藏 padding 和位置选择这两个最容易出错的环节。
+
+\lecturefigure{slide-10-forward-pass-code.jpg}{讲座中的 Decision Transformer forward-pass 代码片段。}{Stanford Online 官方视频 17:24。}
+
+\begin{lstlisting}[caption={Decision Transformer forward pass 的最小伪代码},label={lst:dt-forward}]
+def forward(returns_to_go, states, actions, timesteps, mask):
+    time_emb = embed_time(timesteps)
+    return_emb = embed_return(returns_to_go) + time_emb
+    state_emb = embed_state(states) + time_emb
+    action_emb = embed_action(actions) + time_emb
+
+    tokens = interleave(return_emb, state_emb, action_emb)
+    hidden = causal_transformer(tokens, attention_mask=mask)
+
+    state_hidden = hidden[:, state_token_positions]
+    action_pred = action_head(state_hidden)
+    return action_pred
+\end{lstlisting}
+
+代码中的 \texttt{interleave} 按 $(R,s,a)$ 顺序交错 token；\texttt{state\_token\_positions} 表示在看过当前 return 与 state 后、尚未看到当前 action 的位置取 hidden state。真实实现还要处理不同 state/action shape、padding mask、continuous/discrete head 与 sequence truncation。
+
+\subsection{为什么 non-Markov 是有意设计}
+
+Markov property 假设当前 state 已包含预测未来所需的全部信息，因此最优 policy 可以只依赖 $s_t$。但很多观测其实是 observation $o_t$，只看见隐藏状态的一部分；历史 $o_{<t},a_{<t}$ 能帮助推断被遮蔽的信息。Decision Transformer 显式保留 history，允许“相同观测、不同来路”对应不同 action。
+
+\begin{knowledgebox}{Partial observability（部分可观测）}
+若真实环境状态为 $z_t$，模型只能看到 $o_t=g(z_t)$，则不同 $z_t$ 可能映射到相同 $o_t$。历史轨迹可作为 belief-state 的近似：模型通过此前观测和动作推断当前隐藏状态。此时 non-Markov conditioning 不是违反理论，而是在 observation 不充分时补足信息。
+\end{knowledgebox}
+
+\teachervoice{学生追问：同一个 state 在不同 timestep 加上不同时间 embedding，会不会破坏 Markov 性？讲者明确回答“是的，这里就是有意 non-Markov”，因为 action prediction 和 partial observability 可能需要历史。若任务确实完全 Markov，context ablation 应帮助判断历史是否只是冗余。}
+
+\begin{warningbox}{History 也可能记住错误相关性}
+更长 context 可以恢复隐藏状态，也可以让模型依赖数据收集过程中的偶然模式，例如某个 behavior policy 的节奏、episode 长度或特定时间位置。必须用跨 policy、跨初始状态和 context ablation 验证历史带来的是可迁移信息，而非日志指纹。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Forward pass 的关键不只是 Transformer block，而是 token 交错、embedding 组合、label shift、context mask 和 action head。Non-Markov history 在部分可观测任务中可能是优势，但更长历史也增加计算和 spurious correlation 风险。
+
+\section{训练目标与 rollout：从监督学习到闭环控制}
+
+Decision Transformer 最有吸引力的工程特征，是训练时使用标准 action prediction loss。可训练性来自熟悉的监督目标，但部署仍是闭环 rollout：模型输出动作、环境产生新状态与 reward、系统更新剩余目标并再次调用模型。本节把训练和推理严格分开。
+
+\subsection{Continuous 与 discrete action loss}
+
+训练目标取决于 action space 的统计形式，但二者共享同一个原则：直接把 logged action 当作监督 label，而不是先构造 value target。连续控制通常回归一个实数向量，离散控制则预测 action category 的概率分布。读公式时应同时检查 action normalization、有效 timestep mask 与 reduction 方式，因为这些实现细节会改变不同 episode 对梯度的权重。对 continuous action，可用均方误差：
+\[
+\mathcal{L}_{\mathrm{MSE}}(\theta)
+=\frac{1}{T}\sum_{t=1}^{T}\lVert a_t-\widehat{a}_t\rVert_2^2.
+\]
+对 discrete action，可用 cross-entropy：
+\[
+\mathcal{L}_{\mathrm{CE}}(\theta)
+=-\frac{1}{T}\sum_{t=1}^{T}\log p_{\theta}(a_t\mid \widehat{R}_{\le t},s_{\le t},a_{<t}).
+\]
+$a_t$ 是数据集中的真实 action，$\widehat{a}_t$ 或 $p_{\theta}$ 是模型输出，$T$ 是有效序列长度。Padding 位置必须通过 mask 排除，否则短 episode 会被人工 token 污染。
+
+\lecturefigure{slide-11-loss-function.jpg}{训练目标：continuous action 使用 MSE，discrete action 使用 cross-entropy。}{Stanford Online 官方视频 23:40。}
+
+\begin{knowledgebox}{读图：真正的论点是 “No dynamic programming”}
+slide 底部的粗体结论比两个公式更重要。传统 value-based RL 常用 Bellman target，target 本身依赖另一个估计值或 slowly updated network；Decision Transformer 直接拟合日志中的 action label，训练接口更接近 supervised learning。代价是模型不会自动进行 policy improvement，提升必须来自 return conditioning、数据组合和模型 generalization。
+\end{knowledgebox}
+
+\teachervoice{老师强调，MSE 与 cross-entropy 的价值在于“稳定、易正则化”，而不是它们比 RL loss 更神奇。将复杂问题改写成监督学习能复用成熟基础设施，但也把成败更多地交给数据质量与条件设计。}
+
+\subsection{推理时如何更新 return-to-go}
+
+设初始目标为 $R_{\mathrm{target}}$。在时刻 $t$，模型根据当前上下文采样或输出动作 $a_t$；环境返回 reward $r_t$ 与新状态 $s_{t+1}$。未折扣情形下更新：
+\[
+\widehat{R}_{t+1}=\widehat{R}_t-r_t.
+\]
+若使用折扣 return，需要保持与训练时定义一致，而不能简单照搬减法。每一步还要把新 token 追加到上下文，并只保留最近 $K$ 个 timestep。
+
+\lecturefigure{slide-12-rollouts.jpg}{Rollout 与 autoregressive generation 类似：设定目标回报，生成动作，追加新状态并更新剩余回报。}{Stanford Online 官方视频 24:58。}
+
+\begin{lstlisting}[caption={未折扣 return-to-go 下的 autoregressive rollout},label={lst:dt-rollout}]
+target_return = desired_return
+state = env.reset()
+returns, states, actions, timesteps = [target_return], [state], [], [0]
+
+while not done:
+    action = model(returns, states, actions, timesteps)[-1]
+    next_state, reward, done, info = env.step(action)
+
+    actions.append(action)
+    states.append(next_state)
+    returns.append(returns[-1] - reward)
+    timesteps.append(timesteps[-1] + 1)
+
+    returns, states, actions, timesteps = keep_last_k_steps(
+        returns, states, actions, timesteps, K
+    )
+\end{lstlisting}
+
+\subsection{一个数值例子}
+
+假设目标回报为 10。前三步实际 reward 分别是 $2,0,3$，那么输入模型的 remaining return 依次是 $10,8,8,5$。若第二步没有 reward，目标不会凭空减少；若某一步得到比预期更高的 reward，剩余目标会更快接近零。这个过程使模型持续知道“还差多少”，但前提是训练数据中存在足够多相似剩余目标与状态组合。
+
+\begin{importantbox}{Rollout 的四个不变量}
+\begin{enumerate}
+  \item 训练和推理必须使用一致的 return 定义与 reward scale；
+  \item 当前 action 不能泄漏到预测它的输入位置；
+  \item 更新的是实际获得 reward 后的剩余目标，不是模型自己预测的 reward；
+  \item context truncation 必须按完整 timestep 对齐，不能把 $(R,s,a)$ 三元组切碎。
+\end{enumerate}
+\end{importantbox}
+
+\begin{warningbox}{Exposure bias 仍然存在}
+训练时模型看到日志中的真实历史 action；rollout 时它看到自己的历史 action。一个小错误会改变未来 state，造成与训练分布偏离。Decision Transformer 的监督目标稳定，并不等于 closed-loop error accumulation 已被解决。
+\end{warningbox}
+
+\subsection{本章小结}
+
+训练阶段直接拟合 action，避免显式 Bellman backup；推理阶段则按 autoregressive loop 与环境交互，持续更新 remaining return 和 context。监督学习简化了优化，却没有消除 rollout 中的分布偏移与错误累积。
+
+\section{RL as probabilistic inference：有用的解释，不是万能证明}
+
+讲者随后把 Decision Transformer 放进“control as inference”视角：把高 reward 解释为轨迹具有较高 optimality probability，再通过条件推断选择动作。这个视角帮助理解 return conditioning，却不能替代离线数据覆盖、因果识别或真实环境评价。
+
+\subsection{Optimality variable 的直觉}
+
+引入二元 optimality variable $\mathcal{O}_t$，用 reward 定义
+\[
+p(\mathcal{O}_t=1\mid s_t,a_t)\propto \exp\left(\frac{r(s_t,a_t)}{\alpha}\right),
+\]
+其中 $\alpha>0$ 是 temperature。高 reward 的 state-action 对更可能被视为 optimal。整条轨迹在 ``optimal'' 条件下的后验可写成 prior dynamics 与 reward weighting 的组合；policy learning 可理解为近似该后验。
+
+\lecturefigure{slide-13-rl-as-probabilistic-inference.jpg}{RL as probabilistic inference：用 optimality variables 将 reward 转成条件推断问题。}{Stanford Online 官方视频 30:00；右图引用 Levine 2018。}
+
+\begin{knowledgebox}{读图：Decision Transformer 与 inference view 的连接}
+左侧仍是 $(R,s,a)$ token sequence；右侧 probabilistic graphical model 把每一步的 optimality variable 与 state/action 相连。课程的连接是：return-to-go 可以被看作对未来 optimality 的压缩条件，Transformer 则学习给定该条件的 action distribution。它不是精确执行图模型推断，而是用监督数据近似相关条件分布。
+\end{knowledgebox}
+
+\subsection{这个视角能解释什么}
+
+它解释了为什么“条件化在高回报”可能偏向高质量动作，也解释了为什么 behavior prior 很重要：如果某种动作从未出现在日志里，posterior approximation 很难可靠支持它。它还提示 temperature、reward scale 与 entropy regularization 之间的关系，帮助连接 maximum-entropy RL。
+
+\subsection{这个视角不能证明什么}
+
+概率解释不自动证明目标 return 可达，也不证明条件模型能在 dataset support 外正确外推；更不证明 Transformer 已经完成因果 planning。模型学习的是 observational trajectory distribution 中的相关结构，环境动力学与 action consequence 仍需通过数据体现。
+
+\begin{warningbox}{相关轨迹模式不是反事实保证}
+若高 return 轨迹总伴随某个无因果作用的视觉特征，模型可能把它当作行为线索。只有在 intervention、环境随机性、跨 policy 数据或专门 counterfactual evaluation 下，才能更有把握地区分真正的 action consequence 与日志相关性。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RL-as-inference 为 return conditioning 提供了统一直觉：高 reward 轨迹获得更高 optimality weight，policy 近似条件后验。但该解释仍受 behavior prior 和数据支持约束，不能替代闭环实证。
+
+\section{实验主线：从总分到可证伪的机制}
+
+实验部分不是一张“DT 赢了”的排行榜，而是一串逐步收紧的测试：先比较 offline RL 总体结果，再测 target return 是否可控、是否只是筛选高分轨迹、history 是否必要、sparse reward 是否退化、长期 credit 如何表现，以及同一模型能否作为 critic。每一张图都回答一个不同问题。
+
+\subsection{实验范围与评价协议}
+
+原工作使用 Atari、OpenAI Gym / MuJoCo 与 Key-to-Door 等环境，并与 model-free offline RL、behavior cloning 等 baseline 比较。不同 benchmark 的数据量、reward scale 与 normalized score 定义不同，因此应在同一数据集和协议内比较，而不能跨表直接把数值当作统一百分比。
+
+\lecturefigure{slide-14-experiments-divider.jpg}{课程从方法机制转入 experiments：后续每张图检验一个具体假设。}{Stanford Online 官方视频 32:24。}
+
+\begin{knowledgebox}{Normalized score 的直觉}
+D4RL 常把 raw return 映射为
+\[
+\mathrm{score}_{\mathrm{norm}}
+=100\times\frac{R_{\mathrm{policy}}-R_{\mathrm{random}}}
+{R_{\mathrm{expert}}-R_{\mathrm{random}}}.
+\]
+$R_{\mathrm{policy}}$ 是被测 policy 的真实环境回报，$R_{\mathrm{random}}$ 与 $R_{\mathrm{expert}}$ 是参考点。这个数值便于同任务比较，但不一定严格落在 $[0,100]$，也不是“完成任务百分比”。
+\end{knowledgebox}
+
+\subsection{Offline RL 总体结果}
+
+第一组图比较 Decision Transformer、TD-learning 类方法与 behavior cloning。读图时应先看三件事：每组柱对应哪个 environment/data regime，baseline 是否使用同一 offline dataset，以及差异是否跨任务一致。课程结论是 DT 在多项 benchmark 上具有竞争力，而不是在所有设置中绝对支配。
+
+\lecturefigure{slide-15-offline-rl-summary-results.jpg}{Offline RL summary：Decision Transformer 与 TD learning、behavior cloning 在多组任务上的比较。}{Stanford Online 官方视频 33:24；具体数值以原论文表格为准。}
+
+\begin{knowledgebox}{读图：柱状图支持的是“competitive”，不是“universally superior”}
+三组任务的相对高度表明 DT 可以在不显式训练 value function 的情况下达到强 baseline 水平。图中任务数量有限、数据由既定 collection process 产生，且不同方法可能对 hyperparameter 与 architecture 敏感。因此稳健结论是“sequence modeling 是可行的 offline-RL formulation”，而不是“动态规划从此无用”。
+\end{knowledgebox}
+
+\teachervoice{课堂讨论追问 baseline 是否带 recurrence、数据由何种 policy 收集。讲者承认某些实现细节需要回查，并强调 replay buffer 通常来自在线 agent 的训练过程。实践经验：当结果依赖数据 regime 时，source policy 与数据量必须和模型结构一起报告。}
+
+\subsection{Return conditioning 是否真的可控}
+
+若模型输入 desired return，最直接的验证是横轴设置不同 target，纵轴测量真实 achieved return。理想 oracle 是对角线 $y=x$；logged dataset 的最佳轨迹提供另一个参考上界。曲线越接近对角线，说明目标条件与实际行为质量越一致。
+
+\lecturefigure{slide-16-evaluating-return-conditioning.jpg}{Return conditioning：横轴是 requested return，纵轴是 rollout 中实际得到的 return。}{Stanford Online 官方视频 38:12。}
+
+\begin{knowledgebox}{读图：先分清三条“上界”}
+绿色对角线表示完美控制：请求多少就实现多少；橙色线表示离线数据中最佳轨迹，而不是环境理论最优；模型曲线表示真实 rollout。部分环境中，模型在训练数据最高回报以上仍有提升迹象，但更高 target 最终趋于饱和。饱和比灾难性下降更安全，却仍说明 target token 不是无限增益旋钮。
+\end{knowledgebox}
+
+\begin{warningbox}{Occasional extrapolation 不是 OOD 保证}
+Seaquest 等环境出现过 achieved return 超过 logged best trajectory 的现象，可能来自组合已有局部行为、随机性或函数泛化。讲者明确说这种趋势并不一致。工程上应报告 target sweep、置信区间、失败率与超出数据支持的距离，不能只展示最好一次。
+\end{warningbox}
+
+\teachervoice{学生问：如果输入荒谬大的 target（例如 10,000）会怎样？讲者回答，性能通常在某个阈值后饱和，而不是无限提升，也没有普遍观察到突然崩溃。这一口头说明比“可控生成”四个字更准确。}
+
+\subsection{“Multitask” 需要限定语义}
+
+改变 target return 可以让同一模型生成“保守停留”“中等移动”或“追求高分”等不同行为，因此可视为一种 behavior selection。但这不自动等同于跨任务泛化：return 是一维标量，可能无法区分不同目标、约束或语义任务。更一般的 multitask agent 还需要 goal state、language instruction、task ID 或其他条件。
+
+\begin{warningbox}{Return conditioning 不是完整 task specification}
+两个任务可能拥有相同 return scale，却要求完全不同的行为；同一 return 也可能对应多种策略。把 return 当作 task cue 在特定环境中有效，但不能据此证明模型已经学会抽象任务身份。
+\end{warningbox}
+
+\subsection{它是否只是 behavior cloning 高分轨迹}
+
+Percent behavior cloning（percent BC）先按 trajectory return 排序，保留最高的 $q\%$，再训练普通 behavior cloning：
+\[
+\mathcal{D}_{q}=\{\tau\in\mathcal{D}:R(\tau)\ge Q_{1-q}(R)\},
+\qquad
+\min_{\theta}\;\mathbb{E}_{(s,a)\sim\mathcal{D}_q}[-\log\pi_{\theta}(a\mid s)].
+\]
+$Q_{1-q}(R)$ 是 return 的分位数阈值。这个 baseline 很强，因为它也把低质量轨迹从监督信号中移除；差别在于 DT 保留全部数据，并用 return 条件区分质量。
+
+\lecturefigure{slide-17-comparison-with-behavior-cloning.jpg}{Percent behavior cloning 对照：在中高数据 regime 很强，低数据 regime 中 DT 优势更明显。}{Stanford Online 官方视频 47:34。}
+
+\begin{knowledgebox}{读图：简单 baseline 为什么重要}
+表格先比较 DT 与不同筛选比例的 BC。中等和高数据量时，percent BC 可能接近 DT，说明部分收益确实来自“专注高回报行为”；Atari 的低数据 regime 中，过度筛选会让数据更少，DT 利用全部轨迹与 return 条件的优势更明显。强简单 baseline 能防止把数据选择效应误归因于复杂架构。
+\end{knowledgebox}
+
+\teachervoice{讲者称 percent BC 是未来 offline-RL 工作都应包含的强 baseline。老师强调，这不是削弱 Decision Transformer，而是把贡献说得更精确：当数据足够时，筛选高质量轨迹已很强；当数据稀缺时，条件化使用全部数据更有价值。}
+
+\subsection{Context length 是否真的有用}
+
+将 context length 设为 $K=1$，模型几乎只依赖当前 return 与 state；若完整 context 显著更好，说明历史确实提供了 action-relevant information。这个 ablation 直接检验前文“有意 non-Markov”的设计，而不是仅比较更大与更小网络。
+
+\lecturefigure{slide-18-effect-of-context-length.jpg}{Context-length ablation：完整历史相较 $K=1$ 在多项任务上获得更好结果。}{Stanford Online 官方视频 53:06。}
+
+\begin{knowledgebox}{读图：性能差异可能来自三种来源}
+历史窗口可以恢复 partial observation、识别 behavior phase，也可能仅提供 episode time。要确认真正机制，应进一步比较：显式 time feature、recurrent baseline、随机打乱历史、不同 $K$ 曲线与跨 episode generalization。原 slide 支持“历史有用”，但尚不能唯一确定历史中哪类信息最关键。
+\end{knowledgebox}
+
+\subsection{Sparse reward：credit assignment 不等于 exploration}
+
+稀疏奖励实验只在 trajectory 终点提供 cumulative reward。训练时每个位置的 return-to-go 可由完整日志回算，因此早期 token 仍能得到“这条轨迹最终成功或失败”的条件信息。传统 per-transition 方法若没有合适 backup 或 representation，可能更难传播远期结果。
+
+\lecturefigure{slide-19-sparse-reward-environments.jpg}{Sparse-reward 实验：只在轨迹终点给累计 reward，DT 性能保持而 CQL 明显下降。}{Stanford Online 官方视频 55:12。}
+
+\begin{warningbox}{这项实验没有证明在线探索被解决}
+Offline dataset 已经包含成功和失败 trajectory，模型可以在训练时看到完整结果；在线 cold start 则可能一条成功轨迹都没有。Return-to-go 帮助把未来结果作为条件传播到早期动作，但不能在没有成功数据时自动发现奖励。Credit assignment 与 exploration 是相关但不同的问题。
+\end{warningbox}
+
+\teachervoice{课堂讨论给出了很好的直觉：offline training 每一步都由日志中的真实 action 接回正确轨迹，不会像在线 agent 一样在早期随机动作后“摸黑”。讲者同意，真正在线化时探索与 exploitation 的细节仍需重新设计。}
+
+\subsection{Key-to-Door：跨阶段长期 credit}
+
+Sparse-reward 表格只说明把中间 reward 删除后性能没有明显崩溃，却仍可能是短 episode 或局部线索在起作用。Key-to-Door 进一步把决定成功的早期动作和最终 reward 主动拉开：agent 必须先拿钥匙，再经过一段没有任务信息的空房间，最后才看到门；只有拿到钥匙并成功开门才获得 binary reward。这个三阶段设计把因果相关动作与长 distractor interval 分开，专门检验模型能否把末端成功与很早之前的取钥匙联系起来。
+
+\lecturefigure{slide-20-long-term-credit-assignment.jpg}{Key-to-Door：取钥匙、空房间、开门三个阶段检验长期 credit assignment。}{Stanford Online 官方视频 1:00:04。}
+
+\begin{knowledgebox}{读图：trajectory count 也是自变量}
+表格比较不同成功 trajectory 数量。DT 与 percent BC 在该任务上优于若干 baseline，但当日志中成功行为过少时，任何方法都会缺乏证据。结果支持“sequence context 能保留跨阶段信息”，不能证明模型可在完全没有成功示例时发明拿钥匙策略。
+\end{knowledgebox}
+
+\subsection{同一模型能否成为 critic}
+
+把输出 target 从 action 改为 return 或 reward probability，就能把 causal Transformer 解释为 critic。模型观察历史后，估计未来成功可能性：未拿钥匙时概率下降；拿到钥匙后暂时保持；最终接近门时再根据行动上升或下降。
+
+\lecturefigure{slide-21-decision-transformers-as-critics.jpg}{Decision Transformer 作为 critic：随 Key-to-Door 三阶段更新未来 reward probability。}{Stanford Online 官方视频 1:03:02。}
+
+\begin{knowledgebox}{读图：曲线变化对应可逆与不可逆信息}
+一旦 phase 1 结束且 agent 未拿钥匙，未来成功几乎不可达，蓝线应下降并保持低位；拿到钥匙后，phase 2 的空房间不会立即决定成败，因此候选轨迹仍接近；phase 3 是否到达门口才最终分叉。这说明模型 hidden state 保存了长期事件，并能把它用于 value-like prediction。
+\end{knowledgebox}
+
+\begin{warningbox}{“Impressive critic” 仍不是完整 actor-critic 算法}
+这项实验展示 target 可替换与长期预测能力，但没有自动提供 policy improvement、pessimism、uncertainty calibration 或 off-policy correction。若把它接入 actor-critic 系统，仍需定义 target、bootstrap、data support 和稳定化策略。
+\end{warningbox}
+
+\subsection{本章小结}
+
+实验链条逐步证明：DT 是有竞争力的 offline-RL formulation；return condition 与 achieved return 有相关可控性；percent BC 是必须比较的强 baseline；history 对部分任务确实有用；sequence context 能处理稀疏和长期 credit；同一架构可改为 critic。所有结论都依赖数据 regime，且没有直接解决 online exploration。
+
+\section{限制、工程判断与未来方向}
+
+课程最后的 summary 与 future work 很克制：贡献是一个简单、稳定、可扩展的新视角，而不是宣布 RL 已经被 language modeling 取代。本节把课堂 Q\&A 中最重要的限制整理为可执行检查项。
+
+\subsection{课程总结：方法为什么值得重视}
+
+Decision Transformer 的价值来自三点。第一，用 conditional sequence modeling 统一 return、state 与 action；第二，用稳定监督目标训练，不显式依赖 value function 或 policy gradient；第三，在多类 offline benchmark 上达到有竞争力的结果，并通过 context、sparse reward 与 critic 实验展示 sequence history 的作用。
+
+\lecturefigure{slide-22-summary.jpg}{原讲座总结：简单、稳定、易训练，并在多类 RL 设置中表现强劲。}{Stanford Online 官方视频 1:08:56。}
+
+\begin{importantbox}{证据比例原则}
+可以说：Decision Transformer 证明了 sequence modeling 是可行且强的 offline-RL formulation。不能说：它证明所有 RL 都应被 next-token prediction 取代，或只要扩大 Transformer 就能解决 exploration、safety 和 distribution shift。
+\end{importantbox}
+
+\subsection{Online RL 不能靠简单加噪声获得}
+
+在 offline setting 中，训练数据已经存在；online RL 必须一边收集数据一边改进 policy。课堂 Q\&A 询问能否直接采用 epsilon-greedy 或 Boltzmann sampling。讲者的回答是：初步证据表明传统 RL 的 exploration recipe 不能原封不动迁移，exploration/exploitation balance 与错误轨迹如何进入 context 都需要新的设计。
+
+\begin{warningbox}{在线化的三个额外问题}
+\begin{enumerate}
+  \item \textbf{Cold start}：没有高回报 trajectory 时，target conditioning 缺少对应行为；
+  \item \textbf{Non-stationary dataset}：policy 更新会持续改变数据分布；
+  \item \textbf{Sequence contamination}：探索动作产生的低质量历史会影响后续预测，不能简单视为 iid augmentation。
+\end{enumerate}
+\end{warningbox}
+
+\teachervoice{讲义提醒：讲者没有声称 epsilon-greedy 必然失败，而是说“devil lies in the detail”，现成在线 RL 技巧并非直接 transferable。正确研究问题是如何设计数据收集、目标条件与 sequence replay，而不是只调一个 sampling temperature。}
+
+\subsection{Discount factor 与有限 context}
+
+原实验主要使用 $\gamma=1$ 的 finite-horizon return，但 Decision Transformer 与 discounting 并不冲突。只需在数据预处理和 rollout 中一致地使用 $\widehat{R}^{(\gamma)}_t$。然而 discounting 解决的是远期 reward 权重，不等于 memory：即使 $\gamma$ 合理，有限 $K$ 仍可能看不到完成任务所需的早期事件。
+
+\begin{importantbox}{Discount 与 context 回答不同问题}
+$\gamma$ 决定远期 reward 的数值权重；$K$ 决定模型可访问多少历史信息。较小 $\gamma$ 不能恢复被截断的关键 observation，较大 $K$ 也不能替代对无限时域 return 的稳定定义。
+\end{importantbox}
+
+\subsection{与 CQL、pessimism 和 hybrid objective 的关系}
+
+CQL（Conservative Q-Learning）通过压低数据外 action 的估计价值来对抗 offline overestimation。课堂 Q\&A 提出能否把 pessimism 或 Q-learning objective 加到 Decision Transformer 上。答案是原则上可以，但原工作的科学问题恰恰是：不加入这些传统组件，仅用简单 sequence objective 能走多远。
+
+\begin{knowledgebox}{三类 hybrid 方向}
+\begin{enumerate}
+  \item \textbf{Sequence actor + pessimistic critic}：DT 生成候选动作，保守 value model 过滤；
+  \item \textbf{Return model + uncertainty}：对 desired return 的可达性与置信度联合建模；
+  \item \textbf{Online sequence replay}：按 trajectory quality、novelty 与 safety 维护不断更新的上下文数据。
+\end{enumerate}
+这些方向增加了算法复杂度，也要求重新验证稳定性与因果贡献。
+\end{knowledgebox}
+
+\subsection{未来工作：multimodal、multitask、multi-agent}
+
+讲者的 future-work slide 把序列建模视为统一接口：multimodality 让模型同时处理在线与离线 experience、图像和文本；multitask 需要更丰富的 task-conditioned goal 或语言；multi-agent 则把其他 agent 的动作和 observation 纳入联合序列。每个方向都扩大 token space，也同步扩大 credit、coordination 与 safety 难题。
+
+\lecturefigure{slide-23-future-work.jpg}{未来方向：multimodality、multitask 与 multi-agent sequential decision making。}{Stanford Online 官方视频 1:10:46。}
+
+\begin{knowledgebox}{读图：统一序列接口不等于统一难度}
+把所有模态转成 token 可以统一软件栈，却不会自动统一 reward semantics、action latency、agent identity 或安全约束。Multimodal model 需要时间同步，multitask model 需要避免目标混淆，multi-agent model 还要处理非平稳对手与联合 credit assignment。
+\end{knowledgebox}
+
+\subsection{原讲座资源入口}
+
+原 slide 给出项目页、论文和代码。它们分别承担不同角色：项目页提供可视化与简要说明，论文给出方法和实验定义，代码揭示数据预处理、sequence sampling、return scale 与评估细节。复现时应从代码和原始数据配置核对，而不是只根据架构图重写。
+
+\lecturefigure{slide-24-useful-links.jpg}{原讲座列出的 Decision Transformer 项目页、论文与代码。}{Stanford Online 官方视频 1:11:30。}
+
+\begin{importantbox}{复现检查清单}
+\begin{enumerate}
+  \item 核对 reward normalization、return scale 与 target-return 选择；
+  \item 记录 dataset collection policy、trajectory length 与成功比例；
+  \item 对齐 context length、sequence sampling 与 padding mask；
+  \item 同时报训练 loss、realized return、target sweep 与多随机种子方差；
+  \item 至少比较 BC、percent BC、一个 value-based offline baseline 与 context ablation。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{本章小结}
+
+Decision Transformer 的边界与贡献同样重要。它提供稳定而统一的 offline sequence objective，但 online exploration、超出数据支持的行为、有限 context、discounting 与 conservative policy improvement 仍需单独解决。
 
 \section{总结与延伸}
 
-Decision Transformer 的贡献在于揭示了一个深刻的联系：\textbf{序列建模和决策制定可以统一在同一个框架下}。通过将 RL 轨迹视为 token 序列，利用 Transformer 的强大序列建模能力，我们可以绕开传统 RL 中的许多难题（如价值函数逼近、时序差分学习等）。
+本讲用一个极简问题重构了 offline RL：若完整轨迹本来就是序列，为什么不直接学习“在目标回报与历史条件下，下一个动作是什么”？这个问题带来了一套清晰方法，也带来一套必须诚实面对的假设。
+
+\begin{enumerate}
+  \item \textbf{问题表述是主要创新}：将 RL 写成 conditional sequence modeling，而非仅替换 policy backbone；
+  \item \textbf{return-to-go 是控制 token}：训练时由完整日志回算，推理时作为 desired behavior 条件；
+  \item \textbf{监督目标改善可训练性}：MSE/CE 避免显式 Bellman backup，但不自动进行 policy improvement；
+  \item \textbf{history 是有意设计}：context 可处理 partial observability 和长期事件，也可能记住数据偏差；
+  \item \textbf{rollout 才是最终考试}：requested return、训练 loss 与 realized environmental return 必须分开；
+  \item \textbf{强简单 baseline 必不可少}：percent BC 揭示数据筛选与条件建模各自贡献；
+  \item \textbf{sparse reward 不等于 exploration}：离线日志可传播未来成功信息，但在线 cold start 仍难；
+  \item \textbf{critic 实验展示接口弹性}：同一 causal model 可预测 action 或 return，却不自动构成完整 actor-critic；
+  \item \textbf{外推是观察，不是保证}：极端 target 会饱和，偶发超越 logged best 需要重复验证；
+  \item \textbf{未来更可能是 hybrid}：sequence model 与 pessimism、uncertainty、online data collection 可以组合，但需重新做因果与稳定性审计。
+\end{enumerate}
+
+\begin{importantbox}{课程作业：设计一组能区分“条件建模”与“数据筛选”的实验}
+选择一个 offline-RL benchmark，固定相同 encoder、parameter count 和训练预算，比较：普通 BC、percent BC、Decision Transformer、$K=1$ DT 与带 conservative critic 的 DT。对每个模型报告数据量曲线、target-return sweep、realized return、OOD action rate、五个随机种子及失败轨迹。最后回答：提升来自 return condition、history、更多有效数据，还是 critic filtering？
+\end{importantbox}
+
+\begin{warningbox}{最终自检：五个不能混为一谈的结论}
+\textbf{训练稳定}不等于\textbf{闭环稳定}；\textbf{条件可控}不等于\textbf{目标可达}；\textbf{长期相关}不等于\textbf{因果 credit}；\textbf{离线成功}不等于\textbf{在线探索成功}；\textbf{统一 token 接口}不等于\textbf{所有任务共享同一难度}。
+\end{warningbox}
 
 \subsection{拓展阅读}
 
-\begin{itemize}
-    \item Chen et al., ``Decision Transformer: Reinforcement Learning via Sequence Modeling,'' NeurIPS 2021
-    \item Janner et al., ``Offline Reinforcement Learning as One Big Sequence Modeling Problem,'' NeurIPS 2021
-    \item Kumar et al., ``Conservative Q-Learning for Offline RL,'' NeurIPS 2020
+这一组材料从原始方法、轨迹建模、保守离线 RL、数据集到 probabilistic inference 逐层展开，适合按下列顺序阅读：
+
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://arxiv.org/abs/2106.01345}{\textbf{Decision Transformer}}：方法定义、benchmark、ablation 与 Key-to-Door 实验。
+  \item \href{https://sites.google.com/berkeley.edu/decision-transformer}{\textbf{Project Page}} 与 \href{https://github.com/kzl/decision-transformer}{\textbf{Official Code}}：可视化、数据处理与 rollout 实现。
+  \item \href{https://arxiv.org/abs/2106.02039}{\textbf{Trajectory Transformer}}：将 dynamics、reward 与 action 更完整地写成轨迹生成问题。
+  \item \href{https://arxiv.org/abs/2006.04779}{\textbf{Conservative Q-Learning}}：offline RL 中 pessimism 与 distributional support 的另一条路线。
+  \item \href{https://arxiv.org/abs/2004.07219}{\textbf{D4RL}}：offline-RL dataset 与 normalized evaluation protocol。
+  \item \href{https://arxiv.org/abs/1805.00909}{\textbf{RL and Control as Probabilistic Inference}}：optimality variable、maximum entropy 与 inference 视角。
 \end{itemize}
+}
 
 \end{document}

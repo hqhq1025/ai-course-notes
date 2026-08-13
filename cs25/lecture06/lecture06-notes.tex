@@ -1,593 +1,562 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 06：Perceiver 与 Perceiver IO——用 latent bottleneck 统一高维输入与结构化输出}
+\renewcommand{\noteauthors}{基于 Drew Jaegle 讲座、官方手动字幕与 Perceiver / Perceiver IO / RAFT 原始论文整理}
+\renewcommand{\notedate}{CS25 V1 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-15}
+\renewcommand{\videoduration}{58:58}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=wTZ3o36lXoQ}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25] Perceiver and Perceiver IO — Andrew Jaegle, DeepMind}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2021}
-\newcommand{\videochannel}{Stanford CS25}
-\newcommand{\videopublishdate}{2021}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=GV8-6ZgJVRk}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\makecscover
 
-\tableofcontents
-\newpage
+\section{来源审计与动机：为什么需要通用感知架构}
 
-\section{引言：通用架构的动机}
+本讲讨论的不是“再做一个视觉 Transformer”，而是一个更基础的接口问题：如果输入可能来自图像、声音、触觉、点云、事件相机、文本、蛋白质或科学仪器，我们是否必须为每种数据重新手工设计卷积、tokenizer、局部邻域和专用 decoder？Perceiver 的目标是尽量减少这种逐模态工程，把数据先视为一个带特征与位置的数组，再用统一 attention 接口完成编码、处理和解码。
 
-Andrew Jaegle 来自 DeepMind，介绍了 \textbf{Perceiver} 系列架构的研究动机和设计。核心目标是开发\textbf{通用感知架构}——一个能处理任意模态输入（图像、音频、视频、点云、文本等）的单一模型。
+本次重写以当前 Stanford Online 官方上传 `wTZ3o36lXoQ` 为时间基准。旧讲义引用的 `GV8-6ZgJVRk` 已下线；当前视频提供 1,399 条官方手动英文字幕。录像没有公开独立 slide PDF，因此从 1080p 视频中恢复 39 张完整教学页；重复动画、Q\&A 反复跳页和光流视频中间帧被有意合并，但相应口头解释进入正文与 teacher-voice ledger。
 
-\begin{importantbox}{为什么需要通用架构？}
-\begin{itemize}
-    \item 现实世界的数据模态极其多样（视觉、听觉、触觉、本体感觉、语言等）
-    \item 为每种模态设计专用架构效率低下且不可持续
-    \item 人类大脑能用统一的神经计算处理多种感知输入
-\end{itemize}
-\end{importantbox}
+\lecturefigure{slide-01-why-understand-all-modalities.jpg}{为什么要理解所有数据模态：现实世界的数据远不止图像与文本。}{Stanford Online 当前官方视频 00:00:58--00:01:53。}
 
-\section{标准 Transformer 的瓶颈}
-
-\subsection{自注意力的二次复杂度}
-
-标准 Transformer 的自注意力复杂度为 $O(N^2)$，其中 $N$ 是序列长度。对于高维感知数据：
-\begin{itemize}
-    \item 图像 $224 \times 224 = 50176$ 像素
-    \item 音频 48kHz $\times$ 数秒 = 数十万采样点
-    \item 视频 = 帧数 $\times$ 像素数，轻松达到百万级
-\end{itemize}
-
-直接在这些序列上做自注意力在计算上不可行。
-
-\subsection{本章小结}
-
-标准 Transformer 的二次复杂度是构建通用感知架构的主要障碍。Perceiver 通过引入潜在瓶颈来解决这个问题。
-
-\section{Perceiver：交叉注意力瓶颈}
-
-\subsection{核心架构}
-
-\begin{importantbox}{Perceiver 的关键设计}
-引入一组\textbf{可学习的潜在变量}（latent array），维度远小于输入。处理流程：
-\begin{enumerate}
-    \item \textbf{交叉注意力}：潜在变量（query）从输入数据（key, value）中提取信息。复杂度 $O(M \times N)$，其中 $M \ll N$
-    \item \textbf{自注意力}：潜在变量之间进行自注意力计算。复杂度 $O(M^2)$
-    \item 重复上述步骤（迭代细化）
-\end{enumerate}
-这样，计算复杂度主要由 $M$（潜在变量数量）决定，与输入大小 $N$ 解耦。
-\end{importantbox}
-
-\begin{knowledgebox}{与 Slot Attention 的关系}
-Perceiver 的潜在变量类似于 Slot Attention 中的 ``slots''——两者都使用可学习的向量从输入数据中提取信息。但 Perceiver 更通用，不局限于对象分割。
+\begin{knowledgebox}{什么是 inductive bias}
+Inductive bias（归纳偏置）是架构预先写入的结构假设。例如卷积假设局部邻域重要且平移共享；tokenizer 假设某种离散子词边界；图神经网络假设输入由节点和边组成。偏置能提高数据效率，却也限定适用数据形态。
 \end{knowledgebox}
 
-\subsection{位置编码的角色}
+\teachervoice{Drew Jaegle 的第一个理由非常务实：为每一种传感器和科学数据手工发明偏置，作为研究共同体根本无法持续扩展。通用架构的价值首先是降低“每个新模态一套研究工程”的成本。}
 
-由于 Perceiver 的输入是``扁平化''的字节数组，位置编码至关重要：
-\begin{itemize}
-    \item 使用傅里叶特征（Fourier features）编码位置
-    \item 可以灵活适应不同模态的空间/时间结构
-    \item 不假设任何特定的空间拓扑
-\end{itemize}
+第二个理由是系统维护。传统多模态方案常为视频、音频和文本分别构建 backbone、预处理和 task head，再设计融合模块。它们可以工作，却往往只服务少数固定输入组合，且对采样率、网格形状和模态缺失敏感。Perceiver 希望把架构构建抽象掉，让研究者把精力转向任务、数据和学习目标。
 
-\subsection{本章小结}
+\lecturefigure{slide-02-why-unified-systems.jpg}{从多个专用子系统转向一个可接收异构数组的统一模型。}{Stanford Online 当前官方视频 00:02:58--00:05:09。}
 
-Perceiver 通过交叉注意力将高维输入压缩到低维潜在空间，使计算复杂度不再受限于输入大小。
-
-\section{Perceiver IO：通用输出}
-
-\subsection{从感知到输出}
-
-原始 Perceiver 主要处理分类等简单输出。\textbf{Perceiver IO} 将通用性扩展到输出端。
-
-\begin{importantbox}{Perceiver IO 的输出机制}
-使用\textbf{输出查询}（output query）通过交叉注意力从潜在变量中读取信息：
-\begin{enumerate}
-    \item 定义与目标输出对应的查询向量
-    \item 这些查询向潜在变量做交叉注意力
-    \item 得到任意大小和结构的输出
-\end{enumerate}
-输出大小独立于潜在变量数量，实现了$O(\text{output size})$的线性缩放。
+\begin{importantbox}{“通用”不等于“无假设”}
+Perceiver 仍假设输入可以表示为有限数组，attention 可以学习元素关系，位置/模态信息可作为特征提供，并且有足够数据恢复任务结构。它减少的是\textbf{模态专用架构假设}，不是消除全部先验。
 \end{importantbox}
 
-\subsection{多模态多任务应用}
-
-Perceiver IO 可以用\textbf{同一个架构}处理：
-\begin{itemize}
-    \item 图像分类和目标检测
-    \item 光流估计（dense prediction）
-    \item 自然语言理解
-    \item 多模态输入（如视频 + 音频 + 文本）
-    \item 星际争霸 II 游戏
-\end{itemize}
-
-\begin{knowledgebox}{将任何数据视为表格数据}
-Perceiver 将所有输入数据视为``表格数据''——一个 $N \times C$ 的数组，其中 $N$ 是元素数量，$C$ 是每个元素的特征维度。位置编码提供结构信息。这种统一视角是通用性的关键。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Perceiver IO 将通用性从输入端扩展到输出端，真正实现了``一个架构处理所有模态''的愿景。
-
-\section{Perceiver Training Regimes}
-
-\subsection{多模态数据的调度}
-
-Perceiver 的训练数据池极其多样：视觉、音频、点云、文本、视频都以统一格式投喂。课程强调持有一个混合数据流，可以用一个 weighted sampler 控制各模态在一个 batch 中的比重。
-
-\begin{table}[H]
-\centering
-\caption{Perceiver 训练常用模态与有效约束}
-\begin{tabular}{lll}
-\toprule
-模态 & 样本量 & 关键约束 \\
-\midrule
-图像 & 数百万张 & 增量卷积特征、傅里叶位置编码 \\
-音频 & 数千小时 & 节点映射到时间轴，增加 temporal stride \\
-视频 & 数十万 clip & 时间/空间 attention 分离 \\
-文本 & 数十亿 token & 仅用 embedding + attention mask \\
-多模态 & 各类组合 & 使用 modality embedding + cross attention \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-课程建议采用 curriculum learning：先训练图像/文本单模态，然后逐渐融入 video/frame 级别的数据——这样可以让潜在变量逐步习得多模态语义。
-
-\subsection{优化与正则}
-
-训练 Perceiver 也需关注 regularization：
-
-\begin{itemize}
-    \item \textbf{LayerNorm} 用于每个 cross/self attention 层，避免梯度爆炸
-    \item \textbf{DropPath} 维持训练稳定，尤其在大模型上
-    \item \textbf{Attention Dropout} 的 keep-rate 设置在 0.9 左右就能保持信息流
-    \item \textbf{Fourier features} 的频率采样必须跨模态一致，否则位置编码会塌缩
-\end{itemize}
-
-\begin{knowledgebox}{提前训练 vs 微调}
-课程区分了 ``foundation pretraining''（用尽可能多模态数据预训练）与 ``task-specific fine-tuning''（用 LoRA 之类的 adapter 在特定任务上微调）。Perceiver 倾向把通用部分在 pretraining 阶段完成，只在少量任务上微调 output queries。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Perceiver 的训练是一个不断引入新模态、不断调节正则与 dropout 的过程。混合采样、curriculum 策略与 Fourier 位置编码配合让模型在保持计算高效的同时吸收多样输入。
-
-\section{Performance \& Deployment Considerations}
-
-\subsection{计算需求与瓶颈}
-
-相比标准 Transformer，Perceiver 的 compute budget 主要集中在 latent self-attention，模型大多数时间在 N（输入）与 M（潜在）之间做 cross attention。
-
-\begin{warningbox}{潜在变量数量不是越大越好}
-M 越大计算越慢，但信息密度会提升；课程经验是在 256—512 之间寻找最佳 trade-off。监控指标包括 cross attention FLOPs、latent attention latency 和 memory footprint。
-\end{warningbox}
-
-课程推荐部署：
-\begin{itemize}
-    \item \textbf{Batch inference}：在无实时约束的 batch 任务中，先将输入压缩到 chunk，再依次喂入 cross attention
-    \item \textbf{Streaming input}：用 sliding window 的 Fourier encoding 让模型逐步消费 audio/video
-    \item \textbf{Distillation}：用 Perceiver 生成的 embeddings supervision light-weight student 模型
-\end{itemize}
-
-\subsection{工程部署技巧}
-
-实际部署时，建议：
-\begin{enumerate}
-    \item 把 Fourier features 做成可缓存的 tensor，避免每次重算
-    \item 使用 mixed precision（bfloat16）减少显存
-    \item 预先生成 latent tokens 的 key cache，在 multi-view/multi-frame 任务中复用
-\end{enumerate}
-
-\begin{importantbox}{部署前的跑通检查}
-候选部署版本必须满足三个条件：可复制的 cross attention output、稳定的 init scheme 和一致的 normalization track。特别是在多模态任务中，任何一个 modality 的数据偏差都可能让分布漂移。
-\end{importantbox}
-
-\subsection{本章小结}
-
-Perceiver 把 compute 重心放在 latent cross attention，部署时要关注潜在变量数量、位置编码缓存以及 mixed precision。Distillation/streaming 是现实中让 Perceiver 进入生产的重要手段。
-
-\section{Applications and Benchmarks}
-
-\subsection{Vision, Audio and Beyond}
-
-DeepMind 使用 Perceiver 处理多个基准，包括 Imagenet、AudioSet、LibriSpeech、Kinetics、DeepMind Control 等。课程演示了 unified architecture 只需替换 output query 即可完成 classification/motion prediction/text generation。
-
-\begin{table}[H]
-\centering
-\caption{Perceiver 在几个 benchmark 上的表现（示意）}
-\begin{tabular}{lccc}
-\toprule
-基准 & 模型 & 主要指标 & 备注 \\
-\midrule
-Imagenet & Perceiver + ViT heads & top-1 86.5\% & 接近 ResNet 152 \\
-AudioSet & Perceiver with spectrogram input & mAP 0.41 & 领先 CNN baseline \\
-Kinetics & Perceiver IO & top-1 74.0\% & 仅用 video + audio \\
-DeepMind Control & Perceiver + RL agent & reward beat SOTA & 与 Dreamer V3 相关研究 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{未来方向与挑战}
-
-课程指出三条延展：1) 引入更多 structured output queries 以处理图像生成；2) 把 Perceiver 嵌入 agentic pipeline（与 Aligned LLM 组合）；3) 结合 differentiable rendering 处理 3D 任务。
-
-\begin{knowledgebox}{Perceiver 的开放挑战}
-数据融合后冷启动仍然是问题：如何在缺乏某一模态的前提下保持输出的一致？同时，如何把 Perceiver 生成的 embeddings 转成可微分的 controller signal 也是大的研究方向。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Perceiver 在 vision/audio/multimodal benchmark 上表现优异，但要进入更广泛应用，仍需解决 hybrid output alignment、3D rendering 包装和 agentic 模态切换等挑战。
-
-\section{Lecture Frame Gallery \& Key Quotes}
-
-\subsection{General Purpose Goal (00:00:16)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{Andrew Jaegle at 00:00:16 emphasises ``general purpose architectures'' as the foundational objective.}
-\end{figure}
-
-课程开场曾反复提到``general purpose architecture''，这是设计 Perceiver 时的一条主线：输入扁平化、latent skeleton 始终保持固定。
-
-\subsection{Cross Attention Workflow (00:04:21)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{The slide at 00:04:21 depicts the cross-attention workflow from inputs to latent array.}
-\end{figure}
-
-这个图强调 cross attention 是全模态的接入点，latent array 只需关注非常紧凑的 representation。
-
-\subsection{Perceiver IO Output Queries (00:08:12)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{At 00:08:12 the lecture illustrates how output queries flexibly read latent state for diverse tasks.}
-\end{figure}
-
-输出 query 是 Perceiver IO 的核心，课程建议先把查询布局定义好，再匹配不同任务。
-
-\subsection{Multimodal Case Studies (00:12:40)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{A slide at 00:12:40 shows vision, audio, and control benchmarks handled with the same architecture.}
-\end{figure}
-
-最后课程总结时展示多个 benchmark，使得 ``one architecture for all modalities'' 成为具体的得分表。
-
-\subsection{本章小结}
-
-这些图像和时间戳把抽象的 five-part pipeline 具象化，提醒我们每个关键概念都有具体 visual clue 可追溯。
-
-\subsection{Latent Routing Highlight (00:16:58)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{A slide around 00:16:58 shows latent routing profiles feeding into downstream tasks.}
-\end{figure}
-
-This frame demonstrates how routing weights decide which latent attends to which modality, reinforcing modularity.
-
-\subsection{Benchmark Summary Slide (00:14:05)}
-
-\newpage
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth,height=0.7\textheight,keepaspectratio]{cover.jpg}
-\caption{At 00:14:05 the lecture recaps benchmark numbers for vision, audio and control simultaneously.}
-\end{figure}
-
-The visual summary is a cue to keep metrics aligned when comparing Perceiver to other architectures.
-
-\section{Evaluation Pipeline \& Logging}
-
-\subsection{Generalization Metrics}
-
-课程强调 Perceiver 需要多个层面的 evaluation metric：不仅是 top-1 accuracy，还要有 multimodal retrieval score、alignment recall 和 runtime variance。
-
-\begin{table}[H]
-\centering
-\caption{Perceiver evaluation signal mix}
-\begin{tabular}{lcc}
-\toprule
-Metric & Purpose & Notes \\
-\midrule
-top-1 accuracy & Visual classification & Standard ImageNet scoreboard \\
-MAP & AudioSet & Check long-tail event recall \\
-F1 & Multi-label semantics & Controls threshold calibration \\
-Alignment recall & Cross-modal retrieval & Tests output query alignment \\
-Latency percentile & Deployment safety & 95th percentile latency budgets \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Observability Logs}
-
-Logging should capture:
-\begin{itemize}
-    \item input modality counters per batch
-    \item attention head variance across latents
-    \item output query confidence per task
-    \item drift detection on Fourier embedding distribution
-\end{itemize}
-
-\begin{warningbox}{忽视 logging 就等于忽视模型 drift}
-Perceiver 易受 modality drift 影响。一旦 Fourier encoding statistics 变化，attention weights 会偏向部分 token。稳定的 logging pipeline 是性能可复现的前提。
+\begin{warningbox}{统一接口与统一训练是两件事}
+讲座展示同一架构分别用于多种任务，但这些实验大多独立训练。能够复用 encode/process/decode 接口，不等于已经训练出一个同时掌握所有模态的单一模型。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Perceiver 的 evaluation pipeline 需要组合传统 accuracy/recall 与 alignment-specific metric，并与 logging/monitoring 绑定才能在生产中可靠运行。
+Perceiver 的问题起点是模态扩张和系统复杂度。它追求可复用的数组接口与较少的手工结构，而不是宣称领域知识、专用模型或联合多模态训练已不再需要。
 
-\section{Comparison to Alternative Architectures}
+\section{Transformer 的优点与瓶颈：通用性为什么昂贵}
 
-\subsection{Perceiver vs CNN / ViT}
+前一节提出统一架构，本节解释为什么研究从 Transformer 出发。Transformer 的 attention 不强制局部连接，位置通常作为输入特征而不是固定计算拓扑，且大部分计算是规则矩阵乘法。这些性质让它比卷积更容易迁移到未知结构；代价是 raw input 越大，self-attention 的两两比较越昂贵。
 
-课程提供了对比：CNN 处理 grid-like data，ViT 在 moderate sequence length 依赖 patch, 而 Perceiver 在 $O(M N)$ (with $M \ll N$) 的复杂度下跨模态共享 latent skeleton。
+\lecturefigure{slide-03-improving-transformers.jpg}{Transformer 的通用 inductive bias 与输入规模瓶颈。}{Stanford Online 当前官方视频 00:05:10--00:06:01。}
 
-\begin{table}[H]
-\centering
-\caption{Architecture comparison}
-\begin{tabular}{lccc}
+\begin{knowledgebox}{术语表：本讲的核心接口}
+\begin{tabularx}{\textwidth}{L{0.23\textwidth}X}
 \toprule
-Architecture & Input type & Complexity & Strength \\
+术语 & 精确定义 \\
 \midrule
-CNN & Grid images & $O(N)$ per layer & Local inductive bias \\
-ViT & Tokenized patches & $O(N^2)$ & Transformer modelling, needs large data \\
-Perceiver & Any modality & $O(MN + M^2)$ & General modality fusion \\
+non-local & 任意输入元素原则上都可直接相互注意，不预先限制在固定邻域。 \\
+position as feature & 坐标被编码进 token 特征，而不是用卷积核或图边硬限制连接。 \\
+latent array & 固定或较小数量的可学习向量，作为处理大输入的内部工作空间。 \\
+cross-attention & query 与 key/value 来自不同数组；此处 latent 查询原始输入。 \\
+output query & 指定“预测什么、在哪个位置、哪个模态或哪个任务”的 decoder 查询。 \\
+Fourier feature & 用多频率正弦/余弦把连续坐标映射成可学习的高频特征。 \\
+byte-level language & 直接以 UTF-8 bytes 等低层符号建模，不依赖子词 tokenizer。 \\
+optical flow & 对相邻帧中每个像素预测二维运动向量的稠密结构化输出。 \\
 \bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Interpretability Difference}
-
-与 CNN/ViT 的 layer-wise feature map 不同，Perceiver 的 latent array 可以被读取为 attention map with limited latent count. 课程建议 logging latent activations to track which modals dominate each query.
-
-\subsection{本章小结}
-
-Perceiver 超越 CNN/ViT 主要是 generality：任何 modality 都能 through same latent arrays，加上 interpretability hooks 可以追踪 attention distribution。
-
-\section{Design Considerations for General Purpose Architectures}
-
-\subsection{Motivation from the Lecture}
-
-Andrew 开场就强调“general purpose architectures”的目标（00:00:16），因为现实里的数据模态太多，他希望 build 一个单一模型能处理所有。课程建议从一开始就把架构设计成可以自由加入新模态：输入 flatten 成 $N \times C$ 表格，再用 Fourier features 描述位置，这使得新模态只需定义自己的 embedding 和 mask。
-
-\begin{warningbox}{避免为每个模态再次发明轮子}
-课程提醒我们不要为每个 modality 写一个全新的 attention stack，而是把差异 push 到 embedding + mask 层。这样 latent queries 依然保持一致，只需微调 output queries 就能适配任务。
-\end{warningbox}
-
-\subsection{Practical Engineering Advice}
-
-在工程实践中，这意味着：
-\begin{enumerate}
-    \item 先定义一个“modality registry”，记录每种输入的 dimension、stride、Fourier frequency
-    \item 用 shared latent array 和 attention head，只在 cross attention 中注入 per-modality bias
-    \item 通过 gating 机制让 latent variables 动态选择哪些 modalities 的信息最重要
-    \item 在 inference pipeline 中预编译 Fourier features，当新 modal 加入时，只需更新 registry
-\end{enumerate}
-
-\begin{knowledgebox}{``General purpose'' 的工程拆解}
-``General purpose'' 不意味着 one-size-fits-all，而是 ``same skeleton, replaceable muscles''：Perceiver 保留 latent skeleton，而 input/output 再通过 structured queries/embeddings 重新组合。工程价值在于保持 latent 一致性，尽量少改核心 attention stack。
+\end{tabularx}
 \end{knowledgebox}
 
-\subsection{本章小结}
+标准 attention 将输入 $X\in\mathbb{R}^{M\times d}$ 投影为 query、key 和 value：
 
-课程强调通用架构需要从 day one 就把 modal registry、embedding scheme 和 gating 机制设计好。只有让 latent skeleton 可重复使用，才能在后续不断加入新 modality。
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\qquad
+\operatorname{Attn}(X)=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V.
+\]
 
-\section{Observability \& Metrics for Perceiver Systems}
+其中，$M$ 是输入元素数；$d$ 是表示维度；$W_Q,W_K,W_V$ 是投影矩阵；$d_k$ 是 key 维度。矩阵 $QK^\top$ 的形状为 $M\times M$，因此注意力分数计算和存储随 $M^2$ 增长。
 
-\subsection{Monitoring Signal Design}
+\lecturefigure{slide-04-standard-qkv-attention.jpg}{标准 QKV attention：每个输入元素与全部 key 比较。}{Stanford Online 当前官方视频 00:06:02--00:08:01。}
 
-Perceiver 系统在训练与部署时都有独特的 observability 需求：
-\begin{itemize}
-    \item \textbf{Latent Attention Heatmaps}：监测 cross attention weights 是否 collapse，尤其是在 multi-view 任务里
-    \item \textbf{Modality Balance Metrics}：统计不同 modality 被 attention 的 frequency，保证没有 modality 被忽略
-    \item \textbf{Fourier Drift}：追踪 Fourier encoding 的 statistical moments，避免 position embedding drift 造成 alignment 漂移
-\end{itemize}
-
-\subsection{Deployment Telemetry}
-
-在 production pipeline 中：
-\begin{itemize}
-    \item 定期记录 inference latency 分布、cross attention FLOPs、memory footprint
-    \item 用 synthetic queries（如 zero-shot output query）做 sanity check，确保 output distribution 稳定
-    \item 若有 streaming 模式，记录 window overlap ratio 和 cache hit rate
-\end{itemize}
-
-\subsection{本章小结}
-
-Perceiver 的 observability 需要关注 attention heatmap、modality balance 和 Fourier drift 等信号，同时 telemetry 应覆盖 latency/memory/streaming window，确保快速定位问题。
-
-\section{Architectural Variants \& Interpretability}
-
-\subsection{Latent Stack Design}
-
-课程指出，latent array 的深度（stack layers）和每层的 attention heads 数量显著影响性能。Shallow latent stack 更适合快速前向推理，而 deeper structure 更容易捕捉长依赖。
-
-\begin{itemize}
-    \item \textbf{Single-layer latent}：适合 low-latency inference，cross attention 执行次数少，适用于 real-time audio
-    \item \textbf{Multi-layer latent}：每层都包括 self-attention + cross attention，可在 vision + text 的 multi-output 任务中提供更丰富的信息融合
-    \item \textbf{Residual routing}：将 cross attention 输出 residual 回 latent，使得每一层都有干净的输入/输出，方便 debug
-\end{itemize}
-
-\begin{knowledgebox}{Interpretability via latent queries}
-每个 latent variable 在训练中逐步学习特定模式，例如聚焦于局部图像 patch 或特定频段。在 visualization 中，这些 latent 可以用 attention weights 映射回原始 input，便于调试和检测 bias。
-\end{knowledgebox}
-
-\subsection{Modal Partitioning \& Routing}
-
-Perceiver 可以按模态划分输入 head（如 vision head、audio head），并在 cross attention 里提供 routing weights，课程建议将 modality embedding 统一映射到 latent space，以减小 domain shift。
-
-\begin{importantbox}{Routing gate evaluation}
-训练时可在 cross attention 里引入 gating mechanism：每个 latent 先决定“听”哪种 modality，再 fallback 到无条件 latent。这种 gating 让 Perceiver 在缺失某模态时仍然有鲁棒性。
+\begin{importantbox}{Self-attention 的输入规模成本}
+忽略常数时，一层 attention 的核心分数成本约为 $\mathcal{O}(M^2d)$，注意力矩阵内存约为 $\mathcal{O}(M^2)$。若图像从 $224^2$ 像素扩大到视频或高分辨率多模态流，$M$ 的增长会迅速压倒模型深度扩展。
 \end{importantbox}
 
-\subsection{本章小结}
+\subsection{Non-locality：昂贵但通用的连接方式}
 
-Latent stack 深度与 modal routing 是 Perceiver 可解释性和模块化的核心，合理调度 cross attention 让不同模态在 latent 中形成清晰轨迹，有助于排查 hallucination 和 bias。
+卷积预设邻近像素更相关，能用局部 kernel 高效处理网格。Attention 则让远距离元素直接交互，因此可处理集合、长距离匹配和未知拓扑。讲者把 non-locality 视为通用性的关键，而不是需要完全消除的浪费。
 
-\section{Case Studies: Vision, Audio, Robotics}
+\lecturefigure{slide-05-why-non-locality.jpg}{Non-local attention 不预先规定局部邻域，卷积则以网格邻接限制连接。}{Stanford Online 当前官方视频 00:08:02--00:08:37。}
 
-\subsection{Vision Applications}
+\teachervoice{老师的判断不是“attention 永远优于 convolution”，而是两者位于不同 Pareto 点：已知图像结构时，卷积往往更快、更省数据；面对事件相机、细胞、点云或未知科学数组时，我们可能连正确的卷积邻域都不知道。}
 
-DeepMind 在 ImageNet、ImageNet-21k 等 benchmark 上使用 Perceiver IO 生成 classification logits，加上 ViT-style head，可突破 86\% top-1。课程特别强调训练时使用 large crop + RandAugment，使得 position-invariant features 经常被 latent 吸收。
+\subsection{Position as feature：把坐标交给学习，而不是写进连线}
 
-\begin{itemize}
-    \item \textbf{Feature reuse}：保持 Fourier position encoding 与 ViT 相似，便于迁移
-    \item \textbf{Patch mixing}：latent cross attention 每次从不同 patch 池抽取信息，防止注意力坍缩
-    \item \textbf{Visual grounding}：Perceiver 可通过 output queries 生成 dense prediction（如 semantic segmentation），只需改变 query layout
-\end{itemize}
+本节关注 non-locality 的配套条件：若 attention 对输入排列天然不敏感，模型必须获得位置才能重建空间、时间或序列关系。Perceiver 将坐标编码和内容拼接，让架构知道“这是哪里”，却不强制“只能与谁相连”。这比完全无位置更可用，也比固定局部 kernel 更弱假设。
 
-\subsection{Audio \& Speech}
+\lecturefigure{slide-06-why-featurize-position.jpg}{将位置编码成特征，使 attention 学习空间关系而非使用硬连接规则。}{Stanford Online 当前官方视频 00:08:38--00:09:29。}
 
-AudioSet 和 LibriSpeech 上，Perceiver 直接消费 spectrogram 作为 input token。课程提醒：必须对 time dimension 做 stride pooling，否则 cross attention FLOPs 无法控制。为了捕捉 long-range dependencies，还引入了 relative position bias。
-
-\begin{warningbox}{依赖时间结构的约束}
-若不提供 temporal encoding，audio 模态会丢失节奏结构，模型很容易只依赖局部 patch。课程用 relative bias + time dilation 解决这个问题。
+\begin{warningbox}{弱偏置不等于位置无关}
+若任务要求空间输出，模型仍必须区分坐标。不给位置会让不同排列不可辨；给位置但允许全局 attention，才是“弱化局部结构”，不是“删除结构”。
 \end{warningbox}
 
-\subsection{Robotics \& Control}
+\subsection{Scalability 与 generality 的张力}
 
-Perceiver 在 DeepMind Control Suite 里的实现结合 state/action embedding，cross attention 将 observations 映射到 agent 的 action space。课程演示了 Perceiver 输出可以直接转化为 RL policy logits，使得 agent 直接从 multi-modal sensory data 中推断动作。
+讲座把 convnet 与 Transformer 放在一张概念图上：convnet 对网格高度优化，复杂度可近似线性，但适用输入更窄；Transformer 适合一般集合，却承受二次 attention。Perceiver 的设计目标是保留非局部、位置特征化和权重共享，同时重写输入规模复杂度。
 
-\begin{knowledgebox}{Perceiver acting as state estimator}
-通过构造 output queries 对应到 agent 的 action/action history/goal embedding，Perceiver 可作为 state estimator，替代传统的 LSTM-based policy。
+\lecturefigure{slide-07-scalability-vs-generality.jpg}{ConvNet 与 Transformer 在输入结构假设和复杂度上的权衡。}{Stanford Online 当前官方视频 00:09:30--00:09:41。}
+
+\begin{knowledgebox}{读图：不是从左到右的“进化路线”}
+图中两端代表不同优化目标。若任务固定为图像分类且数据有限，convnet 的局部偏置可能更优；若输入结构变化频繁，Transformer/Perceiver 的统一接口可能降低开发成本。评价应同时包含质量、数据量、速度和跨域复用。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-Perceiver 已经在视觉、音频和控制任务中形成可重复的应用模板：vision 利用 ViT head，audio 强调 relative bias，control 则把 output queries 映射为 agent action。这些 case study 证实了它的通用性。
+Transformer 的通用性来自 non-local attention、位置特征化与共享矩阵计算，但 raw input self-attention 付出 $M^2$ 成本。Perceiver 要解决的正是“保留接口，缩小昂贵工作空间”。
 
-\section{Research Agenda \& Engineering Next Steps}
+\section{Perceiver：把大输入压入小 latent workspace}
 
-\subsection{Open Problems}
+本节进入 Perceiver 的核心。它不在所有 raw inputs 上反复做 self-attention，而是维护 $N$ 个 learned latents，其中 $N\ll M$。一次 cross-attention 让 latent queries 从大输入读取信息，后续深层 self-attention 只发生在小 latent array 内。
 
-课程列出三条研究方向：
+\lecturefigure{slide-08-perceiver-title.jpg}{Perceiver：通过 iterative attention 扩展 Transformer，同时保持较弱的领域假设。}{Stanford Online 当前官方视频 00:09:42--00:10:39。}
 
-\begin{enumerate}
-    \item \textbf{Structured output alignment}：如何让 output query 同时兼顾 dense prediction 与 generative output？
-    \item \textbf{Modality dropout}：在某个模态缺失时，latent 能否自动重新分配 attention？这需要动态 gating。
-    \item \textbf{Data efficiency}：多模态数据稀缺，如何让 Perceiver 在少样本下仍保持表现？课程提到 LoRA-style adapter 是潜在方案。
-\end{enumerate}
+\subsection{为什么 raw-input self-attention 不可承受}
 
-\subsection{Engineering Checklist}
+对高分辨率图像，若每像素都是 token，$M=224\times224=50{,}176$，attention score 已有约 25 亿个元素；视频再乘时间帧数。ViT 通过 patching 减小 $M$，但 patch 大小与二维卷积成为图像专用选择。Perceiver 选择保留细粒度输入，却用 latent 数量控制深层处理规模。
 
-\begin{table}[H]
-\centering
-\begin{tabular}{p{0.2\textwidth} p{0.26\textwidth} p{0.26\textwidth}}
-\toprule
-维度 & 现阶段实践 & 需要探索 \\
-\midrule
-Modality balancing & Weighted sampler + domain embedding & Curriculum + active sampling \\
-Latency control & Mixed precision + frequency caching & Dynamic latent scaling \\
-Explainability & Visualize latent attention maps & Add causal probes \\
-Deployment & Distillation + streaming & Automated retrieval of new modalities \\
-\bottomrule
-\end{tabular}
-\caption{Perceiver 进一步工程化的关注事项}
-\end{table}
+\lecturefigure{slide-09-self-attention-scales-poorly.jpg}{Self-attention 表达力强，但图像像素级输入导致二次计算与内存。}{Stanford Online 当前官方视频 00:10:40--00:16:15。}
+
+\begin{warningbox}{线性输入 scaling 的前提}
+Perceiver 对输入长度线性，是在 latent 数 $N$ 固定或增长很慢时成立。若为了更高容量让 $N$ 与 $M$ 同比例增长，cross-attention 的 $MN$ 与 latent self-attention 的 $N^2$ 仍会变贵。
+\end{warningbox}
+
+\subsection{Cross-attention：用 N 个 queries 读取 M 个 inputs}
+
+令输入为 $X\in\mathbb{R}^{M\times d_x}$，latent array 为 $Z\in\mathbb{R}^{N\times d_z}$。Cross-attention 使用 latent 生成 query、input 生成 key/value：
+
+\[
+Q=ZW_Q,\qquad K=XW_K,\qquad V=XW_V,
+\qquad
+Z'=\operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V.
+\]
+
+其中，$QK^\top$ 形状为 $N\times M$；$M$ 是大输入长度，$N$ 是较小 latent 数。Cross-attention 成本约为 $\mathcal{O}(MNd)$，若 $N$ 固定则对 $M$ 线性；之后 latent self-attention 成本约为 $\mathcal{O}(N^2d)$。
+
+\lecturefigure{slide-10-cross-attention-linear-scaling.jpg}{Cross-attention 以小 query array 读取大 input array，使输入规模项从 $M^2$ 变为 $MN$。}{Stanford Online 当前官方视频 00:16:16--00:18:59。}
+
+\begin{importantbox}{Latent bottleneck 的三重作用}
+它既是计算瓶颈，也是信息压缩接口，还是模态无关的内部坐标系。输入多大、特征维度多少，都先通过 cross-attention 写入固定宽度 latent；模型深度主要花在 latent processing，而不是 raw input pairwise attention。
+\end{importantbox}
+
+\begin{knowledgebox}{读图：三个复杂度模块要分开}
+输入投影和 value 聚合对 $M$ 线性；attention map 是 $N\times M$；latent Transformer 是 $N\times N$。因此不能只说“全部线性”：当 latent 很大或 decoder outputs 很多时，其他项会重新成为瓶颈。
+\end{knowledgebox}
+
+\subsection{完整 Perceiver：Encode、Process、Readout}
+
+原始 Perceiver 用 learned latent array cross-attend 输入，再在 latents 上重复 self-attention/MLP；最终通过 pooling 或紧凑 readout 完成分类。Latents 可以视为 learned queries 或共享工作寄存器，它们不是输入中的固定区域，也不保证每个 latent 对应可解释对象。
+
+\lecturefigure{slide-11-perceiver-architecture.jpg}{原始 Perceiver：输入 cross-attention、latent Transformer 重复与紧凑输出。}{Stanford Online 当前官方视频 00:19:00--00:21:41。}
+
+\begin{lstlisting}[caption={Perceiver encode/process/readout 的概念性伪代码。}]
+def perceiver(inputs, latents, repeats):
+    latents = cross_attention(query=latents, key=inputs, value=inputs)
+    for _ in range(repeats):
+        latents = latent_self_attention(latents)
+        latents = latent_mlp(latents)
+    return task_readout(latents)
+\end{lstlisting}
+
+\teachervoice{讲者说明 latent 是随机初始化并学习的，类似 learned recurrent state；部分重复模块可以共享权重。图中的 cross-attention 也包含 residual 和 MLP，不能把它误画成只有一个裸 $QK^\top V$。}
+
+\begin{warningbox}{Latent 不是无损压缩保证}
+$N\ll M$ 意味着模型必须把任务相关信息压入有限 workspace。若任务要求保留所有细节，瓶颈可能限制质量；Perceiver IO 通过 task-specific output queries 提高读取能力，但不会自动恢复编码阶段丢失的信息。
+\end{warningbox}
 
 \subsection{本章小结}
 
-Perceiver 的研究前沿在于结构化输出、模态缺失与数据效率；工程上则需要更好的 balancing、explainability 与 deployment patterns。这些既是挑战也是未来演进方向。
+Perceiver 用 $N$ 个 learned latents 从 $M$ 个输入读取信息，将深层处理从 $M^2$ 移到 $MN+N^2$。线性输入 scaling 的条件是 latent 数受控，且 latent bottleneck 足以承载任务信息。
+
+\section{结构偏置的边界：ViT、Cross-attention、Fourier 与 ImageNet}
+
+有了 latent bottleneck，本节回答两个问题：Perceiver 与 ViT/已有 cross-attention 有何不同？它又如何在不依赖二维卷积的情况下获得位置？讲座并未声称所有结构先验都无用，而是通过对照和消融寻找“最少但足够”的输入信息。
+
+\subsection{与 ViT 对照：Patching 本身就是图像假设}
+
+前一节给出了 Perceiver 的统一瓶颈，本节先与最接近的视觉 Transformer 对照。ViT 把图像分成固定二维 patches，再用卷积或线性投影生成 tokens。这一方案对图像非常有效，却需要为不同网格、点云或传感器重新定义 patching。Perceiver 可以直接接收像素/数组元素，并把位置作为额外特征。
+
+\lecturefigure{slide-12-contrast-vit.jpg}{ViT 通过二维 patch embedding 降低 token 数，Perceiver 避免把网格 patch 写进核心接口。}{Stanford Online 当前官方视频 00:21:42--00:22:55。}
+
+\begin{knowledgebox}{读图：ViT 与 Perceiver 优化的瓶颈不同}
+ViT 先用 patch size 减少 $M$，然后仍在 patch tokens 上 self-attend；Perceiver 保留更细输入，通过 latent queries 控制 workspace。前者通常更高效且成熟，后者更容易迁移到非网格或异构数组。
+\end{knowledgebox}
+
+\teachervoice{Q\&A 中老师给出明确立场：视觉领域的 convolution/attention hybrids 在图像问题上追求速度与质量的精确 Pareto 点，非常重要；Perceiver 团队追求的是尽可能 general、同时仍保持可用性能。两条路线不是互相否定。}
+
+\subsection{Cross-attention 不是 Perceiver 独有}
+
+DETR 用 object queries 从卷积特征图解码 bounding boxes；Slot Attention 用 learned slots 竞争性读取特征并形成对象中心表示。Perceiver 的新意在于把这类不对称 attention 提升为通用输入瓶颈，并反复在 latent workspace 中处理。
+
+\lecturefigure{slide-13-cross-attention-detr.jpg}{DETR 与 Slot Attention 等视觉工作中的 cross-attention 先例。}{Stanford Online 当前官方视频 00:22:56--00:23:11。}
+
+\begin{importantbox}{方法归属要准确}
+Perceiver 没有发明 cross-attention。其贡献是组合：大输入到小 learned latent 的不对称读取、latent 内部深度处理、弱模态假设，以及 Perceiver IO 的输出-query 解码。
+\end{importantbox}
+
+\subsection{Fourier positional features：用频率基函数表示坐标}
+
+为了在不硬编码局部连接的情况下表达细粒度位置，本节对二维坐标 $p=(x,y)$ 构造多频率正弦/余弦特征：
+
+\[
+\gamma(p)=\big[\sin(2\pi f_1x),\cos(2\pi f_1x),\sin(2\pi f_1y),\cos(2\pi f_1y),\ldots\big].
+\]
+
+其中，$f_k$ 是从低频到 Nyquist 附近的一组频率；$x,y$ 是归一化坐标；$\gamma(p)$ 与 RGB 或其他内容特征拼接。低频表达大尺度位置，高频帮助区分细粒度坐标。
+
+\lecturefigure{slide-14-fourier-position-encodings.jpg}{二维 Fourier positional encodings：多频率坐标特征与 RGB 拼接。}{原始讲解 00:26:18--00:26:55；完整 progressive build 在当前官方视频 00:39:52 再次显示。}
+
+\teachervoice{老师报告一个具体经验：在图像输入上，把 Fourier position 与 RGB \textbf{concatenate} 通常比先投影后相加更好。他并未给出确定机制，只猜测图像内容特征不像词 embedding 那样稀疏；这种“观察可靠、解释未定”的状态应被保留。}
+
+\begin{warningbox}{Fourier features 仍然提供真实结构}
+模型虽然没有卷积邻域，但坐标编码明确告诉它每个像素位于二维平面的哪里。若称其“完全不使用图像结构”是不准确的；更准确的说法是结构以输入特征而非固定计算图提供。
+\end{warningbox}
+
+\subsection{Permuted ImageNet：排列不变不等于结构无用}
+
+接下来用一个反直觉实验检验位置特征是否真的替代了固定数组顺序。实验将图像像素顺序随机打乱，只要每个像素仍携带正确位置编码，Perceiver 仍取得相近 ImageNet top-1 结果。这个结果表明架构不依赖输入数组的内存顺序或局部扫描顺序；它不能证明位置、局部性或卷积偏置对数据效率无价值。
+
+\lecturefigure{slide-15-imagenet-permuted-classification.jpg}{ImageNet 标准与 permuted 输入：正确位置特征使模型不依赖数组排列。}{Stanford Online 当前官方视频 00:29:34--00:33:47。}
+
+\begin{knowledgebox}{读表：比较的是数组顺序，不是删除空间}
+Permuted 版本仍附带位置编码，因此模型可以学习哪些像素在空间上相邻。若同时打乱位置标签，任务会变成不同问题。表中结果支持 input-order robustness，而非“二维结构不存在”。
+\end{knowledgebox}
+
+\teachervoice{Q\&A 的重要提醒是：弱偏置模型可能需要更多数据才能自行恢复结构。对 ImageNet 这类大数据，通用性可以被训练出来；小数据场景仍是讲者明确承认的未解决瓶颈。}
+
+\subsection{本章小结}
+
+Perceiver 比 ViT 少写入 patch/grid 假设，但仍使用位置特征。Cross-attention 有丰富先例，贡献在于通用化组合。Permuted ImageNet 展示输入顺序鲁棒性，却不能推翻局部偏置的数据效率优势。
+
+\section{Perceiver IO：把 Output Query 变成通用任务接口}
+
+原始 Perceiver 很适合分类等紧凑输出，但图像重建、语言序列和 optical flow 需要大量结构化 outputs。Perceiver IO 在 latent processor 后加入 decoder cross-attention：每个 output query 从 latents 读取与自己任务、位置或模态相关的信息。
+
+\subsection{先统一 heterogeneous inputs}
+
+不同模态的 raw feature 维度和语义可以不同。视频 token 可能包含 RGB、$(x,y,t)$ 和 modality tag；音频 token 可能包含振幅、时间和 modality tag。通过投影、padding/拼接与位置/模态编码，它们被组成一个 input array，再由同一 latent set cross-attend。
+
+\lecturefigure{slide-16-featurizing-multimodality.jpg}{多模态特征化：内容、位置、时间与 modality tag 组成统一输入数组。}{Stanford Online 当前官方视频 00:33:50--00:40:31。}
+
+\begin{knowledgebox}{概念解释：把数据视为表格}
+每一行是一个输入元素，每列是内容或元数据特征。行数可随模态和分辨率变化，列数通过投影统一。这个视角适合任意有限数组，但不自动解决缺失值、不同采样率、时间对齐和模态不平衡。
+\end{knowledgebox}
+
+\teachervoice{讲者在结尾 Q\&A 直接说：Perceiver 有效地把任何输入当作 tabular data。这里的“表格”是统一数组接口，不等于传统小型 CSV 表格模型，也不意味着类别列、缺失值和因果结构无需专门处理。}
+
+\subsection{Basic Perceiver 与 Perceiver IO}
+
+本节把同一 latent processor 的两种输出接口并排比较。Basic Perceiver 编码大输入、处理 latents，再用平均池化和分类 head 产生一个紧凑输出。它对 ImageNet 分类合适，却无法自然表达“每个像素一个向量”或“每个字节位置一个 token 预测”。
+
+\lecturefigure{slide-17-basic-perceiver-architecture.jpg}{Basic Perceiver：encode scales with input、process independent of input、compact readout。}{Stanford Online 当前官方视频 00:40:32--00:41:33。}
+
+Perceiver IO 添加 output query array $Y_q\in\mathbb{R}^{O\times d}$，由它查询 processed latents $Z$：
+
+\[
+Y=\operatorname{softmax}\!\left(\frac{(Y_qW_Q)(ZW_K)^\top}{\sqrt{d_k}}\right)(ZW_V).
+\]
+
+其中，$O$ 是输出元素数；$Y_q$ 编码输出位置、任务或模态；$Z$ 是 latent array。Decoder cross-attention 成本约为 $\mathcal{O}(ONd)$，所以输入可以很大，但极大输出仍需付出与 $O$ 线性相关的成本。
+
+\lecturefigure{slide-18-perceiver-io-architecture.jpg}{Perceiver IO：输入 cross-attention、latent processing 与 output-query decoder。}{Stanford Online 当前官方视频 00:41:34--00:41:55。}
+
+\begin{importantbox}{Output query 是“问题”，不是空占位符}
+Query 可以包含坐标、模态、任务 ID 或语义标签。Decoder 回答的是：“对于这个输出位置/任务，从共享 latents 中应读取什么？”同一 latent state 可以被不同 queries 解码成图像像素、类别、文本标签或光流向量。
+\end{importantbox}
+
+\subsection{构造 queries：位置决定输出拓扑}
+
+为了把抽象 output query 变成具体任务接口，本节先看图像 autoencoding：它为每个目标像素建立一个带二维位置的 query。模型不需要在 latent workspace 中保留同样数量的 slots；只需在解码时让每个输出位置读取共享 latent。输出顺序可以通过 query coordinates 恢复。
+
+\lecturefigure{slide-19-constructing-output-queries.jpg}{图像 autoencoding 的 output queries：每个像素位置查询共享 latent。}{Stanford Online 当前官方视频 00:42:04--00:42:59。}
+
+\begin{lstlisting}[caption={任务化 output-query 构造的概念性伪代码。}]
+def build_queries(task, positions, modalities):
+    queries = []
+    for position, modality in zip(positions, modalities):
+        query = concat(
+            task_embedding(task),
+            modality_embedding(modality),
+            fourier_position(position),
+        )
+        queries.append(query)
+    return stack(queries)
+\end{lstlisting}
+
+多模态 autoencoding 可以为视频、音频、label 等输出分别使用不同 modality/task query。输入和输出的元素数可以不同，某些模态甚至只输出一个类别，另一些输出高分辨率网格。
+
+\lecturefigure{slide-20-multimodal-query-construction.jpg}{多模态输出 query：按 modality、task 和 position 解码不同大小的输出。}{Stanford Online 当前官方视频 00:43:00--00:43:05。}
+
+\begin{knowledgebox}{读图：共享的是 latent，不是所有 decoder head 参数}
+不同 queries 访问同一 processed latent state，但最后的 projection、loss 和输出通道仍可因任务不同而变化。统一 architecture interface 不要求分类 logits 与 RGB 像素使用完全相同的数值头。
+\end{knowledgebox}
+
+\subsection{ImageNet refinements：架构通用不代表超参数固定}
+
+Perceiver IO 的 ImageNet 表格展示若干训练与模型调整，例如更深网络、clipping、cutmix/mixup 等。它提醒我们：核心 encode/process/decode 接口可复用，但达到强结果仍需要任务训练 recipe，不能把“少领域假设”误读为“无需调参”。
+
+\lecturefigure{slide-21-imagenet-results.jpg}{Perceiver IO 的 ImageNet 配置与结果。}{Stanford Online 当前官方视频 00:43:06--00:43:43。}
+
+\begin{warningbox}{架构对照必须匹配训练 recipe}
+若 Perceiver 使用更长训练、数据增强或不同正则，而 baseline 没有，结果不能只归因于 latent bottleneck。报告应拆分 architecture、optimization、augmentation 与 compute。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Perceiver IO 通过 output queries 将紧凑 latent state 解码为任意结构化输出。输入、处理与输出规模被分离，但 decoder 仍随 output count 线性增长，任务特定 query 和训练 recipe 仍是必要设计。
+
+\section{从 Bytes 理解语言：移除 Tokenizer 的代价与收益}
+
+前一节说明 output queries 可以产生序列，本节把统一接口应用到语言。常见 Transformer 先用 tokenizer 将字符串切成 subwords；这显著缩短序列，却写入词表、脚本和语言特定规则。Perceiver IO 借助 latent bottleneck，可以处理更长的 raw byte sequence，并尝试弱化 tokenizer 假设。
+
+\lecturefigure{slide-22-language-tokenization.jpg}{语言、Transformer 与 tokenization：同一句话可被切成字符、bytes 或 subwords。}{Stanford Online 当前官方视频 00:43:44--00:45:13。}
+
+\begin{knowledgebox}{什么是 byte-level input}
+文本先编码为 UTF-8 bytes，每个 byte 值位于 0--255。它对语言和脚本共享固定字母表，避免未知词；代价是一个字符可能占多个 bytes，序列比 subword tokenization 长得多。
+\end{knowledgebox}
+
+\subsection{为什么移除 tokenizer}
+
+本节把 tokenizer 当作一种可选择的语言偏置来审计。Tokenizer 的词表在高资源语言上有效，却可能把罕见语言、拼写、代码、emoji 或新词切得很碎。不同语言可能需要不同 vocabulary，跨语言系统还要处理归一化和预分词差异。Bytes 提供最低层统一符号，使模型自己学习边界。
+
+\lecturefigure{slide-23-why-remove-tokenizers.jpg}{Tokenizer 的语言依赖与 UTF-8 byte 表示。}{Stanford Online 当前官方视频 00:45:14--00:45:37。}
+
+\teachervoice{老师并没有说 tokenizer “错误”，而是强调它是人工加入的 inductive bias。Bytes 更通用，但将结构学习和长序列成本转移给模型；是否值得取决于数据规模、语言覆盖与计算预算。}
+
+\begin{warningbox}{Token-free 不等于预处理为零}
+Unicode normalization、UTF-8 编码、padding、masking 和 byte position 仍是预处理选择。Byte vocabulary 固定只消除了 subword segmentation，不消除文本规范化和数据清洗。
+\end{warningbox}
+
+\subsection{Masked Language Modeling 与 GLUE fine-tuning}
+
+训练遵循 BERT 风格 masked language modeling：遮蔽一部分输入 bytes，decoder queries 在对应位置预测目标；之后在 GLUE 任务上增加 sentence/task queries 进行 fine-tuning。对被遮蔽集合 $\mathcal{M}$，目标可写为：
+
+\[
+\mathcal{L}_{\text{MLM}}=-\sum_{t\in\mathcal{M}}\log p_\theta(b_t\mid b_{\setminus\mathcal{M}}).
+\]
+
+其中，$b_t$ 是位置 $t$ 的真实 byte；$b_{\setminus\mathcal{M}}$ 是未遮蔽上下文；$p_\theta$ 是模型输出分布；$\mathcal{M}$ 是 masked positions。
+
+\lecturefigure{slide-24-masked-language-modeling.jpg}{Perceiver IO 的 byte-level masked language modeling。}{Stanford Online 当前官方视频 00:45:38--00:45:53。}
+
+Fine-tuning 时，任务可通过额外 queries 解码 sentence、entailment、grammar 或 paraphrase logits。共享 encoder/latent processor 接受 bytes，输出 interface 随任务变化。
+
+\lecturefigure{slide-25-glue-finetuning.jpg}{从 byte-level MLM 到 GLUE：不同 output queries 解码任务 logits。}{Stanford Online 当前官方视频 00:45:54--00:47:17。}
+
+\begin{importantbox}{Latent bottleneck 为 bytes 提供什么}
+Byte sequence 很长，但 deep self-attention 只在固定 latents 上进行；输入 cross-attention 对 byte 数线性。模型用计算瓶颈换取统一 vocabulary，并把分词边界学习内化。
+\end{importantbox}
+
+\subsection{FLOP-matched 结果与 attention diagnostics}
+
+表格比较 BERT、CANINE 与不同深度/参数的 Perceiver IO。在相近 FLOPs 下，byte-level Perceiver IO 可达到有竞争力的 GLUE 分数；增加模型规模继续提升。正确解读应同时看 tokenizer、深度、参数、FLOPs 和训练数据，而非只挑一个分数。
+
+\lecturefigure{slide-26-language-from-bytes-results.jpg}{直接从 bytes 理解语言：tokenized 与 token-free 模型的参数、FLOPs 和 GLUE 对比。}{Stanford Online 当前官方视频 00:47:18--00:47:59。}
+
+\begin{knowledgebox}{读表：FLOPs 匹配仍不等于延迟匹配}
+长 byte sequence 会改变 memory access、cross-attention kernel 和 batch size。相同理论 FLOPs 在不同硬件上可能有不同 wall-clock；还应比较序列长度、吞吐、峰值内存和语言覆盖。
+\end{knowledgebox}
+
+Attention 可视化显示模型对标点、大小写、词片段和重复 byte pattern 的关注。它说明模型能从低层符号发现结构，但 attention weight 不是因果解释，也不能证明某个 head “理解语法”。
+
+\lecturefigure{slide-27-language-attention-patterns.jpg}{Byte-level Perceiver IO 的语言 attention pattern 诊断。}{Stanford Online 当前官方视频 00:48:00--00:48:43。}
+
+\teachervoice{讲者把这些图作为“模型确实会关注可识别结构”的检查，而非完整 interpretability 结论。对 attention map 应同时做 ablation、counterfactual 和输出敏感性测试。}
+
+\begin{warningbox}{Attention visualization 容易被过度叙事}
+颜色模式可以启发假设，却不能单独说明信息如何影响最终预测。多个 heads、residual 和 MLP 会共同作用；漂亮 pattern 可能与任务贡献很弱。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Byte-level Perceiver IO 用长序列与更多结构学习换取跨语言统一 vocabulary。MLM/GLUE 结果证明方案可行，但 tokenizer 的数据效率与部署优势并未被普遍否定，attention map 也只是诊断证据。
+
+\section{Optical Flow：用 Output Queries 解码稠密运动场}
+
+语言输出仍是一维序列，optical flow 则要求对每个像素预测二维运动向量，是检验 structured output scaling 的强案例。模型输入两帧图像，输出 dense vector field；训练数据有限且真实标注昂贵，因此 synthetic-to-real transfer 与 inductive bias 尤其关键。
+
+\subsection{任务与指标}
+
+Optical flow $F(x,y)=(u(x,y),v(x,y))$ 描述像素从第一帧到第二帧的水平与垂直位移。常用 end-point error（EPE）为：
+
+\[
+\operatorname{EPE}=\frac{1}{HW}\sum_{x,y}\sqrt{(u-\hat u)^2+(v-\hat v)^2}.
+\]
+
+其中，$H,W$ 是图像高宽；$(u,v)$ 是 ground-truth flow；$(\hat u,\hat v)$ 是预测；EPE 越低越好。颜色轮通常用 hue 表示方向、饱和度/亮度表示速度大小。
+
+\lecturefigure{slide-28-optical-flow-definition.jpg}{Optical flow：对相邻帧的每个像素预测二维运动向量。}{Stanford Online 当前官方视频 00:48:44--00:49:15。}
+
+\begin{knowledgebox}{读图：光流颜色不是物体类别}
+相似颜色表示相似运动方向和速度，而不是语义类别。物体内部颜色一致说明运动场平滑；边界突变可能对应遮挡、深度变化或独立运动。
+\end{knowledgebox}
+
+\subsection{Transfer protocol：只在 AutoFlow 训练}
+
+本节先固定数据协议，再阅读模型排名。讲座强调没有大规模真实 dense flow 数据。模型在 AutoFlow 合成场景训练，再不 fine-tune 地评估 Sintel clean/final 与 KITTI。这样测量的是跨渲染与真实驾驶域的 transfer，而不是在每个 benchmark 上拟合。
+
+\lecturefigure{slide-29-optical-flow-transfer-task.jpg}{Optical-flow transfer：AutoFlow 训练，Sintel/KITTI 零 fine-tuning 评估。}{Stanford Online 当前官方视频 00:49:16--00:50:05。}
+
+\begin{warningbox}{不同数据集的 EPE 不能混成一个数}
+Sintel clean/final 使用不同渲染复杂度，KITTI 来自驾驶场景与稀疏 LiDAR 约束。应分别报告三列，不能把平均值当作统一真实世界质量。
+\end{warningbox}
+
+\teachervoice{Q\&A 解释了 ground truth：Sintel 是开放 CGI 电影，可由场景状态计算像素对应；KITTI 使用 LiDAR 深度与相机运动估计对应。Dense optical-flow 标注非常昂贵，这也是 synthetic training 必要的原因。}
+
+\subsection{与 RAFT 对照：弱偏置为什么令人意外}
+
+RAFT 显式构造 all-pairs correlation volume，并通过多尺度或局部 gather 迭代更新 flow。它把 optical-flow 匹配结构写进架构。Perceiver IO 则把两帧特征编码进 input array，用 latent bottleneck 处理，再由每像素 output query 解码 flow。
+
+\lecturefigure{slide-30-raft-comparison.jpg}{RAFT 的 correlation volume 与局部迭代更新：强 optical-flow inductive bias。}{Stanford Online 当前官方视频 00:50:06--00:50:31。}
+
+讲者原本预计 Perceiver IO 会因弱偏置而过拟合 synthetic data，或无法学会 correspondence。实际模型“out of the box”获得有竞争力结果，说明大数据和 attention 可以学习部分匹配结构；但这不代表其速度或小数据效率优于 RAFT。
+
+\lecturefigure{slide-31-perceiver-io-optical-flow.jpg}{Perceiver IO optical flow：双帧输入、latent processor 与每像素 flow queries。}{Stanford Online 当前官方视频 00:50:48--00:51:13。}
+
+\teachervoice{这页最重要的是作者的先验被实验修正：他们预期弱 inductive bias 会严重过拟合，却发现模型直接可用。高质量结论应写成“比预期更能迁移”，而不是“领域偏置从此不需要”。}
+
+\begin{importantbox}{Optical flow 如何映射到 Perceiver IO}
+Input rows 编码两帧像素、位置与帧 ID；latents 汇总跨帧全局信息；每个目标像素建立 output query；decoder 输出两个通道 $(\hat u,\hat v)$。任务变化主要体现在输入 tags、output queries 和 loss。
+\end{importantbox}
+
+\subsection{定量与质性结果}
+
+结果表比较 PWCNet、RAFT 与 Perceiver IO 在 Sintel clean/final 和 KITTI 上的 EPE。读表时要先确认所有模型是否只在 AutoFlow 训练，以及是否使用 benchmark fine-tuning；讲座明确说这里不 fine-tune，避免小测试集过拟合。
+
+\lecturefigure{slide-32-optical-flow-results.jpg}{AutoFlow 训练后在 Sintel clean/final 与 KITTI 的 EPE 对比。}{Stanford Online 当前官方视频 00:51:14--00:51:37。}
+
+\begin{knowledgebox}{读表：EPE 越小越好，但平均误差不够}
+还应检查运动边界、小物体、快速运动、遮挡与纹理缺失区域。两个模型 EPE 接近时，错误分布和稳定性可能完全不同；真实应用还需要 latency 与置信度。
+\end{knowledgebox}
+
+第一组质性图包含人物舞蹈和快速手部/物体运动。彩色 vector field 若在同一运动物体内部连续、在边界处切换，说明模型捕捉到区域运动；高亮空洞或颜色噪声则提示遮挡和细节失败。
+
+\lecturefigure{slide-33-qualitative-optical-flow-animals.jpg}{真实场景 optical-flow 示例一：人物与快速局部运动。}{Stanford Online 当前官方视频 00:51:38--00:51:49。}
+
+第二组展示远处快速运动与局部放大。小目标只占少量 pixels，对 latent bottleneck 是高压测试：全局压缩必须保留弱小但任务关键的 motion evidence，decoder query 才能重建。
+
+\lecturefigure{slide-34-qualitative-optical-flow-skater.jpg}{真实场景 optical-flow 示例二：小目标、远距离与局部放大。}{Stanford Online 当前官方视频 00:51:50--00:52:19。}
+
+\begin{warningbox}{质性图不能替代 benchmark}
+公开视频通常挑选可读案例，且颜色轮会掩盖小数值差异。应结合完整测试集 EPE、failure slices、置信度和视频时间一致性，而不是凭几张漂亮 flow map 下结论。
+\end{warningbox}
+
+\subsection{Very large outputs 与 multimodal autoencoding}
+
+Perceiver IO 可以为视频的每帧、每像素、每通道构造 queries，输出数可达数百万。输入先压成少量 latents，再由大量 queries 解码；这等价于用 latent 作为共享压缩表示。输出成本仍为 $\mathcal{O}(ON)$，因此 decoder query batching 和内存是实际工程问题。
+
+\lecturefigure{slide-35-decoding-very-large-outputs.jpg}{从固定 latent state 解码超大视频输出数组。}{Stanford Online 当前官方视频 00:52:20--00:53:05。}
+
+若重建图像峰值为 $I_{\max}$、均方误差为 MSE，PSNR 定义为：
+
+\[
+\operatorname{PSNR}=10\log_{10}\left(\frac{I_{\max}^2}{\operatorname{MSE}}\right).
+\]
+
+其中，PSNR 越高表示像素误差越小；它不完全对应感知质量。表格同时报告 compression ratio、video/audio PSNR 与分类准确率，用于观察 latent 数减少后重建和语义任务如何退化。
+
+\lecturefigure{slide-36-quantitative-autoencoding.jpg}{Multimodal autoencoding 的压缩率、视频/音频 PSNR 与 top-5 accuracy。}{Stanford Online 当前官方视频 00:53:06--00:56:13。}
+
+\begin{knowledgebox}{读表：压缩比是共享瓶颈的压力测试}
+减少 latents 会提高 compression ratio，但可能降低像素/音频重建；分类准确率可能下降更慢，因为语义任务不需要保留全部细节。这揭示 latent representation 对不同任务的信息需求不同。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Optical flow 展示 Perceiver IO 能解码每像素结构化输出，并在 synthetic-to-real transfer 中取得竞争结果。EPE、质性 flow、output-query 成本和 compression tradeoff 必须一起解释，弱偏置的成功不等于强专用模型失去价值。
+
+\section{结论边界：General Fallback，而不是 Universal Winner}
+
+前面跨越图像、bytes、multimodal autoencoding 和 optical flow，本节回到正确的适用范围。讲者把 Perceiver 定位为：当我们不知道正确结构、希望快速接入新数据形态或需要共享多模态接口时，一个很强的 general fallback。若结构已知、数据少或 latency 极严，专用偏置仍可能更优。
+
+\lecturefigure{slide-37-general-perception-summary.jpg}{讲座总结：线性输入 scaling、drop-in Transformer interface、多模态与结构化输出。}{Stanford Online 当前官方视频 00:56:14--00:56:21。}
+
+\begin{knowledgebox}{读图：把总结改写成条件句}
+Perceiver 对 input size 线性，是在 latent count 固定时；可替换 Transformer，是指 attention-based interface，而非所有训练 recipe 不变；多模态统一，是架构层面可共享，而非本讲已完成所有任务联合训练。
+\end{knowledgebox}
+
+\teachervoice{结尾 Q\&A 给出最重要的负面边界：团队还不擅长 small-scale data，因为弱偏置需要从数据中恢复结构；真正把多种模态和任务联合训练也仍是未来工作。}
+
+相关工作页把方法放回历史：multimodal learning、efficient attention、tokenization-free language、optical flow、Transformer 与 iterative attention 都贡献了组件。阅读这些来源可以避免把 Perceiver 当作凭空出现的单一技巧。
+
+\lecturefigure{slide-38-references.jpg}{讲座相关工作：multimodal、efficient attention、language、optical flow 与 iterative attention。}{Stanford Online 当前官方视频 00:56:22--00:58:49。}
+
+\begin{importantbox}{选择架构的决策顺序}
+先问输入/输出结构是否已知，再问数据量是否足以学习结构，然后比较 domain-specific baseline、Perceiver 的 latent/output query 配置、真实硬件速度与跨域复用成本。不要从“统一”二字直接跳到替换全部专用模型。
+\end{importantbox}
+
+最后一页给出 Perceiver 和 Perceiver IO 两篇核心论文及共同作者。它不仅是致谢页，也是复现入口：架构图说明接口，原论文补齐训练细节、数据、ablation 和任务实现。
+
+\lecturefigure{slide-39-thank-you-and-papers.jpg}{两篇 Perceiver 核心论文、共同作者与讲座结束页。}{Stanford Online 当前官方视频 00:58:50--00:58:55。}
+
+\begin{warningbox}{两个最常见的过度结论}
+第一，“linear scaling”不等于端到端永远线性或更快；第二，“any data as a table”不等于任务结构和数据治理消失。Latent 数、output 数、训练数据、位置编码和硬件 kernel 仍决定可用性。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Perceiver 是结构不明确、新模态和统一接口场景的强起点；在已知领域、小数据和严格延迟场景，专用偏置仍占优势。它的研究价值在于把 generality-speed tradeoff 变成可调的 latent/query interface。
 
 \section{总结与延伸}
 
- Perceiver 系列展示了一种优雅的通用感知模型范式：通过 latent bottleneck 解耦输入/输出大小与计算复杂度，进而在 vision、audio、video 乃至控制任务中复用同一架构。
+Perceiver 的思想可以压缩成一句话：不要让巨大 raw input 在每层彼此两两注意，而是让少量 learned latents 读取输入、在内部深度计算，再用 task-specific output queries 解码需要的结构。这个重排让 attention 更容易扩展到像素、bytes、音视频与稠密向量场，也把架构设计问题转化为 latent capacity、position/modality features 和 query construction。
 
- \subsection{核心总结}
+\begin{enumerate}
+  \item \textbf{研究动机是系统可扩展性}：逐模态 handcraft 无法覆盖所有传感器与科学数据；
+  \item \textbf{Transformer 的通用性来自弱连接假设}：non-local attention 与 position-as-feature 易迁移，但 raw self-attention 昂贵；
+  \item \textbf{Latent bottleneck 改写复杂度}：输入处理从 $M^2$ 变为 $MN$，深层计算主要是 $N^2$；
+  \item \textbf{线性 scaling 有条件}：latent 数固定、output decoder 可承受，且瓶颈没有丢失任务关键信息；
+  \item \textbf{Perceiver 与 ViT 优化不同目标}：ViT 用 image patch prior 换效率，Perceiver 用较弱假设换跨域接口；
+  \item \textbf{位置没有被删除}：Fourier/learned position 仍提供真实结构，只是不硬编码局部连接；
+  \item \textbf{Output queries 定义任务}：位置、模态和 task embedding 告诉 decoder 应从共享 latents 读取什么；
+  \item \textbf{Bytes 弱化 tokenizer 假设}：统一 vocabulary 的代价是更长序列和更多结构学习；
+  \item \textbf{Optical flow 检验 structured output}：每像素 query 解码二维向量，synthetic-to-real transfer 展示弱偏置的潜力；
+  \item \textbf{质性与定量必须并用}：EPE、PSNR、压缩率、吞吐和 failure slices 分别回答不同问题；
+  \item \textbf{Generality 与 speed 是 Pareto tradeoff}：已知领域和小数据下，convnet/RAFT 等专用模型仍可能更优；
+  \item \textbf{未完成方向很明确}：small-data learning、hierarchical cross-attention、联合多模态训练与更高效输出解码。
+\end{enumerate}
 
- \begin{itemize}
-     \item 使用交叉/自注意力串联的 latent array 解耦了输入长度，使得 $O(N^2)$ 的瓶颈消失。
-     \item Perceiver IO 通过 output queries 让表达能力拓展到任意结构化输出，真正实现 ``everything to everything''。
-     \item 多模态训练依赖 weighted sampler、Fourier positional encoding 与 curriculum schedule，防止模态干扰。
-     \item 部署时重点在 latent size、precision 以及 distillation/streaming 策略，保持 latency 可控。
-     \item Benchmarks 显示 Perceiver 可同时处理多个模态，但 hybrid output alignment 与 3D 生成仍需进一步研究。
- \end{itemize}
+\begin{importantbox}{课程作业：构建一个统一输入/输出实验}
+选择两种结构差异明显的数据，例如图像 patches 与时间序列。固定 latent 数，使用共享 Perceiver processor，但分别设计 position/modality features 和 output queries。比较：专用 baseline、ViT/Transformer、Perceiver、不同 latent 数与去掉位置编码。报告质量、训练数据曲线、wall-clock、峰值内存、输入/输出长度 scaling 和 failure cases。
+\end{importantbox}
 
- \subsection{Perceiver Checklist}
+\begin{warningbox}{最终自检：六个不能混为一谈的结论}
+\textbf{弱偏置}不等于\textbf{无偏置}；\textbf{线性输入复杂度}不等于\textbf{线性端到端成本}；\textbf{input permutation robustness}不等于\textbf{空间结构无用}；\textbf{byte-level}不等于\textbf{零预处理}；\textbf{attention pattern}不等于\textbf{因果解释}；\textbf{统一架构接口}不等于\textbf{单一联合模型已训练完成}。
+\end{warningbox}
 
- \begin{table}[H]
- \centering
- \begin{tabular}{p{0.22\textwidth} p{0.28\textwidth} p{0.28\textwidth}}
- \toprule
- 模块 & 关注点 & 工程建议 \\
- \midrule
- Cross Attention & 输入-潜在匹配 & 控制 M，缓存 Fourier 编码，监控 FLOPs \\
- Self Attention & 信息融合 & 采用 LayerNorm + DropPath 稳定训练 \\
- Output Queries & 结构化输出 & 先定义 schema，再设计 query layout \\
- Training Mix & 多模态样本 & Weighted sampler + curriculum + modality embedding \\
- Deployment & 计算/延迟 & Mixed precision + chunking + distillation \\
- \bottomrule
- \end{tabular}
- \caption{把 Perceiver 技术落到工程上的清单}
- \end{table}
+\subsection{拓展阅读}
 
- \subsection{进一步阅读}
+建议按“Transformer 基线—Perceiver 输入瓶颈—Perceiver IO 输出接口—领域对照”的顺序阅读：
 
- \begin{itemize}
-     \item Jaegle et al., ``Perceiver: General Perception with Iterative Attention,'' ICML 2021
-     \item Jaegle et al., ``Perceiver IO: A General Architecture for Structured Inputs \& Outputs,'' ICLR 2022
-     \item Locatello et al., ``Object-Centric Learning with Slot Attention,'' NeurIPS 2020
-     \item Rae et al., ``Meta-learning with Latent Embedding Optimization,'' NeurIPS 2021
-     \item Lee et al., ``StyleGAN2: Analyzing StyleGAN,'' CVPR 2021 (for generative benchmarks)
- \end{itemize}
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://arxiv.org/abs/1706.03762}{\textbf{Attention Is All You Need}}：QKV attention 与标准 Transformer 基线。
+  \item \href{https://arxiv.org/abs/2103.03206}{\textbf{Perceiver}}：latent bottleneck、iterative attention、ImageNet 与多模态实验。
+  \item \href{https://arxiv.org/abs/2107.14795}{\textbf{Perceiver IO}}：output queries、bytes、optical flow 与 structured outputs。
+  \item \href{https://arxiv.org/abs/2010.11929}{\textbf{Vision Transformer}}：image patching 与视觉 Transformer 对照。
+  \item \href{https://arxiv.org/abs/2005.12872}{\textbf{DETR}} 与 \href{https://arxiv.org/abs/2006.15055}{\textbf{Slot Attention}}：视觉 cross-attention / learned queries 的重要前身。
+  \item \href{https://arxiv.org/abs/2006.10739}{\textbf{Fourier Features}}：高频坐标编码的理论与实验背景。
+  \item \href{https://arxiv.org/abs/2103.06874}{\textbf{CANINE}} 与 \href{https://arxiv.org/abs/2105.13626}{\textbf{ByT5}}：tokenization-free / byte-level language 路线。
+  \item \href{https://arxiv.org/abs/2003.12039}{\textbf{RAFT}} 与 \href{https://arxiv.org/abs/2104.14544}{\textbf{AutoFlow}}：optical-flow 架构偏置与 synthetic training 数据。
+\end{itemize}
+}
 
 \end{document}

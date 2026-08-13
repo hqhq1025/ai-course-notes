@@ -1,228 +1,660 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 02：Generative Pretraining——从 GPT-3、iGPT 到 Codex}
+\renewcommand{\noteauthors}{基于 Mark Chen 讲座、时间戳字幕与 GPT/iGPT/DALL-E/Codex 原始论文整理}
+\renewcommand{\notedate}{Fall 2021 课程 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{2022-07-11}
+\renewcommand{\videoduration}{48:38}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=qGkzHFllWDY}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS25 V1] GPT Models (GPT-3, Codex) --- Mark Chen, OpenAI}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{2021}
-\newcommand{\videochannel}{Stanford Online}
-\newcommand{\videopublishdate}{2021}
-\newcommand{\videoduration}{约60分钟}
-\newcommand{\videourl}{https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR\_Z27CM}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}\centering
-{\Large 课程笔记\par}\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}\vspace{0.8cm}
-{\large \noteauthors\par}\vspace{0.3cm}
-{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{{\small 请填入封面图路径。\par}}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{视频时长}：\videoduration\par\textbf{视频链接}：\url{\videourl}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
-\tableofcontents\newpage
+\makecscover
 
-\section{语言建模的演进}
+\section{来源审计：这堂课真正讲的是“生成分布如何被评估”}
 
-Mark Chen（OpenAI）以语言建模能力的进化为线索，展示了从 n-gram 到 GPT-3 的发展轨迹。
+Mark Chen 的讲座从 3-gram 一路走到 GPT-3、iGPT、DALL-E 与 Codex。表面上它像模型年表，真正的主线却是 evaluation interface 的不断变化：文本阶段比较 sample coherence 与人类识别；无监督学习阶段比较 transfer；图像阶段同时看 completion 与 representation；代码阶段则必须让生成结果通过 unit tests，并用 pass@k 评价多次采样。
 
-\subsection{从 n-gram 到 RNN}
+原视频是全屏 slide talk，仓库没有独立 deck。本文从官方视频转场恢复 45 张 teaching slides；Stanford bumper、三个纯分隔页、致谢与重复 thank-you 被标为 optional。课堂发生于 2021 年，Codex、GPT-3 与 DALL-E 的产品/能力描述都按历史时点处理，不能倒写成 2026 年当前产品状态。
 
-2011 年以前的语言模型依赖巨大的 n-gram 查找表，生成文本几乎不可读。神经网络语言模型（尤其是 RNN）的引入使生成文本开始具有句子的"流畅感"，尽管语义仍不连贯。
-
-\subsection{LSTM 与长距离依赖}
-
-LSTM 通过门控机制改善了梯度流，能更好地建模长程依赖。生成文本开始在短段落内保持一定的连贯性，但仍有明显的重复和逻辑断裂。
-
-\subsection{Transformer 语言模型}
-
-自回归 Transformer 在建模长距离依赖方面更为出色。GPT-2 的生成已可保持多句连贯性，GPT-3 则能在多段落间维持角色一致性（如虚构的 Perez 博士）。
-
-\begin{importantbox}{GPT-3 的标志性能力}
-GPT-3 的"最佳采样"质量大致相当于 GPT-2 的 top-1/top-5 采样。其 175B 参数模型能在多段落间保持风格一致性（如模仿《三体》的叙事风格），并产生诗意的隐喻。
+\begin{importantbox}{本讲的三个闭环}
+\begin{enumerate}
+  \item \textbf{Generation loop}：学习分布 $\rightarrow$ 采样 $\rightarrow$ 人类/任务评价 $\rightarrow$ 调整 scale 与 recipe；
+  \item \textbf{Transfer loop}：unlabeled data $\rightarrow$ autoregressive objective $\rightarrow$ representation/behavior $\rightarrow$ downstream task；
+  \item \textbf{Code loop}：problem prompt $\rightarrow$ sampled programs $\rightarrow$ unit tests $\rightarrow$ pass@k $\rightarrow$ temperature/model decision。
+\end{enumerate}
 \end{importantbox}
 
-\begin{knowledgebox}{人类能否分辨 GPT-3 生成的文本？}
-在新闻文章场景下，随着模型参数增加，人类分辨真假文章的准确率趋近于随机猜测（约 50\%），说明大模型的生成质量已接近真实文本。
+\begin{warningbox}{Sample quality、benchmark score 与 deployment reliability 不同}
+一段文本像新闻，不证明它真实；一张图符合 prompt，不证明组合泛化；一个程序通过 benchmark tests，不证明它安全、可维护或满足隐藏需求。本文始终把“模型分布里存在正确样本”“当前 decoding 找到了样本”“部署系统可以信任输出”分开。
+\end{warningbox}
+
+\begin{knowledgebox}{术语消化：生成系统的四个对象}
+\textbf{Model distribution} 是模型对候选输出的概率分布；\textbf{sample} 是从该分布得到的一次具体输出；\textbf{verifier} 用规则、tests 或人类评价判断候选；\textbf{selector} 在多个候选中选择最终输出。模型、采样、验证与选择可以分别改进，不能把最终成功全部归因于参数规模。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-语言建模的进步经历了 n-gram $\to$ RNN $\to$ LSTM $\to$ Transformer 的路径，每一步都显著提升了生成文本的连贯性和多样性。
+这不是单纯的 GPT 历史课，而是一堂生成建模评估课。随着输出从文本扩展到图像与代码，评价必须从表面相似度升级到任务证据和采样分布。
 
-\section{从语言建模到无监督学习}
+\section{从 3-Gram 到 GPT-3：语言模型的质量阶梯}
 
-\subsection{为什么关心语言建模？}
+\term{language model}（语言模型）为 token 序列分配概率。给定 $x_1,\ldots,x_T$，自回归分解为
+\[
+p(x_1,\ldots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{<t}).
+\]
+模型差异主要在条件上下文如何表示、可使用多长历史、参数与数据如何扩展。讲者先展示 sample，而不是先展示 benchmark，是为了让读者直观看见概率模型的失败模式。
 
-Mark Chen 坦言，语言建模本身是一个相对狭窄的能力。OpenAI 真正关心的是\textbf{无监督学习}——如何从海量无标注数据中学习可迁移的表示。
+\subsection{3-Gram：局部统计能生成“相关词”，却难形成全局语义}
 
-\begin{importantbox}{监督学习的瓶颈}
-监督学习需要大量标注数据，而标注成本高昂且难以规模化。互联网提供了近乎无限的\textbf{无标注}文本数据，关键问题是：能否利用这些数据来解决下游任务？
-\end{importantbox}
+\term{n-gram} 假设当前 token 只依赖前 $n-1$ 个 token。3-gram 写为 $p(x_t\mid x_{t-2},x_{t-1})$。它可以从计数平滑得到概率，训练与解释简单，但上下文窗口固定，罕见组合稀疏，无法维护长距离实体、事实和篇章结构。
 
-\subsection{生成模型与 Analysis by Synthesis}
+\lecturefigure{slide-01-3gram.jpg}{3-gram sample 已有局部相关词，却缺少稳定句法和全局语义。}{官方视频 00:08；Shannon 1951 historical framing。}
 
-Richard Feynman 的名言"What I cannot create, I do not understand"及其逆命题"What I can create, I can also understand"为生成式预训练提供了理论直觉：如果模型能生成多样且连贯的文本，那它必然建立了有助于语言理解的内部表示。
+\begin{knowledgebox}{读图：不要只问句子“像不像英语”}
+Sample 中金额、年份和商业词汇局部共现，说明短窗口统计捕获了词邻接；数字关系、实体一致性与句子目的却崩溃。评价时可分成 lexical coherence、syntactic coherence、semantic consistency、factual consistency 四层。n-gram 通常在前两层的短范围有信号，后两层缺乏状态。
+\end{knowledgebox}
 
-\subsection{自回归建模的合理性}
+\begin{knowledgebox}{Perplexity 的定义与限制}
+\term{perplexity}（困惑度）是平均 cross-entropy 的指数：
+\[
+\operatorname{PPL}=\exp\!\left(-\frac{1}{T}\sum_{t=1}^{T}\log p(x_t\mid x_{<t})\right).
+\]
+它可直觉理解为每步“有效候选数”，越低通常表示对该测试分布预测更好。但不同 tokenizer、数据清洗与 domain 的 PPL 不宜直接横比；更低 PPL 也不自动保证事实性、可控性或任务成功。
+\end{knowledgebox}
 
-自回归目标看似"局部"——仅预测下一个 token。但考虑推理小说的场景：要准确预测揭晓凶手的那个 token，模型需要理解整个故事的逻辑链条。因此下一 token 预测实际上隐含了全局理解的需求。
+\subsection{RNN：用隐藏状态替代固定窗口}
 
-\begin{knowledgebox}{Sentiment Neuron 的发现}
-2017 年，OpenAI 训练了一个预测 Amazon 评论下一字符的 LSTM 模型，惊讶地发现其中一个神经元自发学会了情感分类——正激活对应正面评论，负激活对应负面评论，且未见过任何标签。
+本节从固定窗口转向递归状态。RNN 更新 $h_t=f(x_t,h_{t-1})$，理论上能让任意历史影响当前预测。它消除了固定 n-gram 窗口，却把全部历史压入单个状态，并使训练沿时间串行。长序列还面临梯度消失/爆炸和信息覆盖。
+
+\lecturefigure{slide-02-rnn.jpg}{RNN sample 比 3-gram 更连贯，但实体与长程结构仍容易漂移。}{官方视频 00:27；Sutskever et al. 2011。}
+
+\begin{knowledgebox}{读图：RNN 改善的是状态连续性}
+RNN 能维持更长的局部主题和字符/词模式，因此 sample 不再只像词袋。问题是每一步都通过同一个 recurrent bottleneck，旧信息要经过许多非线性变换才能到达未来。输出中出现“句子像语言、论证不像论证”的现象，说明流畅性与全局计划仍是不同能力。
+\end{knowledgebox}
+
+\teachervoice{讲者用真实 sample 逐级展示模型，而不是声称“新架构全面优于旧架构”。课堂提示：生成模型的进步常先表现为错误变得更难发现，因此 evaluation 也必须同步升级。}
+
+\subsection{Big LSTM：门控和规模提高记忆，但没有消除串行路径}
+
+\term{LSTM}（Long Short-Term Memory）用 input、forget、output gates 控制 cell state，缓解普通 RNN 的优化问题。更大 LSTM、更多数据和 better regularization 曾显著推进 language modeling，但训练依旧按时间步递归，长距离信息仍要穿过 $O(T)$ 路径。
+
+\lecturefigure{slide-03-big-lstm.jpg}{大规模 LSTM 生成更像自然文本，但仍暴露重复、漂移和结构错误。}{官方视频 01:12；Jozefowicz et al. 2016。}
+
+\begin{knowledgebox}{读图：scale 与 architecture 同时改变 sample}
+Slide 将 Big LSTM 放在 RNN 与 Transformer 之间，提醒我们不要把所有进步归因于一个组件。门控改善记忆，模型/数据规模降低局部不确定性，训练 recipe 提高稳定性；但 recurrent dependency 仍限制硬件并行。公平比较需要控制参数量、token 数和 compute，而不是只选最好看的样本。
+\end{knowledgebox}
+
+\subsection{Transformer：并行训练与更短信息路径}
+
+Transformer 用 self-attention 让 token 直接交互，矩阵运算更适合 accelerator，并允许扩展更大 batch、模型和数据。它没有自动解决事实、规划和目标问题，但改变了可行的 scaling regime。
+
+\lecturefigure{slide-04-transformer.jpg}{Transformer sample 的提升来自架构、规模、数据与训练共同作用。}{官方视频 01:52。}
+
+\begin{knowledgebox}{读图：Model completion 是条件分布，不是知识库查询}
+Slide 给 prompt 和 completion，输出可以延续格式与主题，却仍可能编造细节。Language model 预测“在训练分布中什么续写可能”，不执行默认 fact-check。随着 sample 更流畅，人类更容易把语言质量误当事实质量，因此 later evaluation 需要任务 grounding、retrieval 或 external checks。
+\end{knowledgebox}
+
+\subsection{GPT-2：规模化 Transformer 与长文本样本}
+
+本节转向 decoder-only scaling。GPT-2 将 Transformer 扩展到更大数据与参数，强调 zero-shot task behavior。课堂先展示模型与数据规模，再展示新闻样本，意图是让读者观察跨段 coherence、风格模仿和 failure。
+
+\lecturefigure{slide-05-gpt2-model.jpg}{GPT-2 把 decoder-only Transformer 扩展为通用文本生成模型。}{官方视频 02:33；Radford et al. 2019。}
+
+\begin{knowledgebox}{读图：参数量只是系统的一列}
+模型规模扩大通常伴随更多训练 token、不同 batch/optimizer、context 和 compute。只说“参数更大所以能力出现”会忽略 data diversity 与 optimization。读这张 slide 时应把 architecture、parameters、data、objective 与 evaluation 作为共同 recipe。
+\end{knowledgebox}
+
+\lecturefigure{slide-06-gpt2-example-1.jpg}{GPT-2 新闻样本展示篇章风格与实体延续，同时保留可检查的虚构风险。}{官方视频 03:05。}
+
+\begin{knowledgebox}{读图：长样本要按 claim 审核}
+先看句法和段落连接，再标出人物、地点、数字与因果 claim；最后检查这些 claim 是否可由 prompt 或外部证据支持。模型可以保持新闻文体，却在细节处“自信地补齐”。样本评估若只问读起来顺不顺，会系统性漏掉 hallucination。
+\end{knowledgebox}
+
+\lecturefigure{slide-07-gpt2-example-2.jpg}{第二个 GPT-2 样本说明不同 prompt 会暴露不同类型的 coherence failure。}{官方视频 03:38。}
+
+\begin{knowledgebox}{读图：不要用单一样本代表模型分布}
+Sampling seed、temperature、top-p 与 prompt 都会改变输出。一个漂亮样本不能代表平均性能，一个糟糕样本也不能证明模型无用。需要固定 decoding protocol、报告样本数量，并结合 likelihood、human rating 与 downstream success。
+\end{knowledgebox}
+
+\subsection{GPT-3：人类能否识别生成新闻}
+
+当文本质量提高，evaluation 从“看起来很差”转向受控人类实验。GPT-3 论文让参与者判断新闻是否由模型生成；准确率随模型规模变化。这个实验测的是特定 prompt、长度、采样和参与者条件下的 detection，不等同真实性或通用智能。
+
+\lecturefigure{slide-08-gpt3-human-detection.jpg}{GPT-3 用人类识别任务把 sample realism 转成可量化实验。}{官方视频 05:12；Brown et al. 2020。}
+
+\begin{knowledgebox}{读图：先定义实验单位}
+每个 item 是模型生成或人类撰写的新闻片段；参与者输出二分类判断。结果受主题熟悉度、文本长度、生成温度与 instruction 影响。接近 chance 只能说明该设置下难以区分来源，不说明内容真实、无害或可用于新闻生产。
+\end{knowledgebox}
+
+\lecturefigure{slide-09-gpt3-detection-curve.jpg}{更大模型使检测更困难，但曲线仍需与实验设置一起解释。}{官方视频 08:10；Brown et al. 2020。}
+
+\begin{knowledgebox}{读图：横轴是规模，纵轴不是“智能”}
+曲线把 model size 与 human detection accuracy 联系起来。关键趋势是规模增大后生成文体更接近人类分布；它不测事实性、来源可追溯或长期一致性。误差条、baseline 与 sample policy 决定结论强度。不能把单一曲线外推到所有语言和所有生成任务。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-GPT 系列的核心动机并非语言建模本身，而是将其作为无监督学习的手段。自回归预训练 + 微调（或 zero-shot）的范式已成为 NLP 的主导框架。
+从 n-gram 到 GPT-3，sample 逐步变得连贯，评价也从肉眼失败升级到受控人类实验。Scale 改变分布质量，却让真实性与来源识别问题更加重要。
 
-\section{GPT 系列的演进}
+\section{为什么 Generative Modeling 能成为 Unsupervised Learning}
 
-\subsection{GPT-1：预训练 + 微调}
+监督学习依赖 $(x,y)$ 标签，而互联网大量数据只有 $x$。生成建模通过预测数据自身构造训练信号，因而可以在没有人工任务标签时学习 representation 和 behavior。关键问题不是“标签为零”，而是自监督 objective 是否迫使模型捕获对下游有用的结构。
 
-GPT-1 在互联网文本上预训练后，通过简单的分类头微调即可在多个下游任务上取得优异表现，证明了"预训练 + 微调"路线的可行性。
+\subsection{标签瓶颈与任务扩张}
 
-\subsection{GPT-2：Zero-shot 能力的涌现}
+\term{unsupervised learning}（无监督学习）在课堂中泛指不依赖人工任务标签的表示学习；现代语境常更精确称 \term{self-supervised learning}，因为 target 从原数据自动构造。语言模型的 next-token label 就来自文本本身。
 
-GPT-2 的关键洞察：许多下游任务可以自然地表达为语言模型的补全问题：
-\begin{itemize}
-    \item \textbf{阅读理解}：将段落和问题拼接，在"Answer:"后补全
-    \item \textbf{摘要}：在文本后加"TL;DR"
-    \item \textbf{翻译}：格式化为"Sentence ... translated from French to English means"
-\end{itemize}
+\lecturefigure{slide-10-unsupervised-learning.jpg}{监督任务的数据需求推动模型寻找可从原始数据自动产生的训练信号。}{官方视频 09:09。}
 
-\begin{warningbox}{规模的作用}
-Zero-shot 能力随参数规模平滑提升。此外，zero-shot 与 few-shot 之间的性能差距也随规模增大而扩大，说明大模型更擅长"学习如何学习"。
+\begin{knowledgebox}{读图：两条路径的区别是标签生产方式}
+Supervised learning 需要 task-specific labels，成本高且覆盖窄；unsupervised/self-supervised path 从大规模 raw data 学习通用结构，再通过 prompting 或 fine-tuning 迁移。它并没有消除 human choices：数据收集、过滤、tokenizer、objective 与 evaluation 仍是人为设计。
+\end{knowledgebox}
+
+\lecturefigure{slide-11-unlabeled-data.jpg}{互联网提供海量无标签数据，但规模不等于质量或授权。}{官方视频 10:38。}
+
+\begin{knowledgebox}{读图：地球图标代表规模，也代表治理}
+大规模 web data 覆盖语言、代码、图像和文化差异，为 pretraining 提供广泛 signal；同时包含 duplication、bias、private data、copyright 与 contamination。课程关注“是否存在数据宝库”，工程上还必须回答来源、许可、清洗、去重、保留与删除。
+\end{knowledgebox}
+
+\subsection{Analysis by synthesis 与 autoregressive objective}
+
+\term{analysis by synthesis} 的直觉是：若模型能生成与数据分布相符的样本，它必须学到部分潜在结构。Autoregressive objective 最大化
+\[
+\mathcal{L}(\theta)=\sum_{t=1}^{T}\log p_\theta(x_t\mid x_{<t}).
+\]
+每个位置都产生训练信号，适合 scale；但 objective 只要求预测 token，不保证内部 representation 与人类概念一一对应。
+
+\lecturefigure{slide-12-autoregressive-analysis-by-synthesis.jpg}{Autoregressive generation 以预测数据来学习结构，是 analysis by synthesis 的一种实现。}{官方视频 11:11。}
+
+\begin{knowledgebox}{读图：生成是训练接口，representation 是副产物}
+模型为了预测下一个 token，会利用语法、主题、实体、情感和世界规律；这些因素可能在 hidden states 中形成可读方向。但模型也可利用 surface shortcut。判断 representation 是否有用，需要 probing、intervention 与 transfer，而不只是低 loss。
+\end{knowledgebox}
+
+\subsection{Sentiment neuron：涌现表示与解释边界}
+
+Radford 等人在 character-level language model 中发现某个单元与 review sentiment 高度相关。这个结果说明生成 objective 可能学习可用于分类的 feature，也提醒我们“一个 neuron”通常是特定模型与分析方法下的现象，不应外推为所有概念都单神经元编码。
+
+\lecturefigure{slide-13-sentiment-neuron.jpg}{无监督生成模型中出现与情感相关的表示方向。}{官方视频 13:00；Radford et al. 2017。}
+
+\begin{knowledgebox}{读图：左看分布，右看激活轨迹}
+左侧比较正负 review 在 neuron activation 上的分布差异；右侧展示文本位置与 activation 变化。相关性支持该单元携带 sentiment signal，但不能单独证明它是唯一因果机制。可进一步通过 clamping、ablation 或 classifier transfer 检验因果与泛化。
+\end{knowledgebox}
+
+\teachervoice{讲者用 sentiment neuron 回答“为什么生成文本会帮助下游任务”：为了 synthesis，模型可能先做 analysis。课堂提醒是可能，不是保证；representation quality 仍需被下游证据验证。}
+
+\subsection{本章小结}
+
+Generative pretraining 用数据本身构造密集监督，能够从无标签规模中学习可迁移表示。它的优势来自信号覆盖，风险来自 objective 与真实任务之间仍有距离。
+
+\section{GPT-1 与 GPT-2：从 Fine-Tuning 到 Zero-Shot Interface}
+
+GPT 系列的早期演进不仅是参数增长，也在改变 task interface。GPT-1 采用通用预训练后 supervised fine-tuning；GPT-2 更强调任务可以被写进自然语言上下文，由同一个 language model zero-shot 完成。
+
+\subsection{GPT-1：Pretrain then fine-tune}
+
+\term{fine-tuning}（微调）是在预训练参数上继续用目标任务数据更新。GPT-1 用 decoder-style Transformer 进行 generative pretraining，再为分类、entailment、question answering 等任务构造输入格式并微调。
+
+\lecturefigure{slide-14-gpt1-architecture.jpg}{GPT-1 将通用语言预训练与任务微调连接起来。}{官方视频 14:11；Radford et al. 2018。}
+
+\begin{knowledgebox}{读图：架构复用不等于完全零改动}
+左侧是统一 Transformer representation，右侧用 task-specific input transformation 和 output head 适配不同任务。Pretraining 提供初始化，fine-tuning 仍需要标签、超参数与每任务 checkpoint。它比从零训练高效，却没有形成统一 prompt-only interface。
+\end{knowledgebox}
+
+\subsection{GPT-2：Zero-shot reading comprehension}
+
+本节先用 reading comprehension 说明统一文本接口。\term{zero-shot} 指目标任务上不提供训练 example 或参数更新，只通过自然语言上下文要求模型执行。GPT-2 将 question、context 和 answer continuation 拼成序列，观察 language modeling 是否隐式完成 QA。
+
+\lecturefigure{slide-15-gpt2-reading-comprehension.jpg}{GPT-2 通过文本格式尝试 zero-shot reading comprehension。}{官方视频 15:21；Radford et al. 2019。}
+
+\begin{knowledgebox}{读图：任务被转写为 continuation}
+模型没有专用 QA head，而是预测 prompt 后的文本。评价必须定义 answer extraction、exact match 或 semantic equivalence；若 prompt format 变化大，结果可能显著波动。Zero-shot 证明 interface 的可塑性，不代表模型真正遵循任意 instruction。
+\end{knowledgebox}
+
+\subsection{Zero-shot summarization}
+
+Summarization 同样被写成文档后接提示词与摘要。Language model 会利用训练数据中类似格式，产生较短 continuation。核心困难是 coverage、faithfulness 和 compression，不是语法流畅。
+
+\lecturefigure{slide-16-gpt2-summarization.jpg}{GPT-2 将 summarization 重新表述为条件文本续写。}{官方视频 16:44。}
+
+\begin{knowledgebox}{读图：摘要质量至少有三条轴}
+Coverage 检查关键事实是否保留；faithfulness 检查是否引入原文没有的 claim；compression 检查长度与冗余。ROUGE 等 overlap metric 只覆盖部分维度。生成式模型可能写出更自然的摘要，同时更容易产生不可见事实错误。
+\end{knowledgebox}
+
+\subsection{Zero-shot translation}
+
+接下来把同一 continuation 接口用于翻译。模型可通过“源句 + language marker”被诱导；GPT-2 的结果展示多任务 signal 可能从 web text 中被吸收，但与专门训练的 translation system 仍有明显差距。
+
+\lecturefigure{slide-17-gpt2-translation.jpg}{GPT-2 zero-shot translation 展示 web pretraining 中的潜在跨语言 signal。}{官方视频 17:30。}
+
+\begin{knowledgebox}{读图：比较 baseline 与任务定义}
+图中的趋势应与 supervised translation baseline 对照。Language model 可能见过平行片段、模板或相似网站，因此 zero-shot 不等于“从未见过翻译关系”。应检查 contamination、language coverage 与低资源语言，而不是只看高资源平均分。
+\end{knowledgebox}
+
+\begin{warningbox}{Zero-shot 是 evaluation protocol，不是魔法属性}
+是否 zero-shot 取决于目标任务是否参与训练、prompt 是否含示例、benchmark 是否泄漏、以及参数是否更新。Web-scale pretraining 很难证明“任务从未出现”，因此更准确的表述是目标 benchmark 上无显式 supervised fine-tuning。
 \end{warningbox}
 
-\subsection{GPT-3：元学习视角}
+\subsection{本章小结}
 
-GPT-3 的核心洞察：训练过程可以被解读为\textbf{元学习}——外层循环是 SGD 训练步，内层循环是模型根据 prompt 识别并适应当前任务。
+GPT-1 通过 pretrain/fine-tune 复用表示，GPT-2 把任务转写为 continuation，向统一自然语言接口迈进。Zero-shot behavior 有价值，却高度依赖 prompt、data exposure 和 metric。
 
-\begin{importantbox}{In-Context Learning 的涌现}
-Few-shot 算术实验显示，能力随参数量增加出现"阶跃函数"式的跃升——在接近 175B 参数时，加法、减法甚至部分乘法的准确率急剧上升。
-\end{importantbox}
+\section{GPT-3：Meta-Learning 与 Few-Shot 学习曲线}
+
+GPT-3 进一步把 examples 放进 context，使模型在不更新参数时根据局部 demonstration 调整输出。课堂称之为 language-model meta-learning：outer loop 是预训练，inner-like behavior 发生在 context 中。这个说法是功能类比，不必假设模型真的执行梯度下降。
+
+\subsection{Meta-learning interface}
+
+本节先定义推理时的任务接口。\term{few-shot} 指 prompt 内提供少量 input-output examples；\term{in-context learning} 指模型仅根据这些上下文改变行为。对参数 $\theta$，预测仍是 $p_\theta(y\mid x,\text{demonstrations})$，$\theta$ 不变。
+
+\lecturefigure{slide-18-gpt3-metalearning.jpg}{GPT-3 将 task description 和 demonstrations 放入同一 context。}{官方视频 18:15；Brown et al. 2020。}
+
+\begin{knowledgebox}{读图：训练与推理的两层结构}
+Pretraining 在大量任务样式上更新参数；inference prompt 提供临时任务定义。模型可能通过 pattern completion、retrieval-like matching 或 learned algorithm 实现 behavior。无论内部机制如何，工程上都需测试 demonstration order、label words、format 和 context length。
+\end{knowledgebox}
+
+\subsection{Few-shot arithmetic}
+
+本节用 arithmetic curve 检查 scale 与 demonstrations 的交互。图中比较 zero/one/few-shot 与 model size；某些位数任务在规模增大后显著改善，但不同难度曲线不同，说明能力不是一个统一 scalar。
+
+\lecturefigure{slide-19-few-shot-arithmetic.jpg}{GPT-3 arithmetic 曲线展示 scale、shots 与任务难度的交互。}{官方视频 19:23。}
+
+\begin{knowledgebox}{读图：先看每条曲线代表什么}
+横轴通常是 model size，纵轴是 accuracy；颜色或线型区分位数/shot setting。重点不是“更大总是更好”，而是某些任务斜率更陡、某些接近随机。算术正确还可能受 tokenization 与训练数据格式影响，不能直接等同通用数学推理。
+\end{knowledgebox}
+
+\subsection{Word unscrambling}
+
+Unscrambling 要求模型从字符或词片段恢复单词。它比常规 language completion 更接近 algorithmic mapping，可观察 demonstrations 是否让模型推断规则。
+
+\lecturefigure{slide-20-word-unscrambling.jpg}{Word unscrambling 用 few-shot examples 测试规则归纳。}{官方视频 20:14。}
+
+\begin{knowledgebox}{读图：关注 task format sensitivity}
+曲线提高说明更大模型更能利用 context examples，但字符分词、大小写、空格与答案格式都会改变难度。若只换 label token 就显著下降，说明模型学到的可能是脆弱 pattern，而不是稳定 algorithm。
+\end{knowledgebox}
+
+\subsection{General few-shot learning}
+
+进一步把多任务表现与 scale 放在同一汇总图中。Average 可以显示总体趋势，也会隐藏任务间差异、负迁移和 benchmark saturation，因此需要回到 per-task evidence。
+
+\lecturefigure{slide-21-general-few-shot.jpg}{GPT-3 多任务曲线把 zero/one/few-shot 与规模化趋势放在共同坐标中。}{官方视频 20:36。}
+
+\begin{knowledgebox}{读图：平均线下面是任务分布}
+比较 zero-shot、one-shot、few-shot 的间距，再看其是否随规模扩大。Few-shot 提升若只来自少数任务，平均分会误导；同时 benchmark 可能被 pretraining contamination 抬高。可靠结论需要 per-task breakdown、confidence 与 held-out data governance。
+\end{knowledgebox}
+
+\teachervoice{讲者把 GPT-3 的关键变化描述为“language model metalearning”。课堂提示是 interface：任务被放进 context，而不是为每项任务重新训练模型。这个接口后来很重要，但当时曲线已经显示它对任务和格式并不均匀。}
 
 \subsection{本章小结}
 
-GPT-1/2/3 展示了从微调到 zero-shot/few-shot 的范式演进，核心驱动力是规模——更大的模型在预训练中发展出更强的 in-context learning 能力。
+GPT-3 让 demonstrations 成为推理时输入，形成 in-context interface。Scale 提高了使用上下文的能力，却没有消除格式敏感、任务差异与 contamination 风险。
 
-\section{将 GPT 应用于图像}
+\section{iGPT：Autoregressive Pretraining 能否迁移到 Pixels}
 
-\subsection{Image GPT}
+若 generative pretraining 的核心是对序列分布建模，那么图像也可被量化、展平并按像素或 code 顺序预测。问题在于图像具有二维局部结构，raster order 是人为选择；语言中合理的 causal factorization 未必是视觉最有效归纳偏置。
 
-将图像视为"像素语言"，用自回归方式预测下一个像素。模型在 ImageNet 无标签数据上预训练后：
-\begin{itemize}
-    \item 能生成多样化的图像补全（同一上半部分产生不同下半部分）
-    \item 线性探测的特征质量优于同规模的有监督 ResNet
-    \item 在 CIFAR-10 上达到 99\% 准确率
-\end{itemize}
+\subsection{把图像变成序列}
 
-\subsection{DALL·E：跨模态生成}
+本节先把图像转成可由 decoder 处理的序列。iGPT 将图像表示为像素 token，训练 next-pixel prediction；模型既可生成 completion，也可把 hidden representation 用于 classification probing。
 
-DALL·E 在文本-图像拼接序列上训练 Transformer，实现了文本到图像的生成。令人印象深刻的 zero-shot 能力包括：
-\begin{itemize}
-    \item 风格转换（照片 $\to$ 素描）
-    \item 图像着色
-    \item 语义变换（给猫加墨镜）
-    \item 逆 OCR（渲染指定文本）
-\end{itemize}
+\lecturefigure{slide-22-image-gpt-question.jpg}{Image GPT 检验同一 autoregressive recipe 能否跨到图像。}{官方视频 23:42；Chen et al. 2020。}
+
+\begin{knowledgebox}{读图：左边是问题，右边是 factorization}
+图像被按固定顺序展开，模型预测下一个像素/离散值。这样可以直接复用 decoder-only Transformer，却把二维邻接转换成一维次序。成功说明 architecture 有通用性，效率和 sample quality 的差距则说明领域 bias 仍重要。
+\end{knowledgebox}
+
+\subsection{Completions：条件分布的视觉版本}
+
+接下来用 completion 观察条件分布。给定图像上半部分，模型生成下半部分；多样输出表示存在多个 plausible continuation，而不是模型“恢复唯一真图”。读图前应先问输入约束保留了什么、哪些属性仍不确定，以及不同样本是否真正覆盖多种合理模式。
+
+\lecturefigure{slide-23-igpt-completions.jpg}{iGPT completion 展示视觉条件生成的多模态不确定性。}{官方视频 25:31。}
+
+\begin{knowledgebox}{读图：正确答案不是原图像素}
+若上半张脸可对应多种下半部，逐像素 ground truth 只是一个样本。评价应考虑 perceptual plausibility、global consistency 和 diversity。只用 pixel MSE 会惩罚合理但不同的生成，也可能偏好模糊平均。
+\end{knowledgebox}
+
+\subsection{Feature learning}
+
+进一步检查生成 objective 是否学到可用于分类的 feature，这是 transfer loop 的关键。Probe accuracy 随层或模型规模变化，可以显示 representation 在何处最可分。
+
+\lecturefigure{slide-24-igpt-feature-learning.jpg}{iGPT 同时评估 generative samples 与 learned visual features。}{官方视频 26:24。}
+
+\begin{knowledgebox}{读图：生成质量与表示质量是两条轴}
+表格比较模型、层或 evaluation protocol。一个模型可生成好看图像却不提供最佳 linear probe，也可能相反。Representation learning 需要冻结 feature、统一 classifier 与 data split，避免把 probe capacity 当成 backbone quality。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-自回归建模具有通用性——相同的架构和训练范式可以直接应用于图像，且在缺少领域归纳偏置的情况下仍能获得有竞争力的表示。
+iGPT 证明 autoregressive pretraining 可以迁移到 pixels，并同时产生 generation 与 representation。它也暴露 sequence order、视觉偏置和评价协议的重要性。
 
-\section{Codex：代码生成模型}
+\section{DALL-E：Text-to-Image 与 Zero-Shot Transformation}
 
-\subsection{动机}
+DALL-E 把 text token 与 image token 放进统一 autoregressive model，学习 $p(\text{image}\mid\text{text})$。课堂用 interpolation、复杂 prompt 和 image-to-image examples 展示组合能力。示例很有说服力，也最容易被 cherry-pick；因此必须把 sample gallery 当定性证据，而不是完整分布统计。
 
-\begin{itemize}
-    \item GPT-3 在几乎未训练过代码数据的情况下就展现了初步的代码生成能力
-    \item 代码具有独特优势：可以通过单元测试客观评估功能正确性
-\end{itemize}
+\subsection{概念插值与组合}
 
-\subsection{HumanEval 数据集}
+本节先从概念插值观察文本条件如何移动视觉分布；读图时要同时检查连续性、对象身份和失败样本，而不是只看画面是否有趣。前一节的 iGPT 只给视觉前缀，这里则由语言指定目标属性，因此条件遵循和视觉真实性必须分开评价。
 
-164 道手写编程题，每题平均 8 个单元测试。手写的原因是避免 GitHub 上已有解答的"数据泄露"。
+\lecturefigure{slide-25-dalle-interpolation.jpg}{DALL-E 通过文本条件在概念之间生成连续变化的图像样本。}{官方视频 29:10；Ramesh et al. 2021。}
 
-\subsection{Pass@k 指标}
+\begin{knowledgebox}{读图：插值展示条件控制，不证明概念几何完美}
+从猫到犬等 prompt variation 让输出外观连续变化，说明文本 token 能控制视觉分布。需要检查失败样本、prompt paraphrase、object count 与 spatial relation，避免只看最成功的 grid。概念组合也可能来自训练数据共现，而非抽象规则。
+\end{knowledgebox}
 
-$$\text{pass@}k = \mathbb{E}\left[1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}\right]$$
+\subsection{多样文本到图像样本}
 
-其中 $n$ 是生成的样本数，$c$ 是通过单元测试的样本数。这是一个无偏估计量，避免了直接采样 $k$ 个样本带来的高方差。
+接下来比较多组 prompt 与 samples，观察 diversity 与 instruction adherence 是否同时成立，并记录 gallery selection 可能带来的偏差。同一行回答“模型能生成多少种合理候选”，跨行则回答“改变文本条件是否可预测地改变对象、材质和风格”。
 
-\begin{warningbox}{BLEU 不适用于代码评估}
-对于同一问题的正确和错误解答，BLEU 分数的分布存在大量重叠，无法有效区分功能正确性。因此必须使用基于执行的评估指标。
+\lecturefigure{slide-26-dalle-examples.jpg}{多组 DALL-E samples 展示对象、材质、风格和文字条件的组合。}{官方视频 30:13。}
+
+\begin{knowledgebox}{读图：一行内看 diversity，跨行看 instruction adherence}
+同一 prompt 的多样样本显示 distribution breadth；不同 prompt 的对比显示条件是否被遵循。还要记录每个 grid 从多少候选中筛选、是否使用 reranker，以及失败率。没有 selection protocol，gallery 无法估计真实用户体验。
+\end{knowledgebox}
+
+\subsection{Zero-shot image-to-image}
+
+进一步把条件生成扩展到 image-to-image。模型可把输入图像重描述或变换到新概念；这里的 zero-shot 指未针对该具体 transformation 训练专用 mapping，但 pretraining data 可能包含相似关系。
+
+\lecturefigure{slide-27-dalle-zero-shot-image2image.jpg}{DALL-E zero-shot transformation 把视觉输入与文本条件组合。}{官方视频 30:33。}
+
+\begin{knowledgebox}{读图：观察内容保持与属性改变}
+理想 transformation 保留身份/布局，同时改变 prompt 指定属性。两者常冲突：改变过少是不服从，改变过多是 identity drift。评价需要 content preservation、condition adherence 与 perceptual quality 三类 metric，而非只看美观。
+\end{knowledgebox}
+
+\lecturefigure{slide-28-dalle-more-image2image.jpg}{更多 transformation examples 暴露组合泛化的范围与不稳定性。}{官方视频 31:33。}
+
+\begin{knowledgebox}{读图：多例的价值是寻找边界}
+跨多个 source/prompt 观察哪些对象、姿态和背景容易保留，哪些发生模式坍缩或属性泄漏。少数成功样本支持“能力存在”，不能估计“能力可靠”。工程上应随机抽样、盲评并报告拒绝/失败分布。
+\end{knowledgebox}
+
+\begin{warningbox}{视觉生成中的“像”与“对”}
+图像没有单一逐像素正确答案，但仍有事实、身份、版权、偏见和安全约束。Perceptual quality 不能替代 provenance、consent 与 policy evaluation；生成模型的开放输出空间使评估更难，而不是无需评估。
 \end{warningbox}
 
-\subsection{采样的"不合理有效性"}
+\subsection{本章小结}
 
-\begin{importantbox}{核心发现}
-从 12B 参数模型中采样 100 次，pass@100 从 pass@1 的不到 30\% 跃升至超过 70\%。这不是简单的重复采样——模型在不同样本中会组合出功能不同的解法。
-\end{importantbox}
+DALL-E 把 autoregressive pretraining 扩展为 multimodal conditional generation。Gallery 显示能力存在，可靠性则需要随机采样、组合测试和明确 selection protocol。
 
-温度参数影响采样多样性：pass@1 适合低温（高置信度），pass@100 适合高温（高多样性）。
+\section{Code as Modality：为什么 BLEU 不够}
 
-\subsection{Codex-S：监督微调}
+代码既是 token sequence，又有可执行语义。两个字符串差异很大可以实现相同函数，字符串相似也可能因一个符号产生严重错误。因此 code generation 的评价应尽量执行 specification，而不是只比较 reference overlap。
 
-在竞赛编程题和含 CI 测试的开源项目上微调，进一步提升性能。能力提升路径：GPT-3 $\to$ Codex $\to$ Codex-S $\to$ + 重排序 $\to$ + Oracle。
+\subsection{Code 真的只是另一种 modality 吗}
 
-\subsection{局限性}
+本节回到可自动验证的输出。Code 可以沿用 token generation recipe，但 parser、runtime 与 tests 让“正确”比自然语言相似度更可操作，也更严格。前面的文本和图像多依赖人工或感知评价；代码首次让候选分布能够进入自动执行、失败分类和搜索闭环。
 
-\begin{itemize}
-    \item \textbf{变量绑定}：多变量复杂操作时容易混淆
-    \item \textbf{组合泛化}：能完成单个简单操作，但难以组合 $n$ 个操作
-\end{itemize}
+\lecturefigure{slide-29-code-modality.jpg}{Code 可以用语言模型生成，但其正确性由执行语义约束。}{官方视频 32:20。}
+
+\begin{knowledgebox}{读图：相同 recipe，新增 verifier}
+Code tokenization 和 autoregressive objective 可直接复用 GPT，但 code 拥有 parser、type checker、tests 与 runtime。它们提供比自然语言更强的自动反馈。与此同时，程序还有 security、resource、dependency 和 specification ambiguity；通过有限 tests 只是证据之一。
+\end{knowledgebox}
+
+\teachervoice{讲者问“isn't code just another modality?”随后立刻转向 HumanEval。课堂提示：模型接口可以统一，evaluation 不能偷懒；代码的优势是有 executable verifier，责任也更高。}
+
+\subsection{HumanEval：问题、签名、docstring 与 tests}
+
+\term{HumanEval} 是一组手写 Python function problems。每题给 function signature 与 docstring，模型生成 body；隐藏 \term{unit tests}（单元测试）检查多个输入。\term{functional correctness}（功能正确性）指程序在 specification cases 上产生正确行为，而不是与 reference code 文本相似。
+
+\lecturefigure{slide-30-humaneval-dataset.jpg}{HumanEval 用 function specification 和 hidden tests 评价生成代码。}{官方视频 33:33；Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：一题包含哪些契约}
+Signature 规定接口，docstring 给自然语言 specification，examples 可能暗示边界，tests 定义可观察正确性。若 tests 不覆盖异常输入、复杂度或副作用，错误程序仍可能通过。Benchmark quality 取决于 specification clarity 与 test coverage。
+\end{knowledgebox}
+
+\lecturefigure{slide-31-humaneval-example.jpg}{HumanEval example 展示 prompt 与候选 implementation 的关系。}{官方视频 35:15。}
+
+\begin{knowledgebox}{读图：先人工推导，再运行 tests}
+阅读函数名、参数与 docstring，列出 normal、boundary、empty、duplicate 和 invalid cases；再检查候选代码。模型可能写出语法正确且看似合理的实现，却在 off-by-one、mutation 或类型边界失败。执行是必要验证，但 secure sandbox 与 timeout 也不可缺少。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={HumanEval-style functional check 的简化形式}]
+def candidate(values):
+    # generated implementation
+    ...
+
+assert candidate([1, 2, 3]) == expected_normal
+assert candidate([]) == expected_empty
+assert candidate(boundary_case) == expected_boundary
+\end{lstlisting}
+
+\subsection{Pass@k：分布中至少一个正确样本}
+
+若从模型采样 $k$ 个独立候选，\term{pass@k} 表示至少一个通过 tests 的概率。对每题采样 $n$ 个程序，其中 $c$ 个正确，Codex 论文使用估计量
+\[
+\widehat{\operatorname{pass@}k}
+=1-\frac{\binom{n-c}{k}}{\binom{n}{k}},
+\]
+当 $n-c<k$ 时结果为 1。分子表示从错误样本中选出 $k$ 个的组合数，分母是所有 $k$ 子集；两者比值是“选出的全部错误”概率。
+
+\lecturefigure{slide-32-pass-at-k.jpg}{Pass@k 评价多次采样中至少找到一个功能正确程序的机会。}{官方视频 36:00；Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：pass@1 与 pass@100 回答不同产品问题}
+Pass@1 接近用户只看一次 completion 的体验；large-k 更接近系统可生成许多候选并用 tests/reranker 选择。高 pass@100、低 pass@1 表示正确程序存在于分布，但默认 decoding 很少命中。部署价值取决于是否真有 verifier、采样成本和选择延迟。
+\end{knowledgebox}
+
+\begin{warningbox}{Pass@k 不是“模型会写软件”的比例}
+HumanEval 题目短、specification 清晰、tests 自动化。真实软件包含跨文件依赖、模糊需求、security、performance、maintenance 与 review。Benchmark pass@k 是窄能力证据，不是 autonomous software-engineering reliability。
+\end{warningbox}
+
+\subsection{Codex training snapshot}
+
+课堂 slide 记录当时 Codex 数据为从 5400 万 repositories 收集的 159 GB code，并从不同规模 GPT-3 models fine-tune；tokenizer 额外支持 spaces。这里是论文时期历史描述，不代表后来产品数据或当前政策。
+
+\lecturefigure{slide-33-codex-training-details.jpg}{Codex 在 GPT-3 基础上使用大规模 code corpus 微调并调整 tokenizer。}{官方视频 36:59；Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：数据量之外还有 representation choice}
+Repository count 不能直接转成独立、高质量 examples；需要去重、许可、安全过滤与 train-test contamination audit。Spaces 对 Python indentation 有语义，tokenizer 改动可降低序列长度并改善结构学习。Fine-tuning 复用自然语言能力，也把自然语言 prompt 与 code distribution 接起来。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-Codex 展示了将语言建模应用于代码领域的巨大潜力，而基于执行的评估和大量采样是释放其能力的关键。
+Code generation 继承 language-model recipe，却因 executable semantics 获得更强 verifier。HumanEval 与 pass@k 把“像代码”升级为“至少一个候选通过 tests”，但仍只覆盖真实软件的一小部分。
+
+\section{Easy、Medium、Hard：为什么单次解码会低估分布能力}
+
+讲者用三道 HumanEval problem 展示 pass@1 的数量级差异。Slide 的价值不在于记住具体实现，而在于观察 prompt ambiguity、algorithm depth 与 rare correctness 如何改变 sampling strategy。
+
+\subsection{Easy problem}
+
+本节先看 easy case，建立“正确样本位于高概率区域”时的基线，再逐步增加 algorithm 和 boundary 难度。读代码时先根据 docstring 手工列出 specification，再观察模型是否使用常见模板就能覆盖 normal 与 edge cases。
+
+\lecturefigure{slide-34-easy-problem.jpg}{Easy problem 的正确实现位于模型分布高概率区域。}{官方视频 38:03。}
+
+\begin{knowledgebox}{读图：高 pass@1 仍需读 specification}
+代码短、pattern 常见、boundary 少时，greedy 或低温 sample 容易正确。先检查 prompt 是否完整，再检查 candidate 是否处理 empty/negative/duplicate。高分可能来自训练中常见模板，不代表模型理解所有变体。
+\end{knowledgebox}
+
+\subsection{Medium problem}
+
+接下来观察 medium case：主体结构可能正确，但一个 branch 或 off-by-one 就足以让全部 hidden tests 失败。这类题最能说明自然语言流畅度与执行正确性脱钩，也最适合分析多次 sampling 是否产生互补错误。
+
+\lecturefigure{slide-35-medium-problem.jpg}{Medium problem 要求更多步骤或边界处理，正确样本概率明显下降。}{官方视频 38:36。}
+
+\begin{knowledgebox}{读图：错误可能集中在一个 branch}
+候选通常已有正确框架，却在循环范围、条件顺序或 state update 上失败。此时多次 sampling 可能探索到正确变体；也可用 test feedback、static analysis 或 repair loop 提高选择。Benchmark 只统计最终 pass，不解释错误类型，需要额外 taxonomy。
+\end{knowledgebox}
+
+\subsection{Hard problem}
+
+进一步进入 hard case，问题不再是“默认输出是否正确”，而是正确 program 是否在分布中拥有足够 probability mass 供 search 找到。若多数 samples 共享同一错误 algorithm，增加 $k$ 只会重复失败；若错误多样，verifier 才可能从长尾中筛出正确候选。
+
+\lecturefigure{slide-36-hard-problem.jpg}{Hard problem 的单样本正确率很低，但分布中仍可能存在正确实现。}{官方视频 39:00。}
+
+\begin{knowledgebox}{读图：低 pass@1 与零能力不同}
+若 pass@1 约为千分量级，单次 demo 几乎总失败；大量 samples 可能仍发现正确程序。系统必须决定能否承担生成、执行与筛选成本。若没有可靠 verifier，large-k 只会产生更多不可审计代码。
+\end{knowledgebox}
+
+\subsection{为什么需要 sampling-aware metric}
+
+下面从单题例子转向全 benchmark 分布。直方图展示有些题几乎总会、有些存在长尾；平均 pass@1 会隐藏“少量候选即可解决”与“再多样本也不行”的区别。这里要携带的问题是：额外 generation budget 应投给哪些题，何时应改进模型而不是继续采样。
+
+\lecturefigure{slide-37-need-pass-at-k-hist.jpg}{题目级成功概率呈长尾，单一平均分隐藏可采样性差异。}{官方视频 40:30。}
+
+\begin{knowledgebox}{读图：横轴题目成功率，纵轴题目数量}
+若大量题集中在接近 0 或 1，模型表现呈 bimodal；中间区域最适合通过 sampling 提升。需要报告 per-problem distribution，而非只给 mean。还应检查不同 model size 的 mass 如何移动，以及难题是否真正获得非零概率。
+\end{knowledgebox}
+
+\lecturefigure{slide-38-need-pass-at-k-scatter.jpg}{不同题目的 pass@1 与 pass@k 提升并不均匀。}{官方视频 40:57。}
+
+\begin{knowledgebox}{读图：散点偏离对角线意味着 sampling value}
+若点在高-k 轴显著上移，说明多样采样可找到 rare correct programs；仍贴近零的点表示 distribution 几乎没有正确质量。Sampling 不是万能，它只能放大已有 probability mass，不能凭空创造模型从未学会的 algorithm。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+题目难度改变正确样本在分布中的位置。Pass@1 测默认一次命中，pass@k 测生成与筛选系统的搜索潜力；两者都需要 per-problem 解释。
+
+\section{Temperature、Sampling 与 Oracle Approximation}
+
+Sampling strategy 决定从 model distribution 的哪个区域取候选。\term{temperature}（温度）对 logits $z_i$ 做
+\[
+p_T(i)=\frac{\exp(z_i/T)}{\sum_j\exp(z_j/T)}.
+\]
+$T<1$ 使分布更尖、偏向高概率 token；$T>1$ 提高多样性，也增加语法/语义错误。最佳温度取决于 metric 和 $k$。
+
+\subsection{为 pass@k 校准 temperature}
+
+本节先把 decoding 参数与评价预算连接起来。温度不应凭习惯固定，而要根据 $k$、verifier 和延迟预算校准。低温让候选集中在 mode，适合一次展示；高温扩大 search coverage，但只有可靠 tests 能把 diversity 转成最终正确性。
+
+\lecturefigure{slide-39-temperature-calibration.jpg}{低温有利 pass@1，较高温可能为 large-k 提供多样候选。}{官方视频 41:26。}
+
+\begin{knowledgebox}{读图：每条曲线对应一个搜索预算}
+当 $k=1$，过高温度会把质量分散到低概率错误；当 $k$ 较大，适度 diversity 可避免重复同一错误模式。最优温度不是模型常数，应在 validation tasks 上按实际 generation budget 校准，并防止 benchmark overfitting。
+\end{knowledgebox}
+
+\subsection{Sampling 的“不合理有效性”}
+
+接下来观察增加 candidate budget 的收益曲线，并把 benchmark gain 与推理、执行、筛选成本放在同一决策中。曲线的横向移动意味着更多 samples，纵向提升则是更多题至少出现一个正确候选；二者之间不是免费的能力增长。
+
+\lecturefigure{slide-40-sampling-effectiveness.jpg}{随着 samples 增加，pass@k 可远高于单次输出表现。}{官方视频 42:19。}
+
+\begin{knowledgebox}{读图：提升来自 search，不一定来自更好单样本}
+曲线说明同一模型在更大 candidate budget 下可解决更多题。真实系统还要支付 inference、sandbox、test 与 ranking 成本。若 tests 不完备，选择器可能偏向 exploit；如果多个候选高度相关，有效样本数低于名义 $k$。
+\end{knowledgebox}
+
+\teachervoice{讲者把 sampling 称为“unreasonably effective”。课堂提示不是鼓励盲目多采样，而是提醒模型质量是一整个 conditional distribution；产品只展示一个 completion 时，decoding 和 verifier 共同决定可见能力。}
+
+\subsection{近似 oracle}
+
+进一步引入选择上限。\term{oracle} 在这里是假想选择器：只要 $k$ 个候选中存在正确程序，就能识别并返回它。Unit tests 是有限 oracle approximation，覆盖越完整，选择越可靠。这个抽象把“模型没生成正确答案”和“系统没认出正确答案”分成两个可测瓶颈。
+
+\lecturefigure{slide-41-oracle-sampling.jpg}{Sampling 加 verifier 近似“从候选集合中选出正确程序”的 oracle。}{官方视频 43:17。}
+
+\begin{knowledgebox}{读图：比较 model curve 与 oracle curve 的差距}
+若 oracle-style pass@k 很高而实际 selector 低，瓶颈在 verification/ranking；若两者都低，瓶颈在 model distribution。工程团队应分别投资 generation、tests、static analysis 与 reranking，不能把所有差距归因于模型参数。
+\end{knowledgebox}
+
+\begin{warningbox}{测试可以被满足，也可以被投机}
+有限 tests 允许 overfit、hard-code 或触发未覆盖副作用。生成代码必须在 sandbox 运行，并检查 timeout、memory、network、filesystem 与 dependency。Oracle 是抽象上限，不是现实安全保证。
+\end{warningbox}
+
+\subsection{Codex-S：监督信号继续塑形}
+
+Codex-S 在 code-pretrained model 上使用 stand-alone Python functions 与正确 solutions 做 supervised fine-tuning。它改变了 prompt-to-solution distribution，使 HumanEval-style tasks 更匹配。
+
+\lecturefigure{slide-42-codex-s-training.jpg}{Codex-S 用监督函数数据进一步对齐 HumanEval-style completion。}{官方视频 44:10；Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：Fine-tuning 改善 task fit，也可能缩窄分布}
+Supervised examples 明确教模型从 docstring 到 function body，提高 benchmark performance。需要检查是否牺牲其他语言、repository context 或 diversity，并防止 train-test similarity。Fine-tuning gain 不代表 base model 不重要，而是 objective 更接近 evaluation。
+\end{knowledgebox}
+
+\subsection{Main figure：模型规模、Codex 与 sampling budget}
+
+本节综合 model family、scale 与 sampling budget，区分 pretraining gain、code fine-tuning gain 和 search gain，避免把三种效果混成一个数字。
+
+\lecturefigure{slide-43-main-figure.jpg}{Codex main figure 联合比较 model family、规模与 pass@k。}{官方视频 45:52；Chen et al. 2021。}
+
+\begin{knowledgebox}{读图：先读图例，再读斜率和间距}
+横轴/曲线通常编码 model size 或 sampling budget；不同颜色区分 GPT、Codex、Codex-S。比较同一 $k$ 下 fine-tuning gain，再比较同一模型从 pass@1 到 pass@100 的 search gain。不要把 pass@100 当交互式单 completion 体验，也不要忽略生成 100 个候选的成本。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Temperature 控制质量—多样性，pass@k 把候选预算纳入评价，tests 近似 oracle，Codex-S 则通过 supervised data 改变分布。代码系统的能力来自 model、decoding 与 verifier 三者。
+
+\section{Limitations：从 Benchmark Capability 到 Software Reliability}
+
+课堂最后没有停在 main figure，而是展示 brittle completion、model-size/compute 关系和结论。高 pass@k 能证明在窄 benchmark 上存在功能正确样本，却不能自动覆盖 specification、security、composition 与维护。
+
+\subsection{Brittleness 与 composition}
+
+本节先看 failures，再解释 main figure 的边界。Prompt brittleness 与 composition 退化说明短函数 benchmark 无法代表 repository-scale software。
+
+\lecturefigure{slide-44-limitations.jpg}{Codex limitations 包括 prompt brittleness 与更复杂 composition 上的快速退化。}{官方视频 46:53。}
+
+\begin{knowledgebox}{读图：左边是局部脆弱，右边是规模趋势}
+一个小 prompt 变化可能触发错误 completion；随着任务需要组合更多步骤，准确率下降。模型规模能改善曲线，却不保证外推到长程序和真实 repository。应测试 paraphrase、hidden requirements、multi-file dependency、security 和 regression。
+\end{knowledgebox}
+
+\begin{warningbox}{Functional correctness 仍不是 production readiness}
+生产代码还需要 readability、types、security、performance、licenses、dependency policy、observability 和 human review。即使 unit tests 全过，也可能存在未覆盖输入或危险副作用。模型输出应进入软件工程流程，而不是绕过流程。
+\end{warningbox}
+
+\subsection{结论 slide 的四个持久判断}
+
+最后把结论 slide 改写为可检验命题：生成建模、scale、跨模态迁移与 sampling 各自在哪些 data、metric 和 cost 条件下成立。回看整场时应把 sample quality、representation transfer、benchmark pass 与 deployment reliability 放在不同列，避免用一个成功故事覆盖所有层级。
+
+\lecturefigure{slide-45-conclusion.jpg}{讲者用 generative pretraining、scale、cross-modality 与 sampling 总结整场。}{官方视频 47:38。}
+
+\begin{knowledgebox}{读图：把结论改写成可检验命题}
+生成建模可利用无标签数据；scale 常提高 sample 与 transfer；同一 recipe 可迁移到 image/code；sampling 能放大分布中的 rare success。每条都需要限定 data、model、metric 与 cost。最重要的延伸是：当 verifier 存在时，生成模型可与搜索形成系统；当 verifier 不可靠时，多采样也可能放大风险。
+\end{knowledgebox}
+
+\teachervoice{讲者在结尾同时强调 generative modeling 的广泛性与 limitations。课堂提醒：Codex 的亮点不是“代码问题已解决”，而是 code 提供了一个能执行、能采样、能验证的研究环境，让模型分布和系统搜索可以被分别测量。}
+
+\subsection{本章小结}
+
+Benchmark capability 是必要证据，不是软件可靠性。Codex 让我们看见生成、采样、测试和选择的系统结构，也让 prompt brittleness、composition 与安全边界更加清楚。
 
 \section{总结与延伸}
 
-本讲的四个核心要点：
+本讲把语言模型历史、无监督学习、跨模态生成与 code evaluation 串成一条方法论：
+
 \begin{enumerate}
-    \item 神经语言建模进步迅速，GPT 系列是无监督学习推动的产物
-    \item 自回归建模具有通用性，即使在有强归纳偏置的领域（图像、代码）也能取得出色结果
-    \item 规模是涌现能力的关键驱动力
-    \item 采样是提升模型性能的"不合理有效"的方法
+  \item \textbf{生成质量是分层的}：词汇、句法、语义、事实和任务成功不能混成“像不像”；
+  \item \textbf{Perplexity 只测分布预测}：它不自动证明真实性、可控性或 downstream utility；
+  \item \textbf{Autoregressive objective 提供密集自监督}：analysis by synthesis 可产生可迁移 representation，但也可能学习 shortcut；
+  \item \textbf{GPT-1/2/3 改变任务接口}：fine-tuning、zero-shot continuation 和 in-context demonstrations 依次扩大复用；
+  \item \textbf{跨模态需要重新定义 token 与 metric}：iGPT、DALL-E 证明 recipe 可迁移，不证明领域结构不重要；
+  \item \textbf{Code 需要 functional verifier}：字符串 overlap 不能替代执行语义；
+  \item \textbf{Pass@k 测分布中的 rare success}：它与 pass@1 对应不同 candidate budget 和产品体验；
+  \item \textbf{Temperature 应按 k 校准}：低温追求单样本质量，高温可在 verifier 支持下增加搜索覆盖；
+  \item \textbf{Sampling 只能放大已有概率质量}：若正确程序概率为零，再多 sample 也无用；
+  \item \textbf{Production reliability 需要完整流程}：sandbox、tests、static analysis、review、security 与 maintenance 不能由 benchmark 代替。
 \end{enumerate}
 
+\begin{importantbox}{Generative-System Evaluation 作业}
+选文本、图像或代码任务：定义 model distribution、decoding policy、candidate budget、verifier 与 final selector；同时报告 pass@1/quality、pass@k/diversity、cost、latency 和 failure taxonomy。对代码任务推导 pass@k estimator，并设计三类隐藏 tests；对文本/图像任务说明为什么你的 verifier 不能成为完美 oracle。
+\end{importantbox}
+
+\begin{knowledgebox}{最终自检：三个“存在”必须分开}
+\textbf{存在于分布}：某个正确样本有非零概率；\textbf{能被找到}：当前 temperature、$k$ 和 search 能采到；\textbf{能被识别}：tests/ranker 能可靠选出。生成模型产品的多数差异，都发生在这三层之间。
+\end{knowledgebox}
+
 \subsection{拓展阅读}
-\begin{itemize}
-    \item Brown et al., \textit{Language Models are Few-Shot Learners}, NeurIPS 2020
-    \item Chen et al., \textit{Evaluating Large Language Models Trained on Code}, 2021
-    \item Ramesh et al., \textit{Zero-Shot Text-to-Image Generation} (DALL·E), 2021
+
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://www.cs.utoronto.ca/~ilya/pubs/2011/LANG-RNN.pdf}{\textbf{Generating Text with Recurrent Neural Networks}}：RNN language generation。
+  \item \href{https://arxiv.org/abs/1602.02410}{\textbf{Exploring the Limits of Language Modeling}}：large LSTM language modeling。
+  \item \href{https://arxiv.org/abs/1704.01444}{\textbf{Learning to Generate Reviews and Discovering Sentiment}}：sentiment neuron 与 unsupervised representation。
+  \item \href{https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf}{\textbf{GPT-1}} 与 \href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf}{\textbf{GPT-2}}：pretrain/fine-tune 到 zero-shot。
+  \item \href{https://arxiv.org/abs/2005.14165}{\textbf{GPT-3}}：few-shot/in-context evaluation 与 human detection study。
+  \item \href{https://arxiv.org/abs/2006.10738}{\textbf{iGPT}}：generative pretraining from pixels。
+  \item \href{https://arxiv.org/abs/2102.12092}{\textbf{DALL-E}}：zero-shot text-to-image generation。
+  \item \href{https://arxiv.org/abs/2107.03374}{\textbf{Codex}}：HumanEval、pass@k 与 code generation evaluation。
 \end{itemize}
+}
 
 \end{document}

@@ -1,239 +1,854 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{subcaption}
-\usepackage{float}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
 
-\newtcolorbox{knowledgebox}[1]{
-    enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm},
-    boxrule=1pt, sharp corners
-}
-\newtcolorbox{importantbox}[1]{
-    enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black,
-    coltitle=black, fonttitle=\bfseries, title=#1, sharp corners
-}
-\newtcolorbox{warningbox}[1]{
-    enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black,
-    coltitle=white, fonttitle=\bfseries, title=#1, sharp corners
+\renewcommand{\notetitle}{Lecture 32：LLM 预训练幕后——StarCoder 数据、治理与评测}
+\renewcommand{\noteauthors}{基于 Loubna Ben Allal 课堂讲座、官方 71 页 slides 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V4 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2024-05-23；上传 2024-06-07}
+\renewcommand{\videoduration}{1:01:36}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=jm2hyJLFfN8}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.47\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
 }
 
-\lstset{
-    language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue},
-    stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black},
-    breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray},
-    captionpos=b, extendedchars=false
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
 }
-
-\newcommand{\notetitle}{[CS25] Behind the Scenes of LLM Pre-training: StarCoder --- Loubna Ben Allal, HuggingFace}
-\newcommand{\noteauthors}{基于公开课程资料整理}
-\newcommand{\notedate}{Spring 2024}
-\newcommand{\videochannel}{Stanford CS25: Transformers United}
-\newcommand{\videopublishdate}{Spring 2024}
-\newcommand{\videoduration}{$\sim$1h}
-\newcommand{\videourl}{}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-
-% Footer with repo info
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
 
 \begin{document}
+\makecscover
 
-\begin{titlepage}
-\centering
-{\Large 课程笔记\par}
-\vspace{1.2cm}
-{\huge\bfseries \notetitle\par}
-\vspace{0.8cm}
-{\large \noteauthors\par}
-\vspace{0.3cm}
-{\large \notedate\par}
-\vspace{1.2cm}
+\section{来源与核心问题：好模型的幕后不是一条训练命令}
 
-\ifdefempty{\videocoverpath}{
-{\small 请在生成笔记时填入视频封面图的本地路径。\par}
-}{
-\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par
-}
+旧稿没有填写 canonical video URL，只把 YouTube thumbnail 重复当成唯一课程图，并把 71 页官方 deck 压成短篇概述。本讲现以讲者个人官网直链的 Google Slides、Stanford Online 官方录像 \texttt{jm2hyJLFfN8}、官方 \texttt{en-US} 人工字幕和 BigCode/StarCoder primary sources 为依据。全部 71 页 slides 已落盘；其中 58 页包含独立教学内容，其余仅为分隔、动画中间态、完成标记、重复页或致谢。
 
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par
-\textbf{发布日期}：\videopublishdate\par
-\textbf{视频时长}：\videoduration\par
-\textbf{视频链接}：
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
+\subsection{课程不是“数据最重要”一句话，而是问题链}
 
-\tableofcontents
-\newpage
+标题把 StarCoder 标成 use case，意味着课程的目标不是复述一个模型配置，而是用代码模型回答一般预训练问题：要多少数据、从哪里找、如何过滤、如何治理、怎样评估、何时相信 benchmark。后文每一章都沿着这个 question--answer 结构展开。
 
-%% --- 正文内容开始 --- %%
+\lecturefigure{slide-01.jpg}{Behind the Scenes of LLM Pretraining：StarCoder use case}{Loubna Ben Allal 官方 deck，第 1 页}
 
-\section{引言：训练一个好的 LLM 需要什么？}
+\lecturefigure{slide-02.jpg}{课程路线：用一连串问题回答“怎样训练好 LLM”}{Loubna Ben Allal 官方 deck，第 2 页}
 
-Loubna Ben Allal 是 HuggingFace Science 团队的机器学习工程师，BigCode 项目核心成员，The Stack 数据集和 StarCoder 代码模型的共同作者。本讲以一个核心问题展开：``训练一个好的 LLM 到底需要什么？''
-
-\begin{knowledgebox}{开源追赶闭源}
-几年前人们认为闭源模型（如 GPT-4）有不可逾越的优势。但如 Google 内部备忘录所预言，开源社区``破解了大部分拼图''。LLaMA 3 70B Instruct 已接近 GPT-4 水平，且开放权重允许量化、微调和定制化部署。
-\end{knowledgebox}
-
-\section{数据：LLM 的核心燃料}
-
-\subsection{数据决定一切}
-
-\begin{importantbox}{训练一个好 LLM 的关键要素}
+\begin{importantbox}{本讲的六个交付问题}
 \begin{enumerate}
-\item \textbf{数据}（最重要）：质量、多样性、规模
-\item \textbf{模型架构}：相对标准化（decoder-only Transformer）
-\item \textbf{训练配方}：学习率调度、batch size、训练 token 数
-\item \textbf{评估}：持续监控训练质量
+  \item 在给定 compute 下，模型参数与训练 token 怎样分配？
+  \item raw web/code/synthetic sources 怎样转成可训练 corpus？
+  \item filter 直觉怎样通过小模型 ablation 验证？
+  \item license、opt-out、PII 与 decontamination 如何进入 pipeline？
+  \item repository/file/commit/notebook 怎样格式化成训练 sequence？
+  \item leaderboard 如何避免 contamination、单一 benchmark 与时间泄漏？
 \end{enumerate}
-数据的重要性超过架构选择——架构已高度标准化，但数据处理仍有巨大优化空间。
 \end{importantbox}
 
-\subsection{The Stack：大规模代码数据集}
+\teachervoice{00:00:50--00:02:10，Ben Allal 说整场报告只有一个“很 loaded”的问题，slides 会不断提出子问题再回答。StarCoder 是把抽象原则落到真实项目的案例。}
 
-The Stack 是 BigCode 项目构建的开源代码数据集：
-\begin{itemize}
-\item V1 覆盖约 80 种编程语言
-\item V2 扩展到 600+ 种语言，并增加了 GitHub Issues、Git Commits、Jupyter Notebooks、Kaggle Notebooks 和 Pull Requests
-\end{itemize}
+\subsection{Open-model 进展：权重开放带来哪些实际能力}
 
-\subsection{数据处理流水线}
+2023 年流传的 ``No Moat'' memo 代表一种判断：闭源领先并不意味着开源永远无法追赶。课堂引用它不是为了宣布竞争结束，而是解释为什么公开 weights 会产生新的 deployment/fine-tuning ecosystem。
 
-\begin{enumerate}
-\item \textbf{语言选择}：保留流行且维护中的编程语言，排除配置文件等
-\item \textbf{质量检查}：检查平均行长度、文件大小等指标
-\item \textbf{按语言定制阈值}：不同编程语言的代码特征不同（如某些语言天然行更长）
-\item \textbf{近似去重}（Near-deduplication）：去除高度相似的文件
-\item \textbf{PII 检测}：检测并移除个人身份信息
-\end{enumerate}
+\lecturefigure{slide-03.jpg}{“No moat”判断：开源社区逐步补齐训练拼图}{Loubna Ben Allal 官方 deck，第 3 页}
 
-\begin{warningbox}{去重的重要性}
-代码数据中的重复问题严重——同一段代码可能在数千个仓库中出现。不去重会导致模型过拟合于这些重复模式，严重影响泛化能力。近似去重（如 MinHash + LSH）比精确去重在计算上更可行。
+开放 weights 后，quantization 可以降低 memory footprint，本地 runtime 可以在 consumer hardware 上部署，parameter-efficient fine-tuning 可以针对组织数据做定制。这些价值不等于模型在所有任务上达到闭源系统能力，而是\textbf{可检查、可改造、可私有部署的选择空间更大}。
+
+\lecturefigure{slide-04.jpg}{2024 年课堂示例：接近 GPT-4 评价的模型可在大型消费级桌面运行}{Loubna Ben Allal 官方 deck，第 4 页}
+
+\begin{warningbox}{“性能接近”必须绑定版本、指标与日期}
+slide 是 2024 年 5 月快照。Arena、MMLU、coding、安全、长上下文、tool use、latency 与 cost 会给出不同排序；本讲不把某张表上的接近改写成通用 parity。
 \end{warningbox}
 
-\subsection{社区驱动的质量审查}
+\teachervoice{00:02:10--00:03:20，讲者强调 open weights 的直接收益是 quantization、consumer deployment 与社区 fine-tuning，而不是一句抽象的“开源更好”。}
 
-BigCode 社区的成员为每种编程语言审查 100 个样本，帮助确定合适的过滤阈值。这种``人在环路''的方法确保了过滤标准的合理性。
+\subsection{Open releases 在增加，但训练透明度仍不足}
+
+Gemma、Mistral 等公开模型让 open ecosystem 扩大；Arena 图也显示 2023 到 2024 年 open/closed gap 缩小。读这两页时应先看它们回答的问题：第一页是供给增长，第二页是特定人类偏好评测协议下的趋势。
+
+\lecturefigure{slide-05.jpg}{开放模型发布增加：Gemma、Mistral 等进入竞争}{Loubna Ben Allal 官方 deck，第 5 页}
+
+\lecturefigure{slide-06.jpg}{May 2024 Arena 视角：open/closed 模型差距缩小}{Loubna Ben Allal 官方 deck，第 6 页}
+
+\begin{knowledgebox}{Arena 证据能说明什么}
+Arena 用用户 pairwise preference 形成 Elo-like ranking，适合衡量交互式回答偏好；它不能单独衡量训练数据合法性、事实可靠性、rare-language coverage、code execution correctness 或部署成本。趋势可参考，能力边界仍需多维评估。
+\end{knowledgebox}
+
+\subsection{为什么公开权重却不公开数据与 recipe}
+
+讲者给出两个现实原因：一是 disclosure 可能引发 license/copyright scrutiny，二是团队希望保留 competitive edge。这使模型 weights 可以下载，却无法回答样本从何而来、filter 怎么选、token 数怎样配、evaluation 是否泄漏。
+
+\lecturefigure{slide-07.jpg}{公开模型的限制：数据与训练细节经常缺失}{Loubna Ben Allal 官方 deck，第 7 页}
+
+\begin{warningbox}{不可复现不是“文档少一点”}
+若缺少 dataset version、dedup threshold、sampling weights、tokenizer、training tokens、optimizer schedule、benchmark decontamination 和 seeds，研究者无法定位性能来自 architecture、data 还是评测泄漏，也无法可靠复用治理选择。
+\end{warningbox}
+
+\teachervoice{00:04:10--00:05:05，讲者把不披露的法律与竞争原因直接说出。她并未因此放弃总结公共规律，而是强调需要从多个公开 release 拼出 evidence。}
+
+\subsection{Model、GPUs、Data：三角形里本讲选择 data}
+
+Transformer、Mamba、MoE 都可能成为 model 选项，GPU 决定 budget 上限；但在相近 architecture 与 training technique 下，数据质量和 mixture 常成为固定预算内的主要差异。这里的“data backbone”是课程的 focus，不是声称 architecture 和 hardware 无关。
+
+\lecturefigure{slide-11.jpg}{训练好 LLM 的三类资源：Model、GPUs 与 Data}{Loubna Ben Allal 官方 deck，第 11 页}
+
+\begin{knowledgebox}{把三者写成约束优化}
+可把训练目标粗略写为
+\[
+\min_{\theta,\mathcal{D},r}\ L(\theta;\mathcal{D},r)
+\quad\text{s.t.}\quad
+C_{\text{train}}\le B,\ C_{\text{serve}}\le S,
+\]
+其中 $\mathcal{D}$ 是数据与 mixture，$r$ 是训练 recipe，$B,S$ 分别是训练与服务预算。课程主要优化 $\mathcal{D}$，但约束仍来自模型和 GPU。
+\end{knowledgebox}
+
+\teachervoice{00:05:05--00:06:20，讲者说 architecture/techniques 越来越相似，所以“给定预算下”数据让模型拉开差距。限定词是 given budget，而不是任何规模都只看数据。}
 
 \subsection{本章小结}
-数据质量和处理流水线是 LLM 性能的决定性因素。
 
-\section{模型架构与训练}
+Open weights 扩大部署和定制空间，但训练透明度仍是主要缺口。课程因此把预训练还原成受 compute、serving、data、governance 和 evaluation 共同约束的工程，而 StarCoder 提供可检查的端到端案例。
 
-\subsection{StarCoder 架构}
+\section{要多少数据：Scaling law 与生命周期成本}
 
-StarCoder 基于标准 decoder-only Transformer，关键配置：
+决定数据源之前，先要估算需要多少 tokens。Scaling law 的价值是给预算分配提供经验曲线；它的局限是训练 loss 的 optimum 不自动等于部署成本、数据受限和 domain-specific performance 的 optimum。
 
-\begin{itemize}
-\item 15.5B 参数
-\item 8K 上下文窗口
-\item Multi-Query Attention（MQA）：所有注意力头共享一组 KV，大幅减少 KV 缓存
-\item Fill-in-the-Middle（FIM）训练目标
-\end{itemize}
+\subsection{三个问题：多少、哪里、怎样过滤}
 
-\begin{importantbox}{Fill-in-the-Middle (FIM)}
-FIM 训练目标允许模型不仅预测下一个 token，还能填充代码中间的空缺。这对代码补全至关重要——用户通常需要在已有代码中间插入新代码，而非仅在末尾追加。
-$$\text{输入}：\text{prefix} + \text{suffix} \to \text{输出}：\text{middle}$$
+上一章把模型、GPU 与数据放进同一个约束问题；本节开始拆解数据变量。读图时应把三个问句看成有依赖的 pipeline：数据量决定 collection 规模，来源决定 provenance 与 domain，filter 决定 quality/diversity；三者相互作用，不能先固定一个再把其他视为清洁步骤。
+
+\lecturefigure{slide-13.jpg}{训练数据的三个问题：how much、where、how to filter}{Loubna Ben Allal 官方 deck，第 13 页}
+
+\begin{importantbox}{Raw data、retained data 与 training tokens 要区分}
+Raw bytes 是抓取体量；retained bytes 是 filter/dedup 后文件；unique tokens 是 tokenizer 后去重统计；training tokens 还包含 epochs/repeats 与 mixture sampling。报告“3T tokens”若不说明是哪一层，无法复现。
 \end{importantbox}
 
-\subsection{StarCoder 2}
+\subsection{Scaling law：在参数与 tokens 之间分配 compute}
 
-StarCoder 2 的改进：
-\begin{itemize}
-\item 训练数据量从 1T 增加到 3.3T token
-\item 引入更多数据源（Pull Requests、Jupyter Notebooks）
-\item 提供 3B、7B、15B 三种规模
-\item 切换到 Grouped Query Attention (GQA)
-\end{itemize}
+确定“需要多少数据”不能只看已有硬盘容量，而要把模型大小、训练 tokens 和预算同时放进经验曲线。本节先给出 scaling-law 形式，再用 Kaplan 与 Chinchilla 的不同结论说明：所谓 optimum 是在一组假设和 fitted range 下得到的资源配置，而不是脱离数据与硬件的常数。
+
+Kaplan-style empirical law 常写成
+\[
+L(N,D)=L_\infty+aN^{-\alpha}+bD^{-\beta},
+\]
+其中 $N$ 为参数量、$D$ 为训练 token、$L_\infty$ 为不可约 loss。对 dense Transformer，训练 FLOPs 常近似 $C\approx 6ND$，固定 $C$ 时就需要选择模型与数据的组合。
+
+\lecturefigure{slide-14.jpg}{How much data：用 scaling laws 分配 compute budget}{Loubna Ben Allal 官方 deck，第 14 页}
+
+\lecturefigure{slide-15.jpg}{Kaplan 与 Chinchilla：不同 compute-optimal 结论及示例}{Loubna Ben Allal 官方 deck，第 15 页}
+
+Kaplan 早期结果给出较大的模型、较少的 token；Chinchilla 通过更广实验修正为参数与 token 更平衡的增长。slide 对比 GPT-3 175B/约 300B tokens 与 Chinchilla 65B/约 1.4--1.6T tokens，教学结论是：\textbf{同 compute 下，旧模型可能参数过大、训练不足}。
+
+\begin{warningbox}{常数比率不是永恒法则}
+“每个参数约 20 tokens”依赖模型族、数据、optimizer、context 和 fitted range。后续模型常 intentionally overtrain，domain 或 data quality 变化也会移动 optimum。
+\end{warningbox}
+
+\teachervoice{00:06:20--00:09:10，讲者用 Kaplan/Chinchilla 说明 scaling law 是预算分配工具，并提醒这些结论来自特定论文和数据，不应只背一个 token-per-parameter 数字。}
+
+\subsection{读 Chinchilla 曲线：每个 compute budget 都有谷底}
+
+上一节给出了抽象公式，本节转向经验曲线，说明 optimum 在图上怎样出现。读图时先固定一种颜色：横轴是参数量，纵轴是 validation loss；每条曲线先降后升，模型太小欠容量，模型太大则在固定预算下 token 不足，谷底才是该 budget 下的 training-compute optimum。
+
+\lecturefigure{slide-16.jpg}{Chinchilla empirical curves：固定 compute 下的参数量谷底}{Loubna Ben Allal 官方 deck，第 16 页}
+
+若 $C=6ND$，将 $D=C/(6N)$ 代回经验 law，可以求 $N^*(C)$ 与 $D^*(C)$ 的幂律。真实训练不会只解公式，还要考虑 discrete hardware shape、parallel efficiency、batch、context 和数据可得性。
+
+\begin{knowledgebox}{曲线不告诉你的四件事}
+它通常不计 serving cost；不保证 downstream task 同步提升；不描述 license/quality constraints；也不包含训练 failure、checkpoint selection 与 hyperparameter search 成本。
+\end{knowledgebox}
+
+\subsection{Compute、Data、Model 三条 scaling evidence}
+
+Chinchilla 曲线展示固定预算内的谷底，这一页进一步把 loss 分别对 compute、data size 和 model size 作图，展示可拟合直线区间。读图时首先确认其他变量是否接近最优，并检查横轴范围；否则单独增加某一轴可能只是把系统推入 under-training 或 data-limited regime。
+
+\lecturefigure{slide-17.jpg}{Scaling evidence：loss 随 compute、data 与 model size 的幂律变化}{Loubna Ben Allal 官方 deck，第 17 页}
+
+\begin{warningbox}{三张直线不能拼成无条件因果}
+这些图是经验边际关系。若 data quality 随规模下降、重复率上升，或模型超出优化稳定区间，同一斜率不会无限延伸。预测必须报告 fitted range 与 confidence。
+\end{warningbox}
+
+\subsection{从 Chinchilla 到 overtraining：optimum 发生了什么变化}
+
+时间线展示 Chinchilla 65B/1.4T、LLaMA 7B/1T、LLaMA-3 8B/15T 等趋势。团队主动让较小模型训练更多 tokens，因为一次训练的额外成本，可以换取长期更低的 inference memory、latency 与 deployment complexity。
+
+\lecturefigure{slide-18.jpg}{Scaling-law timeline：从 compute-optimal 到小模型 overtraining}{Loubna Ben Allal 官方 deck，第 18 页}
+
+定义模型生命周期成本
+\[
+C_{\text{life}}=C_{\text{train}}+Q\cdot C_{\text{infer/token}}+C_{\text{memory}}+C_{\text{ops}},
+\]
+其中 $Q$ 是服务期总 token。若 $Q$ 很大，多训练一个 smaller model 可能降低总成本。
+
+\teachervoice{00:09:10--00:11:10，讲者说 Chinchilla scaling law 没把 inference cost 放入目标，所以今天会选择更小、训练更久的模型，并在训练时多付一次成本。}
+
+\subsection{GPT-1 到 GPT-4：scale 同时放大训练与服务账单}
+
+前面的 optimum 讨论仍然很抽象；这里用 GPT 系列的数量级变化把训练和服务账单放到同一画面。slides 用 dataset/model size 和粗略训练成本展示规模增长，数字是公开估计而不是审计账本；其教学作用是提醒读者，参数增大不仅影响一次训练，也使每 token latency、GPU memory 和并发服务长期变贵。
+
+\lecturefigure{slide-19.jpg}{从 GPT-1 到 GPT-4：dataset、model size 与训练成本增长}{Loubna Ben Allal 官方 deck，第 19 页}
+
+\lecturefigure{slide-20.jpg}{Inference gets more expensive：参数量、显存与 GPU 需求}{Loubna Ben Allal 官方 deck，第 20 页}
+
+若权重精度为 $b$ bytes，单份权重 memory 至少为
+\[
+M_{\text{weights}}=bN,
+\]
+还需 KV cache、activations、workspace 与并行冗余。量化降低 $b$，但不自动降低所有 compute 和 bandwidth bottleneck。
+
+\begin{knowledgebox}{为什么 IDE code model 偏好更小}
+代码补全要求低 latency、高并发、较长 repository context，用户每次按键都可能触发请求。一个 benchmark 更强但延迟更高的模型，未必是产品 optimum；这也解释 StarCoder2 提供多种尺寸。
+\end{knowledgebox}
+
+\subsection{Compute-optimal 不等于 optimal：Harm's law 的警告}
+
+上一节说明大模型会反复支付 inference cost；本节因此把目标从单次训练 loss 改成生命周期成本。两页 slide 写明：smaller model 训练更久会提高 upfront compute，却可能降低每次 deployment 成本；所谓 ``Harm's law'' 只是对越过 Chinchilla 点后额外训练开销的幽默命名，不是新的自然定律。
+
+\lecturefigure{slide-21.jpg}{Compute-optimal $\neq$ deployment-optimal：为什么过训练小模型}{Loubna Ben Allal 官方 deck，第 21 页}
+
+\lecturefigure{slide-22.jpg}{Harm's law：训练越过 Chinchilla 点的额外 compute}{Loubna Ben Allal 官方 deck，第 22 页}
+
+\begin{importantbox}{做决策时至少画两条曲线}
+一条是 training loss versus training compute，另一条是 end-to-end product cost/quality versus model size。若只优化第一条，会忽略 repeated inference、memory capacity、energy、edge deployment 与 user latency。
+\end{importantbox}
+
+\subsection{Data constraint 与 quality 会移动 scaling curve}
+
+进一步阅读页引入 data-constrained scaling 和 DeepSeek LLM：有限 unique data 时，重复训练会改变收益；更高质量 corpus 也会改变 model/data allocation。换句话说，$D$ 不只是 token 计数，还带 distribution 和 quality。
+
+\lecturefigure{slide-23.jpg}{Scaling laws 的进一步阅读：data constraint 与 quality-dependent allocation}{Loubna Ben Allal 官方 deck，第 23 页}
+
+\begin{warningbox}{Domain scaling 仍是 underexplored 问题}
+Q\&A 中讲者说 Chinchilla 在 English/code 间有一定支持，但 medical 等 domain 可能不同；甚至同 domain 换成更 curated data，optimum 也可能移动。不要把 generic web fit 直接复制到专门领域。
+\end{warningbox}
+
+\teachervoice{00:11:10--00:13:20，讲者把 data quality 和 domain 作为 scaling-law caveat，并指出 DeepSeek 的结果说明同一领域的数据集变化也会改变分配。}
 
 \subsection{本章小结}
-代码 LLM 的架构选择日趋标准化，FIM 等任务特定目标是关键差异。
 
-\section{数据配比（Data Mixture）}
+Scaling law 回答“固定训练 compute 下怎样分配”，却不回答整个模型生命周期。真正的 optimum 还取决于 serving volume、memory、latency、unique-data constraint、domain 与 quality，因此现代团队常选择更小模型加更多 tokens。
 
-\subsection{数据配比实验}
+\section{数据从哪里来：Web、Code、Curated 与 Synthetic}
 
-\begin{importantbox}{小规模消融实验的价值}
-在大规模训练前，用小模型（如 1B 参数）在不同数据配比上进行消融实验，可以以低成本找到接近最优的数据混合策略。关键变量包括：
-\begin{itemize}
-\item 各编程语言的比例
-\item 代码 vs 自然语言的比例
-\item GitHub Issues 等非代码数据的权重
-\end{itemize}
+有了 token budget 后，第二个问题是 source。不同来源不仅内容不同，还带来不同的抓取、许可、去重、格式和 verification 成本。课程把来源分成 web data、GitHub/code、curated sources 和 synthetic data；StarCoder 则展示 code corpus 怎样做成可检查的数据产品。
+
+\subsection{Source taxonomy：来源决定后续治理成本}
+
+上一章只估算 token budget，本节开始回答这些 tokens 从哪里来，因为 source 会决定后续的 filter、license 和 evaluation 成本。Web 覆盖广但噪声大，GitHub 有结构和许可元数据但含重复与 secrets，curated sources 质量高但规模有限，synthetic data 可定向生成却依赖 teacher、prompt 与 seed diversity。
+
+\lecturefigure{slide-26.jpg}{LLM training data 的四类来源}{Loubna Ben Allal 官方 deck，第 26 页}
+
+\begin{knowledgebox}{来源不是互斥标签}
+代码仓库包含 README/Markdown，自然语言网页包含代码，synthetic prompts 又常从 web/curated documents 派生。实际 mixture 应按 provenance 和 transformation lineage 记录，而不是只写最终 domain 百分比。
+\end{knowledgebox}
+
+\subsection{Common Crawl：规模大到必须先过滤再下载/处理}
+
+Common Crawl 提供周期性网页快照，raw corpus 可达数百 TB。直接 tokenize 不仅昂贵，还会保留 boilerplate、spam、machine-generated pages、duplicates、PII 与低质量文本，因此通常复用已有 filtered web dataset 或做 distributed filtering。
+
+\lecturefigure{slide-27.jpg}{Web data：Common Crawl 的规模与过滤负担}{Loubna Ben Allal 官方 deck，第 27 页}
+
+\begin{warningbox}{抓到网页不等于拥有训练许可}
+可访问性、robots、copyright、terms、personal data 与 jurisdiction 是不同问题。技术 pipeline 能记录来源和移除样本，却不能自动解决所有法律与伦理判断。
+\end{warningbox}
+
+\teachervoice{00:13:20--00:16:20，讲者强调 Common Crawl 的原始规模和 filtering cost，建议理解已有 dataset 的处理过程，而不是把 raw crawl 当作即用数据。}
+
+\subsection{FineWeb：更好的 filter 用 early-training curve 证明}
+
+FineWeb slide 比较多个 web corpora 上的小模型训练曲线。读图时应先确认相同 architecture、token budget、evaluation 和 seed，再看哪个 corpus 更快达到较高 score。曲线支持的是 filter pipeline 在该设置下优于对照，不是任何模型/任务都最优。
+
+\lecturefigure{slide-29.jpg}{FineWeb ablation：不同 web corpora 的 early-training performance}{Loubna Ben Allal 官方 deck，第 29 页}
+
+\begin{importantbox}{Data quality 的 operational definition}
+高质量不是“看起来像好文章”。在预训练里，它应表现为更低 validation loss、更快 downstream learning、更少 memorization/toxicity/PII、更好 domain coverage，且在 matched compute 和多 seeds 下成立。
 \end{importantbox}
 
-\subsection{更多数据 vs 更多遍}
+\subsection{The Stack：代码数据需要 raw collection、inspection 与 opt-out}
 
-\begin{warningbox}{预训练 vs 微调的数据策略截然不同}
-\textbf{预训练}：数据越多越好（LLaMA 的经验）。重复训练同一数据会导致性能下降。\\
-\textbf{微调}：数据质量远重要于数量。LIMA 论文表明，1000 条高质量指令可以超越百万条低质量指令。
+代码不像纯文本网页：文件有 repository、path、license、language、stars、commit history 等结构，也可能包含 generated files、vendor copies、secrets 与 benchmark solutions。The Stack pipeline 因此不仅抓取，还要语言检测、license/metadata 管理、dedup 和社区 inspection。
+
+\lecturefigure{slide-30.jpg}{Code data：The Stack 的 collection 与 processing 概览}{Loubna Ben Allal 官方 deck，第 30 页}
+
+\lecturefigure{slide-31.jpg}{The Stack v1：GitHub collection、raw data、dedup、inspection 与 opt-out}{Loubna Ben Allal 官方 deck，第 31 页}
+
+\begin{knowledgebox}{Opt-out 在 pipeline 中的位置}
+Opt-out 需要 stable repository/file identifiers、公开查询工具、处理请求的版本化列表，以及 future retraining 时的排除机制。它不是训练完成后删一个网页链接，而是 data lineage 的一部分。
+\end{knowledgebox}
+
+\teachervoice{00:17:10--00:19:10，讲者说明 BigCode 在 v1 发布 inspection tool 和 opt-out form，让开发者能检查代码并请求未来训练排除；这是开放数据项目的核心设计。}
+
+\subsection{The Stack v2：Software Heritage 与更多开发过程数据}
+
+v2 不再主要依赖直接 clone GitHub，而从 Software Heritage archive 提取，并加入 issues、pull requests、commits、Jupyter/Kaggle notebooks、math/coding datasets。这样 corpus 不只教最终代码，还包含问题、修改、讨论和执行环境。
+
+\lecturefigure{slide-32.jpg}{The Stack v2：Software Heritage、过滤与多源开发数据}{Loubna Ben Allal 官方 deck，第 32 页}
+
+\lecturefigure{slide-33.jpg}{The Stack v1 与 v2：raw size、filtered size、languages 与 tokens}{Loubna Ben Allal 官方 deck，第 33 页}
+
+\begin{importantbox}{Raw scale 与 usable scale 的差距就是工程量}
+v2 raw size 约为 v1 的十倍，而过滤后仍约为 v1 的四到五倍。被删除的绝大部分不是“浪费”，而是 duplicates、低质量、unsupported formats、PII 或不合适语言；过滤率本身不代表好坏，需看保留 diversity 与模型结果。
+\end{importantbox}
+
+\teachervoice{00:19:10--00:20:20，讲者把 v2 的关键改进放在 archive source、更多语言和辅助开发数据，而不仅是“token 更多”。}
+
+\subsection{Synthetic data：从 Phi 到可控生成 corpus}
+
+Textbooks Are All You Need/Phi 系列展示用 GPT-3.5/4 生成高质量教材式数据，可以用远少于 web-scale 的 corpus 训练强小模型。它引发的不是“synthetic 取代真实数据”定论，而是把 generator、prompt、seed、verification 变成新数据工程变量。
+
+\lecturefigure{slide-34.jpg}{Synthetic data 的催化案例：Textbooks Are All You Need}{Loubna Ben Allal 官方 deck，第 34 页}
+
+设 seed/context 为 $s$、prompt template 为 $p$、generator 为 $G$，synthetic sample 为
+\[
+y\sim G(\cdot\mid p,s).
+\]
+数据质量取决于 $s$ 的覆盖、$p$ 的约束、$G$ 的能力与后验 verifier $v(y)$，不能只靠采样数量。
+
+\begin{warningbox}{Synthetic feedback loop}
+若 generator 和 verifier 共享盲区，重复生成会放大风格同质化、事实错误与 representation collapse。应记录 teacher/version、seed provenance、rejection reasons、novelty 与 human spot checks。
+\end{warningbox}
+
+\subsection{Cosmopedia：用 web/curated seeds 扩大多样性}
+
+Cosmopedia 使用 Mixtral-8x7B 生成约 25B tokens 的教材、博客、故事等。核心技巧不是一句“让模型写课本”，而是从 web samples、Stanford courses、WikiHow 等抽取 context，把 topic 与具体 seed 一起放入 prompt，限制 hallucination 并增加主题分散度。
+
+\lecturefigure{slide-35.jpg}{Cosmopedia：开放模型生成的大规模 synthetic text dataset}{Loubna Ben Allal 官方 deck，第 35 页}
+
+\lecturefigure{slide-36.jpg}{Cosmopedia 的数据组成：web seeds、curated sources 与多种体裁}{Loubna Ben Allal 官方 deck，第 36 页}
+
+\begin{knowledgebox}{Synthetic corpus 的四项审计}
+\begin{enumerate}
+  \item \textbf{Coverage：}topic、language、difficulty、style 是否分散？
+  \item \textbf{Grounding：}生成是否受 seed/context 约束？
+  \item \textbf{Verification：}事实、代码、数学是否有自动/人工检查？
+  \item \textbf{Lineage：}teacher、prompt、seed、filter 与 license 是否可追踪？
+\end{enumerate}
+\end{knowledgebox}
+
+\teachervoice{00:20:20--00:24:20，讲者说 synthetic data 很新、很有前景，也“very tricky”获得 diversity。Cosmopedia 用大量 web/curated seeds，而不是从少数空泛 prompts 无限扩写。}
+
+\subsection{本章小结}
+
+数据 source 决定后续处理成本。Web 提供覆盖，code 提供结构，curated sources 提供高 signal，synthetic data 提供定向扩展；任何来源都必须附带 provenance、filter、license/opt-out 与 evaluation 设计。
+
+\section{怎样发现好 Filter：不要相信直觉，先跑 Ablation}
+
+“清洗数据”最容易被写成规则清单，但真正困难的是判断规则是否提升模型。课程把 filter discovery 变成实验科学：manual inspection 提出候选，small-model ablation 估计因果效果，多个 seeds 和 high-signal benchmarks 降低噪声。
+
+\subsection{从质量主张到可执行 pipeline}
+
+第一张 evidence slide 引用 Yi/Open Foundation Models 的观点：standard architecture 加高质量数据也能表现很强。它只提供动机；下一页才展示 language filtering、quality rules、dedup、semantic/topic 等可执行 stages。
+
+\lecturefigure{slide-39.jpg}{为什么要过滤：高质量 data 对标准 architecture 的影响}{Loubna Ben Allal 官方 deck，第 39 页}
+
+\lecturefigure{slide-40.jpg}{通用 pretraining data-cleaning pipeline}{Loubna Ben Allal 官方 deck，第 40 页}
+
+常见 rule/perplexity filter 可写成保留条件
+\[
+\mathbb{1}\{q(x)\in[a,b]\}\cdot \mathbb{1}\{\operatorname{PPL}_{r}(x)<\tau\},
+\]
+其中 $q(x)$ 是长度、重复行、符号比例等 heuristic，$r$ 是 reference model。阈值 $a,b,\tau$ 必须用样本和 ablation 校准。
+
+\begin{warningbox}{Perplexity filter 的双刃剑}
+高 PPL 可能是垃圾，也可能是稀有语言、代码、公式或新知识；低 PPL 可能是模板与重复。使用 reference-model PPL 会把其 bias 带入 dataset，应与 diversity/coverage 指标联合。
+\end{warningbox}
+
+\subsection{寻找最佳过滤技术：manual inspection 只是起点}
+
+前一节列出 language、rule、perplexity 与 dedup stages，但还没有回答阈值怎样选。本节把 filter 设计变成可证伪实验：先看数据并解释异常，再训练 matched-compute 小模型验证；评测选择 early-training 就有 signal 的 benchmark，并用不同 seeds 避免把 optimizer noise 当成 filter gain。
+
+\lecturefigure{slide-42.jpg}{Filter discovery：人工检查、小模型 ablation、高 signal benchmark 与多 seeds}{Loubna Ben Allal 官方 deck，第 42 页}
+
+若 filter $f$ 与 baseline 的分数差为 $\Delta_s$，跨 $k$ 个 seeds 的均值和标准误可写为
+\[
+\bar\Delta=\frac{1}{k}\sum_{s=1}^{k}\Delta_s,
+\qquad
+\operatorname{SE}(\bar\Delta)=\frac{\operatorname{sd}(\Delta_s)}{\sqrt{k}}.
+\]
+只有 effect 超过 noise，才值得把规则应用到 TB-scale corpus。
+
+\begin{lstlisting}[caption={数据过滤 ablation 的最小实验协议}]
+for filter_candidate in candidates:
+    subset = apply_filter(raw_subset, filter_candidate)
+    for seed in seeds:
+        model = train_small_model(subset, matched_tokens, seed)
+        scores[filter_candidate, seed] = evaluate(high_signal_suite)
+compare_mean_variance_cost_and_retained_diversity(scores)
+\end{lstlisting}
+
+\teachervoice{00:27:10--00:30:00，讲者给出两个负结果：按 comment density 过滤几乎没提升；删除少于 5 stars 的仓库移除 70\% 以上数据，并训练出最差 ablation。直觉必须让位于实验。}
+
+\subsection{FineWeb 的 200+ ablations：数据 recipe 也需要 search budget}
+
+FineWeb 团队训练 200 多个约 1B 参数、约 30B tokens 的 ablation models 来选择 filters。这个规模说明 data research 不是廉价预处理；它需要 model-training budget、benchmark harness 和统计纪律。
+
+\lecturefigure{slide-43.jpg}{FineWeb：用 200+ ablation models 搜索 filtering recipe}{Loubna Ben Allal 官方 deck，第 43 页}
+
+\begin{importantbox}{把 data recipe 当作 hyperparameter search}
+Filter type、threshold、dedup radius、language mixture、source weights 与 sampling temperature 都是超参数。与 architecture search 一样，应避免 test-set tuning，保留 held-out evaluation，并记录失败实验。
+\end{importantbox}
+
+\subsection{本章小结}
+
+好 filter 不是规则看起来合理，而是在 matched compute、多 seeds、多个 early-signal benchmarks 下提高模型，同时保留 diversity 与 governance 目标。Star filtering 的失败是本讲最重要的实践经验之一。
+
+\section{The Stack 到 StarCoder：代码数据的端到端管线}
+
+这一章把一般 filtering protocol 落到真实 code corpus。代码数据的特殊性来自语言差异、仓库复制、generated files、secrets、benchmark solutions、metadata 与结构化开发事件。每一步都会改变模型能学到的任务。
+
+\subsection{Raw 到 training data：大幅缩小不等于浪费}
+
+The Stack v1 从约 6.4TB source code 缩到 StarCoder 使用的约 800GB；v2 从约 32.1TB 缩到约 3.6TB。这个 reduction 汇总语言选择、quality rules、dedup、PII 与格式约束。
+
+\lecturefigure{slide-44.jpg}{StarCoder/The Stack v1：6.4TB raw 到 800GB training data}{Loubna Ben Allal 官方 deck，第 44 页}
+
+\lecturefigure{slide-45.jpg}{StarCoder2/The Stack v2：32.1TB raw 到 3.6TB training data}{Loubna Ben Allal 官方 deck，第 45 页}
+
+\begin{warningbox}{过滤率不是 quality metric}
+删除 90\% 可能清掉 duplicates，也可能抹掉 rare languages；保留 90\% 可能保持 diversity，也可能保留 spam。必须报告被删类型、source/language retention、token distribution 与 downstream effect。
+\end{warningbox}
+
+\subsection{Language selection 与 per-language thresholds}
+
+v1 从 358 languages 中选择约 86 个，排除 configs 和不维护语言；v2 扩展到 600+。平均行长、文件大小、comment ratio 等统计不能共用一个阈值，因为不同语言 idiom 和 generated-code patterns 不同。
+
+\lecturefigure{slide-46.jpg}{The Stack v1：语言选择、社区抽样与 per-language filtering}{Loubna Ben Allal 官方 deck，第 46 页}
+
+\begin{knowledgebox}{人在环路的具体形式}
+BigCode 社区按 extension 检查约 100 个样本，记录真实 code、generated/vendor data、异常长度和格式，再推导 heuristics。它不是让志愿者逐文件审批，而是用 domain knowledge 校准 scalable rules。
+\end{knowledgebox}
+
+\teachervoice{00:30:00--00:33:20，讲者强调同一 average-line-length threshold 不能用于所有语言；社区 inspection 提供了按语言设计阈值的依据。}
+
+\subsection{Near-dedup：MinHash 与 LSH 为什么适合 TB-scale code}
+
+Exact dedup 只删完全相同文件；near-dedup 要识别改名、格式变化或局部修改。将文件表示为 shingles 集合 $A,B$，Jaccard similarity 为
+\[
+J(A,B)=\frac{|A\cap B|}{|A\cup B|}.
+\]
+MinHash 满足哈希碰撞概率近似 $\Pr[h(A)=h(B)]=J(A,B)$，再用 LSH（Locality-Sensitive Hashing）把相似 signatures 放进候选桶，避免全对全比较。
+
+\lecturefigure{slide-47.jpg}{Near-deduplication：MinHash+LSH 与 StarCoder ablation 收益}{Loubna Ben Allal 官方 deck，第 47 页}
+
+\begin{importantbox}{为什么 near-dedup 是高价值 filter}
+它语言无关、容易并行，并直接减少重复训练与 memorization。slide 的 ablation 显示多种 code subsets 上 pass@1 明显提高，因此团队采用 strong dedup；这比未经验证的 stars/comments heuristic 更可靠。
+\end{importantbox}
+
+\teachervoice{00:33:20--00:35:20，讲者说 near-dedup 是效果最大的 filter，而且无需为 86 种语言分别修改；这同时满足收益与可扩展性。}
+
+\subsection{PII、secrets 与 benchmark decontamination}
+
+GitHub 自带 secret scanning 仍不能保证 corpus 无 emails、names、passwords 和 keys。BigCode 先人工标注 PII spans，再训练 StarPII NER model 扫描全量数据；课堂报告这一步约消耗 800 GPU hours。随后还要移除 evaluation benchmarks，避免 inflated score。
+
+\lecturefigure{slide-48.jpg}{The Stack：PII removal 与 benchmark decontamination}{Loubna Ben Allal 官方 deck，第 48 页}
+
+\begin{knowledgebox}{首次定义：PII 与 decontamination}
+PII（Personally Identifiable Information）包括能识别个人的 names、emails、phones 等；secrets 还包括 tokens/passwords/keys。\textbf{Decontamination} 是从训练数据中移除 benchmark items 及其近似/派生版本，保护 evaluation independence。
+\end{knowledgebox}
+
+\begin{warningbox}{Detector 只能降低风险，不能出具“零 PII”证明}
+NER 有 false negatives，代码字符串可能被混淆，历史 commit 可能泄漏删除内容。发布时还需 sample audits、reporting channel、gating 与 incident response。
+\end{warningbox}
+
+\teachervoice{00:34:00--00:36:20，讲者把 PII 处理的 annotation、NER 和 800 GPU-hour 成本说得很具体，也提醒 evaluation set 必须从 training corpus 移除。}
+
+\subsection{Formatting：把 repository context 变成训练信号}
+
+过滤后仍需决定 sequence format。StarCoder 在 code 前加入 repository/name/file metadata tokens；issues 包含 title、comment、user roles。格式让模型学到上下文边界，也会定义推理时可控制的接口。
+
+\lecturefigure{slide-49.jpg}{StarCoder data formatting：repository、file、stars 与 issue metadata}{Loubna Ben Allal 官方 deck，第 49 页}
+
+\lecturefigure{slide-50.jpg}{Git commits 与 Jupyter notebooks 的结构化格式}{Loubna Ben Allal 官方 deck，第 50 页}
+
+对于 fill-in-the-middle（FIM），将文档切成 prefix $P$、middle $M$、suffix $S$，训练序列可重排为
+\[
+\langle\text{PRE}\rangle P\langle\text{SUF}\rangle S
+\langle\text{MID}\rangle M,
+\]
+仍用 next-token loss，却让模型学习在已知前后文时生成中间 code。
+
+\begin{warningbox}{Metadata tokens 也可能成为 shortcut}
+若 stars、repository name 或 user identity 与质量标签高度相关，模型可能记忆 source bias。应评估移除 metadata 后的能力、privacy risk 和跨仓库 generalization。
+\end{warningbox}
+
+\subsection{StarCoder2 mixture：不同 source 贡献不同任务}
+
+训练数据表列出 The Stack、GitHub issues、pull requests、notebooks、documentation、math/code datasets 等，并区分是否做 FIM、epochs 和 sample weight。读表时不要只看 token 百分比，要问每类 source 教什么 behavior。
+
+\lecturefigure{slide-51.jpg}{StarCoder2 training-data mixture 与 source-specific settings}{Loubna Ben Allal 官方 deck，第 51 页}
+
+若 source $i$ 有 $T_i$ tokens、sampling weight $w_i$，实际抽样概率为
+\[
+p_i=\frac{w_iT_i}{\sum_j w_jT_j}.
+\]
+小 source 可通过 $w_i>1$ 被 oversample，但重复 exposure 也增加 memorization，必须用 validation/evaluation 校准。
+
+\begin{knowledgebox}{Source-to-behavior mapping}
+Code files 教 syntax/algorithms；issues 教 problem description 与 discussion；commits/PRs 教 edit rationale；notebooks 教 code--output--markdown 交织；documentation 教 API usage；math datasets 教 symbolic/reasoning。Mixture 是能力设计，不只是拼接。
+\end{knowledgebox}
+
+\subsection{Tooling：可复现数据管线不能藏在一次性 notebook}
+
+最后一页列出 datasets、datatrove、datatrove-like distributed pipelines、tokenizers/training code 与 BigCode processing repo。TB-scale filtering 需要 streaming、sharding（把文件或样本切成可由不同 workers 独立处理的分片）、checkpointing、deterministic transforms 和 dataset versioning。
+
+\lecturefigure{slide-52.jpg}{数据过滤与训练 tooling：datasets、datatrove、训练框架与 BigCode code}{Loubna Ben Allal 官方 deck，第 52 页}
+
+\begin{lstlisting}[caption={可复现数据管线的阶段契约}]
+discover_sources_and_record_provenance()
+normalize_and_language_classify()
+apply_quality_filters_with_versioned_thresholds()
+exact_and_near_deduplicate()
+detect_pii_secrets_and_benchmark_overlap()
+format_sequences_and_sample_mixture()
+publish_manifest_hashes_stats_and_opt_out_state()
+\end{lstlisting}
+
+\subsection{本章小结}
+
+StarCoder 的 data advantage 不是某个神奇 filter，而是 source selection、per-language inspection、near-dedup、PII/decontamination、structured formatting、mixture 和 reproducible tooling 的组合。每一步都有成本、失误方式和 evidence。
+
+\section{代码模型生态：从 Copilot 到 BigCode 协作}
+
+数据管线完成后，课程回到 code LLM 的历史和生态。核心变化是 Codex/Copilot 证明 next-token prediction 足以成为强 baseline，社区随后把公开数据、模型和 fine-tuning 组合成大量 code assistants。
+
+\subsection{2021：代码可以像文本一样做 next-token prediction}
+
+早期 code modeling 常显式使用 AST、program analysis 或 feature engineering；Codex 展示把大 Transformer 喂入大量 code，也能学会 completion。结构化方法仍有价值，但不再是进入强 code generation 的必要前置。
+
+\lecturefigure{slide-55.jpg}{GitHub Copilot 2021：next-token code modeling 的产品起点}{Loubna Ben Allal 官方 deck，第 55 页}
+
+\teachervoice{00:38:30--00:40:00，讲者把 Codex 的历史意义总结为“code can be treated like text”：不是代码没有结构，而是强 sequence baseline 把手工特征的门槛大幅降低。}
+
+\subsection{2024：1.7K+ open code models 与 leaderboard landscape}
+
+Hub 上出现大量 code-pretrained 或含 code mixture 的模型；同时 base 与 instruction-tuned models 在 HumanEval 类榜单上快速提升。数量说明 ecosystem 活跃，不等于 1,700 个独立高质量 pretraining runs，许多是 fine-tunes、quantizations 或 derivatives。
+
+\lecturefigure{slide-56.jpg}{2024 年快照：超过 1.7K open models trained on code}{Loubna Ben Allal 官方 deck，第 56 页}
+
+\lecturefigure{slide-57.jpg}{强 code base 与 instruction-tuned models 的榜单快照}{Loubna Ben Allal 官方 deck，第 57 页}
+
+\begin{warningbox}{HumanEval 80\% 不是“80\% 编程能力”}
+HumanEval 是约 164 个 Python function-completion tasks，以 unit tests 判断。分数受 prompt、sampling、pass@k、contamination 和 instruction tuning 影响，不能外推到 repository editing、debugging、安全或多文件软件工程。
+\end{warningbox}
+
+\subsection{Open code LLM landscape：provider、size 与 objective}
+
+Meta Code Llama、BigCode StarCoder、DeepSeek Coder 等构成不同 family，另有 CodeGen、StableCode、CodeQwen、Granite。比较时应区分 base/instruct、context、FIM、license、languages、training date 与 benchmark protocol。
+
+\lecturefigure{slide-58.jpg}{开放 code LLM landscape：Meta、BigCode、DeepSeek 与其他 families}{Loubna Ben Allal 官方 deck，第 58 页}
+
+\begin{knowledgebox}{Code model 的首次术语消化}
+\textbf{Base model} 主要学 next-token/FIM；\textbf{instruction-tuned model} 学指令回答；\textbf{MQA} 让所有 query heads 共享一组 KV；\textbf{GQA} 让若干 query heads 共享一组 KV，通常在质量与 KV-cache 之间折中。
+\end{knowledgebox}
+
+\teachervoice{00:55:00--00:57:20，Q\&A 中讲者说 code/text 训练总体相似，但 code assistant 更看重 long context、MQA/GQA inference efficiency 和 IDE-friendly smaller models。}
+
+\subsection{BigCode：开放科学协作的目标}
+
+BigCode 不只发布 weights，而是让 1,000+ 研究者/工程师参与 Slack，公开 data processing、training code、models 和 friendly license。这里的价值是能检查 decision trail，而不是把 collaboration size 当成 quality guarantee。
+
+\lecturefigure{slide-59.jpg}{BigCode open-scientific collaboration：透明 data、processing、models 与社区}{Loubna Ben Allal 官方 deck，第 59 页}
+
+\lecturefigure{slide-60.jpg}{BigCode ecosystem：The Stack、StarCoder 与社区 fine-tunes}{Loubna Ben Allal 官方 deck，第 60 页}
+
+\begin{importantbox}{Ecosystem 的复用链}
+The Stack 被多种 code models 使用；StarCoder checkpoints 又成为 StarChat、WizardCoder 等 fine-tunes 的 base。复用扩大影响，也意味着 upstream data quality、license 与 contamination decisions 会向下游传播。
+\end{importantbox}
+
+\teachervoice{00:40:00--00:43:10，讲者说 BigCode 发起的直接原因是 full data transparency：社区可以 inspect data、复用 processing code、检查模型，而不是只下载 weights。}
+
+\subsection{本章小结}
+
+Code LLM 生态从闭源 Copilot 快速扩展到公开 datasets、base models 和 fine-tunes。下一步问题不再是“有没有模型”，而是 release 是否真正开放、透明、可复现和负责。
+
+\section{Open and Responsible：权重开放只是四分之一}
+
+这一章把 data governance 放在模型 release 的核心。开放性至少包含可访问数据、可访问模型、可复现研究和完整文档；responsibility 还要求 opt-out、PII、license、evaluation 与 limitation reporting。
+
+\subsection{四层开放：Data、Models、Research、Documentation}
+
+slide 将开放拆成四列。数据需要 inspection/opt-out/PII；模型需要 weights、training code、evaluation interface；研究需要 processing/training/evaluation reproducibility；文档需要 dataset/model cards、governance、architecture、cost 与 limitations。
+
+\lecturefigure{slide-61.jpg}{Open and Responsible Research on LLMs 的四层 checklist}{Loubna Ben Allal 官方 deck，第 61 页}
+
+\begin{importantbox}{开放 release 的最小定义}
+\begin{enumerate}
+  \item 能知道模型用了什么 data 和 transformation；
+  \item 能获得或至少审计 weights/code/config；
+  \item 能复现主要 training/evaluation path；
+  \item 能看到 license、limitations、PII/opt-out 与 cost。
+\end{enumerate}
+仅有 downloadable weights，不足以回答这些问题。
+\end{importantbox}
+
+\teachervoice{00:43:10--00:45:10，讲者明确说 open release 不是“release model weights and stop there”，而是 data tools、opt-out、PII、reproducibility、evaluation tools 与 technical reports 的组合。}
+
+\subsection{SantaCoder、StarCoder、StarCoder2：项目怎样迭代}
+
+SantaCoder 作为约 1.1B ablation platform，StarCoder 扩到 15B/约 1T tokens，StarCoder2 提供 3B/7B/15B 并使用更大更多语言 corpus。slide 同时列出 Python source 比例下降，以及透明度与开放访问的延续。
+
+\lecturefigure{slide-62.jpg}{从 SantaCoder 到 StarCoder2：规模、语言、Python 比例与开放性}{Loubna Ben Allal 官方 deck，第 62 页}
+
+\begin{knowledgebox}{为什么先做 SantaCoder}
+TB-scale data rule 无法直接在 15B full run 上反复试。小模型提供 filter/format/objective ablation platform；但 extrapolation 仍需在更大模型验证，不能假设所有 data effect 完全 scale-invariant。
+\end{knowledgebox}
+
+\subsection{Transparency Index：外部指标衡量披露，不衡量全部能力}
+
+Stanford Foundation Model Transparency Index 按 data、labor、compute、risks、downstream 等披露维度评分。StarCoder 在课堂快照中排名靠前，说明文档/透明努力被外部框架捕捉；它不证明模型最准确、最安全或法律争议已解决。
+
+\lecturefigure{slide-63.jpg}{Foundation Model Transparency Index 的课堂时结果}{Loubna Ben Allal 官方 deck，第 63 页}
+
+\begin{warningbox}{Transparency 与 responsibility 相关但不等价}
+披露坏结果比隐藏更透明，却仍可能不负责任；没有完整披露也可能有内部控制，但无法被公众验证。Index 衡量可见信息，不能替代 independent audit 或 legal judgment。
 \end{warningbox}
 
 \subsection{本章小结}
-数据配比是被低估的超参数，小规模实验是找到好配比的实用方法。
 
-\section{评估}
+Responsible open model 需要 data、weights、code、evaluation、documentation 与 governance 一起发布。BigCode 的价值在于把这些层变成项目目标；透明度指标则提供外部检查，但不能替代能力与风险评估。
 
-\subsection{代码模型评估}
+\section{Evaluation 与 Tooling：先防 Contamination，再谈 Leaderboard}
 
-\begin{itemize}
-\item \textbf{HumanEval / MBPP}：经典的 Python 代码生成基准
-\item \textbf{MultiPL-E}：多语言代码评估
-\item \textbf{DS-1000}：数据科学代码评估
-\end{itemize}
+预训练结束并不意味着结果可信。代码 benchmark 尤其容易出现在 GitHub、教程和 instruction data 中；公开 leaderboard 还会诱导反复优化。课程因此主张多 benchmark、decontamination、membership test 与 time-split evaluation。
 
-\subsection{训练过程中的监控}
+\subsection{多 benchmark：一个分数无法描述 code model}
 
-持续追踪验证损失和关键基准分数，及时发现训练不稳定性（如损失尖峰、性能退化）。
+第一张表同时比较 code completion、code reasoning、data science、math 与 repository tasks。模型 size 更大通常更强，但不同 tasks 的排序可能不同。评估必须绑定 model version、prompt、sampling、tests 与 execution environment。
+
+\lecturefigure{slide-64.jpg}{StarCoder/CodeLlama/DeepSeek 等模型的多 benchmark 对比}{Loubna Ben Allal 官方 deck，第 64 页}
+
+\lecturefigure{slide-65.jpg}{StarCoder2 3B/7B/15B 的任务分解结果}{Loubna Ben Allal 官方 deck，第 65 页}
+
+对于每个问题采样 $n$ 个 solutions，其中 $c$ 个通过 tests，pass@$k$ 的常用无偏估计为
+\[
+\operatorname{pass@}k=1-\frac{\binom{n-c}{k}}{\binom{n}{k}}.
+\]
+pass@1 更接近一次 completion；较大 $k$ 衡量多次尝试中至少一次成功，不能直接横比。
+
+\begin{warningbox}{Unit tests 只覆盖写出的行为}
+通过 tests 不保证 efficiency、security、style、undefined behavior、dependency correctness 或 hidden edge cases。若 tests 太弱，模型可生成看似正确却不可靠的代码。
+\end{warningbox}
+
+\teachervoice{00:44:20--00:46:20，讲者建议 release 时用尽可能多的 benchmarks：某一个可能有 contamination，多任务也能揭示模型行为分布，而不是只追单项 headline。}
+
+\subsection{Autocomplete 与 membership test：部署侧也要做 attribution}
+
+BigCode 还发布 VS Code extension 和 membership test。后者尝试判断 generated snippet 是否与 training data 相似，并向用户提示潜在来源。它是 provenance aid，而不是确定的 memorization proof。
+
+\lecturefigure{slide-66.jpg}{Code tooling：autocomplete extension 与 training-data membership test}{Loubna Ben Allal 官方 deck，第 66 页}
+
+\begin{knowledgebox}{Membership test 的边界}
+Exact match 高精度但漏掉改写；fuzzy match 会把 common idioms 误报；training corpus 不完整或版本不同又会产生 false negative。输出应是相似度与候选来源，不应写成法律结论。
+\end{knowledgebox}
+
+\teachervoice{00:45:00--00:47:00，讲者把 membership test 放在 code attribution 努力里：生成代码可能来自训练样本时，应给作者/用户一个可检查提示。}
+
+\subsection{Customize code model：预训练原则怎样缩小到单 GPU}
+
+Personal Copilot workflow 仍是 collect--filter--dedup--format--train--evaluate，只是从 full pretraining 变成 repository-specific continued pretraining 或 fine-tuning。LoRA 将权重更新写成低秩矩阵
+\[
+W'=W+BA,\qquad A\in\mathbb{R}^{r\times d},\ B\in\mathbb{R}^{d'\times r},\ r\ll d,
+\]
+只训练 $A,B$，显著减少 optimizer states 和梯度 memory。
+
+\lecturefigure{slide-67.jpg}{Customize Code Models：在私有 codebase 上训练 personal Copilot}{Loubna Ben Allal 官方 deck，第 67 页}
+
+\begin{lstlisting}[caption={小预算 code assistant 的可执行路径}]
+select_small_strong_base_with_code_and_long_context()
+collect_only_authorized_repository_data()
+deduplicate_and_split_by_repository_or_time()
+format_fim_and_repository_context_examples()
+fine_tune_with_peft_or_lora_on_one_gpu()
+evaluate_execution_latency_leakage_and_regressions()
+\end{lstlisting}
+
+\teachervoice{00:57:20--00:59:10，Q\&A 中讲者给单 GPU 建议：选强 base、curated data、quantized/on-device runtime 与 PEFT，而不是试图从头预训练。}
+
+\subsection{Leaderboards：界面很方便，protocol 更重要}
+
+公开 leaderboard 聚合 model scores，帮助发现候选；但每个 row 背后包含 model date、prompt、temperature、test harness、contamination policy 和 submission rules。截图是入口，不是可复现实验记录。
+
+\lecturefigure{slide-68.jpg}{Code leaderboards：模型比较的公共入口}{Loubna Ben Allal 官方 deck，第 68 页}
+
+\begin{knowledgebox}{Leaderboard 使用顺序}
+先看 benchmark version 和 cutoff，再看 model release/training date；确认 base/instruct、pass@1/pass@k、execution sandbox、prompt；最后才比较分数。若 protocol 不同，排名没有可解释性。
+\end{knowledgebox}
+
+\subsection{HumanEval overfitting：instruction tuning 也会污染}
+
+即使 pretraining 删除 HumanEval，instruction data 仍可能包含“实现一个函数并通过 tests”的近似题。模型可能学习 benchmark style 或见过语义等价问题，导致 public score 相对真实新题过高。
+
+\lecturefigure{slide-69.jpg}{Potential overfitting in HumanEval：公开 benchmark 与真实泛化差距}{Loubna Ben Allal 官方 deck，第 69 页}
+
+若训练样本 $x$ 与 benchmark $b$ 的 similarity $s(x,b)>\tau$，可标记潜在 overlap；但 semantic equivalence 不一定被 lexical detector 捕捉。decontamination 应结合 exact/fuzzy/code-structure/time metadata，并报告阈值。
+
+\begin{warningbox}{Instruction data 是 contamination 的第二入口}
+只清 pretraining corpus 不够。SFT、RLHF prompts、synthetic exercises、benchmark explanations 和 GitHub solutions 都可能泄漏 test pattern；每个 stage 都需要 provenance scan。
+\end{warningbox}
+
+\subsection{LiveCodeBench：用 release date 建立时间隔离}
+
+LiveCodeBench 定期抓取新 contest problems，并只用模型 release 之后的问题评估，降低训练中见过题目的概率。它还比较 full-history 与 post-cutoff score，若差异大，可能提示旧 benchmark overfit。
+
+\lecturefigure{slide-70.jpg}{LiveCodeBench：以 post-release problems 做 contamination-resistant evaluation}{Loubna Ben Allal 官方 deck，第 70 页}
+
+可将 time-split 定义为
+\[
+\mathcal{B}_{\text{valid}}(m)=\{b:\ t_{\text{problem}}(b)>t_{\text{release}}(m)\}.
+\]
+它减少直接时间泄漏，但模型可能基于未公开 checkpoint、网页提前出现题目或相似 templates，仍需谨慎。
+
+\teachervoice{00:49:00--00:52:40，讲者把 LiveCodeBench 作为重要解决方案：使用模型发布后出现的问题，观察一些模型在 uncontaminated slice 上是否仍保持表现。}
 
 \subsection{本章小结}
-评估需要覆盖多种编程语言和任务类型。
 
-\section{数据集发布的注意事项}
+可信 code evaluation 需要多任务、可执行 tests、明确 pass@k、数据/时间 decontamination、membership/attribution tools 和 repeated protocol。Leaderboard 是导航，time-split 与 source audit 才是对 contamination 的实质防线。
 
-\begin{knowledgebox}{负责任的数据集发布}
-发布大规模数据集时需要考虑：
-\begin{itemize}
-\item 许可证合规性
-\item 版权保护
-\item 提供 Opt-out 工具（允许代码作者要求移除自己的代码）
-\item 敏感数据需要访问控制（如 PII 检测数据集）
-\item 完善的文档和数据卡
-\end{itemize}
+\section{Q\&A：Domain、Tokenizer、Fine-tuning 与 Dataset Release}
+
+Q\&A 把 lecture recipe 放到边界场景：multimodal data 能否替代 text、code 是否需要特殊 architecture、一个 GPU 怎样做、scaling 是否跨 domain、tokenizer 有何差异、fine-tuning 是否用同样 filter，以及大数据集发布还需哪些治理。
+
+\subsection{Code 与 text：相似 training，优先级不同}
+
+讲者认为 architecture/training 总体相似，code model 仍可用 decoder Transformer；差别更多在 long repository context、FIM、fast IDE inference、MQA/GQA 和 data formatting。code tokenizer 仍用 BPE，但会保留 number splitting，并在 code mixture 上检查 under/overrepresented tokens。
+
+\begin{knowledgebox}{Tokenizer 首次定义与 sanity checks}
+BPE（Byte Pair Encoding）反复合并高频 token pairs。代码 tokenizer 应检查 whitespace/indentation、operators、numbers、Unicode、paths 和 language coverage；平均 token-per-character 过高会增加 context cost，过大的 whole-identifier tokens 又会损害组合泛化。
 \end{knowledgebox}
+
+\teachervoice{00:58:20--01:00:00，讲者说 code tokenizer 与 text tokenizer 很接近，重点是 number splitting、在真实 mixture 上训练并检查 outlier tokens；代码中也有大量 Markdown/English。}
+
+\subsection{Pretraining 与 fine-tuning 的 filter 强度不同}
+
+预训练需要 breadth，过强 star filter 会删掉太多数据；fine-tuning 面向特定 repository/language，可以更严格地筛高质量样本。LIMA 的 1,000 instructions 结果说明 alignment 阶段 quality 可能比 quantity 更重要，但不代表 1,000 样本适合所有任务。
+
+\begin{warningbox}{不要把 LIMA 外推成“少数据总是够”}
+LIMA 使用强 pretrained base 和特定 alignment setting。domain knowledge 若不在 base 中，fine-tuning 仍需要足够覆盖；小数据也更容易过拟合风格、泄漏评测或缺少 rare cases。
+\end{warningbox}
+
+\teachervoice{00:59:20--01:00:20，讲者对比：pretraining 不能轻易删到没有 breadth；fine-tuning 数据需求更小，可以投入更多精力做严格过滤。}
+
+\subsection{Multimodal、Domain scaling 与不确定答案}
+
+被问到 image/video 是否减少 text-only data 时，讲者明确说没有做过，不能给比例；她只观察到当时 VLM 仍有大量 text。被问到 medical 等 domain 时，她认为 scaling optimum 可能变化，现有 evidence 不足。
+
+\begin{importantbox}{保留“不知道”也是 teacher voice}
+高质量讲义不应替讲者补出确定答案。这里的可执行结论是：对新 modality/domain 重新做 scaling/data-mixture ablation，而不是引用 generic Chinchilla ratio。
+\end{importantbox}
+
+\teachervoice{00:52:40--00:55:00，讲者对 multimodal data substitution 直接回答“没有试过，不能真正回答”，只给出观察性判断。}
+
+\subsection{发布大型数据集：技术、治理和访问控制一起设计}
+
+发布前需要 license/copyright review、opt-out、PII/secrets detection、dataset card、processing code、statistics、gating sensitive subsets 和 versioned removal list。Hub/gated access 能改善可达性与风险控制，但不是法律豁免。
+
+\begin{lstlisting}[caption={大型训练数据集发布前 checklist}]
+record_source_license_timestamp_and_transform_lineage()
+publish_filter_dedup_pii_and_decontamination_versions()
+provide_inspection_opt_out_and_removal_workflows()
+gate_sensitive_annotations_or_high_risk_subsets()
+release_statistics_cards_tools_and_known_limitations()
+version_updates_and_propagate_removals_to_future_models()
+\end{lstlisting}
+
+\teachervoice{01:00:00--01:01:30，讲者建议同时考虑 license、copyright、opt-out、工具和文档；对 PII annotation data 这类敏感 subset，可以使用 gated access。}
+
+\subsection{本章小结}
+
+Code LLM 并非完全不同的物种；它复用语言模型 recipe，却在 context、inference、format 和 evaluation 上有不同优先级。有限预算应做 curated fine-tuning；新 domain/modalities 则需要重新测 scaling；数据发布必须把治理工作流当成产品功能。
 
 \section{总结与延伸}
 
-本讲以 StarCoder 为案例，详细展示了 LLM 预训练的全流程：数据收集 $\to$ 清洗过滤 $\to$ 去重 $\to$ 数据配比 $\to$ 模型训练 $\to$ 评估。核心教训：数据质量比模型架构更重要；社区协作可以加速开源进展；负责任的数据发布是可持续发展的基础。
+这节课真正展示的是一个 data-to-model control loop：先用 scaling 和 lifecycle cost 决定目标规模，再选择来源与 provenance，接着用 ablation 找 filter，用 governance 处理 opt-out/PII/license，用 formatting/mixture 定义任务，最后用 contamination-aware evaluation 检查模型。StarCoder 的价值不只是 code score，而是这条链可以被审计。
+
+\subsection{端到端因果链}
+
+\begin{importantbox}{从 data decision 到 model behavior}
+\begin{enumerate}
+  \item \textbf{Source} 决定知识、许可和长尾覆盖；
+  \item \textbf{Filter/dedup} 决定质量、diversity 与 memorization；
+  \item \textbf{Formatting/mixture} 决定模型看到的任务和上下文；
+  \item \textbf{Training scale} 决定容量与 exposure；
+  \item \textbf{Evaluation} 决定我们能否区分泛化与 contamination。
+\end{enumerate}
+任何一层不可见，最终 benchmark 都难以解释。
+\end{importantbox}
+
+\subsection{最容易犯的五个错误}
+
+\begin{warningbox}{从 headline 滑向伪结论}
+不要把 Chinchilla ratio 写成跨 domain 常数；不要把 stars/comments 当 quality label；不要把 PII detector 写成零风险证明；不要把 HumanEval 分数写成软件工程能力；不要把 open weights 写成完整 openness。课程中的负结果和治理限制与正结果同等重要。
+\end{warningbox}
+
+\subsection{复现实验清单}
+
+\begin{lstlisting}[caption={预训练项目的统一复现清单}]
+pin_model_tokenizer_optimizer_and_code_commit()
+hash_raw_filtered_and_formatted_dataset_versions()
+report_source_mixture_repeats_and_effective_tokens()
+publish_filter_ablations_seeds_and_negative_results()
+document_opt_out_pii_license_and_decontamination()
+freeze_evaluation_prompts_harnesses_cutoffs_and_dates()
+report_train_and_inference_compute_memory_latency_cost()
+\end{lstlisting}
+
+\subsection{自测问题}
+
+\begin{multicols}{2}
+\footnotesize
+\begin{enumerate}
+  \setlength{\itemsep}{0pt}
+  \item 为什么 open weights 不等于完整 transparent release？
+  \item Kaplan 与 Chinchilla 对 model/data allocation 的差别是什么？
+  \item 为什么 compute-optimal 不一定是 lifecycle-optimal？
+  \item raw bytes、unique tokens 与 training tokens 有何区别？
+  \item Common Crawl 为什么不能直接 tokenize 后训练？
+  \item The Stack v1 的 opt-out 需要什么 data lineage？
+  \item v2 使用 Software Heritage 带来什么变化？
+  \item synthetic data 的 seed、generator、verifier 分别控制什么？
+  \item Cosmopedia 怎样增加生成多样性？
+  \item 为什么 repository stars filter 训练出最差 ablation？
+  \item 多 seeds 对 filter experiment 有什么作用？
+  \item MinHash/LSH 为什么适合 near-dedup？
+  \item strong dedup 为什么可能提升 code benchmark？
+  \item PII detection 与 secret scanning 有何区别？
+  \item decontamination 为什么要覆盖 SFT data？
+  \item repository/file metadata 怎样改变训练任务？
+  \item FIM 如何用 next-token objective 实现？
+  \item source sampling weight 怎样改变 effective mixture？
+  \item MQA 与 GQA 主要优化什么？
+  \item BigCode 的 openness 为什么超过权重发布？
+  \item pass@1 与 pass@k 能否直接比较？
+  \item membership test 为什么不能证明 memorization？
+  \item LiveCodeBench 的 time split 减少哪类泄漏？
+  \item 单 GPU 做 code assistant 应优先投资什么？
+\end{enumerate}
+\end{multicols}
 
 \subsection{拓展阅读}
-\begin{itemize}
-\item Li et al., ``StarCoder: May the Source Be with You!'', 2023
-\item Lozhkov et al., ``StarCoder 2 and The Stack v2: The Next Generation'', 2024
-\item Kocetkov et al., ``The Stack: 3 TB of Permissively Licensed Source Code'', 2022
-\item Zhou et al., ``LIMA: Less Is More for Alignment'', 2023
-\end{itemize}
 
-%% --- 正文内容结束 --- %%
+\begin{multicols}{2}
+\footnotesize
+\begin{itemize}
+  \setlength{\itemsep}{0.15em}
+  \item Hoffmann et al., \href{https://arxiv.org/abs/2203.15556}{Training Compute-Optimal Large Language Models}：Chinchilla scaling。
+  \item Muennighoff et al., \href{https://arxiv.org/abs/2305.16264}{Scaling Data-Constrained Language Models}：unique data 受限时的重复训练。
+  \item Kocetkov et al., \href{https://arxiv.org/abs/2211.15533}{The Stack}；Lozhkov et al., \href{https://arxiv.org/abs/2402.19173}{StarCoder 2 and The Stack v2}。
+  \item Penedo et al., \href{https://arxiv.org/abs/2306.01116}{RefinedWeb} 与 \href{https://arxiv.org/abs/2406.17557}{FineWeb}：web filtering 与 ablations。
+  \item Lee et al., \href{https://arxiv.org/abs/2107.06499}{Deduplicating Training Data Makes Language Models Better}。
+  \item Li et al., \href{https://arxiv.org/abs/2305.06161}{StarCoder: may the source be with you!}：模型、FIM、治理与评测。
+  \item Brown et al., \href{https://arxiv.org/abs/2107.03374}{HumanEval}；Jain et al., \href{https://arxiv.org/abs/2403.07974}{LiveCodeBench}：execution 与时间隔离评测。
+  \item Zhou et al., \href{https://arxiv.org/abs/2305.11206}{LIMA}；Hu et al., \href{https://arxiv.org/abs/2106.09685}{LoRA}：少量高质量 alignment 与 parameter-efficient fine-tuning。
+\end{itemize}
+\end{multicols}
 
 \end{document}
