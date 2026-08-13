@@ -1,534 +1,460 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{float}
+\input{../cs153-preamble.tex}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
+\renewcommand{\notetitle}{Lecture 07：Cursor 基础设施——索引、数据库事故与全球推理}
+\renewcommand{\noteauthors}{基于 Sualeh Asif 访谈、时间戳字幕与 Cursor/数据库官方资料整理}
+\renewcommand{\notedate}{2025 年冬季课程 · 2026 年重写版}
+\renewcommand{\videochannel}{Stanford CS153 历史课程上传（当前已 private）}
+\renewcommand{\videopublishdate}{2025-03-04}
+\renewcommand{\videoduration}{48:37}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=4jDQi9P9UIw}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS 153] Cursor 的基础设施与 AI 编程 --- CTO Sualeh Asif}
-\newcommand{\noteauthors}{基于 Stanford CS 153 课程内容整理}
-\newcommand{\notedate}{2025}
-\newcommand{\videochannel}{Stanford CS 153}
-\newcommand{\videopublishdate}{2025-03-04}
-\newcommand{\videoduration}{48:37}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=4jDQi9P9UIw}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
-
-\usepackage{fancyhdr}
-\pagestyle{fancy}\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
+\makecscover
 
-% ===== 封面 =====
-\begin{titlepage}
-\centering
-\vspace*{1cm}
+\section{来源审计：把增长故事改写成系统机制}
 
-{\Huge\bfseries 课程讲义\par}
-\vspace{0.6cm}
-{\LARGE\notetitle\par}
-\vspace{0.8cm}
-{\large\noteauthors\par}
-\vspace{0.5cm}
-{\large\notedate\par}
+本讲由 Cursor CTO 与联合创始人 Sualeh Asif 主讲。公开视频在 2026 年 8 月 11 日核验时已经 private，仓库保留 1288 条时间戳字幕和官方封面。字幕记录了 2025 年 3 月的架构与事故经验；Cursor 2026 年的 secure indexing、privacy、CursorBench、Router 和 agent 文档只用于验证持久机制或说明后续演化，不倒写为课堂当时已经存在的能力。
 
-\vspace{1cm}
-
-\includegraphics[width=0.85\textwidth]{\videocoverpath}
-
-\vspace{1cm}
-
-\begin{tabular}{ll}
-\toprule
-\textbf{课程} & Stanford CS 153: Infrastructure at Scale \\
-\textbf{嘉宾} & Sualeh Asif (Cursor CTO \& Co-Founder) \\
-\textbf{频道} & \videochannel \\
-\textbf{发布日期} & \videopublishdate \\
-\textbf{时长} & \videoduration \\
-\textbf{视频链接} & \href{\videourl}{\videourl} \\
-\bottomrule
-\end{tabular}
-
-\vfill
-{\small 本讲义基于课堂对话录音整理，技术术语保留英文原文。\\
-项目地址：\href{\repourl}{\repourl}\par}
-\end{titlepage}
-
-\tableofcontents
-\newpage
-
-% ===== 正文 =====
-
-\section{引言：Cursor 的规模与增长}
-
-本次讲座是 Stanford CS 153 (Infrastructure at Scale) 第五周的嘉宾分享。Cursor 的 CTO 兼联合创始人 Sualeh Asif 受邀深入讲述 Cursor 产品背后的基础设施架构、重大事故处理经验，以及 AI 编程工具面临的独特工程挑战。课堂采用对话式问答形式，由主持人 Andre 提问，学生在 Discord 中实时提交问题。
-
-\begin{importantbox}{Cursor 的规模数据}
-\begin{itemize}
-  \item 过去一年增长超过 \textbf{100 倍}，部分指标增长更快
-  \item 自研模型（custom models）每天处理约 \textbf{1 亿次模型调用}（model calls）
-  \item 索引系统每天处理约 \textbf{10 亿份文档}，公司生命周期内已索引数千亿份文档
-  \item 占 Frontier Model 流量的相当大比例，是多个模型供应商的最大客户之一
-\end{itemize}
-\end{importantbox}
-
-Asif 指出，Cursor 的增长速度带来了极大的基础设施压力——这不仅仅是简单的"加服务器"问题，而是涉及全球分布式系统、数据库选型、故障恢复等一系列深层次的工程挑战。
-
-\subsection{本章小结}
-
-Cursor 在过去一年经历了百倍级别的增长，日均处理 1 亿次自研模型调用和 10 亿份文档索引。这种增长速度意味着基础设施团队必须持续应对前所未有的规模化挑战。
-
-
-\section{基础设施三大支柱}
-
-Asif 将 Cursor 的基础设施分为三个核心部分：索引系统（Indexing）、模型推理（Models）和数据流处理（Streaming Infrastructure）。
-
-\subsection{索引系统}
-
-索引系统是 Cursor 最为人知的基础设施之一。它包含多个子系统：
-
-\begin{itemize}
-  \item \textbf{检索系统（Retrieval Systems）}：支撑代码库搜索，当用户向 Agent 提问时，系统从代码库中检索相关上下文
-  \item \textbf{Git 索引}：深度理解用户的代码仓库历史，包括处理像 Instagram 这样规模的大型仓库
-  \item \textbf{自动索引}：用户打开编辑器时自动触发，不需要任何手动操作
-\end{itemize}
-
-\begin{knowledgebox}{为什么自动索引至关重要}
-Asif 强调：如果给用户添加过多按钮和操作步骤来索引代码库，没有人会去用它。唯一的办法是让索引完全自动化——用户打开编辑器的那一刻就开始索引。除非代码库大到了 Instagram 的级别，Cursor 会毫不犹豫地索引所有内容，并承担全部成本。
-\end{knowledgebox}
-
-\subsection{模型推理}
-
-模型推理是 Cursor 最计算密集的部分，分为两个层面：
-
-\begin{enumerate}
-  \item \textbf{自研模型推理}：Autocomplete 模型在用户每次击键时触发，任意时刻并发约 \textbf{20,000 次/秒} 模型调用。运行在约 1,000--2,000 张 H100 GPU 的集群上，分布在美国东海岸（Virginia）、西海岸（Phoenix）、伦敦和东京等地。
-  \item \textbf{Frontier Model 推理}：依赖 Anthropic、OpenAI、Google Cloud 等第三方模型供应商，用于 Chat、Composer 等高级功能。
-\end{enumerate}
-
-\begin{importantbox}{Autocomplete 的极端需求}
-每次用户按键都会触发 Autocomplete 模型调用，每次调用处理数万 tokens 的上下文。按 Asif 的估算，每次击键可能涉及约 1000 亿次浮点运算（FLOPs）。这意味着 Autocomplete 在 input token 数量上远远超过 Frontier Model 的使用量。
-\end{importantbox}
-
-\subsection{数据流基础设施}
-
-第三个支柱是后台的数据流处理系统，用于：
-
-\begin{itemize}
-  \item 存储和处理用户使用数据
-  \item 支撑模型训练和评估
-  \item 日常改进产品体验
-\end{itemize}
-
-这不是用户直接交互的实时系统，而是一个后台持续运行的"改进引擎"。
-
-\subsection{产品层：Apply 模型与 UX 优化}
-
-除了三大核心支柱，Asif 还提到了产品层的工程技巧。Apply 模型需要处理 100,000--200,000 tokens 的上下文，但必须让用户感觉像是简单的复制粘贴——速度快到感觉不到模型在工作。这涉及大量推理侧的优化技巧。
-
-\subsection{本章小结}
-
-Cursor 的基础设施由索引、模型推理和数据流三大支柱构成。索引系统追求完全自动化；模型推理分为自研（高频低延迟的 Autocomplete）和第三方 Frontier Model 两部分；数据流系统在后台持续驱动产品改进。
-
-
-\section{架构设计：单体服务与故障隔离}
-
-\subsection{单体架构的选择}
-
-Asif 指出，Cursor 采用的是\textbf{单体架构（Monolithic Architecture）}——所有服务打包成一个大型 monolith 进行部署。这在快速迭代的初创公司中是常见的选择。
-
-\begin{knowledgebox}{单体 vs 微服务的权衡}
-尽管微服务架构在大型企业中流行，但对于快速成长的初创公司，单体架构有其显著优势：部署简单、开发速度快、调试容易。Cursor 选择在单体架构内部做隔离，而非过早拆分微服务。
-\end{knowledgebox}
-
-\subsection{爆炸半径控制}
-
-随着规模增长，\textbf{爆炸半径（Blast Radius）}控制变得至关重要。Asif 分享了一个早期教训（2023 年 6--7 月）：
-
-\begin{warningbox}{一个无限循环就能搞垮全部服务}
-早期 Cursor 所有功能运行在同一台服务器上。有人写了一个死循环（infinite loop），导致 Chat 功能挂掉——更糟糕的是，连登录服务也一起挂了。核心教训：\textbf{不能让实验性代码的 bug 影响到关键服务}（如认证、支付等）。
+\begin{warningbox}{规模数字的证据边界}
+课堂提到过去一年约百倍增长、自研模型每日约一亿次调用、索引系统每日约十亿文档等数量。本文把它们保留为\textbf{讲者估计/课堂口径}，用于理解负载形状，不作为当前规模、商业排名或供应商关系的审计结论。
 \end{warningbox}
 
-解决方案是对服务器进行\textbf{分区隔离（Compartmentalization）}：将关键服务放在更安全、更受保护的区域，与实验性代码隔开。
-
-\subsection{代码简洁性的强制要求}
-
-Asif 强调，随着规模增长，团队对服务端代码的复杂度有了\textbf{严格的限制}：如果代码太复杂、无法被人理解，就不应该上线运行。这已经成为 Cursor 基础设施管理的重要原则。
-
-\subsection{本章小结}
-
-Cursor 采用单体架构并在内部做隔离来控制爆炸半径。早期的无限循环事故促使团队将关键服务与实验性代码严格分离。服务端代码复杂度受到严格管控，确保可理解性和可运维性。
-
-
-\section{索引系统：Merkle Tree 与数据库演进}
-
-\subsection{Merkle Tree 同步机制}
-
-Cursor 的索引系统使用 \textbf{Merkle Tree}（默克尔树）来高效同步客户端与服务端的文件状态。
-
-\begin{importantbox}{Merkle Tree 文件同步原理}
+\begin{importantbox}{全讲的三个闭环}
 \begin{enumerate}
-  \item 每个文件被 hash，每个文件夹的 hash 等于其所有子节点 hash 的组合，一直到根节点
-  \item 当用户重新打开编辑器（如 git checkout 到一年前的版本），客户端计算本地 Merkle Tree，与服务端对比
-  \item 从根节点开始：如果 hash 不同，至少有一个子文件夹发生了变化
-  \item 逐层向下遍历，精确定位变化的文件
-  \item 只上传发生变化的文件进行重新索引
+  \item \textbf{Context loop}：workspace change $\rightarrow$ incremental index $\rightarrow$ retrieval context；
+  \item \textbf{Edit loop}：request $\rightarrow$ model/provider $\rightarrow$ plan/edit $\rightarrow$ fast apply $\rightarrow$ validation；
+  \item \textbf{Reliability loop}：traffic/failure $\rightarrow$ telemetry $\rightarrow$ mitigation/migration $\rightarrow$ safer architecture。
 \end{enumerate}
 \end{importantbox}
 
-这种机制使得 Cursor 能够高效处理大规模代码库的增量更新，而不需要每次都重新索引整个代码库。
+\subsection{为什么 AI coding 不是一个模型 API}
 
-\subsection{数据库选型的惨痛教训}
+AI coding 的用户体验由上下文 freshness、retrieval quality、模型能力、provider capacity、edit application 和 editor validation 共同决定。即使模型输出正确，索引过期、provider 排队、patch 应用慢或 diagnostics 卡顿，用户仍会感到系统失败。基础设施优化因此必须以完整 interaction loop 为对象。
 
-索引系统的数据库选型经历了一段曲折的历程：
+\lecturefigure{01-coding-loop.png}{AI coding 产品是 workspace、context、model、apply 与 feedback 构成的闭环。}{本地字幕 00:00--05:20；概念重绘。}
 
-\begin{knowledgebox}{分布式数据库领域的"三巨头"}
-Asif 介绍了数据库世界中几个标志性的系统：
-\begin{itemize}
-  \item \textbf{Google Spanner}：以全球级别的分布式事务能力著称
-  \item \textbf{FoundationDB}：Apple 内部广泛使用的分布式 KV 存储
-  \item \textbf{Redis} 等 KV 存储：简单高效的键值数据库
-\end{itemize}
-Asif 认为，如果你有这三种类型的数据库加上一个分析引擎，基本可以应对所有场景。
+\begin{knowledgebox}{读图：Latency budget 属于整条链}
+把一次交互近似拆为
+\[
+T_{total}=T_{context}+T_{queue}+T_{model}+T_{apply}+T_{validate}.
+\]
+其中任一项的 p95/p99 都会破坏流畅感。Streaming 可以降低 time-to-first-token，却不能消除 context lookup、queueing、patch conflict 或 diagnostics 的尾延迟。
 \end{knowledgebox}
 
-\subsubsection{YugaByte 的失败}
-
-作为 Google Spanner 的开源后代，YugaByte 在理论上具备无限可扩展性。Asif 选择它正是看中了这一点。然而现实是：
-
-\begin{warningbox}{不要选择过于复杂的数据库}
-YugaByte 在 Cursor 的场景下根本跑不起来。花了大量资金试图缩减节点，但系统就是不稳定。其全球分布式事务的共识协议（consensus protocol）在大量长事务场景下表现极差。Asif 的教训：\textbf{先用 Postgres，不要用花哨的分布式数据库}。迁移到 AWS RDS（Postgres）后，问题迎刃而解。
-\end{warningbox}
-
-\subsubsection{PostgreSQL 的 MVCC 陷阱}
-
-迁移到 RDS 后，索引系统平稳运行了八个月。然而，22 TB 数据量最终引发了一场严重事故。
-
-\begin{importantbox}{PostgreSQL Update = Delete + Insert}
-PostgreSQL 与 MySQL 在 Update 操作上有根本区别：
-\begin{itemize}
-  \item \textbf{MySQL}：直接在磁盘上原地修改记录
-  \item \textbf{PostgreSQL}：Update 实际上是 Delete（标记 tombstone）+ Insert（写入新记录），旧记录的磁盘空间不会立即回收
-\end{itemize}
-对于 Cursor 这样"用户每次击键都触发 Update"的工作负载，会产生\textbf{海量的死元组（dead tuples）}，导致存储空间快速膨胀。
-\end{importantbox}
-
-PostgreSQL 依赖后台的 \textbf{VACUUM} 进程来清理死元组、回收空间，以及 \textbf{Anti-Wraparound Vacuum} 来处理事务 ID 回绕问题。当这两个进程同时出现异常时，数据库就会陷入恶性循环。
+\teachervoice{Asif 用“如果一亿次调用听起来不吓人，那它其实很吓人”提醒学生：增长改变的不只是容量，而是每个默认假设。曾经偶发的 retry、全量 rebuild 或人工修复，在高基数下都会成为持续负载。}
 
 \subsection{本章小结}
 
-Cursor 使用 Merkle Tree 实现高效的客户端-服务端文件同步。数据库选型经历了 YugaByte 到 PostgreSQL 的迁移。PostgreSQL 的 MVCC 机制（Update = Delete + Insert）在高频更新场景下会产生严重的存储膨胀问题，需要特别关注 VACUUM 配置。
+Lecture 07 的主角不是 Cursor 品牌，而是一个高频 AI interaction system。后文每个架构选择都必须回答：它改善了哪一段 loop、增加了什么状态、故障时如何降级。
 
+\section{三个 Product-Critical Systems：Indexing、Inference 与 Apply}
 
-\section{重大事故与应急响应}
+课程先把系统拆成 indexing、model inference 和 product/apply layer。它们都服务同一个 editor，却有完全不同的资源曲线：indexing 偏异步与 data-intensive；inference 受 GPU capacity、batching 和 latency 约束；apply layer 需要把生成结果快速而安全地映射回用户正在编辑的文件。
 
-Asif 分享了两次重大事故（Sev）的详细经过，展现了规模化服务中故障处理的残酷现实。
+\subsection{不同 workload 需要不同 SLO}
 
-\subsection{事故一：索引系统连环故障}
+本节把上一段的 workload 差异转成可观测合同。读图时先为 indexing、inference、apply 和 data plane 分别定义“成功、降级和失败”，再选择 freshness、recall、queue time、edit success 或 job correctness 等指标；如果所有路径只共享一个 availability 数字，事故时就无法判断应当牺牲哪类工作来保护交互主链。
 
-\subsubsection{故障链}
+\lecturefigure{02-three-systems.png}{Cursor 的规模来自 indexing、inference、product/apply 与 data plane 四类负载。}{本地字幕 02:20--05:20；概念重绘。}
 
-这次事故涉及多个系统的级联故障：
+\begin{knowledgebox}{读图：先给每个系统定义失败}
+Indexing 的失败可能是 stale、missing 或低 recall；inference 的失败可能是 timeout、rate limit 或低质量；apply 的失败可能是 patch 冲突、位置错误或 editor freeze；data plane 的失败可能是 job 丢失、重复执行或 billing 不可解释。只有先分类型，报警和降级才不会互相污染。
+\end{knowledgebox}
 
+\begin{importantbox}{SLO 不能只写“99.9\% available”}
+\begin{itemize}
+  \item Index freshness：workspace change 到可检索的延迟；
+  \item Retrieval quality：在给定 latency 和 filter 下的 recall/utility；
+  \item Inference：time-to-first-token、tokens/s、error 与 queue time；
+  \item Apply：edit success、conflict、validation latency 与 undo safety。
+\end{itemize}
+\end{importantbox}
+
+\subsection{Apply model：把“想改什么”与“如何落盘”分开}
+
+规划模型擅长理解意图、选择文件和生成修改；specialized apply model 则处理位置匹配、局部重写和高速 token application。把两者分开，是因为最强模型未必在低延迟、确定性 patch application 上最优。系统需要为“思考”和“写入 editor state”设计不同接口。
+
+\teachervoice{课堂反复强调产品层并不是模型输出后的薄 UI。真正让工具“感觉好用”的，往往是 apply、streaming、context preparation 和 editor integration 这些不容易在 benchmark 中出现的系统工作。}
+
+\subsection{本章小结}
+
+AI coding 平台不是一个后端服务，而是多个 SLO 和数据形状不同的系统组合。产品价值来自这些系统在一次交互中的协同，而不是某个单点模型指标。
+
+\section{Monolith 与 Blast Radius：代码边界不等于故障边界}
+
+Asif 并不把 microservice 当作规模化前提。课程更关注 \term{blast radius}（爆炸半径）：一次代码、配置或依赖故障能影响多少用户、功能、region 和时间。Monolith 可以共享代码和部署流程，同时通过 traffic cell、queue、database、feature flag 与权限边界隔离高风险路径。
+
+\subsection{Critical path 与 experimental path 分开}
+
+本节回答“一个仓库怎样仍然拥有小故障域”。读图时不要数 service 数量，而要检查 auth、editor request、index job、new model 与 shared schema 的运行边界。若 experimental code 可以耗尽 critical database connection 或污染共享 queue，即使它被拆成独立 service，blast radius 仍然很大。
+
+\lecturefigure{03-blast-radius.png}{Monolith 可以通过部署 cell、依赖和流量边界缩小 blast radius。}{本地字幕 05:20--07:50；概念重绘。}
+
+\begin{knowledgebox}{读图：四个隔离旋钮}
+\textbf{Traffic} 用 canary、tenant/region cell；\textbf{resource} 用独立 quota、queue 和 pool；\textbf{state} 用 versioned schema 与 rebuildable derived data；\textbf{change} 用 feature flag、rollback 与 deploy policy。Microservice 只是实现这些隔离的一种方式。
+\end{knowledgebox}
+
+\begin{importantbox}{Blast radius 的诊断式}
+可粗略写为
+\[
+B=A\times D\times S,
+\]
+其中 $A$ 是 affected requests/users，$D$ 是持续时间，$S$ 是状态损坏或恢复复杂度。架构应优先降低不可逆的 $S$，再通过 canary 和 cell 降低 $A$，通过 detection/rollback 降低 $D$。
+\end{importantbox}
+
+\begin{warningbox}{“保持代码简单”不是少写抽象}
+简单性应体现在 invariant 可解释、dependency 少、failure mode 可测试和 recovery path 明确。把复杂性藏进 global state、隐式 retry 或共享 database，代码行数可能减少，系统复杂度反而上升。
+\end{warningbox}
+
+\teachervoice{Asif 的选择并非“永远不要拆服务”，而是优先让少量工程师理解完整 critical path。只有当组织、故障域或资源形状真的需要独立演进时，再为分布式边界支付成本。}
+
+\subsection{本章小结}
+
+规模化首先是隔离问题，而不是 service 数量问题。好的 monolith 与好的 distributed system 都需要显式 blast radius、资源预算、版本契约和恢复策略。
+
+\section{Incremental Indexing：只处理发生变化的代码}
+
+Codebase indexing 的第一原则是避免重复工作。Workspace 大部分文件在两次同步之间没有变化，系统应通过 content hash 和 tree summary 找出 delta，再对 changed content 解析、chunk、embedding 和 index。当前 Cursor secure indexing 文档进一步说明了 content-based embedding cache 和 index sharing，但这些是后续演化，本文只用来解释 durable mechanism。
+
+\subsection{Merkle-style sync 与 content identity}
+
+\term{Merkle tree} 是一种层次化 hash tree：叶节点表示文件或 chunk 内容，父节点 hash 由子节点决定。若两个 root hash 相同，可快速判断整个 subtree 未变；若不同，则向下定位变化。它减少同步 metadata 和全量扫描，但不自动解决 permission、rename semantics 或 semantic equivalence。
+
+\lecturefigure{04-merkle-sync.png}{Merkle-style sync 用层次 hash 定位变化，而不是重复上传完整 workspace。}{本地字幕 10:20--14:40；概念重绘。}
+
+\begin{knowledgebox}{读图：Hash 相等证明什么}
+Hash equality 证明 byte-level content identity，可以安全复用解析或 embedding；它不证明两个 path 权限相同，也不证明相似代码具有相同语义。Index key 至少要包含 content hash、embedding model/version、chunking version 和 access scope。
+\end{knowledgebox}
+
+\begin{importantbox}{Incremental work 的成本模型}
+若 workspace 有 $N$ 个 chunk，本次变化为 $\Delta N$，理想增量成本应接近
+\[
+C_{update}=O(\Delta N\cdot(C_{parse}+C_{embed}+C_{write}))
+\]
+而不是每次支付 $O(N)$。实际系统还要承担 tree comparison、deleted/renamed content、queue overhead 与 cache miss。
+\end{importantbox}
+
+\subsection{Parse、chunk、embed、store、retrieve}
+
+\term{embedding}（向量表示）把代码 chunk 映射到数值向量，使相似 query 和 content 在向量空间接近；\term{vector search}（向量检索）在大量 embedding 中寻找近邻。它不是“理解整个 repo”的同义词：chunk boundary、metadata filter、lexical search、reranking 与 context budget 都会影响结果。
+
+\lecturefigure{05-index-pipeline.png}{Secure indexing 是 parse、cache、embedding、storage 与 retrieval 组成的增量管线。}{本地字幕 10:20--15:10；Cursor secure indexing 官方资料。}
+
+\begin{knowledgebox}{读图：Freshness、security 与 recall 分开测}
+Freshness 看新 edit 多久可检索；security 看谁能 query 哪些 chunk；\term{recall}（召回率）看应返回的相关内容有多少被检索到，可写为 $\mathrm{recall}=\frac{\text{relevant retrieved}}{\text{all relevant}}$。高 recall 仍可能带来噪声，因此还要测 precision、ranking utility 与最终任务成功。
+\end{knowledgebox}
+
+\begin{warningbox}{Embedding cache 也需要版本和删除语义}
+内容相同可以复用 embedding，但 model version、chunker、language parser 或 security policy 改变时，旧 cache 可能失效。用户删除 repo 或权限变化后，系统还要撤销 index reference；content cache 可继续存在的条件必须由 retention 与隔离策略决定。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Incremental indexing 的核心是 content identity、versioned transform 和 access scope。Hash 能减少重复计算，retrieval quality 与 security 仍需要独立证据。
+
+\section{数据模型演进：哪些状态真的需要数据库}
+
+随着索引规模增长，把 users、repos、jobs、documents、vectors 和 source artifacts 全放进同一种数据库会制造互相冲突的 workload。Transactional metadata 需要一致更新；job state 需要 lease 与 retry；向量段适合大块 immutable data；source chunks 应能重建 derived index。本节用 source-of-truth 分层替代“哪种数据库最好”的争论。
+
+\subsection{四类状态，四种存储目标}
+
+\term{source of truth}（权威数据源）是恢复时被认为正确的原始状态。Derived vector index 可以从 source artifact 和 transform version 重建，不应承担唯一 truth；job progress 若丢失可重试，却必须保证幂等；permission metadata 则需要强约束和 audit。
+
+\lecturefigure{06-storage-roles.png}{Metadata、job、vector/search 与 source artifact 需要不同的耐久性和查询模型。}{本地字幕 14:40--19:10；概念重绘。}
+
+\begin{knowledgebox}{读图：先问“丢了怎么办”}
+如果状态丢失后只能向用户道歉，它可能是 source of truth；如果可从 object 重建，它是 derived state；如果可以重复执行，关键是 idempotency；如果只为加速 query，它是 cache。这个分类比先选 PostgreSQL、MongoDB 或 vector DB 更稳定。
+\end{knowledgebox}
+
+\begin{importantbox}{重建能力是一种架构资产}
+对 derived index，恢复目标不仅是 RPO/RTO，还要记录：输入版本、embedding/chunking 版本、rebuild throughput、验证集和 cutover 方法。没有可重复 rebuild 的“索引”会逐渐变成无法迁移的第二权威数据库。
+\end{importantbox}
+
+\subsection{Backpressure、lease 与幂等}
+
+\term{backpressure}（背压）让下游饱和时上游减速或拒绝新工作，避免 queue 无限增长。Index job 应带 version 和 idempotency key；worker 通过 lease 获得有限时间所有权；超时后可安全重试；同一 repo 的新版本可以 supersede 旧版本，避免无意义地完成过期 rebuild。
+
+\begin{warningbox}{Retry 不是可靠性的免费午餐}
+没有预算、jitter、deadline 和 idempotency 的 retry 会把一次 timeout 变成重复写和连接风暴。每个 retry policy 必须说明：哪些错误可重试、最多多少次、是否消耗同一 budget、何时转入 dead-letter 或人工处理。
+\end{warningbox}
+
+\subsection{本章小结}
+
+存储架构应从 state class、source of truth 和恢复路径出发。Database brand 是实现细节；状态的可重建性、幂等、版本与背压才是长期约束。
+
+\section{事故一：Retry、Cron 与 Rebuild 的正反馈}
+
+课堂第一段事故不是“一个数据库挂了”，而是多个自动机制同时响应：timeout 触发 retry，repair job 和 cron 增加负载，queue 拉长，cache miss 与 rebuild 又进一步压垮依赖。Incident response 的首要动作不是添加更多修复工作，而是识别正反馈并停止 producer。
+
+\subsection{从 initial fault 到 cascade}
+
+本节把课堂事故改写成 dependency feedback graph，而不是按时间复述操作。读图时要从 initial fault 追踪 automatic reaction、load amplification 和 mitigation：关键判断不是哪个组件先报错，而是哪些 retry、repair job 和 rebuild 在持续增加 saturated dependency 的输入，以及哪个控制点能最快降低系统增益。
+
+\lecturefigure{07-incident-cascade.png}{自动 retry 和 repair job 可能把局部故障放大成全局事故。}{本地字幕 19:10--25:30；概念重绘。}
+
+\begin{knowledgebox}{读图：恢复顺序与平时优化顺序相反}
+平时追求吞吐和自动化；事故中先保护 invariant：停止非关键 producer、限制 retry、shed load、冻结 deploy，再恢复最小 read/write path。只有 dependency 有 headroom 后，才逐步放开 backlog 和 rebuild。
+\end{knowledgebox}
+
+\begin{importantbox}{Retry amplification}
+若原始请求率为 $\lambda$，每次失败平均触发 $r$ 次重试，失败概率为 $p$，附加负载可近似为
+\[
+\lambda_{effective}\approx \lambda(1+pr+(pr)^2+\cdots).
+\]
+当 $pr$ 接近 1 时，重试链会非常敏感。实际系统用 bounded retry、exponential backoff、jitter、circuit breaker 和 global retry budget 控制放大。
+\end{importantbox}
+
+\teachervoice{课程中的事故叙述有很强的“一个人坐在那里救系统”的戏剧感。真正应该学习的是 command structure：谁能停止 producer、谁判断数据 invariant、谁负责用户沟通，以及哪些自动化在 degraded mode 必须关闭。}
+
+\subsection{本章小结}
+
+Incident cascade 的根因常是 feedback loop，而非单点组件。恢复需要先降低系统增益，再修复状态；postmortem 应把 retry、cron、queue 与 migration 纳入同一 dependency graph。
+
+\section{事故二：PostgreSQL Storage Pressure 与迁移账单}
+
+第二段事故聚焦 PostgreSQL 存储压力。PostgreSQL 使用 MVCC（Multi-Version Concurrency Control，多版本并发控制）：update/delete 后旧 tuple 不会立即从文件移除，需要 vacuum 回收可复用空间。长事务、写入量、index 和 autovacuum lag 会造成 bloat；磁盘接近耗尽时，maintenance 自身也需要 I/O 和空间，恢复风险陡增。
+
+\subsection{Dead tuple、VACUUM 与 disk headroom}
+
+\term{dead tuple} 是不再对任何活跃 transaction 可见的旧行版本；\term{VACUUM} 标记空间可复用并维护可见性信息，常规 VACUUM 通常不把文件归还给操作系统；\term{VACUUM FULL} 重写表并可回收更多磁盘，却需要额外空间和强锁。事故处理不能在饱和时盲目运行最重 maintenance。
+
+\lecturefigure{08-postgres-pressure.png}{PostgreSQL storage pressure 来自 write workload、MVCC residue、maintenance 与 disk headroom 的耦合。}{本地字幕 25:30--32:40；PostgreSQL 官方 vacuum 文档。}
+
+\begin{knowledgebox}{读图：不是“Postgres 不可扩展”}
+先检查 transaction age、dead tuple、table/index growth、WAL、autovacuum thresholds、I/O 和 free space，再决定 tune、partition、archive、offload 或 migrate。讲者的痛苦来自特定 workload 与时点，不能推出所有 indexing 系统都应避免 PostgreSQL。
+\end{knowledgebox}
+
+\begin{warningbox}{Emergency migration 会叠加负载}
+迁移期间旧系统继续 serving，新系统要 backfill，validation 要 dual read/query，失败还会 retry。若没有独立 capacity 和 throttle，migration 本身会让原系统更难恢复。先 offload 非关键 workload 和冻结 schema，通常比立即全速搬迁更安全。
+\end{warningbox}
+
+\subsection{Cold start：重建 embedding 与 cache}
+
+\term{cold start} 在这里不仅是新 process 启动，而是新 index 缺少 embedding、segment、cache 和统计信息。重建每个 repo 需要读取 source、chunk、调用 embedding、写入新 storage，再用 query 验证。课堂提到 migration 还会消耗额外 inference capacity，这正是隐藏账单。
+
+\lecturefigure{09-cold-start.png}{Index migration 需要 backfill、dual validation、cache warming 和安全 cutover。}{本地字幕 29:30--32:40；概念重绘。}
+
+\begin{knowledgebox}{读图：Cutover 之前先定义 equivalence}
+新旧系统不一定返回完全相同 top-$k$。Validation 应比较 recall/utility、filter correctness、latency、freshness 和 cost；对关键用户可 shadow query；只有满足阈值后再按 tenant/region 渐进切流，并保留 rollback 期间的双写或源数据。
+\end{knowledgebox}
+
+\teachervoice{“最好的扩数据库方式是不要让数据库承担这份工作”是一句有用但危险的课堂口号。正确理解是：把 immutable、可重建、吞吐型数据移出 transactional hot path，而不是删除所有 database。}
+
+\subsection{本章小结}
+
+PostgreSQL 事故揭示了 MVCC maintenance、disk headroom 与 migration workload 的耦合。数据库迁移不是复制数据，而是重建派生状态、验证等价性并管理双系统风险。
+
+\section{Object-Storage-Native Search：耐久层与热查询层分离}
+
+事故后的架构方向是把大块 immutable index segment 放入 object storage，把 query compute 和 SSD/memory cache 做成可替换层。Amazon S3 提供对象级耐久存储与强读后写一致性；turbopuffer 等系统在其上构建 search。优势是 durable cost 与 compute 解耦，代价是首次读取、tail latency、cache admission 和 segment management。
+
+\subsection{Durable objects、cache 与 stateless compute}
+
+\term{object storage} 以 object key 存放 blob 与 metadata，适合大对象、低成本耐久和海量 namespace，不提供传统 row update 与 join。\term{stateless compute} 指 query worker 不持有唯一耐久状态，可从 object 和 shared metadata 恢复；它仍可以有本地 cache，只是 cache 丢失不破坏 correctness。
+
+\lecturefigure{10-object-storage-search.png}{Object-storage-native search 用 durable segment、SSD/memory cache 和 stateless query tier 分层。}{本地字幕 32:30--36:40；turbopuffer 官方架构资料。}
+
+\begin{knowledgebox}{读图：Object storage 没有消灭 database 问题}
+系统仍需要 metadata catalog、segment version、compaction、cache coherence、filter index、recall measurement 和 deletion。对象层降低 durability cost 并简化 replacement，却把性能问题移动到 prefetch、cache 和 query planning。
+\end{knowledgebox}
+
+\begin{importantbox}{Cache 的价值取决于 reuse}
+若 object fetch latency 为 $L_o$，cache hit latency 为 $L_c$，hit rate 为 $h$，平均读取延迟近似
+\[
+E[L]=hL_c+(1-h)L_o.
+\]
+但用户体验更受 p95/p99 影响；热门 tenant、扫描 query 和 cold region 会让平均值掩盖尾部。需要按 namespace 与 query type 观察 hit rate。
+\end{importantbox}
+
+\begin{warningbox}{Low cost per TB 不等于 low query cost}
+Object storage 的容量便宜，但 frequent GET、data transfer、decompression、CPU ranking 和 cache miss 会增加单位 query 成本。价格模型必须同时计算 stored bytes、read amplification、QPS、recall target 和 latency SLO。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Object-storage-native search 把 durable state 与 query compute 解耦，适合 immutable、可重建的大规模 index。它不是无数据库架构，而是重新定义 metadata、object 和 cache 的职责。
+
+\section{Global Inference 与 Provider Portfolio}
+
+Cursor 同时运行自研模型和调用 frontier providers。Autocomplete 对 latency 极敏感，需要全球 GPU replica 与 overload behavior；复杂 agent request 更看质量、context 与 tool use，也受 provider rate limit 和版本变化影响。本节将 self-hosted serving 与 multi-provider routing 放在同一个 capacity/evaluation 控制面中。
+
+\subsection{Self-hosted model 的 region、queue 与 fallback}
+
+本节先回答 autocomplete 为何不能只部署一个集中集群。读图时沿 user region、router、GPU region 和 fallback 观察：距离、queue depth、model replica 和 KV cache 都会影响 p99；当本地 region 饱和时，系统要在远端 latency、smaller model 和 graceful degradation 之间选择。
+
+\lecturefigure{11-global-inference.png}{Self-hosted inference 需要按 region 路由、容量与降级设计交互尾延迟。}{本地字幕 03:20--04:20、38:10--41:40；概念重绘。}
+
+\begin{knowledgebox}{读图：Capacity headroom 不是浪费}
+Interactive serving 不能把平均 utilization 推到 100\%。Queueing 在饱和附近非线性增长；需要 replica headroom、admission control、deadline 和 preemption。低优先级 batch/re-embedding 可以填谷，但必须在在线流量上升时让出资源。
+\end{knowledgebox}
+
+\subsection{Frontier providers：Rate limit、quality、cost 与 failover}
+
+\term{rate limit} 是 provider 对 request/token 并发或时间窗口的限制；\term{provider routing} 按任务、质量、健康、quota、成本和 policy 选择模型。简单 round-robin 会忽略不同模型能力与 context/tool interface，真正可用的 portfolio 需要 normalized request、versioned eval 和 provider-specific fallback。
+
+\lecturefigure{12-provider-routing.png}{Multi-provider inference 需要 task contract、provider state、router 与持续证据。}{本地字幕 38:10--41:40；CursorBench 与后续 Cursor Router 资料。}
+
+\begin{knowledgebox}{读图：Offline eval 与 online outcome 各自缺什么}
+Offline benchmark 可重复、适合回归，却不完全反映真实 repo、latency 和 user acceptance；online metric 接近产品结果，却受 selection、UI 和 traffic mix 影响。Router 应同时使用二者，并把 model/version 记录到每次 request 和 incident。
+\end{knowledgebox}
+
+\begin{importantbox}{Routing 是约束优化}
+对 task $x$ 和候选 model/provider $m$，可抽象为
+\[
+m^*=\arg\max_m Q(m,x)-\alpha C(m)-\beta L(m)
+\]
+并满足 privacy、availability、context、tool 和 quota 约束。权重 $\alpha,\beta$ 会随 plan、tenant 和交互路径变化，因此不应只维护一个全局“最佳模型”。
+\end{importantbox}
+
+\teachervoice{课堂中的现实感在于，快速增长的客户会持续打电话请求更多 capacity，同时准备多 provider 和自有 GPU。Resilience 不是在供应商失败后临时接第二家，而是平时就保持接口、eval、quota 和数据政策可切换。}
+
+\subsection{本章小结}
+
+Global inference 同时是 queueing、capacity、evaluation 和 supply-chain 问题。Self-hosted 与 frontier provider 不是二选一，而是具有不同控制权、成本和故障模式的组合。
+
+\section{Fast Apply：把模型输出变成可验证编辑}
+
+模型生成 patch 后，系统仍要定位文件位置、处理用户同时修改、应用 diff、保持格式并触发 diagnostics。Cursor 后来的 Fast Apply 公开资料说明 specialized model 可以承担高吞吐 edit application；本节将其作为 durable design pattern，而不是把后续性能倒写进课堂。
+
+\subsection{Plan、generate、apply、validate}
+
+上一章解决“从哪里获得模型输出”，本章解决“怎样安全进入 editor state”。读图时重点看 plan 与 apply 的职责分离，以及 validation/undo 为什么是产品基础设施。若 apply 静默修改错误位置，即使文本质量高也会破坏信任。
+
+\lecturefigure{13-fast-apply.png}{Planning model 与 specialized apply model 分担理解和高速编辑任务。}{本地字幕 04:20--05:20；Cursor Fast Apply 官方资料。}
+
+\begin{knowledgebox}{读图：Patch application 的四个失败面}
+定位错误、context drift、语法/类型失败、用户并发编辑。系统应使用 file/version precondition、structured edit、parser/diagnostic、visible diff 和 atomic undo。对大改动，还需要分批 apply 与中间 validation，避免 editor 被单次巨型 patch 锁死。
+\end{knowledgebox}
+
+\begin{importantbox}{交互速度不是单纯 tokens/s}
+用户感知时间包含 first useful preview、edit stabilization 与 validation complete。一个更慢但可渐进展示、冲突少、能快速 undo 的 apply path，可能比纯 token throughput 更好。指标应包括 accepted edit、rework 和 rollback，而不仅是生成速度。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Fast Apply 把 AI coding 从文本生成问题变成 state transition 问题。模型负责提出修改，系统必须负责 precondition、application、validation、visibility 与 recovery。
+
+\section{Security、Privacy 与 Abuse：代码和 Token 都是高价值资产}
+
+AI coding 平台同时接触私有源代码和昂贵模型 quota。安全不仅是“数据库加密”，还包括 workspace ignore、access scope、retention、provider data policy、agent tool approval、secrets 与 audit；反滥用也不是独立风控，而是保护 inference capacity 和 unit economics 的基础设施。
+
+\subsection{代码数据流与 shared responsibility}
+
+\term{envelope encryption}（信封加密）通常用 data encryption key 加密数据，再用 key encryption key 保护前者；client-held 或 tenant-controlled key 可以缩小 server compromise 的可读范围，但 key lifecycle、metadata、access log 和 provider path 仍需治理。Current Cursor docs 还区分 Privacy Mode、retention 与 enterprise controls。
+
+\lecturefigure{15-security-flow.png}{Code security 由 workspace、index、Cursor service 与 model provider 多层共同承担。}{本地字幕 41:40--43:30；Cursor 当前 privacy/security 文档。}
+
+\begin{knowledgebox}{读图：Encryption 不能替代五件事}
+Access control 决定谁能读；retention 决定保留多久；audit 记录谁做了什么；data minimization 减少不必要传输；provider governance 约束第三方处理。加密只保护特定静态/传输风险，不会阻止合法身份误用或 agent 读取 workspace secrets。
+\end{knowledgebox}
+
+\begin{warningbox}{Agent tool approval 需要风险分级}
+Read-only search、local edit、terminal command、network request 和 deployment 的影响不同。默认策略应按 tool、target、workspace trust 和 user intent 分级；审批 UI 要显示将执行什么，而不是让用户盲目点击“允许”。
+\end{warningbox}
+
+\subsection{Free-token arbitrage 与资源控制}
+
+课堂描述攻击者利用免费或补贴账户获取昂贵 frontier token。系统要把 identity、plan、device/payment signal、per-user/model quota、velocity 和 anomaly 组合，而不是只依赖 CAPTCHA。\term{abuse prevention} 的目标是限制损失并保留申诉，不是无限增加普通用户摩擦。
+
+\lecturefigure{14-abuse-controls.png}{Free token 形成可被自动化套利的 unit-economics attack surface。}{本地字幕 36:40--38:10、43:30--45:00；概念重绘。}
+
+\begin{knowledgebox}{读图：Quota 必须映射真实成本}
+不同模型的 token price、context、cache 和 tool call 成本不同；统一 request count 会低估高成本路径。Budget 应支持 token/model 权重、burst、daily cap、organization pool 与 suspicious velocity，并在 throttling 时向合法用户解释原因。
+\end{knowledgebox}
+
+\begin{warningbox}{反滥用不可把高强度开发误判为攻击}
+大型 refactor、CI agent 或团队 rollout 可能产生异常高流量。Detection 应结合 account age、payment、organization、repetition pattern、concurrency 和 model mix，并提供 temporary verification 或 enterprise quota，而不是直接永久封禁。
+\end{warningbox}
+
+\teachervoice{课堂把 security 和 abuse 放在同一场问答里很合理：私有代码泄漏损害信任，token 被套利损害经济性；两者都会让产品无法持续。安全团队和平台团队必须共享 request、identity、cost 与 incident telemetry。}
+
+\subsection{本章小结}
+
+AI coding 的安全边界跨越 endpoint、index、service 和 model provider。Privacy controls、agent approvals 与 abuse budget 需要共同设计，才能同时保护代码、用户控制和计算资源。
+
+\section{AI 对软件工程的影响：更需要 Systems Judgment}
+
+课程最后转向教育和 IDE 未来。Asif 的判断不是“CS 基础失效”，而是生成代码增多后，理解 state、performance、security、failure 和 interface 的能力更重要。Agent 可以写更多代码，也会更快制造依赖、重试和权限问题；工程师的工作从逐行输入扩展到定义 contract、验证 evidence 和管理 change。
+
+\subsection{IDE 变成 Agent workspace}
+
+IDE 会承载多个 agent、background task、terminal、browser、test 和 deployment feedback。基础设施必须让用户知道 agent 在读什么、改什么、运行什么，并保留可暂停、可审查、可回滚的 control plane。更强 autonomy 不应以失去 workspace state visibility 为代价。
+
+\begin{importantbox}{AI-native software engineering 的四项核心能力}
 \begin{enumerate}
-  \item \textbf{缓存层 Bug}：使用 AWS DynamoDB 作为缓存，但存在一个隐蔽的 bug——超过一定大小的文件无法被缓存到 DynamoDB（DynamoDB 有 item 大小限制）
-  \item \textbf{缓存未命中}：大文件每次都 miss cache，直接打到 Embedding 模型，导致模型过载
-  \item \textbf{队列竞态条件}：完成 chunking 和 embedding 后，需要更新 Merkle Tree 的上层 hash，这个过程在队列上存在竞态条件（race condition），导致大文件的提交永远无法完成
-  \item \textbf{无限重试循环}：客户端发现大文件未提交，重新发送请求 $\rightarrow$ 缓存再次 miss $\rightarrow$ 再次打 Embedding 模型 $\rightarrow$ 再次提交失败 $\rightarrow$ 无限循环
-\end{enumerate}
-
-\begin{warningbox}{全局错误率"正常"的假象}
-最危险的地方在于：全局的错误率指标看起来完全正常！只有那些超大文件（60,000 行以上）在不断重试。这意味着传统的监控指标无法发现问题，需要细粒度地监控缓存命中率等更具体的指标。
-\end{warningbox}
-
-\subsubsection{排查过程}
-
-团队首先注意到缓存命中率（cache hit rate）异常，然后发现文件未能成功提交，最终定位到 DynamoDB 的大小限制和队列上的竞态条件。Asif 坦言，分布式系统中的竞态条件即使你知道它存在，要真正找到它也是\textbf{极其困难的}。
-
-\subsection{事故二：PostgreSQL 存储危机}
-
-\subsubsection{故障背景}
-
-索引系统迁移到 RDS 后平稳运行了八个月，团队甚至忘记了监控 dashboard 的存在。直到某天 Asif 被大量告警页面唤醒：
-
-\begin{itemize}
-  \item RDS 数据量达到 22 TB（上限 64 TB）
-  \item 看似还有空间，但实际上已经岌岌可危
-  \item VACUUM 和 Anti-Wraparound Vacuum 同时失控
-  \item 数据库表现为"引擎抖动"：刚恢复就再次崩溃，反复循环
-\end{itemize}
-
-\subsubsection{War Room 应急}
-
-Asif 描述了一个经典的 War Room 场景：
-
-\begin{importantbox}{并行应急策略}
-团队同时派出多人执行不同方案：
-\begin{enumerate}
-  \item \textbf{A 组}：删除数据库中所有 foreign key 约束，降低数据库负载
-  \item \textbf{B 组}：尝试删除最大的 20 TB 表
-  \item \textbf{C 组}：手动在 PostgreSQL 控制台中清理事务，维持数据库存活
-  \item \textbf{D 组}：尝试创建 replica 并迁移
-  \item \textbf{E 组（联合创始人 Arvid）}：重写整个工作负载，将最大的表迁移到 Object Storage
+  \item 设计 versioned interface、invariant 和 permission；
+  \item 为 generated change 建立 test、eval、diff 和 rollback；
+  \item 识别 queue、database、network 与 provider 的系统瓶颈；
+  \item 把 incident 和 user feedback 转成 guardrail，而不是只修 prompt。
 \end{enumerate}
 \end{importantbox}
 
-\subsubsection{外部求助}
+\subsection{AI-assisted incident response}
 
-\begin{itemize}
-  \item 联系了一位朋友 Martin（前 GitHub VP of Infrastructure），他推荐了 RDS 专家
-  \item 联系 AWS Support——\textbf{完全无法提供有用帮助}
-  \item 最终与 RDS 的底层架构师通话，他们的回答是："你们确实陷入了大麻烦"
-\end{itemize}
+AI 可以汇总 logs、关联 deploy、生成 query、解释 runbook 和提出 hypothesis，但生产事故处于证据不完整、成本快速变化的环境。AI 不应直接拥有无限 production authority；incident commander 需要确认目标、停止 feedback loop、选择风险和记录决策。
 
-\begin{knowledgebox}{事故中的两种人}
-Asif 观察到，面对重大事故有两种人：一种人会变得焦虑（get shitty），另一种人反而会"苏醒"（come alive）。他的联合创始人 Arvid 属于后者——平时不太关注日常运维，但一到重大事故就变得异常兴奋和高效。这种人在危机时刻是无价的。
+\lecturefigure{16-incident-learning.png}{AI 可以压缩证据处理，但 human incident command 仍负责生产决策。}{本地字幕 47:50--48:37；概念重绘。}
+
+\begin{knowledgebox}{读图：Assistant 最适合缩短哪一步}
+它可以从海量 metrics/logs 中定位时间相关性，生成 safe read-only query，比较最近 deploy，或把聊天记录整理成 timeline。高风险 write、failover、data repair 和 customer communication 仍需要显式 owner 与 approval。
 \end{knowledgebox}
 
-\subsubsection{戏剧性的结局}
-
-最终，负责重写工作负载的 Arvid 竟然比所有其他方案更快地完成了任务——他在事故进行中（约 10 小时内）将最大的数据表迁移到了 Object Storage，然后新系统上线，流量切换过去，危机解除。
-
-\begin{warningbox}{在生产环境运行未经测试的代码}
-Asif 坦言，这段代码是在极端压力下几小时内写出的，没有测试，没有代码审查，直接部署到处理最高流量的生产服务上。这在正常情况下是不可接受的，但当数据库已经完全不可用时，"反正什么都不能工作，不如放手一搏"。
+\begin{warningbox}{AI 生成的根因同样需要证据}
+语言模型容易把相关性写成因果故事。每个 hypothesis 都应链接 metric、trace、log、config 或 reproduction；postmortem 记录 unknown 与 rejected hypothesis，避免把流畅解释误当事实。
 \end{warningbox}
 
-\subsection{Cold Start 问题}
-
-Asif 特别提到了服务恢复中的 \textbf{Cold Start Problem}（冷启动问题）：
-
-当所有节点都宕机后（如处理 100K requests/s 的集群），你不能直接把所有节点同时拉起来：
-\begin{itemize}
-  \item 如果集群有 1,000 个节点，先起来 10 个
-  \item 所有积压的请求会涌向这 10 个节点，把它们直接压垮
-  \item 10 个节点还没来得及变健康，就已经被"杀死"了
-  \item 你需要先\textbf{切断大部分流量}，然后逐步放量
-\end{itemize}
-
-WhatsApp 的做法是使用前缀分组——如果整个系统崩溃，只先恢复特定前缀的用户群，而不是一次性服务所有人。Cursor 的做法是对用户设置优先级，或者对所有用户统一限流。
+\teachervoice{课堂的结尾把 AI-assisted incident response 当成可能方向。最稳妥的迁移结论是：让 AI 提高 evidence bandwidth，让人保留目标、风险和 authority。}
 
 \subsection{本章小结}
 
-重大事故的处理需要并行执行多个方案、快速做出决策，以及团队中有能在危机时刻高效工作的关键人物。冷启动问题是服务恢复中的一个核心挑战。监控指标的粒度决定了你能否及时发现问题——全局错误率可能掩盖局部严重故障。
-
-
-\section{数据库技术趋势：Object Storage 革命}
-
-事故的解决方案——将数据迁移到 Object Storage——背后有一个更深层的技术趋势。
-
-\subsection{Object Storage 的优势}
-
-Asif 认为，将数据库构建在 Object Storage（如 S3、R2、Azure Blob）之上是近年来最重要的数据库趋势之一：
-
-\begin{importantbox}{Object Storage 的三大核心优势}
-\begin{itemize}
-  \item \textbf{极致可扩展性}：已被优化到极致，几乎没有容量上限
-  \item \textbf{极高可靠性}：世界上没有比 Object Storage 更可靠的存储系统
-  \item \textbf{消除存储层复杂性}：数据库中最难的部分是存储层，Object Storage 将这个问题完全托管
-\end{itemize}
-\end{importantbox}
-
-\subsection{代表性项目}
-
-\begin{itemize}
-  \item \textbf{WarpStream}（被 Confluent 收购）：将 Kafka 重写到 Blob Storage 之上。Asif 特别提到，Kafka 在基础设施圈子里有"癌症"之称——极难维护和运行
-  \item \textbf{Turbopuffer}：在 Object Storage 上构建的向量数据库，Cursor 在实际生产中使用
-  \item \textbf{分析引擎}：Snowflake、Databricks 等利用列式存储和向量化运算的分析系统
-\end{itemize}
-
-\begin{knowledgebox}{Asif 的数据库哲学}
-"扩展数据库的最好方式就是\textbf{不要有数据库}（The best way to scale a database is to just not have a database）。"这句话的深层含义是：尽量将数据存储下推到极其可靠的 Object Storage 层，用计算层做数据组织和查询，避免运维传统数据库的巨大开销。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Object Storage 正在成为新一代数据库的基础存储层。它消除了传统数据库存储层的复杂性，提供了极高的可靠性和可扩展性。WarpStream 和 Turbopuffer 是这一趋势的代表。
-
-
-\section{模型推理与多 Provider 策略}
-
-\subsection{全球 GPU 部署}
-
-Cursor 的自研模型推理集群分布在全球多个地点：
-
-\begin{table}[H]
-\centering
-\begin{tabular}{ll}
-\toprule
-\textbf{区域} & \textbf{位置} \\
-\midrule
-美国东海岸 & Virginia \\
-美国西部 & Phoenix \\
-欧洲 & London（曾尝试 Frankfurt，不稳定后放弃） \\
-亚洲 & Tokyo \\
-\bottomrule
-\end{tabular}
-\caption{Cursor GPU 集群全球分布}
-\end{table}
-
-全球化部署的目标是确保无论用户身在何处（如日本），都能获得足够低延迟的 Autocomplete 体验。
-
-\subsection{Frontier Model 供应商管理}
-
-Asif 坦言，与第三方模型供应商的合作是 Cursor 基础设施中\textbf{最混乱的部分之一}：
-
-\begin{itemize}
-  \item 多个供应商经常宕机，所有供应商的历史可靠性都很差
-  \item 需要在多个供应商之间做负载均衡和故障转移
-  \item Rate limit 谈判是持续的"战争"
-\end{itemize}
-
-\begin{importantbox}{推理供应链的连锁反应}
-当 Anthropic 发布 Claude 3.5 Sonnet 时，Cursor 的联合创始人 Aman 在发布前夜紧急联系课程主持人 Andre，请求帮忙联系 Anthropic 提升配额。实际的调用链条是：
-$$\text{Cursor} \rightarrow \text{Anthropic} \rightarrow \text{Google (TPU)} \rightarrow \text{Borg 团队（硬件上架）}$$
-每一层都在紧急申请更多资源，整个 AI 推理供应链处于持续的"压力锅"状态。
-\end{importantbox}
-
-Cursor 的应对策略包括：
-\begin{itemize}
-  \item 同时与多个供应商保持合作（AWS Bedrock、Google Cloud、Anthropic 直连等）
-  \item 为自研模型也采用多云策略（multi-cloud）
-  \item 根据各供应商的实时可用性动态分配用户流量
-\end{itemize}
-
-\begin{warningbox}{推理服务的成熟度}
-Asif 指出，AI 推理服务整体还\textbf{不够成熟}。供应商的 caching 机制不完善，冷启动问题普遍存在。一个未命名的供应商在 Cursor 扩容时，在 30--40 million tokens/min 就开始崩溃，而 Cursor 的需求是 100 million tokens/min 以上。
-\end{warningbox}
-
-\subsection{本章小结}
-
-Cursor 在全球部署 GPU 集群以降低 Autocomplete 延迟，同时与多个 Frontier Model 供应商合作以提高可靠性。推理供应链的每一层都面临容量瓶颈，Rate limit 谈判是日常工作的重要组成部分。
-
-
-\section{安全、定价与反滥用}
-
-\subsection{代码安全}
-
-面对学生关于代码安全的提问，Asif 介绍了 Cursor 在安全方面的设计：
-
-\begin{importantbox}{客户端加密的向量数据库}
-Cursor 对用户代码的 embedding 向量进行加密存储：
-\begin{itemize}
-  \item 加密密钥存储在\textbf{用户设备上}，而非服务端
-  \item 即使攻击者获取了向量数据库的访问权限，也无法解密向量
-  \item 虽然 Asif 个人认为从向量反推代码的可能性极低（99.99\%），但由于这不是一个可证明的事实，额外的加密层提供了更强的安全保障
-\end{itemize}
-\end{importantbox}
-
-\subsection{定价策略}
-
-Cursor 的月费为 \$20，Asif 透露了维持这个价格的工程挑战：
-
-\begin{itemize}
-  \item 每次击键都涉及约 1000 亿次浮点运算，成本不低
-  \item 团队投入大量工程精力优化系统，以维持 \$20 的定价
-  \item 如果不做这些优化，更简单的做法是直接涨价
-  \item 对于行业用户来说 \$20 微不足道，但 Cursor 希望保持对个人开发者的可及性
-\end{itemize}
-
-\subsection{反滥用工程}
-
-\begin{knowledgebox}{创意无限的滥用者}
-Asif 分享了一个近期案例：某人创建了数十万个 Hotmail 账号（选择相对稳定的邮件域名，而非可疑的一次性域名），从约 10,000 个不同的 IP 地址发送请求，分散在约 100,000 个用户账号中。目的是利用免费试用获取大量模型推理 tokens，可能用于运行自己的服务。应对这类滥用需要深入分析流量模式来识别和封锁。
-\end{knowledgebox}
-
-Asif 半开玩笑地向学生发出"负责任披露"邀请：如果能找到获取免费 tokens 的 bug 并报告给 Cursor，将获得免费订阅。
-
-\subsection{本章小结}
-
-Cursor 通过客户端加密保护用户代码安全，投入大量工程资源维持 \$20 定价，并持续对抗利用免费试用的滥用行为。安全和反滥用是持续的工程战场。
-
-
-\section{AI 对软件工程的影响}
-
-\subsection{竞争与差异化}
-
-面对"市场拥挤"的质疑（GitHub Copilot、Codeium 等），Asif 的回答直截了当：
-
-\begin{itemize}
-  \item 竞争激烈\textbf{只是事后看起来如此}，在 Cursor 创立时市场格局完全不同
-  \item GitHub Copilot 虽然有 Microsoft + OpenAI 的"梦之队"背书，但产品在一年半内几乎没有变化
-  \item AI 编程的天花板极高——可以上升到自动化大量工程工作——而 Copilot 只停留在 Autocomplete 层面
-  \item 真正的竞争壁垒在于\textbf{产品创新的速度}，而非既有资源
-\end{itemize}
-
-\subsection{CS 教育是否过时？}
-
-这个有些挑衅的问题引发了有趣的讨论。Asif 的观点是：
-
-\begin{importantbox}{AI 让工程师更有创造力，而非取代}
-\begin{itemize}
-  \item 无聊的、重复性的编码工作会被自动化（如给函数添加参数）
-  \item 但这释放了工程师去做\textbf{更复杂、更有创造性}的系统设计
-  \item Cursor 自身就是一个例子：小团队借助 AI 辅助，覆盖了远超其人数应能处理的基础设施范围
-  \item 类比足球运动员：移动腿部是必要的，但绝非最有意义的部分
-\end{itemize}
-\end{importantbox}
-
-Asif 还分享了个人经历：他在 MIT 的分布式系统课程至今仍对工作有帮助，但大部分运维技能只能在实践中学到。
-
-\subsection{IDE 的未来}
-
-对于"IDE 是否会过时"的问题，Asif 的回答极为简洁：未来仍然会有程序员使用的工具来编写代码，至于那个工具叫不叫 IDE，只是定义问题。
-
-\subsection{AI 辅助的事故响应}
-
-Asif 提到了一个令人兴奋的方向：用 AI 模型进行代码审查（code review），自动捕捉可能导致重大事故的 bug。他提到的一个具体案例：导致最近一次 Sev-0/Sev-1 级别事故的那个单行代码变更，如果当时运行了即将发布的 Bug Bot，模型\textbf{能够检测到这个 bug}。
-
-\subsection{本章小结}
-
-AI 不会取代软件工程师，而是让工程师能够处理更复杂的系统。IDE 的形态会演变，但程序员的工具需求永远存在。AI 辅助的代码审查可能成为防止重大事故的有力工具。
-
+AI coding 并未降低 systems knowledge 的价值。相反，生成能力越强，验证、隔离、恢复、安全和资源会计越成为产品与职业的核心。
 
 \section{总结与延伸}
 
-本次讲座从 Cursor CTO 的第一视角展示了一个快速增长的 AI 编程产品背后的基础设施全景。以下是核心要点：
+\subsection{核心结论}
+
+\begin{importantbox}{八条可迁移结论}
+\begin{enumerate}
+  \item AI coding 是 context、model、apply、validation 的闭环，各层需要不同 SLO。
+  \item Blast radius 由 runtime/state boundary 决定，不由 service 数量决定。
+  \item Merkle-style sync、content cache 和 retrieval evaluation 把全量工作变为可测 delta work。
+  \item Metadata、jobs、source objects 与 derived index 需要不同 source of truth 和 rebuild path。
+  \item Retry、cron、MVCC bloat 和 rebuild 会形成事故正反馈，恢复时先停止 producer。
+  \item Migration 的隐藏成本是 re-embedding、dual validation、cache warming 和临时 capacity。
+  \item Object storage 解耦耐久与 compute；global inference 仍需 cache、region、provider eval 与 fallback。
+  \item Security、abuse、tool approval 与 incident response 都是产品持续性的基础设施。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{实践作业：设计一个 AI coding backend}
+
+为一个支持 autocomplete、repo chat 与 multi-file agent 的系统完成以下设计：
 
 \begin{enumerate}
-  \item \textbf{规模带来全新的工程挑战}：百倍增长不是线性加服务器的问题，而是涉及架构选型、故障隔离、冷启动等系统性问题。
-
-  \item \textbf{数据库选型的实用主义}：从 YugaByte 到 PostgreSQL（RDS）再到 Object Storage 的演进表明，应该\textbf{从最简单可靠的方案开始}，而不是追求理论上的完美。
-
-  \item \textbf{PostgreSQL 的 MVCC 特性需要特别注意}：对于高频更新的工作负载，VACUUM 管理是关键。Update = Delete + Insert 这个特性在面试中是知识点，在生产中是生死线。
-
-  \item \textbf{Object Storage 是新的数据库基石}：S3/R2 等 Object Storage 提供了无与伦比的可靠性和可扩展性，越来越多的数据库和流处理系统在其上构建。
-
-  \item \textbf{事故响应需要人才和文化}：并行执行多个恢复方案、关键时刻有能"苏醒"的人才、以及快速决策的文化，比完美的流程更重要。
-
-  \item \textbf{AI 推理供应链尚不成熟}：所有模型供应商的可靠性都不理想，多 Provider 策略和动态负载均衡是必要的生存手段。
-
-  \item \textbf{监控的粒度决定了发现问题的速度}：全局错误率可能掩盖局部灾难，需要在缓存命中率、特定文件类型的处理状态等细粒度维度建立监控。
-
-  \item \textbf{安全是持续的工程投入}：客户端加密、流量分析、反滥用系统都需要持续迭代。
-
-  \item \textbf{AI 辅助工程是正反馈循环}：Cursor 自身使用 AI 来构建更好的 AI 编程工具，这个循环正在加速。
+  \item 定义 indexing、inference、apply 和 data plane 的 SLO 与 blast radius；
+  \item 设计 Merkle-style sync、chunk/version key、embedding cache 和 deletion semantics；
+  \item 列出 metadata、job、source object、vector segment 的 source of truth、rebuild path 与 migration validation；
+  \item 为 retry storm、database disk pressure、object-storage cache miss 和 provider rate limit 写 degraded mode；
+  \item 建立 self-hosted/frontier routing、offline/online eval、privacy、quota、tool approval 与 incident command。
 \end{enumerate}
+
+\begin{knowledgebox}{验收标准}
+高质量方案不会只列“vector DB + LLM + queue”。它应说明可重建状态、retry 放大、dual validation、model version telemetry，以及代码与 terminal 权限怎样被理解和撤销。
+\end{knowledgebox}
 
 \subsection{拓展阅读}
 
-\begin{itemize}
-  \item \textbf{Google Spanner}：\href{https://research.google/pubs/pub39966/}{Spanner: Google's Globally-Distributed Database} (2012)
-  \item \textbf{PostgreSQL MVCC}：\href{https://www.postgresql.org/docs/current/mvcc.html}{PostgreSQL 官方文档 --- Multiversion Concurrency Control}
-  \item \textbf{WarpStream}：\href{https://www.warpstream.com/}{Kafka 兼容的 Blob Storage 原生流处理系统}
-  \item \textbf{Turbopuffer}：\href{https://turbopuffer.com/}{基于 Object Storage 的向量数据库}
-  \item \textbf{FoundationDB}：\href{https://www.foundationdb.org/}{Apple 维护的分布式事务 KV 存储}
-  \item \textbf{Merkle Tree}：\href{https://en.wikipedia.org/wiki/Merkle_tree}{Wikipedia --- Merkle Tree 原理与应用}
-  \item \textbf{Cursor}：\href{https://cursor.com/}{AI-First 代码编辑器}
-\end{itemize}
+建议依次阅读 Cursor 的 \href{https://cursor.com/blog/secure-codebase-indexing}{secure indexing}、\href{https://cursor.com/blog/instant-apply}{Fast Apply}、\href{https://cursor.com/blog/cursorbench}{CursorBench}、\href{https://cursor.com/docs/enterprise/privacy-and-data-governance}{privacy} 与 \href{https://cursor.com/docs/agent/security}{agent security}；再读 turbopuffer 的 \href{https://turbopuffer.com/blog/turbopuffer}{object-storage search} 和 \href{https://turbopuffer.com/blog/continuous-recall}{continuous recall}；最后对照 PostgreSQL \href{https://www.postgresql.org/docs/current/routine-vacuuming.html}{vacuum} 与 Amazon S3 \href{https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html}{object/consistency model}。
 
 \end{document}

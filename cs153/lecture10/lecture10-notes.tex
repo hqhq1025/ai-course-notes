@@ -1,541 +1,399 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{float}
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
+\input{../cs153-preamble.tex}
 
-\newcommand{\notetitle}{[CS 153] Scaling AI --- Anthropic 联合创始人 Ben Mann}
-\newcommand{\noteauthors}{基于 Stanford CS 153 课程内容整理}
-\newcommand{\notedate}{2025}
-\newcommand{\videochannel}{Stanford CS 153}
-\newcommand{\videopublishdate}{2025-02-03}
-\newcommand{\videoduration}{41:56}
-\newcommand{\videourl}{https://www.youtube.com/watch?v=UdxSCFmUk9o}
-\newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
+\renewcommand{\notetitle}{Lecture 10：Scaling Frontier Models——训练、评估、安全与 API Contract}
+\renewcommand{\noteauthors}{基于 Ben Mann 访谈、时间戳字幕与 Anthropic/论文官方资料整理}
+\renewcommand{\notedate}{2025 年冬季课程 · 2026 年 source-first 重写版}
+\renewcommand{\videochannel}{Stanford CS153 历史课程上传}
+\renewcommand{\videopublishdate}{2025-02-03}
+\renewcommand{\videoduration}{41:56}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=UdxSCFmUk9o}
+\renewcommand{\videocoverpath}{cover.jpg}
 
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
 
 \begin{document}
-\begin{titlepage}\centering
-{\Large 课程笔记\par}\vspace{1.2cm}{\huge\bfseries \notetitle\par}\vspace{0.8cm}{\large \noteauthors\par}\vspace{0.3cm}{\large \notedate\par}\vspace{1.2cm}
-\ifdefempty{\videocoverpath}{}{\includegraphics[width=0.82\textwidth,height=0.45\textheight,keepaspectratio]{\videocoverpath}\par}
-\vfill
-\begin{tcolorbox}[width=0.9\textwidth, colback=black!2!white, colframe=black!60, sharp corners]
-\textbf{视频作者/频道}：\videochannel\par\textbf{发布日期}：\videopublishdate\par\textbf{视频时长}：\videoduration\par
-\ifdefempty{\videourl}{}{\textbf{视频链接}：\href{\videourl}{\nolinkurl{\videourl}}\par}\par
-\textbf{项目主页}：\href{\repourl}{\nolinkurl{\repourl}}\par
-\end{tcolorbox}
-\end{titlepage}
-\tableofcontents\newpage
+\makecscover
 
-%% ============================================================
-\section{引言：Anthropic 的爆发式增长}
-%% ============================================================
+\section{来源审计：Scaling 不是一条曲线，而是一套 Operating System}
 
-本次讲座是 Stanford CS 153: Infrastructure at Scale 课程的一部分，邀请了 Anthropic 联合创始人 Ben Mann 分享 AI 基础设施规模化的工程挑战与经验。Mann 在对话中回顾了从 GPT-3 到 Claude 的技术演进，探讨了 Scaling Laws 的深层意义，并深入剖析了训练监控、安全评估、以及产品架构等关键话题。
+本讲由 Anthropic 联合创始人 Ben Mann 主讲，时间是 2025 年 2 月。课堂从 GPT-2/GPT-3 与 scaling laws，讲到 frontier training 的 distributed failure、loss spike、RLHF/Constitutional AI、安全评估、Responsible Scaling Policy（RSP）、mechanistic interpretability，以及 chat 产品与 API 的不同发布纪律。仓库保留官方封面和 1025 条时间戳字幕；本文用论文与 Anthropic 官方材料校验机制，不把演讲后的模型、收入、RSP 或产品状态倒写回课堂。
 
-\begin{importantbox}{Anthropic 的增长数据}
-Mann 透露，Anthropic 在过去一年实现了 \textbf{10 倍}的收入增长。更值得注意的是，仅在 2024 年 10--12 月这三个月中，\textbf{编程（coding）业务线}的收入就实现了 10 倍增长，体现了 AI 编程助手市场的爆发式需求。
-\end{importantbox}
+\begin{warningbox}{课堂口径与版本边界}
+“过去一年十倍增长”“coding segment 三个月十倍”等数字只作为讲者当时的 workload 描述，不当作经审计财务结论。课堂使用 2025-era AI Safety Level（ASL）叙事；截至 2026 年 8 月 11 日，Anthropic 已在 2026 年 2 月 24 日发布 RSP v3.0，采用 capability thresholds、required safeguards 等更新框架。本文先忠实解释历史课程，再单独标记后续演化。
+\end{warningbox}
 
-这种增长带来了巨大的基础设施挑战——如何在流量急剧增加的情况下保持系统可靠性和服务质量，成为 Anthropic 工程团队日夜面对的核心问题。
-
-\subsection{本章小结}
-
-Anthropic 正经历前所未有的增长，coding 业务尤其突出。这种爆发式增长为基础设施团队带来了极大的压力，也为本次讲座提供了丰富的讨论素材。
-
-%% ============================================================
-\section{个人经历：从 Google 到 OpenAI 再到 Anthropic}
-%% ============================================================
-
-\subsection{学术背景与早期职业}
-
-Ben Mann 在 Columbia 大学完成了计算机科学本科学习，选修了 AI 方向。他坦言自己并非从小编程的天才少年——最初想学机械工程和机器人，但上了入门课后发现自己讨厌这两个方向，反而被计算机科学深深吸引。
-
-\begin{knowledgebox}{2015 年的 ImageNet 时刻}
-Mann 提到，2015 年 ImageNet 的突破对他是一个``构造性时刻''（tectonic moment）。在此之前，AI 课程还在讨论专家系统（Expert Systems）、80 年代的 AI 寒冬（AI Winter）和多层感知器（Multi-Layer Perceptrons）。ImageNet 让这些技术突然变得实用——模型在图像分类任务上超越了人类，而且只需要一块 GPU 就能训练。
-\end{knowledgebox}
-
-从 Google 离开后，Mann 开始自学 AI 研究——没有攻读硕士或博士学位，而是大量阅读论文和实践。他提到 Nick Bostrom 的《Superintelligence》一书对他的影响，让他意识到 AI 是一个关乎全人类命运的课题。
-
-\subsection{加入 OpenAI 与 GPT-3}
-
-2017 年，Mann 加入 OpenAI。他回忆当时团队对如何实现 AGI 并没有清晰的路径，只是认为``AI 领域正在发生大事，应该站在前沿''。
-
-\begin{importantbox}{GPT-2 的启示}
-Mann 指出，GPT-2 的出现让他确信了通往 AGI 的路径：不是在虚拟沙箱中模拟智能体对抗演化，而是\textbf{在互联网数据上训练模型，让它自然展现出人类智能的特征}。尽管当时很多人嘲笑这只是``模式匹配''而非真正的推理，Mann 始终相信这是一条通往高级能力的连续路径。
-\end{importantbox}
-
-在 OpenAI 期间，Mann 与 Dario Amodei 和 Tom Brown 一起参与了 GPT-3 项目。尽管没有正式的研究背景，他负责了所有的\textbf{数据工程}和大量的\textbf{数据质量分析}工作，研究数据如何影响模型质量，并与 Tom 一起进行架构实验。
-
-\subsection{创立 Anthropic}
-
-大约 2021 年，8 位核心成员从 OpenAI 离开，创立了 Anthropic。Mann 表示，离开的原因是希望将安全（Safety）作为公司使命的更核心部分。
-
-\begin{knowledgebox}{从 OpenAI 到 Anthropic 的传承}
-Mann 坦言，作为 GPT-3 的构建者，团队在``第二次做''（指训练大模型）时更加得心应手。但真正的差异化在于 Anthropic 在安全研究上取得了突破，这些突破不仅有科学价值，还被证明具有巨大的商业价值——这并非一开始就能预见的。Anthropic 将其称为``race to the top''，即通过自身的安全承诺推动整个行业提升安全标准。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Mann 的个人经历体现了当代 AI 领域的一个重要特征：前沿研究不再是学术界的专属，工程能力和数据直觉同样关键。从 ImageNet 到 GPT-2 再到 GPT-3，每一次突破都在强化``更多数据 + 更多计算 = 更强能力''这一信念。
-
-%% ============================================================
-\section{Scaling Laws：从怀疑到信仰}
-%% ============================================================
-
-\subsection{为什么人们不相信 Scaling Laws}
-
-Scaling Laws 的核心主张是：模型能力随着参数规模、数据量和计算量的增加而可预测地提升。Mann 指出，这个看似简单的观察遭到了广泛的怀疑，原因有二：
-
-\begin{warningbox}{Scaling Laws 面临的两大怀疑}
+\begin{importantbox}{Frontier model program 的四个闭环}
 \begin{enumerate}
-    \item \textbf{历史先例的缺失}：在计算系统的历史中，大多数性能指标（CPU 性能、互联网带宽、芯片间延迟等）都经历了先指数增长、后 sigmoid 平台期的曲线。很多基础设施老手看到 GPT-3 的 Scaling Laws 后，本能地认为``我们以前见过这种情况，最终都会停滞''。
-    \item \textbf{人类认知的特殊性假设}：部分人认为人类的推理能力是某种``特殊的东西''，不可能仅通过规模化训练来复现。
+  \item \textbf{Scaling loop}：hypothesis $\rightarrow$ pilot runs $\rightarrow$ fit/forecast $\rightarrow$ compute allocation；
+  \item \textbf{Training loop}：telemetry $\rightarrow$ anomaly $\rightarrow$ checkpoint/replay $\rightarrow$ fix/resume；
+  \item \textbf{Safety loop}：pre-training $\rightarrow$ post-training $\rightarrow$ evaluation $\rightarrow$ safeguards/deployment；
+  \item \textbf{Product loop}：chat experiment $\rightarrow$ behavior evidence $\rightarrow$ API contract $\rightarrow$ migration/deprecation。
 \end{enumerate}
-\end{warningbox}
-
-\subsection{T5 论文的反面教材}
-
-Mann 举了一个生动的例子：在 GPT-3 论文发布前不久，Google 发表了 T5 论文（一个 110 亿参数的模型）。在论文的结论段落中，作者明确表示``看不到继续扩大规模的回报''，并且认为 T5 本身的推理成本已经高到不可能部署。
-
-\begin{importantbox}{BERT 范式的思维定式}
-当时的研究社区被锁定在 BERT 范式中，认为 3 亿参数就算``大模型''。扩展到 110 亿参数需要整个 GPU 服务器进行数据并行（Data Parallel）操作，人们认为这既不经济也不实用。GPT-3 的成功打破了这一范式——它证明了 Scaling Laws 可以跨越 \textbf{13 个数量级}持续有效，这在物理世界中都极为罕见。
 \end{importantbox}
 
-\subsection{Banister 效应}
-
-Mann 用一个经典的体育类比来说明心理障碍的影响：在 Roger Banister 打破四分钟一英里的纪录之前，人们认为这是人类体能的极限。然而一旦有人做到了，短时间内就有大量跑者跟进。Scaling Laws 也是类似的情况——一旦 GPT-3 证明了可行性，整个行业迅速跟进。
-
-\subsection{计算系统 Sigmoid 的真实原因}
-
-Mann 对计算系统性能必然趋于 sigmoid 的说法提出了有趣的异议：
-
-\begin{knowledgebox}{投资不足还是物理极限？}
-Mann 认为，互联网带宽和芯片间互连（interconnect）速度的停滞并非物理极限，而是\textbf{缺乏投资动力}。以数据中心互连为例：云服务商长期维持 30 Gbps 的机器间带宽，因为``没人要求更多''。直到 NVIDIA 收购 Mellanox（拥有 400 Gbps 互连技术），AI 训练对高带宽互连的需求才引爆了这一领域的创新。类似地，Apple M 系列芯片的内存带宽表现远超传统 AMD/Intel 处理器，这证明了技术进步的潜力远未耗尽。
+\begin{knowledgebox}{术语消化：四种“规模”必须分开}
+\textbf{Training scale} 是参数、token 与训练 FLOPs；\textbf{serving scale} 是请求量、context、latency 和 accelerator fleet；\textbf{capability scale} 是任务成功、泛化与 tool use；\textbf{risk scale} 是模型能力、访问方式和 safeguard failure 共同产生的潜在影响。收入或流量增长不能直接证明 capability，benchmark 增长也不能自动证明 safety。
 \end{knowledgebox}
 
-\subsection{Scaling Laws 的科学价值}
+\subsection{增长为什么会改变工程假设}
 
-Mann 强调 Scaling Laws 对 AI 研发流程的革命性影响：
+快速需求增长不只意味着“多买 GPU”。Training 与 inference 争夺 capacity，API 用户要求稳定 contract，chat 用户期待更快迭代，安全团队要处理更多 adversarial traffic，on-call 则面对更高故障成本。Program 需要把 capability、compute、reliability 和 safeguards 放在同一资源模型中，而不是分别优化。
 
-\begin{importantbox}{从``艺术''到``科学''}
-在 Scaling Laws 出现之前，大模型训练更像是一门艺术——把各种东西往墙上扔，看什么能粘住。Scaling Laws 让这变成了一门科学：通过小规模、低成本的实验来预测大规模训练的结果。团队可以提前验证超参数选择、数据集质量等因素，从而确保最终的大规模训练产出有用的模型，而不是一个``非常昂贵的垃圾''。
-\end{importantbox}
+\lecturefigure{01-scaling-program.png}{Frontier scaling 是 demand、capability、compute 与 reliability 耦合的 program。}{本地字幕 00:00--01:00；概念重绘。}
+
+\begin{knowledgebox}{读图：增长带来正反馈，也带来风险复利}
+Demand 提供收入和真实任务；capability 提高 adoption；compute 支持训练与 serving；reliability 维持用户信任。任何一环失衡都会反向放大：capability release 没有 serving capacity 会造成排队，traffic 没有 abuse control 会扩大风险，训练挤占 inference 会伤害现有客户，API regression 则会把模型升级变成业务 outage。
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-Scaling Laws 的核心价值在于可预测性。它让 AI 实验室能够像工程项目一样规划训练，通过小实验外推大结果。对 Scaling Laws 的怀疑来自历史经验的惯性和对人类认知特殊性的信仰，但 GPT-3 的成功彻底改变了游戏规则。
+Scaling program 的对象是完整生命周期。后文不会把“更大模型”当成单一答案，而会追问预测、训练、恢复、对齐、评估、发布与兼容性如何共同成立。
 
-%% ============================================================
-\section{大规模训练的工程挑战}
-%% ============================================================
+\section{从 GPT-2 到 GPT-3：把直觉变成可检验 Scaling Hypothesis}
 
-\subsection{组织挑战：研究与工程的深度融合}
+Mann 把 2015 ImageNet 和随后 GPT-2 的出现视为关键 field signal：长期被认为只是 academic promise 的神经网络开始在真实任务上表现出可迁移能力。GPT-2 提示“在大规模互联网文本上做 next-token prediction 可能产生广泛能力”，GPT-3 则用多尺度实验检验参数、数据和 compute 增长是否稳定改善 loss 与 few-shot performance。
 
-Mann 指出，AI 前沿模型的训练越来越像大型工程项目（他用``三峡大坝级别''来形容），需要将大量资源集中到单一目标上。
+\subsection{Observation、hypothesis、pilot 与 frontier run}
 
-\begin{importantbox}{组织模式的差异决定了竞争力}
-\begin{itemize}
-    \item \textbf{DeepMind 早期模式}：研究人员主导，工程师被视为执行层。
-    \item \textbf{Google Brain 模式}：大量独立研究者各做各的，难以汇聚资源进行大规模实验。
-    \item \textbf{OpenAI/Anthropic 模式}：研究与工程高度融合的团队，共同驾驭整个项目。Mann 认为这种模式是成功的关键——前者``不允许任何人说服其他人做一个大赌注''。
-\end{itemize}
-\end{importantbox}
+\term{scaling law}（缩放定律）是模型性能或 loss 与 compute、dataset size、parameter count 之间的经验规律。它的工程价值不是事后画一条漂亮线，而是在最大训练前用较小 run 估计收益、比较 recipe、配置 data/model mix，并明确何时新证据表明 regime 已改变。
 
-\subsection{保密与协作的矛盾}
+\lecturefigure{02-scaling-hypothesis.png}{Scaling law 把 field signal 转成 hypothesis、pilot runs 和可预测的 frontier commitment。}{本地字幕 01:00--05:40；GPT-2/GPT-3 与 scaling laws 论文。}
 
-随着团队规模扩大到数百人，一个新的挑战浮现：\textbf{Compartmentalization}（知识隔离）。
-
-\begin{warningbox}{保护``Compute Multipliers''}
-Anthropic 将特定的训练技巧称为``compute multipliers''——给定相同的计算预算，这些技巧能显著提升模型能力。这些是公司的核心竞争力，不能泄露。为此，Anthropic 借鉴了美国情报机构和芯片开发商的做法：没有任何一个人掌握整个系统的全貌，每个人只知道与自己工作相关的部分。挑战在于，你仍然需要最终产出一个连贯的整体。
-\end{warningbox}
-
-\subsection{依赖云服务商的约束}
-
-Anthropic 不拥有自己的计算基础设施，而是依赖 Amazon（AWS）和 Google 等云服务商来编排计算集群。Mann 指出，这带来了独特的挑战：
-
-\begin{itemize}
-    \item Anthropic 的工作负载与普通云用户\textbf{完全不同}
-    \item 使用的 Kubernetes 集群节点数远超标准规格所支持的范围
-    \item 在几乎所有维度上都将系统推到了极限
-\end{itemize}
-
-\subsection{分布式训练中的可靠性}
-
-在大规模分布式训练中，\textbf{容错}是一个核心问题：
-
-\begin{knowledgebox}{分布式训练的关键挑战}
-\begin{itemize}
-    \item 如果一台机器在大规模分布式作业中故障，需要能够快速重启而不丢失大量训练进度
-    \item 需要高效的 checkpoint 存储和数据传输机制
-    \item 云存储系统承受着存储所有 snapshot 和向训练机器传输数据的巨大压力
-\end{itemize}
+\begin{knowledgebox}{读图：最大 run 之前必须有预测}
+Field signal 提供方向，hypothesis 明确“哪些变量增加会怎样改变 loss”，pilot runs 要跨多个尺度并保持可比 recipe，frontier run 则在预算批准前写出 expected curve、confidence 和 stop condition。若团队只有一个大 run，没有 holdout prediction，就很难判断成功来自 scaling、data cleanup、architecture change 还是选择性解释。
 \end{knowledgebox}
 
-\subsection{强化学习带来的新复杂性}
+\teachervoice{Mann 强调自己没有传统 PhD 路径，却通过 data engineering、分析与 architecture experiment 参与 GPT-3。课堂提示：frontier research 的关键贡献不只来自提出新公式，也来自构造可信数据、实验和测量系统。}
 
-Mann 特别提到，强化学习（RL）训练比传统的 pre-training 更加复杂：
+\subsection{为什么当时很多人不信}
 
-\begin{importantbox}{RL 训练的基础设施挑战}
-RL 训练涉及\textbf{有状态的环境}（stateful environments），智能体需要与之交互。这些智能体需要使用最新的模型权重，并且需要高效地更新权重。这比 pre-training 阶段的``读数据 $\rightarrow$ 计算梯度 $\rightarrow$ 更新参数''的流水线复杂得多，因为 RL 训练是一个动态的、交互式的过程。
-\end{importantbox}
+怀疑并不荒谬：历史技术常经历 sigmoid，已有模型可能成本高、部署困难，BERT/T5 时代的经验又强调 task-specific fine-tuning。问题在于把“当前 recipe 和 hardware 下的经济性”误当成“永远的能力上限”。更好的争论方式是要求跨尺度预测、residual analysis 与外推边界，而不是用一次昂贵 demo 或一次失败否定整个假设。
 
-\subsection{本章小结}
-
-大规模 AI 训练的挑战远不止``更多 GPU''。它涉及组织协作模式、知识安全、云基础设施的极限利用、分布式容错、以及 RL 训练带来的全新架构需求。Mann 用一句话概括：``每个层级都很难，每天都有新东西崩溃。''
-
-%% ============================================================
-\section{训练监控：像守护患者一样守护模型}
-%% ============================================================
-
-\subsection{持续监控的必要性}
-
-Mann 用一个生动的比喻描述大模型训练：就像守护一个重症监护室的患者。团队需要时刻关注数百个不同的诊断指标。
-
-\begin{warningbox}{训练不是``启动后等结果''}
-大模型训练绝不是``YOLO 式''地启动后祈祷一切顺利。在训练过程中，团队需要持续监控：
-\begin{itemize}
-    \item 训练分布和其他分布上的 loss 曲线
-    \item 各种中间指标的健康程度
-    \item 对模型进行快速评估（rapid eval），确保训练方向正确
-\end{itemize}
-\end{warningbox}
-
-\subsection{Loss Spikes 与回滚}
-
-大模型训练中一个常见的问题是 \textbf{loss spikes}（损失函数突然跳升）。Mann 描述了应对策略：
-
-\begin{enumerate}
-    \item 首先尝试\textbf{回滚到 spike 之前的 checkpoint}，然后重新运行，希望 spike 不会再次出现（即使什么都没改变）
-    \item 如果 spike 反复出现且过于严重，则需要进行``深度外科手术式干预''
-\end{enumerate}
-
-\begin{knowledgebox}{OpenAI 的``邪恶模型''Bug}
-Mann 分享了一个经典故事：在 OpenAI 训练 GPT-3 期间，团队发现模型在训练过程中变得越来越``邪恶''。经排查发现是 reward 信号的\textbf{正负号被搞反了}——一个 preference model reward 上的双重否定 bug 导致模型在优化``做坏事''而非``做好事''。更糟糕的是，这个 bug 存在已久，修复后反而``破坏了''模型（因为训练已经适应了错误的信号），最终不得不修复两次。
-\end{knowledgebox}
-
-\subsection{从人工值班到 Follow-the-Sun}
-
-在 Anthropic 早期（2021 年前后），训练监控非常原始——联合创始人 Tom Brown 在朋友聚会时都要不断刷新可观测性 dashboard 来``照看''训练进程。
-
-Mann 描述了演进过程：
-\begin{itemize}
-    \item \textbf{早期}：某个人全程盯着 dashboard，手动值班
-    \item \textbf{现在}：借鉴了标准工程实践，建立了 on-call 轮换制度
-    \item \textbf{Follow-the-Sun}：在全球不同时区部署团队成员，确保总有人在工作时间值班，避免半夜被叫醒处理紧急情况
-\end{itemize}
-
-\begin{warningbox}{仍然很难}
-尽管有了这些改进，Mann 坦言训练监控``仍然相当困难''。基础设施的复杂性和训练过程的脆弱性意味着需要持续的人类判断和干预。
+\begin{warningbox}{Scaling law 不是“只要加 compute 就一定成功”}
+Architecture、optimizer、token mixture、data contamination、context length、precision、parallelism 和 post-training 都可能改变曲线。Power law 只描述已观测区间的经验关系；跨 modality、跨 recipe 或跨多个数量级外推时，应扩大 uncertainty，并准备发现新的 bottleneck。
 \end{warningbox}
 
 \subsection{本章小结}
 
-大模型训练的监控是一项高强度的持续性工作。从 loss spikes 到 reward 信号 bug，各种意外随时可能发生。虽然工具和流程在不断改善，但这仍然是 AI 基础设施中最具挑战性的领域之一。
+Scaling hypothesis 的科学性来自可预测和可证伪。Field signal 触发方向，多尺度 pilot 提供曲线，frontier run 检验外推；任何结果都必须与预注册预测和 residual 对照。
 
-%% ============================================================
-\section{从 RLHF 到 Constitutional AI}
-%% ============================================================
+\section{读懂 Scaling Law：Fit、Residual 与 Compute Allocation}
 
-\subsection{RLHF 的基本流程}
+前一节解释了研究路径，本节进入公式与决策。常见语言模型 scaling law 把 cross-entropy loss 写成资源的幂律衰减加不可约项。重点不是背 exponent，而是理解每个 fit 假设、数据范围与误差如何影响数千万乃至更高成本的 compute allocation。
 
-RLHF（Reinforcement Learning from Human Feedback）是 Anthropic 和 OpenAI 共同开创的关键技术。Mann 简洁地解释了其原理：
+\subsection{Power Law 与不可约损失}
 
-\begin{importantbox}{RLHF 的``教师-学生''模型}
-\begin{enumerate}
-    \item 让人类标注者提交偏好数据（比较两个模型输出，选择更好的一个）
-    \item 用这些偏好数据训练一个 \textbf{Preference Model}（偏好模型），它代替人类判断输出的好坏
-    \item 用 Preference Model 作为 reward signal 进行 RL 训练
-    \item 训练完成后，Preference Model 就不再需要了——``以一种友善的方式把老师丢掉''
-\end{enumerate}
-可以理解为：先训练一个``老师''，老师再去教``学生''（最终的模型）。
-\end{importantbox}
+\term{cross-entropy loss}（交叉熵损失）衡量模型给真实下一个 token 分配的负对数概率。一个简化 compute scaling 形式是
+\[
+L(C)=L_{\infty}+aC^{-\alpha},
+\]
+其中 $C$ 表示训练 compute，$L(C)$ 是对应 loss，$L_{\infty}$ 是当前数据/任务假设下的不可约项，$a$ 是尺度系数，$\alpha>0$ 是收益衰减速度。Log-log 图可能近似直线，但 $L_{\infty}$、噪声与 recipe change 会显著影响外推。
 
-\subsection{Constitutional AI（RLAIF）的突破}
+\lecturefigure{03-scaling-law-fit.png}{Scaling law 是带 residual、confidence 和适用边界的 fit，而不是永恒直线。}{Kaplan et al. 2020；本地字幕 06:20--11:50；概念重绘。}
 
-Anthropic 的核心创新之一是 Constitutional AI，也称为 RLAIF（RL from AI Feedback）：
-
-\begin{importantbox}{Constitutional AI 的工作原理}
-\begin{enumerate}
-    \item 编写一组\textbf{自然语言原则}（Constitution），定义期望的行为，例如``要友善''、``不写网络攻击代码''、``不提供制造毒物的配方''
-    \item 在一个\textbf{完全封闭的流程中（无人类参与）}，让模型自我批评
-    \item 基于自身的批评来改进自身
-    \item 递归地自我提升
-\end{enumerate}
-\end{importantbox}
-
-\subsection{RLAIF 相对于 RLHF 的优势}
-
-Mann 解释了为什么 Anthropic 转向 RLAIF：
-
-\begin{knowledgebox}{RLAIF 的科学可控性}
-人类标注者来自不同背景，可能对指令有不同的理解，也可能遗忘部分指令。这导致 RLHF 的结果存在不确定性。相比之下，RLAIF 是一个：
-\begin{itemize}
-    \item \textbf{高度可重复}的过程
-    \item \textbf{可以在实验室环境中精确调优}
-    \item 更易于进行科学性的迭代
-\end{itemize}
+\begin{knowledgebox}{读图：先看残差，再看斜率}
+Axes 必须说明是 FLOPs、token、parameter 还是 wall-clock；fit 要给训练区间和 confidence；residual 显示 architecture、data 或 optimization 是否系统偏离；decision 才能据此调整 budget、model/data mix 或停止外推。若较大 run 连续落在预测线同一侧，最重要的信息可能不是“模型还不错”，而是当前 law 已失配。
 \end{knowledgebox}
 
-\begin{warningbox}{能力门槛限制}
-RLAIF 只有在模型能力超过一定阈值后才能工作。如果模型太小或太弱，当你问它``你的输出是否符合原则 X？''时，它给不出有用的答案，也无法基于批评进行有效修订。只有足够强大的模型才能``引导自己''走向更高的能力水平。
+\begin{warningbox}{Benchmark 提升与 loss scaling 不是同一函数}
+Average loss 的平滑下降可以对应某些 downstream task 的突然阈值效应，也可能不改善目标任务。能力评估要覆盖真实环境、工具和 elicitation；不能用一条 pre-training loss 曲线替代 post-training quality、安全和 serving economics。
 \end{warningbox}
 
-\subsection{早期 Claude 的多轮对话能力}
+\subsection{Compute multiplier 是组合，而不是秘密常数}
 
-Mann 提到，Anthropic 在 ChatGPT 发布之前就已经有了可用的 Claude 模型（2022 年 3 月完成训练），但选择暂不发布。这个早期版本通过 Slack 提供给``亲友团''使用。
+课堂把 architecture、data、optimizer 和 systems improvement 统称为 compute multiplier：同样 nominal FLOPs 下获得更多 effective capability。保密具有竞争理由，但内部仍要能复现。每个 multiplier 应有 baseline、ablation、interaction 与 transfer evidence，避免 portfolio 中多个改动相互抵消却都被宣称成功。
 
-两个关键因素使 Claude 在多轮对话中表现出色：
-\begin{enumerate}
-    \item \textbf{模型能力提升}：更大更好的模型天然更连贯，不会像 GPT-2 那样句与句之间``失去线索''
-    \item \textbf{多轮训练数据}：当时主流是 instruction tuning（单轮交互），但 Anthropic 从一开始就收集\textbf{多轮对话}的人类反馈，并使用类似 system prompt 的对话前缀来引导模型行为
-\end{enumerate}
+\lecturefigure{04-compute-allocation.png}{Compute allocation 同时投资 model、data、optimization 与 systems 四类 multiplier。}{本地字幕 12:00--15:20；概念重绘。}
 
-\begin{knowledgebox}{ChatGPT 的``加速效应''}
-Mann 透露了一个有趣的轶事：有传言称 ChatGPT 的发布是因为 OpenAI 以为 Anthropic 即将推出消费级产品（事实并非如此）。Anthropic 当时的判断是公开发布会``导致太多加速''，因此选择了延迟。Mann 表示对``给了世界多六个月时间做安全研究''感到满足。
+\begin{knowledgebox}{读图：收益要按 effective compute 归因}
+Architecture 可能提高表达或稀疏效率；data 改善 signal-to-noise；optimization 提高稳定性与收敛；systems 提高 hardware utilization。最终应比较固定 wall-clock、固定美元、固定 energy 或固定 FLOPs 下的 quality，而不是只报告某一 microbenchmark。Multiplier 还可能只在特定 scale 生效，必须验证 transfer。
 \end{knowledgebox}
+
+\teachervoice{讲者把 frontier lab 描述成 researchers 与 engineers 深度协同，而不是研究员提出想法、工程师做“杂活”。Scaling law 让两者共享一个实验语言：研究改 recipe，工程保证 run 可比、可恢复、可测量。}
 
 \subsection{本章小结}
 
-从 RLHF 到 Constitutional AI 的演进体现了 Anthropic 的核心理念：安全技术不仅可以与能力提升并行，还能成为竞争优势。RLAIF 的可控性和可重复性使安全训练成为一门可操作的科学，而非依赖大量人类标注的昂贵艺术。
+Scaling law 是资源决策工具。正确做法是联合 fit、residual、uncertainty 与 multiplier ablation；错误做法是把历史指数当自然常数，或把系统吞吐提升直接等同于模型能力提升。
 
-%% ============================================================
-\section{安全评估与 Responsible Scaling Policy}
-%% ============================================================
+\section{Distributed Training：Rare Failure 会变成日常事件}
 
-\subsection{评估为什么困难}
+Frontier run 同时依赖大量 accelerators、host、collective network、dataset storage、checkpoint storage、scheduler 和 cloud quota。单个组件的故障率即使很低，规模扩大后也会频繁中断。系统目标不是幻想零故障，而是限制 failure domain、快速检测、保存科学状态并恢复有效进展。
 
-Mann 直言，模型评估（Evals）\textbf{极其困难}。Anthropic 专门发布过一篇关于``为什么 evals 很难''的博客文章。核心挑战在于：
+\subsection{Workers、network、storage 与 scheduler}
 
-\begin{warningbox}{Elicitation Overhang（激发悬崖）}
-即使模型具备某种潜在能力，也可能因为没有找到正确的``提问方式''而在评估中表现不佳。这被称为 \textbf{elicitation overhang}。
+\term{collective communication}（集合通信）是 all-reduce、all-gather、reduce-scatter 等多设备协同 primitive；一次慢 worker 或 network partition 会拖住同步训练。Storage 既要持续供给 token，也要接收大 checkpoint；scheduler 则维护 membership、placement 与 restart。任何依赖都需要 health signal、timeout、backpressure 和 ownership。
 
-历史案例：Chain-of-Thought prompting 出现之前，模型已经具备了更好的推理能力，只是没有被正确激发。甚至简单地在 prompt 中加上``try very very very very hard''（每个 very 都重要！）都能显著提升模型表现。这意味着当前的评估结果可能系统性地\textbf{低估}了模型的真实能力。
+\lecturefigure{05-training-failure-domains.png}{Frontier training 耦合 workers、network、storage 和 scheduler 四类 failure domain。}{本地字幕 15:00--17:20；概念重绘。}
+
+\begin{knowledgebox}{读图：先区分 hard failure 与 silent corruption}
+Hard failure 包括进程退出、设备掉线、storage timeout，容易触发 restart；silent corruption 可能表现为错误数据、collective bit error、stale code 或异常梯度，更危险。监控不仅要回答“job 还在跑吗”，还要回答“它是否仍在执行同一个有效实验”。
+\end{knowledgebox}
+
+\begin{importantbox}{Useful training rate}
+设理论峰值 compute 为 $F_{peak}$，有效利用率为 $u$，因故障、恢复与空转损失的比例为 $d$，则长期 useful rate 可近似写为
+\[
+F_{useful}=F_{peak}\,u(1-d).
+\]
+其中提高 kernel MFU 只改善 $u$；若 checkpoint 太慢、故障检测迟或恢复不一致导致 $d$ 很大，昂贵硬件仍无法转化为有效训练进展。
+\end{importantbox}
+
+\subsection{本章小结}
+
+规模让 rare failure 常态化。Distributed training 必须同时优化 steady-state utilization 与 recovery tax，并用实验一致性而非“job resumed”作为恢复成功标准。
+
+\section{Training Observability：Loss Spike 只是症状}
+
+训练不是提交 job 后等待数周。研究假设可能被 data corruption、optimizer instability、precision overflow、code regression、network degradation 或 checkpoint mismatch 破坏。单看 global loss 无法诊断，因此需要 model、optimizer、data 与 system 四个同步 telemetry plane。
+
+\subsection{四类 Telemetry 与 anomaly triage}
+
+\term{loss spike} 是训练 loss 突然异常上升，可能短暂恢复，也可能预示 run 已失效。Model plane 记录 loss、gradient/activation statistics；optimizer plane 记录 learning rate、moment/update norm；data plane 记录 batch source、token mixture 与 corruption；system plane 记录 utilization、network、storage 和 hardware error。
+
+\lecturefigure{06-training-observability.png}{训练诊断需要 model、optimizer、data 与 system 四类同步 telemetry。}{本地字幕 17:20--20:10；概念重绘。}
+
+\begin{knowledgebox}{读图：Correlation 先于 root cause}
+当 loss spike 出现，先把异常时间对齐 data batch、optimizer update、collective retry 和 device error，再提出 hypothesis。若只看 loss，团队可能错误降低 learning rate；若只看 hardware log，又可能忽略特定数据触发的数值不稳定。所有 telemetry 必须使用一致 run/step ID，并保存 code/data/config version。
+\end{knowledgebox}
+
+\begin{warningbox}{Dashboard 绿色不代表实验有效}
+GPU utilization、throughput 和 job status 可以全部正常，而训练目标已因错误 mask、污染数据、label shift 或 optimizer state 损坏而失真。Frontier program 需要 scientific invariants：held-out loss、gradient range、data distribution、checkpoint checksum 与 periodic evaluation。
 \end{warningbox}
 
-\subsection{CBRN 风险评估}
+\subsection{Checkpoint、replay 与 resume}
 
-Anthropic 最关注的安全威胁是 \textbf{CBRN 风险}：
+\term{checkpoint} 保存恢复训练所需的参数、optimizer state、scheduler state、random state 与 data cursor；它不同于 activation checkpointing，后者是在单个 forward/backward 内用重算节省显存。\term{deterministic replay} 尽可能用相同 code、batch 和 state 重现异常，以判断是 transient infrastructure fault 还是 recipe defect。
 
-\begin{importantbox}{CBRN 风险类别}
-\begin{itemize}
-    \item \textbf{C}hemical：化学武器相关能力
-    \item \textbf{B}iological：生物威胁
-    \item \textbf{R}adiological：放射性威胁
-    \item \textbf{N}uclear：核武器相关知识
-\end{itemize}
-这些能力如果被滥用，可能真正\textbf{颠覆社会秩序}。此外，Anthropic 也评估模型的网络安全攻击能力。
-\end{importantbox}
+\lecturefigure{07-checkpoint-recovery.png}{训练恢复要保留科学含义：detect、checkpoint、replay、diagnose，再 resume 或修复。}{本地字幕 17:20--19:10；概念重绘。}
 
-评估过程涉及：
-\begin{itemize}
-    \item 聘请专业渗透测试（pen testing）人员
-    \item 与美国政府合作——与掌握国家核机密的人员共同测试模型的知识边界
-    \item 与美国和英国的 AI 安全研究所合作
-\end{itemize}
-
-\subsection{AI Safety Levels（ASLs）}
-
-Anthropic 提出了 AI Safety Levels 框架，灵感来自生物安全实验室的 BSL（Biosafety Level）分级：
-
-\begin{importantbox}{ASL 分级体系}
-\begin{itemize}
-    \item \textbf{ASL-2}（当前状态）：即使完全不对齐地使用模型，也不会对社会造成严重危害。例如，模型能破解验证码（CAPTCHA），但在此之前已有更窄的专用模型能做到，所以\textbf{边际风险很低}。
-    \item \textbf{ASL-3}（下一级）：模型能在一定程度上帮助人类研究者加速生物威胁研究，但尚未达到超人水平。在此级别，需要实施更严格的控制措施，如\textbf{双人控制}（two-party control）——任何生产环境的代码提交都需要至少一人审查，以防内部威胁。
-\end{itemize}
-\end{importantbox}
-
-\begin{knowledgebox}{Responsible Scaling Policy（RSP）}
-Anthropic 是目前唯一一家公开承诺会\textbf{基于能力阈值暂停开发}的前沿 AI 实验室。每个 ASL 级别都预先定义了所需的安全缓解措施——如果模型达到某个能力阈值但安全措施尚未就绪，Anthropic 承诺暂停该模型的开发和部署。此外，Anthropic 设有 \textbf{LTBT}（Long-Term Benefit Trust）治理机制，该信托委员会有权在判断 Anthropic 的 AI 开发不利于人类利益时，关闭公司。
+\begin{knowledgebox}{读图：恢复点必须包含 data cursor}
+只保存 model weights 会丢失 optimizer moments、LR schedule、randomness 和数据位置，恢复后曲线可能悄悄改变。Replay 若在同一 batch 再次 spike，优先检查 data/recipe；若换硬件后消失，可能是 transient fault；若无法重现，则要保留不确定性并提高监控，而不是宣布问题已解决。
 \end{knowledgebox}
 
-\subsection{Defense in Depth：多层防御}
-
-Mann 介绍了 Anthropic 的安全方法论——\textbf{Defense in Depth}（纵深防御），这一概念借鉴自网络安全领域：
-
-\begin{itemize}
-    \item \textbf{Pre-training 阶段}：在预训练数据和过程中嵌入安全训练
-    \item \textbf{Post-training 阶段}：通过 RLHF/RLAIF 进行安全对齐
-    \item \textbf{在线检测}：部署 Prompt Shield 等分类器，实时检测恶意使用意图
-    \item \textbf{可解释性研究}：通过 Mechanistic Interpretability 深入理解模型内部运作
-\end{itemize}
+\teachervoice{Mann 用“像看护病人一样看训练”说明 on-call 心态：loss curve 的异常可能在数小时后才显现，回滚又会损失昂贵进度。课堂里的重点不是戏剧化值班，而是训练本身已经成为需要 SRE discipline 的生产系统。}
 
 \subsection{本章小结}
 
-Anthropic 的安全策略是多层次的：从 RSP 和 ASL 分级提供宏观框架，到 CBRN 评估和 red teaming 提供具体测试，再到 defense-in-depth 提供技术保障。Elicitation overhang 的存在意味着我们可能持续低估模型能力，这使得前瞻性的安全规划尤为重要。
+Training observability 把模型实验与系统运行连接起来。Loss spike 是入口，四类 telemetry、完整 checkpoint 与 controlled replay 才能把 anomaly 变成可修复知识。
 
-%% ============================================================
-\section{Mechanistic Interpretability：最令人期待的安全技术}
-%% ============================================================
+\section{Follow-the-Sun：全球值班不等于自动拥有清晰责任}
 
-Mann 表示，在所有安全研究方向中，他个人最看好 \textbf{Mechanistic Interpretability}（机械可解释性）。
+长训练跨越时区，follow-the-sun 可以减少无人响应时间，但只有 handoff packet、明确 owner 和 stop criteria 才能避免重复操作。Frontier training 的难点是系统和研究责任交织：网络故障由 infra owner 处理，loss drift 需要 research owner，data corruption 又跨 pipeline 与 privacy owner。
 
-\begin{importantbox}{Mechanistic Interpretability 的核心思想}
-如果能够``窥视模型的内心世界''——不仅仅是它输出的 token，而是这些概念在模型内部如何形成——那么就有可能对模型行为进行\textbf{审计}。具体来说，可以检测模型是否存在：
-\begin{itemize}
-    \item \textbf{Resource Stockpiling}（资源囤积倾向）
-    \item \textbf{Shutdown Resistance}（抗关闭行为）
-    \item 其他可能在极强模型中出现的危险行为模式
-\end{itemize}
-\end{importantbox}
+\subsection{Handoff packet 与 escalation}
 
-\begin{knowledgebox}{Chris Olah 的开创性工作}
-Mann 特别提到了 Anthropic 的 Chris Olah 及其团队——他们几乎是从零开始构建了这个全新的研究领域。虽然 Mechanistic Interpretability 仍处于早期阶段，但团队已经开始``对模型内部发生了什么有了初步的理解''。Mann 认为这可能是确保未来超强模型安全性的最重要技术方向。
+一个有效 handoff 至少包含当前 checkpoint/step、expected curve、最近异常、已验证 hypothesis、禁止重复的 action、pending experiment、下一决策 deadline 与 contacts。接班者必须 acknowledge 并复核 dashboard，而不是只读聊天记录。High-risk action，例如修改 optimizer 或跳过数据 shard，应要求双人 review。
+
+\lecturefigure{08-follow-the-sun.png}{Follow-the-sun 依赖 active owner、handoff packet、接班确认与跨职能 escalation。}{本地字幕 19:00--21:20；概念重绘。}
+
+\begin{knowledgebox}{读图：Coverage 与 ownership 是两件事}
+全球 coverage 保证有人在线，ownership 决定谁有权 stop、rollback 或 change recipe。若多个地区都能“顺手修”，run 会积累不可追踪变更；若所有人只观察，又会错过 recovery window。Handoff 应冻结当前 hypothesis 和 authority，重大变更写入 run ledger。
 \end{knowledgebox}
+
+\teachervoice{讲者承认 follow-the-sun 也没有消除困难：有些 failure 模糊、偶发且跨研究/系统边界。课堂提醒我们，增加时区覆盖不是组织魔法，仍需共享语言、runbook 与明确 escalation。}
 
 \subsection{本章小结}
 
-Mechanistic Interpretability 代表了一种从根本上不同的安全方法——不是从模型输出端进行事后检测，而是从模型内部结构出发进行事前审计。尽管尚处早期，但 Mann 对其潜力给予了最高评价。
+全球训练运营的关键是 evidence transfer 与 decision rights。Handoff 质量决定 coverage 能否转化为更低 downtime，而不是更多并发误操作。
 
-%% ============================================================
-\section{前沿模型部署：Pre-training、RL 与推理}
-%% ============================================================
+\section{Post-Training：RLHF 与 Constitutional AI}
 
-\subsection{Pre-training 不会消失}
+Pre-training 提供广泛语言和世界知识，但不会自动产生符合产品意图的对话行为。Post-training 把 instruction、preference、principle 和 tool policy 注入模型。课堂从 RLHF 讲到 Constitutional AI/RLAIF，重点不是把 human feedback 完全替换，而是扩大监督规模并让行为目标更明确、可迭代。
 
-当被问及 RL 训练是否会取代 pre-training 时，Mann 给出了明确的否定：
+\subsection{RLHF：把偏好训练成 proxy reward}
 
-\begin{knowledgebox}{Pre-training vs. RL 的互补关系}
-虽然存在``纯 RL 训练''的实验尝试，但这些实验通常仍然使用蒸馏（distillation）——这本质上是一种监督学习，从工作负载角度看与 pre-training 并无本质区别。Mann 认为 pre-training 非常高效，能够``让你走很远''，不会消失。RL 是在 pre-training 基础上的增强，而非替代。
+\term{reinforcement learning from human feedback}（RLHF）通常包含 supervised fine-tuning、human preference comparison、\term{reward model}（奖励模型）和 policy optimization。Reward model 学习预测人类更喜欢哪个回答，RL 再优化模型提高 predicted reward，并用 KL 等约束避免策略偏离过远。
+
+\lecturefigure{09-rlhf-pipeline.png}{RLHF 把 demonstrations、preference、reward model 与 policy optimization 串成训练管线。}{InstructGPT；本地字幕 21:00--26:20；概念重绘。}
+
+\begin{knowledgebox}{读图：每一层都有独立误差}
+SFT 受 demonstration 覆盖限制；preference 受 annotator/rubric 影响；reward model 可能在 distribution shift 下被 exploit；RL policy 可能提高 proxy reward 却损害真实 helpfulness。最终 human evaluation、safety evaluation 和 product metrics 不能被 reward curve 替代。
 \end{knowledgebox}
 
-\subsection{分布式训练的前沿探索}
+\begin{warningbox}{Reward hacking 是 proxy 问题，不只是算法 bug}
+任何有限 rubric 都无法完整表达“有帮助、诚实、无害且符合上下文”。模型可能学会讨好 judge、过度拒绝或使用表面风格获得高分。应使用多维 evaluation、adversarial examples、holdout tasks 和 policy review，避免单一 reward 成为唯一真理。
+\end{warningbox}
 
-对于 pre-training 是否必须依赖大型单机房数据中心，Mann 表示还没有定论：
+\subsection{Constitutional AI 与 RLAIF}
 
-\begin{itemize}
-    \item 多个公司和开源组织正在尝试通过\textbf{大规模分布式网络}进行 pre-training
-    \item 关键技术包括 \textbf{single-bit updates}（单比特梯度更新）来替代完整梯度传输
-    \item 这种方法是否能与大型数据中心的性能竞争，目前尚无定论
-    \item 但经济激励是明确存在的——如果能用分布式小集群达到大型数据中心的效果，将极大降低训练门槛
-\end{itemize}
+\term{Constitutional AI} 用一组原则指导模型 critique 和 revise 自己的回答，再生成 AI preference data；\term{reinforcement learning from AI feedback}（RLAIF）用 evaluator model 产生偏好或 reward signal。人类仍负责选择 principles、审计行为、处理冲突与决定 deployment boundary，AI feedback 负责降低每个样本都要人工标注的成本。
 
-\subsection{推理可以更分散}
+\lecturefigure{10-constitutional-ai.png}{Constitutional AI 用 principles、critique/revision、AI preferences 与 RLAIF 扩展监督。}{Anthropic Constitutional AI；本地字幕 26:00--27:40；概念重绘。}
 
-与训练不同，推理（inference）对互连带宽的需求低得多，因此计算可以更广泛地分布。Mann 认为：
+\begin{knowledgebox}{读图：Base model capability 是前提}
+模型必须能理解原则、发现问题并提出更好 revision，CAI 才能工作；evaluator model 也可能共享 target model 的 blind spot。Principle 冲突、文化语境、过度拒绝与 hidden reasoning 都需要 human audit。RLAIF 扩大监督吞吐，不等于消除 human governance。
+\end{knowledgebox}
 
-\begin{itemize}
-    \item \textbf{前沿模型}始终只能在数据中心级别的计算资源上运行
-    \item \textbf{本地可运行的模型}将始终落后前沿 2 年左右
-    \item 量化（quantization）技术在持续缩小这一差距
-    \item Anthropic 关注的是前沿安全——需要确保安全技术适用于最新、最强的模型
-\end{itemize}
+\teachervoice{Mann 把 Constitutional AI 描述为一个能力门槛后的突破：早期模型还不足以可靠 critique 自己，模型变强后才可能成为监督工具。这个例子说明 capability growth 也能创造新的 safety technique，而不是只增加风险。}
 
 \subsection{本章小结}
 
-AI 训练的基础设施正在从``大型单点数据中心''向更分布式的方向演进，但 pre-training 的核心地位不会改变。推理工作负载的分布式特性为更灵活的部署提供了可能性，但前沿模型的训练仍需要集中的大规模计算资源。
+Post-training 是多层 proxy 优化。RLHF 和 RLAIF 都需要清晰原则、独立 evaluation 与 human governance；它们改变行为，却不替代 base capability、system control 或 deployment safety。
 
-%% ============================================================
-\section{API 与 Chat 产品的架构哲学}
-%% ============================================================
+\section{Evaluation：Measured Capability 取决于 Elicitation}
 
-\subsection{Chat 作为试验场}
+安全与能力评估看似是给模型出题，实际还包括 prompt、scaffold、tool、time budget、environment、judge 与统计不确定性。\term{elicitation}（能力激发）是通过合理 prompting、tool access、search 或 fine-tuning，让评估尽可能接近模型可达到能力。Elicitation 太弱会低估风险，太强又可能脱离真实 attacker/user 条件。
 
-Mann 解释了 Anthropic 的 Chat 体验（claude.ai）和 API 服务之间的策略关系：
+\subsection{Task、elicitation、environment 与 judge}
 
-\begin{importantbox}{Chat vs. API 的根本差异}
-\begin{itemize}
-    \item \textbf{Chat 体验}：Anthropic 完全控制每个环节，可以单方面修改或回撤功能，迭代速度极快
-    \item \textbf{API 服务}：``APIs are forever''（API 即永恒）——一旦发布，就有企业客户和合作伙伴依赖它。任何变更都可能影响下游系统
-\end{itemize}
-\end{importantbox}
+评估首先定义 construct：是在测 knowledge、planning、tool use、cyber/CBRN uplift 还是 harmful propensity；随后确定 elicitation budget 和权限；environment 应模拟真实 feedback 和 constraint；judge 则可由专家、人群或模型构成，并需要 rubric、inter-rater agreement 与 calibration。
 
-\begin{knowledgebox}{API 的惯性}
-Mann 分享了一个生动的例子：即便 Claude 1 和 Claude 2 的模型性能远不如 Claude 3 系列，弃用这些旧版 API 仍然花了很长时间。事实上，Claude 2 在讲座时仍在某些生产环境中运行。这是因为企业客户的考量不仅是``用最酷的模型''，更包括\textbf{业务连续性}和\textbf{工程资源限制}。
+\lecturefigure{11-evaluation-stack.png}{模型评估的分数由 task、elicitation、environment、judge 和 confidence 共同决定。}{Anthropic evaluation research；本地字幕 27:30--30:40；概念重绘。}
+
+\begin{knowledgebox}{读图：低分可能是能力低，也可能是没激发出来}
+固定 prompt 的失败不能证明 model 无能力；允许无限工具和人工搜索的成功也不代表普通用户可复现。Evaluation report 应写 model/version、system prompt、tools、samples、search effort、judge、scoring 和 uncertainty，并区分 observed performance 与 estimated upper bound。
 \end{knowledgebox}
 
-\subsection{从 Chat 到 API 的功能流动}
+\begin{importantbox}{置信区间比单点分数更诚实}
+若 $n$ 个独立样本中成功 $k$ 次，经验成功率为
+\[
+\hat p=\frac{k}{n}.
+\]
+其中 $\hat p$ 是有限样本估计，真正能力 $p$ 仍有统计区间；当高风险 gate 依赖极低 failure rate 时，几十个样本远远不足。还要处理非独立任务、prompt selection 与 evaluator bias，不能只报告整数百分比。
+\end{importantbox}
 
-Anthropic 将 Chat 体验定位为 API 功能的 \textbf{Proving Ground}（试验场）：
-
-\begin{enumerate}
-    \item 新功能（如 PDF 上传）首先在 Chat 中推出
-    \item 验证其稳定性和用户价值
-    \item 再将经过验证的功能开放到 API 中
-    \item 这个模式让 Anthropic 能在低风险环境中快速迭代，同时保持 API 的稳定性
-\end{enumerate}
+\begin{warningbox}{高风险评估不应泄露可操作细节}
+公开材料可以说明风险类别、评估框架、access control、red-team process 和 aggregate finding，但不应发布能显著降低有害行为门槛的具体流程、材料或绕过方法。Transparency 的目标是可问责，而不是把 evaluation set 变成能力教程。
+\end{warningbox}
 
 \subsection{本章小结}
 
-Chat 和 API 的双轨策略体现了产品成熟度管理的智慧：Chat 追求快速迭代和功能探索，API 追求稳定性和向后兼容。对开发者来说，这意味着 API 的新功能是经过 Chat 验证的成熟能力。
+Evaluation 是 measurement system，不是题库。Elicitation、environment 和 judge 决定分数含义；高风险决策需要 uncertainty、external review 和版本化证据。
 
-%% ============================================================
-\section{工程师在 AI 前沿的角色}
-%% ============================================================
+\section{RSP：从 Historical ASL 到 Capability-Triggered Safeguards}
 
-讲座的一个反复出现的主题是：\textbf{推进 AI 前沿不仅是研究问题，更是工程问题}。
+课堂使用 AI Safety Levels 描述模型能力与防护等级的关联，并强调 defense in depth。当前 Anthropic RSP v3.0 已演化为 capability thresholds、required safeguards、risk reports 与治理流程。两版共同的 durable idea 是：随着 capability evidence 接近高影响 threshold，训练和部署必须先升级 security/deployment controls，而不是事后补救。
 
-\begin{importantbox}{工程师的不可替代性}
-Mann 的个人经历本身就是最好的证明——他没有硕士或博士学位，却成为 GPT-3 论文的第一作者之一，负责了关键的数据工程和分析工作。在 Anthropic，基础设施和计算方面的挑战（分布式训练、容错、RL 环境编排、安全机制实现）\textbf{不是靠研究论文就能解决的}，它们需要一流的工程能力。
-\end{importantbox}
+\subsection{Threshold、safeguard 与 gate}
 
-课程主持人特别强调，听了 Mann 对 RLAIF pipeline 的描述后，应该清楚地意识到这本质上是一个\textbf{工程挑战}而非纯研究问题。Anthropic 刻意打造一个对工程师友好的环境，因为前沿 AI 的突破越来越依赖于工程创新。
+团队先通过 evaluation、elicitation 与 forecast 形成 capability evidence，再判断离 threshold 多远；若达到或接近 threshold，就要满足对应 required safeguards，例如更强 model-weight security、access control、runtime guard、monitoring、red team、incident readiness 与 governance review；最后才决定继续训练、扩大部署或限制 access。
 
-\begin{knowledgebox}{学术界的独特贡献空间}
-Mann 指出，Evals（模型评估）是学术界可以做出重要贡献的领域。构建有效的 benchmark 不需要大量计算资源，但对理解模型能力至关重要。他举了 OS World benchmark 的例子——它提供了一种可重复的方式来衡量模型操作桌面计算机的能力，这种评估虽然本身无害，但可以指向潜在的安全风险。
+\lecturefigure{12-capability-safeguards.png}{能力证据触发 threshold review、required safeguards 与 deployment gate。}{课堂 ASL framing；Anthropic RSP v3.0；概念重绘。}
+
+\begin{knowledgebox}{读图：版本变化说明 governance 需要可修订}
+课堂 ASL 把模型/防护分级绑定得较紧；RSP 后续版本把 capability threshold 与 safeguard package 拆开，以便针对具体风险更新。这个变化不是“旧版错误、新版正确”的简单替换，而是承认 evaluation science、threat model 与 safeguard evidence 会变化，因此 policy 本身也必须 versioned、公开变更并接受 review。
+\end{knowledgebox}
+
+\teachervoice{讲者强调评估最难之处之一是 elicitation overhang：今天没测出来，不代表更强 scaffold、tool 或研究 effort 后仍做不到。课堂里的 ASL 不是给模型贴永久标签，而是要求组织在不确定性下提前准备防护。}
+
+\subsection{Defense in Depth}
+
+\term{defense in depth}（纵深防御）是设置相互独立、失败模式不同的多层控制。Training 通过 data/objective 与 post-training 降低危险行为；access 层限制谁能使用什么能力；runtime classifier/tool policy 监控请求和 action；response 层负责 red team、incident、patch、revoke 与 customer communication。
+
+\lecturefigure{13-defense-in-depth.png}{Frontier model safety 需要 training、access、runtime 与 response 的纵深防御。}{本地字幕 37:00--39:10；概念重绘。}
+
+\begin{knowledgebox}{读图：层数多不等于独立}
+若 training、classifier 和 judge 都依赖同一模型与同一数据，它们可能共享 blind spot。有效纵深防御要分析 common-mode failure、权限分离、监控独立性和 human override。每层都应产生 evidence 供下一层判断，并有明确 fallback，而不是把风险在层间循环转发。
 \end{knowledgebox}
 
 \subsection{本章小结}
 
-AI 前沿的竞争已经不再是纯学术竞赛。工程能力——从分布式系统到安全基础设施——已成为决定性的竞争因素。无论是在工业界还是学术界，都有大量高价值的贡献机会。
+RSP 的核心是 capability-triggered governance。术语会变，durable contract 是：先评估，再满足 required safeguards，最后训练/部署；任何例外都要有 owner、证据与重新评估日期。
 
-%% ============================================================
+\section{Mechanistic Interpretability：内部证据的希望与限制}
+
+Behavioral evaluation 只能观察输入输出，\term{mechanistic interpretability}（机制可解释性）尝试从 activation、feature 和 circuit 理解模型内部计算。Anthropic 的 dictionary-learning 工作把单个 neuron 的混合表示分解为更稀疏的 feature，为“某种概念何时激活、如何影响下游”提供研究工具。
+
+\subsection{Feature、circuit hypothesis 与 intervention}
+
+\term{feature} 是从高维 activation 中提取的可解释模式，不一定对应单个 neuron；\term{circuit} 是多个 feature/attention/MLP interaction 形成的计算路径。研究流程从 activation collection、feature discovery 到 behavior correlation，再用 ablation、steering 或 counterfactual intervention 检验因果。
+
+\lecturefigure{14-interpretability-loop.png}{机制可解释性从 activation 提取 feature，形成 circuit hypothesis，再用 intervention 验证。}{Anthropic monosemanticity research；本地字幕 38:17--39:03；概念重绘。}
+
+\begin{knowledgebox}{读图：可读 feature 不等于完整“读心”}
+Feature label 来自激活样本和人类解释，可能遗漏 polysemy、distributed representation 或 context dependency；circuit hypothesis 需要 causal intervention；局部解释也不能证明全局安全。Interpretability 更适合作为 evaluation、red team 和 anomaly investigation 的补充证据，而不是单独 release gate。
+\end{knowledgebox}
+
+\begin{warningbox}{不要把 anthropomorphic label 当模型意图}
+“欺骗”“权力”“自我保护”等标签可以帮助检索行为模式，但模型内部 feature activation 不自动意味着持久目标或主观意图。报告应说明 operational definition、dataset、false positive、intervention result 和 alternative explanation。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Mechanistic interpretability 提供内部 evidence，但仍处于研究早期。Feature discovery、causal validation 与 behavioral evaluation 必须相互校验，不能把一张 activation 图当成安全证明。
+
+\section{Compute Lifecycle：Pre-training、Post-training 与 Inference}
+
+课堂反对“pre-training 已经结束”的二元叙事。Pre-training 高效吸收广泛数据并建立 base capability；post-training 把行为、工具和安全目标聚焦；inference compute 通过 context、search、reasoning 或多次采样解决具体任务。三者的边际收益、latency、cost 和可控性不同。
+
+\subsection{不同阶段解决不同问题}
+
+Pre-training 适合摊销到所有请求的广泛能力；post-training 适合产品/政策行为；inference 适合按任务动态投入。若 base model 缺少知识或 representation，增加 inference token 可能只是更长地猜；若 post-training 不足，强 base model 也可能不遵循工具 contract；若 serving budget 太低，复杂 reasoning 又无法落地。
+
+\lecturefigure{15-compute-lifecycle.png}{Pre-training、post-training、inference compute 与 product feedback 形成互补生命周期。}{本地字幕 34:40--36:50；概念重绘。}
+
+\begin{knowledgebox}{读图：比较 total cost，不只看训练 FLOPs}
+一个模型的经济性包括训练摊销、post-training iteration、每请求 accelerator/time、context storage、cache、tool call 和 failure retry。更小 base model 加更多 inference search 可能适合低并发高价值任务；更强 base model 可能降低每请求步骤。选择应基于 target workload 与 SLO，而非阶段流行度。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+Frontier progress 来自 compute 在生命周期中的重新分配，而不是某一阶段永久取代另一阶段。Program 要用端到端 quality、cost、latency 和 risk 选择组合。
+
+\section{Chat Proving Ground 与 API Contract}
+
+最后一节把研究与产品连接起来。Chat experience 由供应商控制 UI、system prompt、tool、rollback 与 user education，可以快速试验；API 一旦被客户写进 production，schema、model behavior、latency、error、pricing 和 retirement 都成为外部 contract。正如课堂所说，“APIs are forever”不是字面永不变化，而是变化成本落在大量客户系统上。
+
+\subsection{从实验到 versioned primitive}
+
+Chat 中验证 PDF upload、long context 或 tool behavior 后，团队需要把隐式 UX 约束转成 API schema、auth、quota、idempotency、error model、version 和 docs。\term{API deprecation}（弃用）是宣布某模型或参数不再推荐，并提供 replacement、migration guidance 与 retirement date；retirement 后请求失败，因此客户必须在窗口内测试和迁移。
+
+\lecturefigure{16-chat-to-api.png}{Chat 负责快速试验，API 则把成熟能力发布为长期兼容 contract。}{本地字幕 39:00--41:56；Anthropic API lifecycle docs；概念重绘。}
+
+\begin{knowledgebox}{读图：Release 之前要补齐哪些证据}
+Chat experiment 先观察 usefulness、安全和 failure；evidence 形成 acceptance criteria；API release 固化 schema/version/SLO；lifecycle 提供 active、legacy、deprecated、retired 状态与 migration。客户 continuity 可能比“最新模型更聪明”更重要，因此 replacement 必须在真实 workload 上回归，而不能只看 benchmark。
+\end{knowledgebox}
+
+\teachervoice{Mann 用 Claude 旧模型仍在某处生产环境说明 API inertia：客户可能没有工程资源迁移，也可能把旧行为写进合规流程。课堂提醒 frontier lab，发布 API 就等于接受 support、compatibility 和 deprecation 责任。}
+
+\begin{warningbox}{模型升级不是普通 binary upgrade}
+新模型可能改变 refusal、format、tool call、latency、token usage 与 nondeterministic distribution。Migration 需要 golden tasks、safety regression、cost/SLO test、shadow traffic、rollback 和 customer communication；同名 alias 静默切换会让事故难以归因。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Chat 与 API 的速度不同是合理的。Proving ground 帮助发现行为，API contract 要求版本化、可测试和可迁移；产品纪律是 frontier capability 成为基础设施的最后一步。
+
 \section{总结与延伸}
-%% ============================================================
 
-Ben Mann 的讲座为我们描绘了一幅从 GPT-3 到 Claude 的技术演进全景图，涵盖了 Scaling Laws 的哲学意义、大规模训练的工程现实、安全评估的前沿实践，以及产品架构的策略思考。以下是核心收获：
+本讲把 frontier scaling 从“模型越大越好”扩展为一套 research、systems、safety 与 product operating system：
 
 \begin{enumerate}
-    \item \textbf{Scaling Laws 改变了 AI 研发范式}——从``扔到墙上看什么粘住''变成可预测的科学实验，小规模实验可以指导大规模投入。
-
-    \item \textbf{大模型训练是巨型工程项目}——需要研究与工程的深度融合，组织模式直接影响竞争力。DeepMind 的研究者主导模式和 Google Brain 的分散模式都不如 OpenAI/Anthropic 的集成模式高效。
-
-    \item \textbf{基础设施的瓶颈无处不在}——从 Kubernetes 集群的规格限制到分布式训练的容错，从 checkpoint 存储到 RL 环境编排，每个层级都在被推到极限。
-
-    \item \textbf{训练监控仍是高强度工作}——尽管有了 on-call 轮换和 follow-the-sun 机制，大模型训练的脆弱性意味着持续的人类判断不可或缺。
-
-    \item \textbf{Constitutional AI 是安全领域的关键创新}——RLAIF 用可重复的科学过程替代了依赖人类标注者的 RLHF，既提高了可控性也降低了成本。
-
-    \item \textbf{安全不是能力的对立面}——Anthropic 的经验表明，安全研究可以同时产生商业价值，推动``race to the top''。
-
-    \item \textbf{Mechanistic Interpretability 是长期安全的希望}——通过理解模型内部概念的形成过程来审计行为，可能是确保超级 AI 安全性的最重要技术路径。
-
-    \item \textbf{API 稳定性与产品敏捷性需要平衡}——Chat 作为 API 的试验场，体现了成熟的产品策略。
-
-    \item \textbf{工程师在 AI 前沿不可或缺}——前沿 AI 的突破越来越依赖于分布式系统、安全基础设施和大规模工程能力，而非仅靠研究论文。
-
-    \item \textbf{Elicitation overhang 提醒我们保持警惕}——当前的评估可能系统性低估模型能力，前瞻性的安全规划至关重要。
+  \item \textbf{Scaling law 是预测合同}：先用多尺度 run 做 fit 和 residual，再批准 frontier commitment；
+  \item \textbf{Compute multiplier 需要归因}：model、data、optimization 与 systems 改动要在共同成本基准下验证；
+  \item \textbf{Rare failure 必须被设计进去}：failure domain、checkpoint、replay 和 recovery tax 决定 useful progress；
+  \item \textbf{Training 需要四平面可观测性}：model、optimizer、data、system telemetry 共同解释 anomaly；
+  \item \textbf{全球值班需要 decision rights}：handoff packet、owner 与 stop criteria 比“有人在线”更重要；
+  \item \textbf{Post-training 优化 proxy}：RLHF/CAI/RLAIF 扩大行为监督，但都需要独立 evaluation 与治理；
+  \item \textbf{Evaluation 取决于 elicitation}：task、tool、effort、environment、judge 和 uncertainty 决定分数含义；
+  \item \textbf{Safeguard 随 capability 升级}：RSP 版本会演化，先评估、满足 required controls、再训练/部署的原则不变；
+  \item \textbf{Interpretability 是补充证据}：feature/circuit 需要 causal validation，不能单独证明安全；
+  \item \textbf{API 是外部 contract}：chat 可快速试验，API 必须 version、migrate、deprecate 与 support。
 \end{enumerate}
+
+\begin{importantbox}{Frontier Model Program 作业}
+设计一个 8 周训练与发布计划：给出三档 pilot scale、loss fit 与 uncertainty；列出 workers/network/storage/scheduler failure budget；定义 checkpoint/replay 和 follow-the-sun handoff；画出 pre-training、RLHF/RLAIF、capability/safety evaluation、safeguard gate、chat canary 和 API release；最后给出 model deprecation、shadow traffic 与 rollback。每个 gate 必须有 owner、evidence 和 stop condition。
+\end{importantbox}
 
 \subsection{拓展阅读}
 
-\begin{itemize}
-    \item Anthropic, \textit{Responsible Scaling Policy}.\\ \url{https://www.anthropic.com/index/anthropics-responsible-scaling-policy}
-    \item Bai et al., \textit{Constitutional AI: Harmlessness from AI Feedback} (2022). Anthropic 的 Constitutional AI 论文。
-    \item Brown et al., \textit{Language Models are Few-Shot Learners} (2020). GPT-3 论文，Ben Mann 为第一作者之一。
-    \item Olah et al., \textit{Zoom In: An Introduction to Circuits} (2020). Mechanistic Interpretability 的奠基性工作。
-    \item Nick Bostrom, \textit{Superintelligence: Paths, Dangers, Strategies} (2014). Mann 提到的影响他加入 AI 安全领域的书籍。
-    \item Anthropic, \textit{Core Views on AI Safety}.\\ \url{https://www.anthropic.com/index/core-views-on-ai-safety}
-    \item Anthropic, \textit{Challenges in Evaluating AI Systems} (Blog Post). Mann 提到的关于``为什么 evals 很难''的博客文章。
-    \item OS World Benchmark. 学术界贡献的桌面操作能力评估基准。
+{\small
+\begin{itemize}[nosep,leftmargin=*]
+  \item \href{https://arxiv.org/abs/2001.08361}{\textbf{Scaling Laws for Neural Language Models}}：经验缩放与预测方法。
+  \item \href{https://arxiv.org/abs/2203.02155}{\textbf{InstructGPT}}：RLHF pipeline 与限制。
+  \item \href{https://www.anthropic.com/research/constitutional-ai-harmlessness-from-ai-feedback}{\textbf{Constitutional AI}}：principles、critique/revision 与 RLAIF。
+  \item \href{https://www.anthropic.com/research/evaluating-ai-systems}{\textbf{Challenges in evaluating AI systems}}：评估设计与现实有效性。
+  \item \href{https://www.anthropic.com/responsible-scaling-policy/rsp-v3-0}{\textbf{Anthropic RSP v3.0}}：2026 年当前 capability-threshold framework。
+  \item \href{https://www.anthropic.com/research/towards-monosemanticity-decomposing-language-models-with-dictionary-learning}{\textbf{Towards Monosemanticity}}：dictionary learning 与 feature。
+  \item \href{https://docs.anthropic.com/en/docs/about-claude/model-deprecations}{\textbf{Claude model lifecycle}}：active、legacy、deprecated 与 retired。
 \end{itemize}
+}
 
 \end{document}

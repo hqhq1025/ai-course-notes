@@ -1,0 +1,19 @@
+# CS153 Lecture 05 Teacher-Voice Ledger
+
+| Time / source node | Spoken point | Why it matters | Planned note location | Status |
+|---|---|---|---|---|
+| 00:00--01:15 / T001 | The ambition was web-giant capability with website-builder simplicity, not merely another hosting option. | Defines the product constraint that drives the architecture. | opening | integrated |
+| 01:12--01:42 / T002 | The first Kubernetes implementation was too heavy, rigid, static, and slow for one-command deployment. | Preserves a concrete failed architecture rather than a retrospective success story. | Kubernetes failure | integrated |
+| 01:45--03:08 / T003 | Vercel inverts the hyperscaler workflow: start with application/framework intent and generate infrastructure; infrastructure should be invisible. | Establishes framework-defined infrastructure. | abstraction and FDI | integrated |
+| 04:40--07:38 / T004 | Vercel is a cloud compiler with an intermediate representation; ISR and cache tiers absorb backend traffic. | Connects the metaphor to a real transformation and workload. | compiler, Build Output, ISR | integrated |
+| 07:40--10:30 / T005 | Building physical/hyperscale infrastructure offers less differentiation than democratizing access to it; use AWS scale rather than reproduce it. | Frames Build vs. Buy by comparative advantage. | build vs buy | integrated |
+| 10:30--13:30 / T006 | Vercel's differentiated layer is globally distributed metadata and application-aware infrastructure, not raw compute. | Identifies the control-plane wedge above commodity primitives. | metadata/control plane | integrated |
+| 13:30--17:15 / T007 | Opinionated frameworks and vertical integration can be a bridge into cloud primitives; Vercel and AWS are complementary. | Avoids a simplistic platform-versus-hyperscaler competition story. | opinionated platform | integrated |
+| 20:00--22:40 / T008 | Consumption is a developer feedback signal; systems should expose the resource impact of operations instead of hiding noisy costs. | Turns billing into a systems feedback mechanism. | consumption economics | integrated |
+| 22:50--23:45 / T009 | Near-real-time telemetry is expensive platform infrastructure but gives users an actionable view of usage growth. | Preserves the operational reason for observability investment. | telemetry | integrated |
+| 23:40--24:50 / T010 | Soft caps teach and alert; hard caps can protect spend but may interrupt revenue-generating traffic, so thresholds must be business-aware. | Captures a non-obvious cost-control trade-off. | spend control | integrated |
+| 24:50--28:10 / T011 | AI requests may wait on external models for minutes; CPU-bound requests need scale-out while I/O-bound requests can share compute safely. | Explains compute density and the workload shift later productized as Fluid Compute. | AI workload shape | integrated |
+| 28:15--30:50 / T012 | Real startups can be research environments; setting an unreasonable immutable-deployment constraint created novel scheduler and placement problems. | Connects product ambition to applied research while preserving the warning about excess DIY. | career and research | integrated |
+| 30:15--31:55 / T013 | Early v0 used GPT-3.5 Turbo before native function calling, so the team built bespoke tool invocation and treated product constraints as research. | Preserves the historical product/infra context. | v0 | integrated |
+| 32:50--35:55 / T014 | IPFS, gossip and immutable data structures inspired an MVP that returned a permanent deployment URL through one API/CLI call. | Connects distributed-systems ideas to product shape. | immutable MVP | integrated |
+| 36:00--37:05 / T015 | Day 1 wins adoption, Day 100 tests whether the platform absorbs growing complexity, and Day 1000 tests operations and uptime. | Provides a durable infrastructure product rubric. | product maturity | integrated |

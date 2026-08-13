@@ -1,524 +1,439 @@
 \documentclass[a4paper]{article}
-\usepackage[fontset=fandol]{ctex}
-\usepackage{amsmath, amssymb}
-\usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage[most]{tcolorbox}
-\usepackage{etoolbox}
-\usepackage{listings}
-\usepackage{hyperref}
-\usepackage{booktabs}
-\usepackage{float}
 
-\newtcolorbox{knowledgebox}[1]{enhanced, colback=blue!5!white, colframe=blue!75!black, colbacktitle=blue!75!black, coltitle=white, fonttitle=\bfseries, title=#1, attach boxed title to top left={yshift=-2mm, xshift=2mm}, boxrule=1pt, sharp corners}
-
-\newtcolorbox{importantbox}[1]{enhanced, colback=yellow!10!white, colframe=yellow!80!black, colbacktitle=yellow!80!black, coltitle=black, fonttitle=\bfseries, title=#1, sharp corners}
-
-\newtcolorbox{warningbox}[1]{enhanced, colback=red!5!white, colframe=red!75!black, colbacktitle=red!75!black, coltitle=white, fonttitle=\bfseries, title=#1, sharp corners}
-
-\lstset{language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue}, stringstyle=\color{red!60!black}, commentstyle=\color{green!60!black}, breaklines=true, frame=single, numbers=left, numberstyle=\tiny\color{gray}, captionpos=b, extendedchars=false}
-
-\newcommand{\notetitle}{[CS 153] Web 基础设施的扩展与适应 --- Vercel CEO Guillermo Rauch}
-\newcommand{\noteauthors}{基于 Stanford CS 153 课程内容整理}
-\newcommand{\notedate}{2025}
-\newcommand{\videochannel}{Stanford CS 153}
+\newcommand{\notetitle}{Lecture 05：Vercel 的云编译器——框架、消费反馈与 AI Compute}
+\newcommand{\noteauthors}{基于 Guillermo Rauch 访谈、时间戳字幕与 Vercel/Next.js 官方资料整理}
+\newcommand{\notedate}{2025 年冬季课程 · 2026 年重写版}
+\newcommand{\videochannel}{Stanford CS153 历史课程上传（当前已 private）}
 \newcommand{\videopublishdate}{2025-03-10}
 \newcommand{\videoduration}{37:16}
 \newcommand{\videourl}{https://www.youtube.com/watch?v=9SqYFxp9yRM}
 \newcommand{\videocoverpath}{cover.jpg}
-\newcommand{\repourl}{https://github.com/hqhq1025/ai-course-notes}
 
-\usepackage{fancyhdr}
-\pagestyle{fancy}\fancyhf{}
-\fancyfoot[C]{\thepage}
-\fancyfoot[R]{\footnotesize\color{gray}\href{\repourl}{AI Course Notes}}
-\renewcommand{\headrulewidth}{0pt}\renewcommand{\footrulewidth}{0pt}
+\input{../cs153-preamble.tex}
+\graphicspath{{./}{images/}}
+\setcounter{tocdepth}{1}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth,height=0.49\textheight,keepaspectratio]{#1}
+\caption{#2}
+\figsource{#3}
+\end{figure}
+}
 
 \begin{document}
+\makecscover
 
-% ============ 封面 ============
-\begin{titlepage}
-\centering
-\vspace*{1cm}
+\section{来源审计：为什么 AWS 之上仍需要一层平台}
 
-{\Huge\bfseries \notetitle \par}
-\vspace{1cm}
-{\Large \noteauthors \par}
-\vspace{0.5cm}
-{\large \notedate \par}
+这场访谈从一个看似朴素的问题开始：既然 AWS 已经提供计算、存储、网络和数据库，为什么还需要 Vercel？回答不能停在“开发体验更好”。真正的系统问题是：\textbf{hyperscaler 暴露的是通用 primitives，而应用团队需要的是从产品意图到可运行系统的确定性转换。} 当 primitives 数量越来越多，选择、连接、配置、扩缩容和观测本身就形成新的复杂性层。
 
-\vspace{1.5cm}
+历史公开视频在 2026 年 8 月 11 日核验时已转为 private；仓库保留官方封面和 931 条时间戳字幕。字幕自动识别把 Vercel、v0、Guillermo 和若干技术名词写错，因此本讲只在上下文和官方文档一致时规范化名称。Black Friday、收入、客户损失和 uptime 等数字视为讲者现场案例，不当作审计数据。
 
-\begin{tcolorbox}[colback=gray!5!white, colframe=gray!75!black, title=视频信息, fonttitle=\bfseries, sharp corners]
-\begin{tabular}{ll}
-\textbf{频道} & \videochannel \\
-\textbf{发布日期} & \videopublishdate \\
-\textbf{时长} & \videoduration \\
-\textbf{链接} & \url{\videourl} \\
-\end{tabular}
-\end{tcolorbox}
-
-\vfill
-{\small 本讲义基于课程视频字幕整理，仅供学习参考。}
-\end{titlepage}
-
-\tableofcontents
-\newpage
-
-% ============================================================
-\section{引言：为何在 AWS 之上再建一层？}
-% ============================================================
-
-本讲是 Stanford CS 153: Infrastructure at Scale 的第五讲，嘉宾为 Vercel CEO Guillermo Rauch。讲座以 fireside chat 形式展开，围绕 Vercel 如何在 AWS 等 hyperscaler 之上构建应用层基础设施、如何应对 AI 时代的新型工作负载，以及创业过程中的技术决策与教训。
-
-\begin{knowledgebox}{Vercel 简介}
-Vercel 是一家前端云平台公司，同时维护开源框架 Next.js。其核心理念是让开发者以"一条命令"完成从代码到全球部署的全流程，无需手动配置底层基础设施。Rauch 于约 2015 年创立该公司（最初名为 ZEIT），目前服务于大量企业客户，在 Black Friday 等流量高峰期间承载海量请求。
-\end{knowledgebox}
-
-Rauch 在开场即点明 Vercel 的核心雄心：\textbf{让普通开发者能以 Squarespace/Wix 级别的简易度，构建出 Google、Amazon、Meta 级别的 Web 应用}。许多投资人曾认为这不可能实现，但云计算的新兴创新（如 serverless 函数、边缘计算等）使这一愿景逐步成为现实。
-
-\begin{importantbox}{Vercel 的核心命题}
-Vercel 的起点不是"我有基础设施，来放应用吧"，而是反过来——"你有一个应用想法，基础设施应该是\textbf{不可见的}（invisible）"。Rauch 强调："对开发者来说，最重要的是 idea 和 app code，基础设施必须消失在背后。"
-\end{importantbox}
-
-\subsection{从 Kubernetes 到自研架构的演进}
-
-Vercel 的第一个版本使用 Kubernetes 作为工作负载运行平台。然而，Rauch 很快发现 Kubernetes 过于笨重（heavy）、僵化（rigid）、静态（static），伸缩速度太慢，无法支撑"每个 git commit 即一次部署"的产品愿景。
-
-\begin{warningbox}{Kubernetes 的局限}
-Kubernetes 虽然是容器编排的事实标准，但对于需要\textbf{极致弹性}和\textbf{毫秒级响应}的前端部署场景，其 Pod 调度和水平扩展的延迟往往难以接受。Rauch 直言，基于 Kubernetes 的方案"bleeding money left and right"——每个 commit 都生成一个 deployment 的模型在 Kubernetes 上经济上完全不可持续。
-\end{warningbox}
-
-这段经历促使团队从零设计适合 Vercel 愿景的基础设施，最终发展出 Framework-Defined Infrastructure 的理念。
-
-\subsection{本章小结}
-
-Vercel 的创业起点是对云部署复杂性的不满。Rauch 通过将关注点从"基础设施优先"反转为"应用优先"，在 hyperscaler 之上构建了一个抽象层。第一版基于 Kubernetes 的方案因成本和弹性问题被淘汰，这一失败为后续架构创新埋下伏笔。
-
-% ============================================================
-\section{Framework-Defined Infrastructure：云编译器思维}
-% ============================================================
-
-Rauch 将 Vercel 的方法论总结为 \textbf{Framework-Defined Infrastructure (FDI)}——框架定义基础设施。这一理念的灵感来源于 Software-Defined Networking (SDN)。
-
-\begin{importantbox}{Framework-Defined Infrastructure 的核心思想}
-传统云服务（AWS）的范式是：\textbf{先配置基础设施，再把应用放进去}（"Primitives over Frameworks"）。Vercel 将这一过程完全反转：开发者使用框架（如 Next.js）编写应用代码，部署时 Vercel \textbf{自动生成}适配的基础设施。框架本身包含了"guard rails"，赋予应用结构化的形状，基础设施成为部署的\textbf{输出}而非输入。
-\end{importantbox}
-
-\subsection{Vercel 即"云编译器"}
-
-Rauch 给出了一个精妙的技术类比：
-
-\begin{quote}
-\textit{"Think of your application code as the input, and think of Vercel as a cloud compiler. Vercel maintains an intermediate representation of that code being transformed into infra."}
-\end{quote}
-
-这意味着：
+\begin{importantbox}{本讲的两个编译/反馈闭环}
 \begin{enumerate}
-    \item \textbf{输入}：开发者的应用代码（Next.js 项目）
-    \item \textbf{中间表示}：Vercel 对代码进行分析，识别出静态页面、动态路由、API 端点、边缘函数等组件
-    \item \textbf{输出}：自动编排为 S3 对象、边缘缓存、serverless 函数等基础设施原语
+  \item \textbf{设计闭环}：application intent $\rightarrow$ framework semantics $\rightarrow$ platform IR $\rightarrow$ infrastructure；
+  \item \textbf{运行闭环}：traffic $\rightarrow$ telemetry/metering $\rightarrow$ developer decision $\rightarrow$ new immutable deployment。
 \end{enumerate}
+Vercel 的价值来自同时缩短这两个闭环，而不是隐藏所有技术细节。
+\end{importantbox}
 
-\begin{knowledgebox}{ISR：增量静态再生}
-Incremental Static Regeneration (ISR) 是 Vercel 发明的关键技术。以电商客户为例：大多数客户的后端无法承受 Black Friday 的流量洪峰。ISR 让 Vercel 按一定时间间隔调用后端，将页面"物化"（materialize）到网络边缘，由 Vercel 吸收全部用户流量。后端压力被大幅降低，页面响应速度则接近 CDN 静态资源。
+先看平台在整个栈中的位置。底层 hyperscaler 解决大规模物理运营，上层框架表达应用结构，平台负责把二者连接成可持续运行的部署系统。
+
+\lecturefigure{01-abstraction-layers.png}{平台层把应用意图编译成对 hyperscaler primitives 的受管使用。}{本地字幕 00:00--03:10；\texttt{lecture05-diagrams.py} 可复现重绘。}
+
+\begin{knowledgebox}{读图：抽象层不是简单“包一层”}
+有价值的抽象必须压缩决策空间，并提供底层 primitives 做不到的全局不变量，例如每个 commit 对应不可变部署、域名指针可原子切换、框架路由自动变成 edge routing、缓存策略与代码语义一致。若平台只是把 AWS 控制台换皮，它没有创造新的系统能力。
 \end{knowledgebox}
 
-\subsection{"Vercel 不运行 Next.js"}
-
-Rauch 抛出一个看似矛盾的论断：\textbf{Vercel does not run Next.js}。这意味着 Vercel 从不简单地将 Next.js Server 扔进虚拟机然后执行 \texttt{npm start}。
-
-\begin{warningbox}{"npm start" 模式的问题}
-如果简单地将 Next.js 应用部署到 VM 中运行：(1) multi-tenant 程度低，每个应用独占一个 VM 的时间和空间资源；(2) 无法做到全球分布式，前端用户期望 CDN 级别的延迟；(3) 无法根据工作负载特性做精细化优化。Vercel 更像是一个 CDN 而非 EC2——它将应用代码"编译"为全球分布式的基础设施原语。
-\end{warningbox}
-
-Vercel 的做法是将应用拆解为高度专业化的基础设施组件：静态资源推送到边缘缓存、动态逻辑以 serverless 函数运行、数据通过多级缓存体系加速。这种分解使得前端工程师在不知不觉中获得了资深基础设施工程师级别的架构优势。
-
-\subsection{基础设施原语的商品化}
-
-Rauch 指出，hyperscaler 提供的底层原语（S3、计算实例、队列、存储等）已经高度\textbf{商品化}（commoditized）：
-
-\begin{itemize}
-    \item S3 的 API 在各云服务商之间几乎完全一致
-    \item AI 模型的调用接口也在向 OpenAI HTTP 协议标准化
-    \item 当所有后端变成商品时，\textbf{价值向应用层和前端体验聚拢}
-\end{itemize}
-
-\begin{importantbox}{AWS "Primitives over Frameworks" 的历史合理性}
-AWS 早期提出"原语优先于框架"的理念在云计算初期是正确的——一切都需要从头发明。但如今基础设施已经成熟且商品化，框架层的抽象能力才是差异化竞争力所在。Vercel 的定位正是在这一商品化趋势中，做连接 hyperscaler 与开发者的桥梁。
-\end{importantbox}
+\begin{knowledgebox}{术语消化：四个容易混淆的层次}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+层次 & 提供什么 & 不自动提供什么 \\
+\midrule
+Hyperscaler & 区域、硬件、网络和通用云服务 & 针对某个框架的完整应用语义 \\
+Cloud primitive & 对象存储、函数、队列、数据库等能力 & primitives 之间的正确组合与产品默认值 \\
+Platform & 受管 build、deploy、route、scale、observe & 应用业务逻辑与正确产品目标 \\
+Framework & 路由、rendering、data lifecycle 等结构 & 跨区域物理基础设施和长期运营 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
 
 \subsection{本章小结}
 
-Framework-Defined Infrastructure 是 Vercel 的核心方法论：将应用代码视为输入，通过"云编译器"自动产出最优的基础设施配置。这一范式使前端工程师无需理解底层基础设施细节，同时享有 CDN 级别的全球分布和多级缓存优化。ISR 等技术创新是这一理念的具体实现。
+平台层存在的理由不是底层云“不够强”，而是通用 primitives 与应用意图之间仍有巨大翻译成本。高价值平台把这段翻译固化为可重复的编译和运营闭环。
 
-% ============================================================
-\section{Build vs. Buy：基础设施层的战略选择}
-% ============================================================
+\section{失败样板：为什么第一版 Kubernetes 架构不合适}
 
-当被问及 Vercel 是否会自建底层基础设施以替代 AWS 时，Rauch 给出了明确且深思熟虑的回答：\textbf{在可预见的未来不会}。
+Vercel 的第一版曾把 Kubernetes 当作工作负载运行平台。Kubernetes 本身并非错误；问题在于产品承诺是“每个 Git commit 都成为一个快速、不可变、可分享的部署”。如果直接把 deployment 映射为 pod 或静态资源单元，部署数量会随 commit 增长，而 idle reservation、调度延迟和 scale transition 会破坏单位经济学。
 
-\subsection{为什么选择 Buy}
+\subsection{技术可行不等于经济可行}
 
-\begin{knowledgebox}{90\% 的 IT 工作负载尚未上云}
-Rauch 引用了与 AWS CEO Andy Jassy 会面时的数据：全球仍有约 90\% 的 IT 工作负载不在云上。这意味着将工作负载迁移到云端仍是一个巨大的增量机会。Jassy 对 Vercel 的存在"非常高兴"，因为 Vercel 降低了上云门槛，间接为 AWS 带来更多消费。
+假设一天产生 $N_d$ 个 preview deployments，每个 deployment 的空闲资源成本为 $c_{idle}$，实际执行成本为 $c_{run}$，则粗略日成本为
+\[
+C_{day}=N_d\cdot c_{idle}+\sum_j c_{run,j}.
+\]
+当大部分 preview 很少被访问时，第一项会主导成本。系统必须让“未访问部署”接近零运行成本，同时在第一次请求到来时快速恢复，才能支撑 per-commit product model。
+
+\lecturefigure{02-kubernetes-economics.png}{Per-commit 产品承诺会放大静态资源分配的成本与延迟。}{本地字幕 01:12--01:42、28:50--30:10；概念重绘。}
+
+\begin{knowledgebox}{读图：问题不是 pod，而是映射关系}
+若每个 immutable deployment 都长期绑定独立 pod，preview 数量和运行资源近似线性增长。更合适的架构会把部署表示为 artifact + metadata，在请求到达时复用共享 runtime、cache 和调度资源。Kubernetes 可以作为底层组件，但不能让产品对象与资源对象一一绑定。
 \end{knowledgebox}
 
-Rauch 给出不自建基础设施的理由：
+\begin{warningbox}{“Kubernetes 太重”不是普遍结论}
+课堂评价针对 Vercel 当时的超高部署基数、快速 scale-to-zero 和 preview 经济模型。对于长期运行服务、稳定容量和成熟平台团队，Kubernetes 仍可能是合理选择。系统设计应比较 workload shape、控制面规模和单位成本，而不是复述工具偏好。
+\end{warningbox}
 
+\teachervoice{Rauch 把这次失败描述得很直接：第一版实现“bleeding money left and right”。高价值 teacher voice 在于，他没有降低“每个 commit 都部署”的产品标准，而是把不合理的体验目标转成新的 scheduler、placement 和 metadata 研究问题。}
+
+\subsection{本章小结}
+
+架构必须服从产品对象的基数与生命周期。Per-commit deployment 需要 artifact-first、shared-runtime 和 fast activation，而不是把每个逻辑部署永久映射成一个静态资源租约。
+
+\section{Framework-Defined Infrastructure：把应用当成高层语言}
+
+\term{Framework-Defined Infrastructure}（FDI）把框架约定视为高层语言。框架知道哪些 route 是静态的、哪些需要函数、哪些数据可以缓存、哪些请求需要 middleware；平台在 build time 解析这些语义，生成底层基础设施配置。与 Infrastructure as Code 不同，开发者不直接声明每个云资源，而是声明应用，基础设施成为编译输出。
+
+\subsection{Cloud compiler 与 intermediate representation}
+
+设应用源码为 $A$，框架语义抽取器为 $S_F$，平台编译器为 $C_P$，则部署计划可抽象为
+\[
+I=C_P\bigl(S_F(A)\bigr),
+\]
+其中 $S_F(A)$ 不是原始源码，而是 \term{intermediate representation}（IR，中间表示）：route graph、static assets、function boundaries、cache policy、runtime hints 和环境元数据。IR 让平台不必理解每个框架内部实现，只需要稳定的输出契约。
+
+\lecturefigure{03-cloud-compiler.png}{Framework semantics 经过平台 IR 转换为部署计划。}{本地字幕 04:40--06:00；Vercel 官方 Framework-Defined Infrastructure。}
+
+\begin{knowledgebox}{读图：框架为什么能提供比通用 IaC 更多的信息}
+IaC 知道“创建一个 function”，却未必知道它对应哪个 route、能否静态化、何时 revalidate、是否需要 edge middleware。框架掌握应用语义，平台掌握运行约束；FDI 的优势来自二者在 build time 合并，而不是来自少写几行 YAML。
+\end{knowledgebox}
+
+\subsection{Build Output API：把框架适配变成 artifact contract}
+
+Vercel 的 Build Output API 把编译结果定义为文件系统规范：静态资源、functions、routing 和配置被写成可部署 artifact。这样 Next.js、SvelteKit、Nuxt 或其他框架可以生成共同 IR，平台只需消费标准化输出。它也允许本地 build 后使用 prebuilt deployment，从而把 build 与 deploy 解耦。
+
+\lecturefigure{04-build-output-graph.png}{Build Output 把一个应用拆成可部署的 artifact graph。}{Vercel Build Output API 官方文档；课堂 cloud compiler 比喻。}
+
+\begin{importantbox}{编译器抽象带来的四个系统收益}
 \begin{enumerate}
-    \item \textbf{规模不可复制}：AWS 的闲置计算资源池"天文数字般庞大"（astronomically large），Vercel 可以在 Black Friday 按需调用这些资源
-    \item \textbf{商品化加速}：底层基础设施的价格持续下降，自建是净损失
-    \item \textbf{机会成本}：精力应投入"捕获 AI 时代的下一波软件开发浪潮"，而非建设"没人关心的数据中心"
+  \item \textbf{可重复}：相同输入和版本生成可审计输出；
+  \item \textbf{可移植}：框架通过 artifact contract 接入平台；
+  \item \textbf{可优化}：平台可按 route 选择 cache、runtime 和 region；
+  \item \textbf{可回滚}：部署对象不可变，流量指针可切回旧版本。
 \end{enumerate}
-
-\subsection{Apple 硅片类比}
-
-Rauch 用 Apple 的芯片战略做类比：Apple 在 iPhone 已经征服世界之后，才开始设计自研芯片。消费者从不关心芯片是谁造的——他们关心的是组件的组装和最终的消费体验。Vercel 当前的机会在于做 AI 时代的桥梁，而非深入硬件层。
-
-\begin{importantbox}{Build vs. Buy 的决策框架}
-Rauch 分享了自己在 Build vs. Buy 决策中"最大的伤疤"：Vercel 先后使用了\textbf{四种不同的数据库}来存储部署元数据。最糟糕的错误是相信自建数据库能带来业务优势——实际上，选择最适合特定场景的外部数据库、使其扩展、增加冗余层并持续迭代架构，才是正确的优先级。
 \end{importantbox}
 
-\begin{warningbox}{过度自建的代价}
-Rauch 坦言自己"有过太多 DIY 的痛"。作为技术创始人，他亲自编写了 Vercel 早期的调度器、Placement 系统、负载均衡器，甚至自己的 React 和 Kubernetes 克隆版本。虽然这些经验极其宝贵，但他也承认"too much build versus buy, too much DIY can kill you"。创业者需要在技术好奇心和商业务实之间找到平衡。
-\end{warningbox}
-
-\subsection{Vercel 作为全球分布式元数据存储}
-
-Rauch 用一个半开玩笑的方式描述 Vercel 的本质：
-
-\begin{quote}
-\textit{"Vercel is actually a globally distributed, highly available, fast-propagating metadata store that then gets repurposed as a control plane and as a way of invoking compute."}
-\end{quote}
-
-换言之，Vercel 的核心是一个\textbf{元数据存储与传播系统}，所有部署、路由、域名映射等信息以极快的速度在全球节点间传播。计算（serverless 函数等）是在此基础上"按需生成"的。
-
-\begin{knowledgebox}{React for Infrastructure}
-Rauch 将 Vercel 比作"基础设施版的 React"：所有资源默认 spin down to zero（缩减到零），只有当用户访问时才按需创建。这种\textbf{声明式、响应式}的基础设施范式与 React 的虚拟 DOM 渲染哲学一脉相承——状态变更驱动 UI 更新，访问请求驱动基础设施存在。
-\end{knowledgebox}
-
-\subsection{本章小结}
-
-Vercel 坚定选择在 AWS 之上构建，而非自建底层基础设施。这一决策基于规模经济、商品化趋势和机会成本的综合考量。Rauch 从四次更换数据库的教训中总结出：对于非核心差异化的组件，Buy 优于 Build；公司的注意力应投向最能创造价值的方向。
-
-% ============================================================
-\section{竞争策略：垂直整合与有主见的观点}
-% ============================================================
-
-\subsection{不关注竞争对手}
-
-Rauch 对竞争的第一反应是："我非常努力地\textbf{不去想竞争}。每次我在职业生涯中沉迷于竞争分析，我都偏离了客户真正在要求的东西。"
-
-\begin{importantbox}{竞争策略的核心：Opinionated Point of View}
-Vercel 与 Netlify、AWS Amplify、Cloudflare Pages 等竞争对手的本质区别在于：后者都说"去找一个适合你的框架，我们提供基础设施"，而 Vercel 将框架与基础设施\textbf{垂直整合}（verticalized integration）。Next.js 既是开源框架，也是 Vercel 平台的最佳实践入口。
-\end{importantbox}
-
-这种垂直整合的灵感来自两个类比：
-\begin{itemize}
-    \item \textbf{Linux 发行版}：将内核、工具链、包管理器整合为统一体验
-    \item \textbf{Apple 硬件+操作系统}：硬件与软件协同开发，为用户提供最优整合体验
-\end{itemize}
-
-Rauch 强调，客户喜欢 Vercel 的原因恰恰是它能"代表客户采购最优组件"（procure the best components on their behalf），而不是让客户自己在茫茫多的 AWS 服务中选择。
-
-\subsection{Next.js 的云原生 Trojan Horse}
-
-Rauch 将 Next.js 描述为一个"特洛伊木马"，在开发者使用它编写应用的同时，\textbf{悄然植入了云原生架构设计}：
-
-\begin{knowledgebox}{Next.js 与云可移植性}
-Next.js 应用本身可以在任何地方运行和托管。这解决了 Docker 和 Kubernetes 最初试图解决的问题——快速上云的同时保持与特定云服务商的健康距离。但当部署到 Vercel 时，Next.js 应用会被"编译"为全球分布式系统，充分利用平台的优化能力。
-\end{knowledgebox}
-
-\subsection{与 AWS 的共生关系}
-
-Rauch 与 AWS CEO Andy Jassy 的会面揭示了一个有趣的共生关系：AWS 有动力推广 Vercel 和 Next.js，因为这降低了企业上云的门槛。传统路径要求企业先学习 CloudFormation 或 Terraform，这正是 90\% 工作负载仍未上云的原因之一。
-
-\begin{warningbox}{"免费无限"的陷阱}
-当竞争对手打出"免费无限"的营销牌时，Rauch 直言"nothing in the world is free and unlimited"。表面上看某些平台因自有基础设施而能提供低价，但真正的差异可能只是营销策略。基础设施的每一次流量服务都有成本，过度承诺最终会以服务质量或隐性限制的形式反噬。
+\begin{warningbox}{编译器不能推断所有业务意图}
+平台可以识别 route 和 cache declaration，却不知道库存数据能否陈旧、某个 API 是否需要强一致、失败是否影响收入。FDI 需要 guard rails 和 override；若把错误默认值自动扩散到全球，自动化只会更快地制造事故。
 \end{warningbox}
 
 \subsection{本章小结}
 
-Vercel 的竞争策略建立在"有主见的观点"之上：通过框架与基础设施的垂直整合，而非在底层原语上打价格战。这种策略使 Vercel 从众多"提供基础设施让你自己选框架"的竞争者中脱颖而出，并与 AWS 形成共生而非竞争的关系。
+FDI 的本质是从框架语义生成平台 IR，再映射为基础设施。Build Output API 把这条编译边界显式化，使框架生态与平台运行时能够独立演化。
 
-% ============================================================
-\section{消费定价与可观测性：基础设施经济学}
-% ============================================================
+\section{ISR 与缓存：把后端工作 materialize 到边缘}
 
-\subsection{消费导向的世界}
+电商 Black Friday 的典型瓶颈不是边缘网络，而是 origin/backend 无法承受每个用户都触发动态渲染。Incremental Static Regeneration（ISR）把一次 render 的结果 \term{materialize}（物化）为可缓存 artifact，在 freshness policy 到期或事件触发时重新生成。它改变了负载模型：后端处理“内容变化”，edge 处理“访问次数”。
 
-Rauch 指出，整个基础设施世界正在向\textbf{消费定价}（consumption-based pricing）模式转型：Snowflake、Datadog、AWS 本身，以及 AI token 的采购方式都是按需消费。Vercel 也采用这一模式："here's what everything costs, you pay for what you use, and you pay as you grow."
+\subsection{从 request amplification 到 backend shielding}
 
-\begin{importantbox}{基础设施成本的反馈回路}
-Rauch 认为开发者需要的最佳反馈信号是：每次操作消耗了多少基础设施资源。他将此类比为土木工程师建造大楼——"用了多少材料？承重结构浇注了多少混凝土？"消费定价不是惩罚，而是将软件工程师与物理现实重新连接的反馈机制。
-\end{importantbox}
+若页面在一个 freshness window 中收到 $R$ 次请求，传统动态渲染需要约 $R$ 次 origin work；理想 ISR 只需一次生成和一次 revalidation，后端工作量从 $O(R)$ 接近 $O(1)$。真实系统还要处理 stampede、失败回退、区域 cache、tag invalidation 和 stale content。
 
-\subsection{好系统 vs. 坏系统：DynamoDB vs. PostgreSQL}
+\lecturefigure{05-isr-cache-loop.png}{ISR 用 materialization 和 revalidation 把重复读取从 backend 移到 edge。}{本地字幕 05:55--07:20；Next.js 官方 ISR 文档。}
 
-Rauch 以数据库为例阐述了好坏基础设施系统的区别：
-
-\begin{table}[H]
-\centering
-\begin{tabular}{lll}
-\toprule
-\textbf{特性} & \textbf{好系统 (DynamoDB/CosmosDB)} & \textbf{坏系统 (某些关系型 DB)} \\
-\midrule
-成本反馈 & 每个操作返回精确的消耗 & 整体性能下降，无法归因 \\
-扩展方式 & 水平自动扩展 & 需手动调优，noisy neighbor \\
-开发者感知 & 知道查询花费 1.23 分 & 不知道哪个 join 拖垮了系统 \\
-服务质量 & 付费换取一致的 QoS & 昂贵查询影响所有工作负载 \\
-\bottomrule
-\end{tabular}
-\caption{基础设施系统的成本反馈对比}
-\end{table}
-
-\begin{warningbox}{Noisy Neighbor 问题}
-在共享基础设施中，某个客户的高负载查询可能导致其他客户的服务质量下降。Rauch 特别提到他对 noisy neighbor 问题的"执念"："\$4 的 VPS 很酷，但流量一上来，你的客户就会被其他租户拖累。" Vercel 必须精细地分配 CPU 和内存资源，确保性能不因个别客户的流量激增而退化。
-\end{warningbox}
-
-\subsection{Soft Caps 与 Hard Caps 的教训}
-
-Vercel 引入了软硬上限机制来管理消费：
-
-\begin{itemize}
-    \item \textbf{Soft Cap}：提供预警和学习信号，告知用户接近预算上限
-    \item \textbf{Hard Cap}：绝对不超过的消费上限
-\end{itemize}
-
-\begin{knowledgebox}{Hard Cap 的双刃剑}
-Rauch 分享了一个真实案例：某客户因 Hard Cap 生效而\textbf{损失了 \$20,000 的收入}——当时正值流量高峰，客户其实希望基础设施继续运行以服务付费用户。OpenAI 后来也在其 hard cap 功能上添加了警告："设置 hard cap 可能对你的业务不利。"教训是：消费上限必须作为\textbf{收入或增长的函数}来考虑，而非绝对金额。
+\begin{knowledgebox}{读图：比较访问频率与变化频率}
+ISR 最适合“读很多、写较少、允许明确 freshness”的内容。若数据每次请求都不同，cache 命中率低；若内容绝不能陈旧，就需要同步 origin 或更严格 invalidation。核心问题不是“能否缓存”，而是业务允许什么 consistency contract。
 \end{knowledgebox}
 
-\subsection{实时遥测投资}
+\begin{warningbox}{缓存不会让 origin 无限扩展}
+Cache miss、同时 revalidation、个性化请求和大量不同 key 仍会击穿后端。平台需要 request coalescing、stale-while-revalidate、负载保护和可见的 cache status，开发者也必须理解 cache key 与 invalidation 语义。
+\end{warningbox}
 
-Vercel 在可观测性上投入巨大，构建了世界上最实时的使用量监控系统之一：
-
-\begin{itemize}
-    \item \textbf{分钟级}的基础设施账单更新（而非竞品的每日/每6小时汇总）
-    \item 企业用户支付的 platform fee 中很大一部分用于支撑这套实时遥测基础设施
-    \item 目标是让开发者拥有与土木工程师相同的"物理世界感知"——写的每一行代码都有明确的成本信号
-\end{itemize}
-
-\begin{importantbox}{基础设施的透明度原则}
-Rauch 的定价哲学核心是\textbf{透明与清晰}（transparency and clarity）。一切都有成本，最好的策略是让用户清楚地知道成本在哪里，而非用"免费无限"的营销话术掩盖真实经济学。
-\end{importantbox}
+\teachervoice{Rauch 的表达很有工程感：云“elastic”不代表任何组件都完美扩展。平台价值之一，是自动组合多级缓存和 materialization，把开发者过去手工管理的 Memcached、worker pool 和横向扩展模式固化为框架能力。}
 
 \subsection{本章小结}
 
-Vercel 采用消费定价模式，核心是为开发者构建精确的成本反馈回路。好的基础设施系统（如 DynamoDB）会告诉你每个操作的成本，使开发者能做出知情的优化决策。Soft/Hard Cap 机制需要谨慎设计以避免业务损失。实时遥测系统是 Vercel 差异化投资的重要方向。
+ISR 把访问规模与后端计算解耦，让应用流量更多由 edge artifact 承担。它不是静态化一切，而是显式管理 freshness、materialization 和 revalidation。
 
-% ============================================================
-\section{Compute Density：AI 时代的新型工作负载}
-% ============================================================
+\section{Build vs. Buy：差异化边界与全球 control plane}
 
-\subsection{AI 改变了请求模型}
+平台公司很容易陷入“既然基础设施重要，就全部自研”的误区。Rauch 的判断相反：AWS 的区域、骨干网、对象存储和物理运营规模难以复制，Vercel 更应该在 application-aware layer 积累差异化。Build vs. Buy 不是技术能力测试，而是资本、时间和学习效应的配置问题。
 
-Rauch 宣布 Vercel 正在推出一款针对 AI 工作负载优化的新计算产品（于 2025 年 2 月 4 日正式发布）。其背景是 AI 从根本上改变了 Web 请求的特征：
+\subsection{把自研放在 insight 会复利的位置}
 
-\begin{importantbox}{从毫秒到分钟：请求模型的根本变革}
-传统 Web 应用追求\textbf{瞬时响应}：电商交易、OLTP 数据库查询的 P99 延迟在 10 毫秒级别。但 AI 推理（尤其是 reasoning model 如 OpenAI o1、DeepSeek R1 等）可能让一个请求持续\textbf{数分钟}。这意味着计算资源需要为单个请求保留更长时间，彻底颠覆了传统 serverless 的假设。
-\end{importantbox}
+上一节已经把 hyperscaler primitives 与 application intent 之间的缺口解释为“编译层问题”；本节进一步回答组织边界：哪些层值得自己掌握，哪些层应该借助成熟供应商。读图时先比较 commodity scale 与 application-aware insight，再判断某项自研是否会持续产生产品知识、控制面能力和单位经济性优势。
 
-\subsection{CPU-Bound vs. IO-Bound 的智能调度}
+\lecturefigure{06-build-vs-buy.png}{复用 commodity scale，在 application-aware layer 建立专用能力。}{本地字幕 07:40--10:30；概念重绘。}
 
-Vercel 新计算产品的核心创新是\textbf{Compute Density}——根据工作负载特性智能调整资源分配：
-
-\begin{table}[H]
-\centering
-\begin{tabular}{lll}
-\toprule
-\textbf{工作负载类型} & \textbf{特征} & \textbf{Vercel 策略} \\
-\midrule
-CPU-Bound & 计算密集，需要 CPU 周期 & 激进水平扩展，为每个请求保留 CPU \\
-IO-Bound & 等待外部服务（如 AI 推理） & 智能饱和已分配计算资源 \\
-\bottomrule
-\end{tabular}
-\caption{Compute Density 的工作负载自适应策略}
-\end{table}
-
-\begin{knowledgebox}{Servers meet Serverless}
-Rauch 用"servers meet serverless"来描述这一新范式。传统 serverless 的缺陷是对长时间运行的请求不友好（冷启动、超时限制等），而传统服务器（VPS/EC2）的缺陷是需要用户手动管理扩展。Vercel 的 Compute Density 方案试图结合两者优势：像 serverless 一样免运维，像 server 一样高效利用资源。
+\begin{knowledgebox}{读图：Apple silicon 类比的边界}
+课堂用 Apple 最终自研芯片类比 vertical integration：只有当某层成为产品体验和长期经济性的核心，且组织拥有足够规模与能力时，向下整合才可能合理。类比不能直接推出 Vercel 应造数据中心；它只说明 build/buy boundary 会随着战略变化移动。
 \end{knowledgebox}
 
-\subsection{消除客户的扩展负担}
+\subsection{全球 metadata 才是平台差异化}
 
-Rauch 强调，Vercel 的目标是\textbf{零配置扩展}——彻底消除以下传统负担：
+Vercel 更像 application-aware CDN/control plane，而不是 EC2。每个 deployment 是不可变对象；domain binding 是一个可变指针；全球 edge 需要快速获得最新 pointer 和 routing metadata。回滚不需要覆写旧部署，只需把 domain 指针切回已知版本。
 
-\begin{itemize}
-    \item 手动调整 Kubernetes Pod 数量
-    \item 不断调优 CPU 阈值
-    \item 决定需要多少 VPS 实例
-    \item 权衡 auto-scaling 参数
-\end{itemize}
+\lecturefigure{07-global-metadata.png}{不可变部署与可变 domain pointer 分离了 artifact identity 和流量决策。}{本地字幕 10:00--16:40、33:30--34:05；概念重绘。}
 
-\begin{warningbox}{将扩展负担推给客户的危害}
-Rauch 指出，最糟糕的云平台设计是"将可扩展性的负担放在客户身上"。手动调优 Pod 数量、CPU 阈值等参数不仅耗费工程师时间（TCO），还容易导致配置不当引发的故障。理想的平台应当根据工作负载画像自动做出最优决策。
+\begin{importantbox}{Control plane 与 data plane}
+\term{control plane} 决定 deployment、domain、routing、policy 和 rollout；\term{data plane} 真正处理用户请求、执行函数和返回 assets。控制面更新必须快速传播，但不应让单点故障中断已知路由；数据面必须在 metadata 短暂陈旧时保持安全行为。
+\end{importantbox}
+
+\subsection{Opinionated platform 的正负面}
+
+框架约定提供 guard rails，使平台能推断 routing、cache 和 runtime。代价是部分自由被收敛，非典型 workload 可能需要 escape hatch。一个健康的 opinionated platform 应让常见路径极简，同时保留 artifact contract、标准协议和 override，防止生态锁死。
+
+\lecturefigure{08-opinionated-platform.png}{框架约定为平台创造可优化的结构化表面。}{Vercel FDI 官方材料；本地字幕 13:30--17:15。}
+
+\begin{warningbox}{Next.js 不是“把用户锁进 Vercel”的充分证据}
+框架与平台之间确实存在正反馈和商业利益，但判断 lock-in 应检查开放源码、标准输出、self-host 路径、数据可迁移性和替代成本。讲义讨论 mechanism，不采用“Trojan horse”式情绪标签替代分析。
+\end{warningbox}
+
+\teachervoice{课堂没有把 Vercel 与 AWS 描述成零和竞争。AWS 提供可信的 hyperscale primitives，Vercel 把尚未迁移到云的应用通过更高层模型接入这些 primitives。平台之间既竞争价值份额，也可能互相扩大市场。}
+
+\subsection{本章小结}
+
+Build vs. Buy 应围绕差异化和学习复利；Vercel 的专用能力集中在 framework compiler、global metadata、routing 和 developer loop，而不是重复 hyperscaler 的物理规模。
+
+\section{Consumption economics：把资源影响反馈给开发者}
+
+云和 AI 都在走向 consumption-based pricing。问题不只是“按量收费是否便宜”，而是计量能否成为开发者的 \term{fitness function}：某次 query、render、model call 或 data transfer 消耗了什么资源，是否影响其他 workload，开发者能否据此优化。
+
+\subsection{Honest metering 与可归因资源}
+
+若计费维度为 $u_i$，单价为 $p_i$，账单为
+\[
+B=\sum_i u_i p_i.
+\]
+公式本身不难；困难在于 $u_i$ 是否与开发者操作可对应。一个昂贵 join 若只表现为“数据库整体变慢、账单整体上升”，反馈很差；若系统能指出该 operation 的读取、CPU、内存和延迟影响，开发者才能决定加索引、缓存、拆查询或接受成本。
+
+\lecturefigure{09-consumption-feedback.png}{消费计量只有进入开发决策闭环时才产生工程价值。}{本地字幕 20:00--22:40；概念重绘。}
+
+\begin{knowledgebox}{读图：价格信号必须和质量信号一起看}
+只显示费用会诱导过度优化；只显示延迟会隐藏资源浪费。理想界面同时展示 request volume、latency、error、cache hit、CPU/memory、transfer 和 spend，并关联 deployment version。开发者优化的是单位业务结果的成本，而不是单个指标最小化。
+\end{knowledgebox}
+
+\subsection{Noisy workload 与隔离}
+
+课堂用数据库作类比，真正要表达的是 workload attribution：共享系统中某个昂贵操作可能拖慢邻居，却没有清晰计量。讲义不把 PostgreSQL 或 DynamoDB 绝对分类为“坏/好系统”，而是比较具体配置能否提供 workload isolation、horizontal scaling 和 operation-level evidence。
+
+\lecturefigure{10-workload-isolation.png}{资源隔离和 operation-level accounting 让性能与成本可解释。}{本地字幕 20:30--22:35；概念重绘。}
+
+\begin{warningbox}{消费计费可能把平台低效转嫁给用户}
+按量收费不天然公平。如果平台 runtime 浪费 CPU、cache 策略低效或计量维度不可解释，用户会为平台问题买单。供应商需要公开计量语义、提供优化建议，并让用户区分业务增长与系统回归。
 \end{warningbox}
 
 \subsection{本章小结}
 
-AI 时代的 Web 请求模型从"毫秒级响应"扩展到"分钟级等待"，对基础设施提出了全新要求。Vercel 的 Compute Density 产品通过区分 CPU-Bound 和 IO-Bound 工作负载，实现智能资源分配，在保持服务质量的同时降低客户成本。"Servers meet Serverless"代表了云计算演进的下一步。
+Consumption economics 的核心是 attribution。资源、价格和服务质量必须映射回具体 operation 和 deployment，才能形成工程反馈，而不是月底才出现的不可解释账单。
 
-% ============================================================
-\section{v0：AI 原生软件开发的实验}
-% ============================================================
+\section{Telemetry 与 Spend Control：可见不等于可控}
 
-\subsection{什么是 v0}
+上一章说明 consumption economics 必须落实到 operation-level attribution；但“能计量”还没有回答异常发生时谁来行动。本章把近实时 telemetry 与 spend controls 连成闭环：前者把部署变化映射到 latency、error、resource 和费用，后者决定越过阈值后通知、触发 webhook、降级还是暂停。核心不是拥有更多 dashboard，而是用可解释信号做出与业务价值相称的控制决策。
 
-v0（\texttt{v0.dev}）是 Vercel 推出的 AI Web 开发助手。用户输入自然语言 prompt，v0 将其转换为可工作的前端/全栈应用，使用 React、Next.js、Tailwind CSS、shadcn/ui 等 Vercel 生态工具链。
+\subsection{把 deploy、latency、error 和 spend 放在同一时间线}
 
-\begin{importantbox}{v0 的爆炸式增长}
-v0 是 Vercel 增长最快的产品——\textbf{在 14-20 天内收入翻了三番}。它打开了漏斗的顶部（top of funnel），让任何有想法的人——不仅仅是专业开发者——都能创建软件。Rauch 的一位同事甚至用 v0 重建了整个 Vercel Dashboard。
-\end{importantbox}
+本节先建立可观测性的因果顺序：一次 deployment 改变了代码与配置，随后才可能改变性能、错误率、资源消耗和账单。读图时不要把四条独立曲线并排观看，而要沿同一版本时间线追问“哪次变化造成了什么后果”，并区分业务流量增长、应用回归与平台计量变化。
 
-\subsection{从 GPT-3.5 Turbo 到 Idea-Market Fit}
+\lecturefigure{11-telemetry-loop.png}{Telemetry 应把版本变化与资源、性能和费用后果关联起来。}{本地字幕 22:50--23:45；概念重绘。}
 
-v0 的第一个版本建立在 GPT-3.5 Turbo 之上，当时甚至\textbf{没有 function calling}功能。Vercel 团队不得不在模型之上自建了一套 bespoke 函数调用系统。
-
-\begin{knowledgebox}{Idea-Market Fit vs. Product-Market Fit}
-Rauch 区分了两个概念：v0 一开始就有 \textbf{Idea-Market Fit}——AI 生成代码的想法本身就有巨大需求。但要达到 \textbf{Product-Market Fit}，团队需要不断推进模型能力和工程创新的边界。这个从"想法验证"到"产品成熟"的过程是持续的研发投入。
+\begin{knowledgebox}{读图：为什么 telemetry 自身也是昂贵基础设施}
+高基数 labels、分钟级账单、跨区域日志和长保留期都会增加存储与查询成本。平台收费的一部分确实是在维护这套反馈基础设施。用户应明确哪些信号需要实时、哪些可采样、哪些必须长期保留用于审计。
 \end{knowledgebox}
 
-\subsection{All Software Will Be AI-Native}
+\subsection{Soft cap 与 hard cap 的目标不同}
 
-Rauch 表达了一个强烈的观点：\textbf{所有软件最终都将是 AI 原生的}。这不仅指用 AI 辅助写代码，还包括：
+Soft cap 通过通知或 webhook 促使人和自动化采取行动，但流量继续服务；hard cap 在阈值后暂停，限制最坏支出，却可能切断正在产生收入的业务。当前 Vercel Spend Management 文档还明确指出检查并非连续，暂停可能在越过阈值数分钟后发生，因此 hard cap 也不是精确断路器。
 
+\lecturefigure{12-spend-controls.png}{Soft control 保护学习与连续性，hard control 保护最坏支出。}{本地字幕 23:40--24:50；Vercel Spend Management 官方文档。}
+
+\begin{importantbox}{预算阈值应来自业务函数}
+可把 hard-stop 决策粗略写为：当继续服务的预期损失
+\[
+L_{continue}=P(\text{abuse})\cdot C_{abuse}+C_{runaway}
+\]
+超过暂停造成的
+\[
+L_{pause}=R_{lost}+C_{recovery}+C_{trust}
+\]
+时才暂停。这里 $R_{lost}$ 是丢失收入，$C_{trust}$ 是用户信任损失。实际系统需要多级限流、attack detection 和人工升级，而不是只设一个金额。
+\end{importantbox}
+
+\begin{warningbox}{Hard cap 不是实时安全边界}
+计量、汇总、阈值判断和暂停传播都存在延迟。对高风险 AI endpoint，还应使用 request rate limit、per-user quota、model budget、circuit breaker 和 abuse monitoring，不能只依赖月底预算。
+\end{warningbox}
+
+\teachervoice{课堂案例中，客户因 hard cap 在高流量时停止服务而损失收入。无论数字是否精确，结论很清楚：成本控制必须理解业务价值。Soft cap 用于学习，hard cap 用于不可接受风险；两者不能互换。}
+
+\subsection{本章小结}
+
+Telemetry 提供因果线索，Spend Control 提供行动。有效系统要把性能、成本、业务价值和执行延迟共同纳入阈值设计。
+
+\section{AI Compute Density：长等待请求改变 serverless 假设}
+
+传统 web request 追求短延迟：CPU 执行、数据库返回、快速结束。AI 应用常调用外部 model provider，streaming 数十秒甚至数分钟；这段时间本地 CPU 可能空闲。如果仍为每个请求独占完整实例，就会产生巨大浪费。课堂预告的 compute 产品后来演化为 Fluid Compute；当前官方资料强调复用 warm instances、并发处理、active CPU 和更长执行生命周期。
+
+\subsection{CPU-bound 与 I/O-bound 必须分开调度}
+
+\term{CPU-bound} 请求的大部分时间在本地计算，过度并发会争抢 CPU；\term{I/O-bound} 请求的大部分时间等待网络、数据库或模型，适度并发可以在等待间隙复用 CPU。定义请求 $j$ 的 active CPU time 为 $a_j$，wall time 为 $w_j$，则等待比例约为
+\[
+r_j=1-\frac{a_j}{w_j}.
+\]
+$r_j$ 高的 workload 更适合安全 multiplex；$r_j$ 低则更需要 scale-out 和资源隔离。
+
+\lecturefigure{13-compute-density.png}{AI workload 要按 CPU activity 和 I/O wait 选择 scale-out 或并发复用。}{本地字幕 24:50--28:10；Vercel 当前 Fluid Compute 官方资料。}
+
+\begin{knowledgebox}{读图：compute density 不等于无上限并发}
+I/O-bound 请求仍占用内存、socket、file descriptor、stream buffer 和 event-loop capacity。并发上限必须由 latency SLO、memory、downstream quota 和 noisy-neighbor test 决定。调度器需要观察真实 active CPU 和 wait profile，而不是只按请求数扩容。
+\end{knowledgebox}
+
+\begin{warningbox}{课堂预告与当前产品不能混为一谈}
+访谈只描述了“根据 CPU-bound / I/O-bound profile 智能提高 compute density”的方向。Fluid Compute 后续加入的 active-CPU billing、warm instance reuse、longer execution 和 background work 是当前官方产品描述，不应倒写成 2025 课堂已经完整实现的细节。
+\end{warningbox}
+
+\teachervoice{Rauch 的优先级是性能：不能因为某客户突然流行，就让 noisy neighbor 降低其他客户质量。Compute density 的目标不是单纯压成本，而是在保持隔离和延迟标准下减少 idle waste，并把 capacity tuning 从客户手中移到平台。}
+
+\subsection{本章小结}
+
+AI 把 web workload 从短 CPU burst 推向长等待和 streaming。调度器需要区分 active compute 与 I/O wait，在不破坏隔离的前提下复用 warm capacity。
+
+\section{v0 与 AI-native development：产品约束制造研究问题}
+
+v0 把自然语言想法转换为可运行前端，并逐步扩展到 full-stack application。课堂时点的早期版本使用 GPT-3.5 Turbo，原生 function calling 还不成熟，团队必须构建 bespoke tool invocation。这个历史说明：AI 产品不是简单调用模型 API，而是模型、工具、framework knowledge、preview deployment 和用户反馈的联合系统。
+
+\subsection{从 prompt 到运行中的应用}
+
+前面的 compute-density 讨论关注请求如何高效运行；这里转向 AI application 的生成与验证闭环。本节回答的不是“模型能否写出一段 JSX”，而是一个 prompt 怎样经过 tool invocation、framework-aware code generation、build、preview 和 human feedback 变成可交互产品。读图时应把 preview environment 看成 verifier，而不是单纯的发布终点。
+
+\lecturefigure{14-v0-loop.png}{v0 把生成代码、工具调用、preview URL 和用户反馈连接成产品闭环。}{本地字幕 30:15--31:55；概念重绘。}
+
+\begin{knowledgebox}{读图：运行环境为什么是 coding agent 的 verifier}
+代码看起来合理不等于能 build、render 和交互。Preview deployment 提供可执行反馈：编译是否通过、页面是否可访问、视觉和行为是否符合要求。Agent 需要把 build log、browser result 和用户修改重新送回生成循环。
+\end{knowledgebox}
+
+\begin{warningbox}{Fast growth 不是 architecture proof}
+课堂提到 v0 的快速增长，只能说明需求信号强，不能证明单位经济学、长期 retention 或生成质量已经解决。AI 产品仍需要任务分布、成功率、修复轮数、token cost、latency 和用户留存等长期指标。
+\end{warningbox}
+
+\teachervoice{Rauch 把“设定不合理的高标准”当作研究方法：如果目标只是把现有 workflow 自动化，团队可能不会遇到 novel problem；若要求每个 prompt 都快速变成可运行系统，tool calling、sandbox、preview 和 feedback 就会成为新的研究基础设施。}
+
+\subsection{本章小结}
+
+v0 的系统单元不是一个 completion，而是 prompt--tool--code--preview--feedback 循环。产品约束可以创造研究问题，但必须用运行证据验证，而不是只展示生成文本。
+
+\section{Immutable MVP、Gossip 与 Day 1/100/1000}
+
+Vercel 的早期 MVP 极窄：一个 API/CLI 调用返回不可变 deployment URL。底层系统起初可能过度配置且昂贵，但这个接口足以验证用户是否真正想要“部署即 URL”。Rauch 将 immutable data structures、IPFS content identity 和 gossip propagation 作为灵感来源，随后用实际需求驱动内部重构。
+
+\subsection{先验证 idea-market fit，再优化内部实现}
+
+\term{immutable deployment} 指部署内容一旦生成便不原地修改；新版本创建新 identity。\term{gossip protocol} 让节点互相传播 metadata，最终在全球副本间收敛。Domain 指针可以变化，deployment artifact 保持不变，从而获得可追溯 preview、原子 promote 和快速 rollback。
+
+\lecturefigure{15-immutable-mvp.png}{一个窄 API/CLI 把 artifact identity、metadata propagation 和 URL 连接起来。}{本地字幕 32:50--35:55；概念重绘。}
+
+\begin{knowledgebox}{读图：MVP 可以内部低效，但外部契约要正确}
+早期系统可以 over-provision，只要成本可承受且产品信号值得验证；但若外部 API 把可变服务器状态暴露给用户，后续很难迁移。优秀 MVP 选择一个未来仍成立的稳定抽象，再逐步替换内部实现。
+\end{knowledgebox}
+
+\subsection{Day 1、Day 100、Day 1000 是三种不同验收}
+
+上一小节说明 MVP 可以暂时内部低效，但外部契约必须长期正确；接下来需要用时间尺度检验这个契约是否真的吸收了复杂度。Day 1 检查 onboarding 和第一印象；Day 100 检查项目增长后平台是否泄漏复杂性；Day 1000 检查 uptime、恢复、成本和组织信任。许多开发工具只优化 Day 1 demo，却把长期状态、依赖和运维负担交还给用户，因此成熟度不能只由首次部署速度衡量。
+
+\lecturefigure{16-day-maturity.png}{基础设施产品必须分别通过采用、复杂度吸收和长期运营测试。}{本地字幕 36:00--37:05；概念重绘。}
+
+\begin{importantbox}{Day 1/100/1000 验收问题}
 \begin{itemize}
-    \item 过去需要设计大量 UI 和表单的场景，agent 可以自动化
-    \item 编写代码、构建、部署的全流程可以通过 AI 对话界面抽象
-    \item v0 本身就是这一愿景的产品化落地
+  \item Day 1：新人能否在不了解底层细节时安全部署？
+  \item Day 100：route、team、environment 和数据依赖增加后，默认模型是否仍清晰？
+  \item Day 1000：升级、事故、人员流动和供应商变化时，系统能否恢复并保持可审计？
 \end{itemize}
+\end{importantbox}
 
-\begin{warningbox}{在公众面前做研究的痛苦}
-Rauch 坦言"researching in public with your customers is more painful but can be quite satisfying"。v0 的早期版本能力有限，但持续迭代和公开交付让团队获得了宝贵的用户反馈。这种"公开研发"模式对于创业公司来说既是风险也是加速器。
+\begin{warningbox}{不可变部署不等于不可变数据}
+代码和 assets 可以 immutable，数据库、队列和外部系统仍会变化。Rollback application version 可能遇到 schema incompatibility。平台需要 migration policy、backward-compatible contract 和 data recovery，不能把 Git 式体验机械套在所有状态上。
 \end{warningbox}
 
 \subsection{本章小结}
 
-v0 代表了 Vercel 对 AI 原生软件开发的押注。从 GPT-3.5 时代的简陋原型到快速增长的明星产品，v0 的发展历程验证了"idea-market fit 先行，product-market fit 随后"的创业方法论。Rauch 坚信所有软件都将走向 AI 原生，这既是 Vercel 的产品方向，也是其基础设施需求的核心驱动力。
+好的 MVP 固定正确的外部抽象，允许内部暂时低效；好的基础设施产品则继续通过 Day 100 和 Day 1000，吸收项目复杂度并保持运营信任。
 
-% ============================================================
-\section{创业方法论：MVP、不可变部署与 Day 1/100/1000}
-% ============================================================
+\section{职业与研究：在真实系统中制造 novel constraints}
 
-\subsection{从 API 开始}
+学生问 Rauch 是否后悔过早进入工业界而没有走传统研究路线。他的回答不是“工业优于学术”，而是自己在公司里参与 scheduler、placement、load balancer、metadata store 等研究型工作。真实产品可以提供高规模、强约束和即时反馈；但他也承认过多 DIY 会杀死 startup。
 
-Rauch 分享了他对 MVP 的独到见解。他在天使投资中观察到，\textbf{最好的公司往往从一两个 API 调用开始}。他投资的三家成功公司都遵循这一模式：
-
-\begin{table}[H]
-\centering
-\begin{tabular}{ll}
-\toprule
-\textbf{公司} & \textbf{起步形态} \\
-\midrule
-Auth0 & 一个认证 API \\
-Clearbit & 一个人物信息查询 API \\
-Scale AI & 一个人工标注数据 API \\
-\bottomrule
-\end{tabular}
-\caption{三家从单一 API 起步的成功公司}
-\end{table}
-
-受此启发，Vercel 的第一版产品就是\textbf{一个部署 API}——输入代码，返回一个不可变的 URL。
-
-\begin{importantbox}{不可变部署的哲学}
-Rauch 深受函数式编程和 React 的 immutability 理念影响。他将部署设计为\textbf{不可变的}（immutable），就像 git commit 不可变一样——每次部署生成一个唯一的、永不改变的 URL。这个设计决策看似简单，实际上对底层基础设施提出了极高要求（需要高效的内容寻址存储和全球传播系统）。
-\end{importantbox}
-
-\subsection{IPFS 与 Gossip 协议的启发}
-
-Rauch 透露，Vercel 的架构灵感部分来自去中心化系统 IPFS：
-
-\begin{knowledgebox}{Content-Addressable Store 与 Gossip Protocol}
-IPFS 是一个全球内容寻址存储系统——通过 checksum 即可获取任何内容，甚至不需要知道网络的完整成员信息。Vercel 的底层基础设施大量使用了类似的 gossip protocol，例如：安全系统需要实时分析流量画像并阻断攻击者，部署信息（如 stanford.edu 应指向哪个不可变部署）需要在全球数百万台计算机之间快速传播。
-\end{knowledgebox}
-
-\subsection{Day 1 / Day 100 / Day 1000 框架}
-
-Rauch 分享了他最重要的产品方法论之一：
-
-\begin{importantbox}{Day 1 / Day 100 / Day 1000 评估框架}
-\begin{itemize}
-    \item \textbf{Day 1}：首次使用体验。"一条命令部署"可以吸引大量早期用户
-    \item \textbf{Day 100}：持续使用体验。随着项目代码增长、功能增加，平台是否"泄漏"（leak）？能否持续吸收复杂性？
-    \item \textbf{Day 1000}：运维体验。系统是否稳定在线？Vercel 在 Black Friday 期间达到了 \textbf{9 个 9 的可用性}（99.9999999\%）
-\end{itemize}
-在基础设施领域，\textbf{没有人真正关心 Day 1 体验}——Day 100 和 Day 1000 才是决定胜负的关键。
-\end{importantbox}
-
-\begin{warningbox}{漂亮 Demo 的陷阱}
-很多基础设施产品可以做出惊艳的 Day 1 demo，但在 Day 100 就开始"泄漏"——性能退化、抽象失效、隐藏的复杂性暴露。Rauch 强调，Vercel 创立后的\textbf{整整一年多}都在追赶 Day 100 和 Day 1000 的质量标准，而非打磨 Day 1 的花哨体验。
-\end{warningbox}
-
-\subsection{设定不合理的高标准}
-
-Rauch 的个人哲学是\textbf{设定不合理的高标准}（unrealistic expectations），然后让标准本身成为研究项目。例如：
-
-\begin{itemize}
-    \item "每个 git commit 必须成为一次部署"——这在 Kubernetes 上不可行，迫使团队发明全新的基础设施
-    \item v0 在 GPT-3.5 时代就开始构建——当时模型能力远不足以实现愿景，但推动了团队在 function calling 等方面的创新
-\end{itemize}
-
-\subsection{本章小结}
-
-Vercel 的创业路径遵循"从最小 API 开始验证 idea-market fit，然后用一年以上的时间追赶 Day 100/Day 1000 的质量标准"。不可变部署的设计理念来自函数式编程和去中心化系统的启发，而 gossip protocol 等技术被实际应用于 Vercel 的全球传播系统。设定不合理的高标准既是痛苦的来源，也是创新的驱动力。
-
-% ============================================================
-\section{技术人员的职业发展}
-% ============================================================
-
-\subsection{早入行 vs. 做研究}
-
-当被问及是否后悔 18 岁就进入工业界（全职前端工程师）而非继续学术研究时，Rauch 表示\textbf{毫无遗憾}。他的理由是：
-
+\begin{knowledgebox}{Applied research 的三个必要条件}
 \begin{enumerate}
-    \item 他加入的公司本身就给了他做研究的机会——创业公司的技术挑战本身就是研究项目
-    \item 通过实践学习构建系统的速度"非凡"（phenomenal）
-    \item 可以设定不合理的产品目标，让"达标"的过程本身成为新颖的研究
+  \item 问题包含现有方法不能满足的明确 constraint；
+  \item 团队能构建实验、测量和失败反馈，而不是只写生产补丁；
+  \item 研究结果能回到产品指标，同时保留可复用知识和系统边界。
 \end{enumerate}
-
-\begin{knowledgebox}{以产品为驱动的研究}
-Rauch 提出了一种"以产品驱动研究"的模式：不是先做研究再产品化，而是设定一个激进的产品目标（如"每个 commit 即部署"），然后在实现过程中自然产生新颖的研究问题。v0 也是这一模式的典型案例——先有 idea-market fit，再通过推动 state-of-the-art 来达到 product-market fit。
 \end{knowledgebox}
 
-\subsection{招聘顶尖基础设施工程师}
+\begin{warningbox}{“自己写一遍”不是默认教育路线}
+重写 React、Kubernetes 或 scheduler 可以建立深层理解，也可能浪费公司 runway。应选择与核心差异化直接相关、现成方案无法满足约束的层；其余部分优先复用，并通过源码阅读、实验和故障演练学习。
+\end{warningbox}
 
-Rauch 提到 Vercel 基础设施团队的招聘极其困难，因为"没有人见过我们所处的规模"。团队成员通常在公司待很长时间，因为他们面对的是"互联网上最迷人的挑战"。Rauch 强调他亲自 outbound 联系领域内最优秀的人才。
+\teachervoice{课堂真正有张力的地方是两句话同时成立：too much DIY can kill you；unreasonable standards can create novel research. 成熟判断不在“全部买”或“全部造”，而在知道哪个约束值得用组织生命去解决。}
 
 \subsection{本章小结}
 
-对于技术人员的职业发展，Rauch 倡导通过实践而非纯学术路径来积累能力。创业公司的极端技术挑战本身就是最好的研究训练场。关键在于设定足够高的标准，让达标过程自然产生创新。
+工业系统可以成为研究环境，但前提是问题约束、实验反馈和产品价值清晰。Build vs. Buy 同样适用于个人学习：深挖关键层，复用非关键层。
 
-% ============================================================
 \section{总结与延伸}
-% ============================================================
 
-本讲中，Guillermo Rauch 从多个维度分享了 Vercel 在 Web 基础设施领域的思考与实践：
+\subsection{核心结论}
+
+\begin{importantbox}{十二条可迁移结论}
+\begin{enumerate}
+  \item Hyperscaler primitives 与 application intent 之间仍需要编译层。
+  \item 抽象必须创造新不变量，而不是只给控制台换皮。
+  \item 产品对象的基数和生命周期决定资源映射是否经济。
+  \item FDI 用框架语义生成 IR，再映射为 routing、cache 和 functions。
+  \item ISR 按内容变化频率而非访问频率消耗 origin compute。
+  \item Build vs. Buy 应把自研放在 insight 会复利的差异化层。
+  \item Immutable deployment 与可变 pointer 让 preview、promote 和 rollback 可组合。
+  \item Consumption pricing 只有可归因时才成为开发者反馈信号。
+  \item Telemetry 要把版本、性能、错误和 spend 放在同一时间线。
+  \item Soft cap 保护学习与连续性，hard cap 保护最坏支出但可能中断业务。
+  \item AI workload 要区分 active CPU 与 I/O wait，compute density 不能靠固定 pod 数。
+  \item Day 1 获得采用，Day 100 吸收复杂度，Day 1000 赢得运营信任。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{实践作业：设计一个 framework-aware AI deployment platform}
+
+选择一个 AI web application，例如多模型聊天、coding agent、文档分析或生成式电商页面，完成以下设计：
 
 \begin{enumerate}
-    \item \textbf{Framework-Defined Infrastructure}：应用代码是输入，Vercel 作为"云编译器"自动产出最优基础设施
-    \item \textbf{Build vs. Buy}：在 hyperscaler 之上构建抽象层，而非自建底层，将精力聚焦于最能创造价值的应用层
-    \item \textbf{消费定价与可观测性}：精确的成本反馈回路使开发者能做出知情决策，soft/hard cap 需要作为业务函数考虑
-    \item \textbf{Compute Density}：AI 时代的请求模型（毫秒到分钟）要求全新的计算调度策略
-    \item \textbf{v0 与 AI 原生}：所有软件最终都将是 AI 原生的，v0 是这一愿景的产品化落地
-    \item \textbf{Day 1/100/1000}：基础设施产品的成功取决于长期可靠性而非首次体验的花哨
+  \item 定义 framework 能提供的应用语义，以及平台无法自动推断的业务约束；
+  \item 设计 Build Output / IR，列出 assets、functions、routes、cache、tools 和 policies；
+  \item 给出 immutable deployment、domain pointer、preview 和 rollback 模型；
+  \item 将请求分为 CPU-bound、I/O-bound、streaming 和 background 四类，设计 capacity policy；
+  \item 设计 telemetry schema，把 deployment version、latency、error、model token、CPU、memory 和 spend 关联起来；
+  \item 设计 soft/hard controls，说明阈值、执行延迟、业务连续性和 abuse handling；
+  \item 分别写出 Day 1、Day 100、Day 1000 的验收测试。
 \end{enumerate}
 
-\begin{importantbox}{核心启示}
-Rauch 的思维模型贯穿一个主题：\textbf{从用户体验出发反推基础设施需求}。无论是"基础设施应当不可见"的产品哲学、"框架定义基础设施"的技术范式，还是"Day 1000 才是真正的考验"的运维标准，都体现了以终端用户为中心的工程思维。在 AI 时代，这一思维更加重要——当请求模型从毫秒扩展到分钟，平台必须在无需用户干预的情况下自适应。
-\end{importantbox}
+\begin{knowledgebox}{验收标准}
+高质量方案不会只写“用 serverless 自动扩缩容”。它应说明 framework intent 如何进入 IR，调度器如何区分 active compute 与 wait，成本如何归因到 operation，hard control 如何避免误伤，以及 rollback 遇到 stateful dependency 时如何处理。
+\end{knowledgebox}
 
 \subsection{拓展阅读}
 
-\begin{itemize}
-    \item \textbf{Vercel 官方文档}：\url{https://vercel.com/docs} — 涵盖 Framework-Defined Infrastructure、ISR 等核心技术的详细说明
-    \item \textbf{Next.js 文档}：\url{https://nextjs.org/docs} — 了解框架层如何与 Vercel 平台协同
-    \item \textbf{v0 产品}：\url{https://v0.dev} — AI 驱动的 Web 开发体验
-    \item \textbf{Vercel AI SDK}：\url{https://sdk.vercel.ai} — Vercel 的 AI 集成工具包，支持多模型 streaming 等能力
-    \item \textbf{Software-Defined Networking (SDN)}：了解 FDI 理念的灵感来源
-    \item \textbf{IPFS 白皮书}：\url{https://ipfs.tech} — Content-addressable store 和 gossip protocol 的详细设计
-    \item \textbf{Amazon DynamoDB 定价模型}：作为消费定价和成本反馈回路的典型案例
-\end{itemize}
+\begin{enumerate}
+  \item Vercel, \href{https://vercel.com/blog/framework-defined-infrastructure}{Framework-Defined Infrastructure}。
+  \item Vercel, \href{https://vercel.com/blog/build-output-api}{Announcing the Build Output API} 与 \href{https://vercel.com/docs/build-output-api/v3}{Build Output API v3}。
+  \item Vercel, \href{https://vercel.com/blog/life-of-a-request-application-aware-routing}{Life of a Vercel request: Application-aware routing}。
+  \item Next.js, \href{https://nextjs.org/docs/app/guides/incremental-static-regeneration}{Incremental Static Regeneration}。
+  \item Vercel, \href{https://vercel.com/blog/introducing-fluid-compute}{Introducing Fluid Compute} 与 \href{https://vercel.com/docs/fluid-compute}{current documentation}。
+  \item Vercel, \href{https://vercel.com/docs/spend-management}{Spend Management} 与 \href{https://vercel.com/docs/observability}{Observability}。
+  \item v0, \href{https://v0.app/docs}{Documentation}。
+\end{enumerate}
+
+\subsection{建议阅读路线}
+
+先读 FDI 与 Build Output API，画出“源码—框架语义—IR—部署”的编译边界；再读 request routing 与 ISR，追踪一个请求怎样命中 metadata、cache、function 和 origin。随后阅读 Spend Management 与 Observability，把监控项映射到课堂的 consumption feedback。最后阅读 Fluid Compute，并用 active CPU / wall time 比例解释为什么 AI request 改变了 serverless 的调度目标。阅读每个官方页面时，统一记录\textbf{输入契约、生成或管理的资源、可观测信号、失败/回滚路径，以及当前版本与历史课堂的差异}；若页面没有明确 failure mode，再主动补写可能的控制面、数据面和计量风险。
 
 \end{document}
