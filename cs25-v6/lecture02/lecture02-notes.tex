@@ -1,0 +1,828 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 02：JEPA 世界模型——对象交互、反坍塌与潜空间规划}
+\renewcommand{\noteauthors}{基于 Heejeong ``Hazel'' Nam、Lucas Maes 官方讲座、55 页 deck 与人工字幕整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-04-09；上传 2026-04-22}
+\renewcommand{\videoduration}{1:11:03}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=GBd7iuJkW08}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\newcommand{\videofigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{世界模型的合同：状态、动作与可预测未来}
+
+本课不是把 ``world model'' 当成一个更大的视频生成器，而是先规定它必须履行什么合同：给定当前状态与可执行动作，模型应当预测环境怎样演化，并让预测足以支撑 reasoning、planning 与 control。两位讲者随后从两条互补路线回答这个合同：Causal-JEPA 给预测任务加入对象交互的结构偏置，LeWorldModel 则把端到端训练压缩成一个稳定而简洁的目标。
+
+\subsection{从一步预测到受控状态转移}
+
+普通自回归预测只写成 $x_t\mapsto x_{t+1}$，但真实环境中的未来还取决于智能体和外部参与者采取的动作。因而本课采用的最小世界模型是受控状态转移：模型既要知道``现在有什么''，也要知道``施加动作后什么会改变''。读第一张图时，应把三列理解为三项独立验收，而不是一条网络自动同时满足的性质。
+
+\lecturefigure{slide-003.jpg}{世界模型的三项合同：状态表示、转移规律与动作响应}{CS25 V6 official deck, p.~3}
+
+\[
+f_\theta:\mathcal{S}\times\mathcal{A}\rightarrow\mathcal{S},
+\qquad
+\hat{s}_{t+1}=f_\theta(s_t,a_t).
+\]
+其中，$\mathcal{S}$ 是状态空间，$\mathcal{A}$ 是动作空间，$s_t$ 是时刻 $t$ 的状态，$a_t$ 是该时刻施加的动作，$f_\theta$ 是参数为 $\theta$ 的转移模型，$\hat{s}_{t+1}$ 是模型预测的下一状态。若环境含有不可观测随机性，更诚实的写法是条件分布 $p_\theta(s_{t+1}\mid s_{\le t},a_{\le t})$，而不是假设唯一确定的未来。
+
+\teachervoice{00:01:52--00:03:41，Hazel 把 world model 直观地称为 simulator，并要求读者始终记住三项设计问题：表示是否保留当前重要信息，转移模型是否学到环境规则，动作是否以正确方式改变未来。}
+
+\begin{importantbox}{世界模型不是一个单独网络名}
+一个可用的世界模型至少包含三层接口：\textbf{observation encoder} 把像素变成状态，\textbf{dynamics predictor} 推演未来，\textbf{decision interface} 把预测接到动作搜索或策略学习。只展示一段逼真视频，只能证明生成器会产生某种视觉序列，不能证明它的状态可控、动作语义正确或预测足以规划。
+\end{importantbox}
+
+\subsection{为什么本课暂时不追求重建每个像素}
+
+生成式世界模型可以产生高度逼真的未来，但像素级似然要求模型同时解释任务相关结构和大量不可预测细节，例如纹理、光照噪声或背景中的随机运动。讲者并非否定 Sora、GAIA、Genie 或交互式三维生成，而是把问题缩窄为：如果目标是控制与推理，是否可以直接学习一个只保留可预测、可决策因素的 latent state？
+
+\lecturefigure{slide-004.jpg}{本课范围之外的生成式世界模型：视频、驾驶与交互环境}{CS25 V6 official deck, p.~4}
+
+下一页把差异画成监督信号的位置。生成架构把预测结果送回像素空间，与真实未来 $y$ 直接比较；joint-embedding 架构则把目标也编码成 $s_y$，只要求预测 latent 与目标 latent 相容。核心不是简单删除 decoder，而是允许表示空间忽略多解未来中不影响任务的细节。
+
+\lecturefigure{slide-005.jpg}{生成式预测与 joint-embedding prediction 的监督位置不同}{CS25 V6 official deck, p.~5}
+
+\[
+\mathcal{L}_{\text{pixel}}=\ell\!\left(D(P(E(x),a)),y\right),
+\qquad
+\mathcal{L}_{\text{latent}}=\ell\!\left(P(E(x),a),\operatorname{sg}(E(y))\right).
+\]
+其中，$E$ 是 encoder，$P$ 是 predictor，$D$ 是 decoder，$x$ 是上下文，$a$ 是动作或辅助条件，$y$ 是未来观测，$\ell$ 是距离或负对数似然，$\operatorname{sg}$ 表示 stop-gradient。第一式必须重建目标域；第二式只需在表示空间对齐，因此可以选择性保留可预测因素。
+
+\begin{warningbox}{latent 并不自动等于 semantic}
+把 loss 移到 latent space 只改变优化接口；若 encoder 学到常数、背景纹理或训练集捷径，latent 仍可能毫无用途。后文的 object masking 与 SIGReg 分别解决``预测依赖什么''和``表示如何不坍塌''，二者不能互相替代。
+\end{warningbox}
+
+\subsection{JEPA 的 energy-based 视角与表示坍塌}
+
+JEPA 可以用 energy-based model（能量模型）理解：兼容的上下文--未来组合应得到低能量，不兼容组合应得到高能量。这个视角允许一个上下文对应多个合理未来，而不要求平均成模糊像素。然而，如果 encoder 把所有输入映射到同一向量，任意预测都会与目标``相等''，于是损失为零却没有学到世界。
+
+\lecturefigure{slide-006.jpg}{JEPA：在表示空间学习兼容性与能量地形}{CS25 V6 official deck, p.~6}
+
+\[
+\mathcal{E}_\theta(x,y)=\left\|P_\theta(E_\theta(x))-E_\theta(y)\right\|_2^2,
+\qquad
+\mathcal{E}_\theta(x,y^+) < \mathcal{E}_\theta(x,y^-).
+\]
+其中，$\mathcal{E}_\theta$ 是兼容性能量，$y^+$ 是与 $x$ 相容的未来，$y^-$ 是不相容未来，$E_\theta$ 与 $P_\theta$ 分别为表示器和预测器。低能量意味着``可作为合理未来''，并不等价于对像素概率进行了归一化。
+
+\teachervoice{00:06:13--00:08:16，老师强调 anti-collapse 大致分为 contrastive 与 regularization 两族。V-JEPA 使用 EMA target encoder、stop-gradient 与遮蔽任务，目的不是装饰训练流程，而是排除常数表示等平凡解。}
+
+\lecturefigure{slide-007.jpg}{V-JEPA：时空遮蔽、context encoder、target encoder 与 predictor}{CS25 V6 official deck, p.~7}
+
+\begin{knowledgebox}{首次使用：EMA 与 stop-gradient}
+\textbf{EMA（Exponential Moving Average）target encoder} 用在线 encoder 参数的指数滑动平均更新目标分支，使目标变化更慢；\textbf{stop-gradient} 阻止目标分支被当前预测误差直接拉动。二者常一起稳定自监督训练，但它们是优化启发式，不等于已经解释了表示为何必然非坍塌。
+\end{knowledgebox}
+
+\subsection{从表示学习到动作条件世界模型}
+
+V-JEPA 2 把大规模视频表示学习与少量交互数据上的 action-conditioned post-training 分开：先从观察中学习视觉状态，再冻结或复用表示，训练动作条件 predictor。DINO-WM 更进一步地问：既然 DINOv2 已经能提供强视觉特征，是否无需重新学习 encoder，只在这些 feature 上训练动力学即可？
+
+\lecturefigure{slide-008.jpg}{V-JEPA 2：从遮蔽视频预训练到动作条件 post-training}{CS25 V6 official deck, p.~8}
+
+\lecturefigure{slide-009.jpg}{DINO-WM：冻结 DINOv2，在 patch latent 上自回归预测未来}{CS25 V6 official deck, p.~9}
+
+\teachervoice{00:08:16--00:10:17，Hazel 要求读者区分两阶段：V-JEPA 2 的大规模 action-free pretraining 先学表示，V-JEPA 2-AC 与 DINO-WM 才把动作和 proprioception 接入预测器。课程随后质疑的是 patch representation 是否适合表达对象间作用，而不是否认这些 baseline 的规划能力。}
+
+\begin{knowledgebox}{术语消化：四种容易混淆的对象}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth} X}
+\toprule
+术语 & 本课中的含义 \\
+\midrule
+representation model & 把观测压成任务可用状态；不一定知道动作后果。 \\
+dynamics model & 在给定状态与动作时预测状态演化；可以建立在冻结表示上。 \\
+world model & 表示、动力学与决策接口的组合；能否规划取决于三者共同质量。 \\
+JEPA & 在表示空间做预测的训练框架；encoder 与 predictor 完全可以由 Transformer 实现。 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+世界模型的最小合同是受控状态转移；JEPA 的价值是把预测目标移到表示空间，让模型不必重建所有像素；其根本风险是 latent 可能坍塌或学到错误捷径。V-JEPA、V-JEPA 2 与 DINO-WM 给出了三种稳定表示与动力学的组合方式，而下一章的问题是：这些状态应该由 patch 组成，还是由可交互对象组成？
+
+\section{从 patch 到 object：表示结构决定模型能问什么问题}
+
+若世界模型只看到规则网格中的 patch，它可以拟合局部运动，却未必把``红球推动绿色 T 块''表示成实体间关系。Causal-JEPA 的切入点不是先发明更复杂 controller，而是把预测单位改成 object slot，并通过遮蔽让模型不能只沿着每个对象自己的轨迹外推。
+
+\subsection{三个 benchmark 对应三种能力}
+
+这三个 benchmark 并非随意挑选的 demo，而是分别检验不同能力。Push-T 测试动作条件规划；CLEVRER 测试描述、预测、解释与反事实问答；PHYRE 用多物体接触和重力检验 rollout 是否物理可信。读这组图时应先看任务输出：成功率、问题正确率和 rollout plausibility 分别测量不同能力，不能互相替代。
+
+\lecturefigure{slide-012.jpg}{Causal-JEPA 的三类验证环境：Push-T、CLEVRER、PHYRE}{CS25 V6 official deck, p.~12}
+
+\begin{knowledgebox}{Benchmark 到能力的映射}
+Push-T 的 image goal 使模型必须把动作序列接到空间结果；CLEVRER 的 counterfactual 问题要求判断移除一个对象后会发生什么；PHYRE 的长链交互暴露``仅记相关性''的失败。若一个模型只在其中一项领先，不能据此声称它已经获得一般物理理解。
+\end{knowledgebox}
+
+\subsection{为什么 patch token 容易错过交互单位}
+
+在 Push-T 中，灰色 T 块、绿色目标、蓝色控制点和障碍物具有稳定语义。patch grid 会把同一对象切成多个 token，并让一个 token 的内容随对象移动而改变；object-centric representation 则试图让每个 slot 持续指向同一实体。它减少 token 数，也把``谁影响谁''变成可直接提问的变量关系。
+
+\lecturefigure{slide-013.jpg}{像素 patch 与对象级状态对 Push-T 的不同分解}{CS25 V6 official deck, p.~13}
+
+下一页保持 DINO-WM 的 predictor 和训练接口，单独把 patch representation 换成 object representation，构造 OC-DINO-WM。这个 baseline 很重要，因为它隔离了``对象表示''本身的作用；若后续 C-JEPA 更强，还必须证明增益来自 masking，而不是仅来自 token 更少。
+
+\lecturefigure{slide-014.jpg}{DINO-WM 与 OC-DINO-WM：只替换状态表示的对照}{CS25 V6 official deck, p.~14}
+
+\[
+X_t\in\mathbb{R}^{H\times W\times C}
+\xrightarrow{g}
+S_t=\{s_t^1,\ldots,s_t^N\},
+\qquad s_t^i\in\mathbb{R}^{d}.
+\]
+其中，$X_t$ 是像素观测，$g$ 是 object-centric encoder，$S_t$ 是包含 $N$ 个 slot 的集合，$s_t^i$ 是第 $i$ 个对象候选的 $d$ 维表示。这里的集合符号意味着 slot 顺序本身没有语义；跨帧身份必须由视频 encoder 或额外锚点维持。
+
+\begin{warningbox}{object slot 不是现成的真值对象}
+slot 可能把一个实体拆成多个槽、把多个实体合并、追踪时交换身份，或把阴影与背景当作对象。因此 object-centric 只提供一种可学习的结构假设；后文关于 interaction 与 causal 的结论都依赖表示足够 faithful。
+\end{warningbox}
+
+\subsection{Slot Attention：竞争式分组而非检测框真值}
+
+Slot Attention 从 feature map 中初始化若干 slot query，让每个输入 feature 在 slots 之间竞争，再用加权和与 GRU 迭代更新 slot。它不需要检测框标签，因而适合自监督对象分解；代价是 slot 只在置换意义下等价，没有天然的``slot 1 永远是红球''规则。
+
+\lecturefigure{slide-015.jpg}{Slot Attention 的 encoder--slot--decoder 结构}{CS25 V6 official deck, p.~15}
+
+\lecturefigure{slide-016.jpg}{Slot Attention 迭代：竞争归一化、聚合与 GRU 更新}{CS25 V6 official deck, p.~16}
+
+\[
+\alpha_{ij}=\frac{\exp(q_i^\top k_j/\sqrt d)}{\sum_{i'=1}^{N}\exp(q_{i'}^\top k_j/\sqrt d)},
+\qquad
+u_i=\frac{\sum_j \alpha_{ij}v_j}{\sum_j\alpha_{ij}},
+\qquad
+s_i\leftarrow\operatorname{GRU}(s_i,u_i).
+\]
+其中，$q_i$ 是第 $i$ 个 slot 的 query，$k_j,v_j$ 是第 $j$ 个输入 feature 的 key 与 value，$\alpha_{ij}$ 是 feature $j$ 分配给 slot $i$ 的竞争权重，$u_i$ 是聚合更新，$s_i$ 是 slot 状态，$d$ 是 attention 维度。分母沿 slot 归一化，使不同 slots 竞争解释同一 feature。
+
+\begin{lstlisting}[language=Python,caption={Slot Attention 的最小机制伪代码}]
+slots = init_slots(batch_size, num_slots, dim)
+for _ in range(num_iterations):
+    queries = to_queries(layer_norm(slots))
+    keys, values = encode_features(features)
+    weights = softmax(queries @ keys.T / sqrt(dim), axis="slots")
+    updates = normalized_weighted_sum(weights, values)
+    slots = gru(slots, updates)
+return slots
+\end{lstlisting}
+
+\teachervoice{00:12:20--00:14:23，老师把 Slot Attention 定义为 encoder--decoder 中间的迭代分组机制，并提醒视频版本还必须维护 temporal consistency。它不是把检测器输出直接塞进 Transformer。}
+
+\subsection{本章小结}
+
+对象表示把可移动实体变成较稳定、较少量的 token，使交互结构更容易表达；但它同时引入 slot 无序、身份漂移和分解错误。Causal-JEPA 的关键问题因此变成：如何设计遮蔽，使 predictor 必须利用其他对象和动作，而不是继续依赖被预测对象自身的历史？
+
+\section{Causal-JEPA：用 object masking 制造交互必要性}
+
+Causal-JEPA 不是先估计一个固定 causal graph，再在图上做消息传递。它在训练时删除部分 object histories，让模型面对一类 counterfactual-like completion：目标对象自身的信息不可见时，哪些邻近对象、动作和历史足以恢复它？这种任务把 interaction reasoning 从``可能有帮助''变成``降低 loss 所必需''。
+
+\subsection{香蕉反例：为什么只 mask 一个时刻还不够}
+
+如果只隐藏未来一帧的香蕉，模型仍可沿着香蕉自己的历史做速度外推，完全忽略它是否被其他物体咬掉。三格漫画用夸张方式说明 shortcut：真正的问题不是``下一帧长什么样''，而是``当目标对象自身轨迹被拿走时，谁决定它的变化''。
+
+\lecturefigure{slide-017.jpg}{香蕉反例：对象自身历史会让 predictor 绕过交互推理}{CS25 V6 official deck, p.~17}
+
+\teachervoice{00:14:23--00:16:30，课堂用漫画解释 object masking 的动机：若目标对象在历史中始终可见，模型可以只学 self-dynamics；遮掉对象跨时间的状态，才迫使模型读取施加影响的其他实体。}
+
+\begin{importantbox}{masking 在这里扮演什么角色}
+普通 data augmentation 关心鲁棒性；C-JEPA 的 masking 更像一个可观测性干预：训练时撤掉目标对象的部分 latent history，但保留其他对象、动作和一个最小身份锚点。模型若想恢复目标，就必须寻找 interaction-relevant context。
+\end{importantbox}
+
+\subsection{为什么 predictor 使用 bidirectional attention}
+
+DINO-WM 的 causal Transformer 按时间从过去预测未来，适合常规 autoregressive rollout；C-JEPA 训练时还要在历史窗口内部补全被 mask 的对象，因此允许未遮蔽的历史 token 彼此双向交互。这里的 bidirectional 仅作用于训练窗口中的 latent completion，不意味着 inference 偷看真实未来。
+
+\lecturefigure{slide-018.jpg}{Causal Transformer 与 bidirectional masked Transformer 的信息流}{CS25 V6 official deck, p.~18}
+
+\begin{warningbox}{bidirectional 不等于数据泄漏}
+训练时 future token 本身也被替换成 mask token，predictor 只能看到其位置与身份提示，不能看到真实目标 latent。推理时历史完全可见、未来仍被遮蔽，模型照样只能从过去和动作 rollout。判断泄漏要看 target value 是否进入输入，而不是只看 attention 是否双向。
+\end{warningbox}
+
+\subsection{从单对象轨迹到多对象遮蔽}
+
+最直接的构造是选中一个对象，把它在历史窗口与未来位置上的 slot 全部遮掉。这样 predictor 仍知道时间位置，却失去该对象的自轨迹。进一步遮多个对象可以增加任务难度，但如果连身份线索也删除，模型甚至不知道每个 mask token 应对应哪个对象，训练目标会变成不适定的集合匹配。
+
+\lecturefigure{slide-019.jpg}{第一步：沿时间轴遮蔽一个对象的历史与未来}{CS25 V6 official deck, p.~19}
+
+\lecturefigure{slide-020.jpg}{第二步：同时遮蔽多个对象，暴露身份歧义}{CS25 V6 official deck, p.~20}
+
+\lecturefigure{slide-021.jpg}{仅有 temporal positional encoding 无法回答 slot 身份是谁}{CS25 V6 official deck, p.~21}
+
+\[
+M_\tau\subseteq\{1,\ldots,N\},
+\qquad
+S_\tau^m=\{s_\tau^i\mid i\in M_\tau\},
+\qquad
+S_\tau^c=\{s_\tau^j\mid j\notin M_\tau\}.
+\]
+其中，$M_\tau$ 是时刻 $\tau$ 被遮蔽的 slot 索引集合，$S_\tau^m$ 是 masked object states，$S_\tau^c$ 是可见 context。$N$ 是 slot 数；同一对象可跨多个时间步进入 mask 集合，以压制 self-dynamics shortcut。
+
+\begin{lstlisting}[language=Python,caption={跨时间 object masking 的最小伪代码}]
+masked = slots.clone()
+for object_id in sampled_objects:
+    identity = project(slots[first_time, object_id])
+    for time_id in history_and_future:
+        masked[time_id, object_id] = identity + mask_token[time_id]
+predicted = predictor(masked, actions)
+loss = mse(predicted[mask_positions], slots[mask_positions])
+\end{lstlisting}
+
+\subsection{slot 是集合：身份锚点如何消除跨视频置换}
+
+Video A 的 slot 2 可能追踪绿色物体，Video B 的 slot 2 却可能追踪蓝色物体；slot index 不能跨样本当作类别 ID。C-JEPA 保留最早时刻 $t_0$ 的对象状态作为 identity anchor，再把它投影后与时间相关 mask embedding 相加。这样每个 mask token 表达``这个视频里从该初始对象延续出来、位于时刻 $\tau$ 的未知状态''。
+
+\lecturefigure{slide-022.jpg}{不同视频中的 slot 顺序可以任意置换}{CS25 V6 official deck, p.~22}
+
+\lecturefigure{slide-023.jpg}{identity anchor 加时间 mask embedding，定义可预测的对象身份}{CS25 V6 official deck, p.~23}
+
+\[
+\tilde z_\tau^i=\phi(z_{t_0}^i)+e_\tau.
+\]
+其中，$\tilde z_\tau^i$ 是替代真实对象状态的 mask token，$z_{t_0}^i$ 是最早可见时刻的身份锚点，$\phi$ 是线性投影，$e_\tau$ 是可学习 mask embedding 与 temporal positional encoding 的组合，$i$ 表示同一视频内的对象轨迹。
+
+\teachervoice{00:16:30--00:20:36，老师强调 object-centric representation 是 set 而非 list。保留第一个时间步不是为了泄露运动，而是为了给 mask token 一个视频内稳定身份；跨视频仍不假设 slot 顺序一致。}
+
+\subsection{动作为什么应该是单独节点}
+
+把同一个 action vector 复制并拼接到每个 object token，虽然实现简单，却把``谁被动作直接影响''隐藏在高维特征里。C-JEPA 把 action 当作独立 token/node，与对象在 attention 图中交互：predictor 可以学习动作先影响控制点、控制点再推动目标物体，而不要求每个对象都携带同一份动作副本。
+
+\lecturefigure{slide-024.jpg}{动作条件：复制拼接到所有 slot，还是作为独立节点}{CS25 V6 official deck, p.~24}
+
+\lecturefigure{slide-025.jpg}{action token 随时间进入对象交互图}{CS25 V6 official deck, p.~25}
+
+\begin{knowledgebox}{首次使用：auxiliary variable}
+本课的 auxiliary variable 指可观测但不属于对象视觉状态的条件，例如动作 $a_t$ 与 proprioception $p_t$。它们影响状态转移，却不应被误当成 object appearance 的一部分。作为独立 token 能让 attention 学习条件化关系，也便于分析哪个对象真正依赖动作。
+\end{knowledgebox}
+
+\subsection{完整训练目标：历史补全与未来预测合一}
+
+完整 Causal-JEPA 先用冻结 object-centric encoder 提取 history 与 future 的目标 slots，再替换选中的历史对象和全部未来位置，最后让 bidirectional predictor 同时恢复 masked history 与预测 future。前一项压制 self-dynamics，后一项维持真正的 forward world modeling；推理时不再遮历史，只 rollout 未来。
+
+\lecturefigure{slide-026.jpg}{Causal-JEPA 全结构：对象遮蔽、动作条件与联合 latent prediction}{CS25 V6 official deck, p.~26}
+
+\[
+\hat Z_{\mathcal T}=f_\theta(\bar Z_{\mathcal T},U_{\mathcal T}),
+\qquad
+\mathcal{L}_{\text{mask}}
+=\mathbb{E}\!\left[
+\sum_{\tau\in\mathcal T}\sum_{i=1}^{N}
+\mathbf{1}[\bar z_\tau^i\neq z_\tau^i]
+\left\|\hat z_\tau^i-z_\tau^i\right\|_2^2
+\right].
+\]
+其中，$\mathcal T$ 覆盖 history window 与 future horizon，$\bar Z_{\mathcal T}$ 是替换过的输入序列，$U_{\mathcal T}$ 是动作等辅助变量，$f_\theta$ 是 predictor，$\hat z_\tau^i$ 是预测 slot，$z_\tau^i$ 是冻结 encoder 给出的目标，指示函数只选择被遮蔽的位置。
+
+\[
+\mathcal{L}_{\text{mask}}
+=\underbrace{\mathbb{E}\!\left[\|\hat z_\tau^i-z_\tau^i\|_2^2\mid i\in M,\tau\le t\right]}_{\mathcal{L}_{\text{history}}}
++\underbrace{\mathbb{E}\!\left[\|\hat Z_\tau-Z_\tau\|_2^2\mid\tau>t\right]}_{\mathcal{L}_{\text{future}}}.
+\]
+其中，$\mathcal{L}_{\text{history}}$ 是历史对象补全误差，$\mathcal{L}_{\text{future}}$ 是未来状态预测误差，$M$ 是被选中的对象集合，$t$ 是当前时刻。两项共享 predictor，因此交互线索必须同时支持补全和 rollout。
+
+\teachervoice{00:20:36--00:22:38，Hazel 明确说 C-JEPA 不恢复 true causal graph；动作节点和 object masking 的目的，是让预测器在训练目标下依赖交互相关变量。}
+
+\subsection{三种评估问题对应三种失败模式}
+
+在进入结果前，讲者先把实验分成 reasoning、planning/control 与 physical plausibility。这个顺序很重要：VQA 可以检验 counterfactual 关系，却不证明 controller 高效；Push-T 成功率可以检验决策接口，却不证明 rollout 物理合理；PHYRE 的质性轨迹则能暴露相关性捷径，却未必给出通用任务表现。
+
+\lecturefigure{slide-027.jpg}{Causal-JEPA 的三类评估：推理、规划与物理可信性}{CS25 V6 official deck, p.~27}
+
+\begin{importantbox}{证据三角形}
+一个强世界模型结论最好同时回答：\textbf{关系是否可读出}（reasoning）、\textbf{预测是否可用于选动作}（control）、\textbf{分布外干预后是否仍遵守动力学}（plausibility）。本课的三组实验分别提供局部证据，不能合并成``模型已理解世界''这一无条件判断。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Causal-JEPA 用 object slot 作为状态单位，用跨时间遮蔽移除目标对象的 self-history，用 identity anchor 解决 slot 集合的置换问题，并把动作作为独立辅助节点。其 loss 同时包含历史补全与未来预测，使 interaction reasoning 对降低训练误差变得必要。下一章检验这种结构偏置是否真的改善 counterfactual reasoning、planning efficiency 与 rollout plausibility。
+
+\section{Causal-JEPA 的证据：增益来自哪里，不能推出什么}
+
+结果部分最容易被压缩成``加了 masking，数字更高''。高质量阅读必须拆开三层：object-centric representation 是否有用，predictor 与 action interface 是否合适，history masking 是否在同一架构上带来额外收益。只有 OC-JEPA 与 C-JEPA 的同架构对照，才最接近回答 masking 本身的贡献。
+
+\subsection{CLEVRER：counterfactual 问题最能暴露交互捷径}
+
+CLEVRER 表格同时报告平均问题准确率与 counterfactual 指标。阅读时应先固定 encoder 与 architecture，再沿 $|M|$ 比较遮蔽对象数。VideoSAUR 表示下，随着适度增加遮蔽，counterfactual per-question accuracy 的增益明显大于总体准确率增益，符合``移除对象后会怎样''与训练时 latent intervention 的结构对应。
+
+\lecturefigure{slide-028.jpg}{CLEVRER：不同 object mask 数量下的推理与 counterfactual VQA}{CS25 V6 official deck, p.~28}
+
+\teachervoice{00:22:38--00:24:39，Hazel 特别要求比较 no-mask 的 OC-JEPA 与同架构 C-JEPA：object-centric representation 不是充分解释，masking 才是 counterfactual 指标额外提升的关键变量。}
+
+\begin{knowledgebox}{读图：为何不能只看最大数字}
+表中 VideoSAUR 与 SAVi 是两种 object-centric encoder，$|M|$ 是被遮蔽对象数。适度 masking 提升 counterfactual reasoning，但 SAVi 下过度遮蔽会掉点，说明信息被删除过多时任务本身变得不可辨识。正确结论是存在机制相关的 sweet spot，而不是 ``mask 越多越因果''。
+\end{knowledgebox}
+
+\begin{warningbox}{counterfactual VQA 不等于 causal identification}
+问题正确率提高说明模型生成的 object trajectories 更支持特定反事实问答；它不证明模型恢复了数据生成图，也不证明在真实干预分布上无偏。benchmark 的场景、问题模板、对象分解与 reasoning head 共同限制了结论范围。
+\end{warningbox}
+
+\subsection{Push-T：token efficiency、architecture 与 masking 要分开}
+
+Push-T 表格揭示 object token 的系统优势：patch baseline 使用 $196\times384$ 的 latent 输入，而 object-centric variants 只需约 $6\times128$。但 OC-DINO-WM 直接替换表示后成功率大幅下降，说明 token 更少并不自动更好；静态 object slot 可能没有显式编码速度，原有 causal predictor 与 action concatenation 也未必适配。
+
+\lecturefigure{slide-029.jpg}{Push-T：patch 与 object token 的输入规模及规划成功率}{CS25 V6 official deck, p.~29}
+
+\[
+C_{\text{latent}}\propto KdH,
+\qquad
+\frac{C_{\text{object}}}{C_{\text{patch}}}
+\approx\frac{6\times128}{196\times384}\approx1.0\%.
+\]
+其中，$K$ 是每个时间步 token 数，$d$ 是 token 维度，$H$ 是 rollout horizon，$C_{\text{latent}}$ 是一次 latent rollout 的近似表示计算与存储量。$1\%$ 是输入特征规模的数量级比较，不等价于端到端 wall-clock 必然精确加速一百倍。
+
+下一页把 action conditioning 与 masking 逐项加回。把 action 作为独立 node、改用 bidirectional masked predictor 后，OC-JEPA 相比不适配的 object baseline 显著恢复；在相同 OC-JEPA 架构上增加 object masking，又获得额外提升。因而完整结果来自三件事配合，而非单一``对象化''操作。
+
+\lecturefigure{slide-030.jpg}{Push-T ablation：action node、predictor 与 object masking 的独立贡献}{CS25 V6 official deck, p.~30}
+
+\teachervoice{00:24:39--00:26:43，老师解释 object slot 单帧未必包含 velocity/acceleration，直接沿用 DINO-WM 的 causal predictor 会掉点；动作节点与 bidirectional predictor 先带来约 15 个百分点，masking 相对 OC baseline 再带来约 28 个百分点。}
+
+\begin{importantbox}{Ablation 的正确因果语言}
+在给定实验设置内，可以说：\textbf{同一 OC-JEPA 架构中}，history masking 与更高成功率相关，并且去掉 masking 会显著变差。不能说：任何 object-centric world model 加 masking 都会提升 28 个点；encoder、动作表示、horizon、solver 与数据分布都参与结果。
+\end{importantbox}
+
+\subsection{PHYRE：相关性 rollout 为什么看起来也像预测}
+
+本节用 PHYRE 的浮空横杆反例，把表格中的成功率差异还原为可观察的机制错误。OC-JEPA 可能学到``两根杆靠近时通常保持相邻''，却没有学习支撑关系；当关键支撑被移走，它仍延续训练相关性。C-JEPA 在训练中反复被问``缺少这个对象自身信息时，哪些对象足以解释未来''，因而更可能把注意力放在真正施加约束的邻近实体上。
+
+\lecturefigure{slide-031.jpg}{PHYRE：学习相关性与学习动力学会产生不同 rollout}{CS25 V6 official deck, p.~31}
+
+下一页把 rollout 与 attention probing 并列。应先看红框中的物理失败，再看表格/热度中 predictor 依赖了谁：OC-JEPA 关注与目标无关的容器或伴随物体，C-JEPA 更关注支撑杆。attention 只能作为依赖线索，不能直接当成 causal edge，但它能与质性失败形成机制一致的证据链。
+
+\lecturefigure{slide-032.jpg}{PHYRE rollout 与 attention probing：错误对象依赖导致物理违例}{CS25 V6 official deck, p.~32}
+
+\teachervoice{00:26:43--00:28:45，课堂把浮空预测解释为 correlation shortcut：模型看到两个对象常同时出现，就预测它们继续一起，而没有识别支撑关系。attention probe 显示失败模型依赖了无关对象，但老师没有把 attention 权重直接宣称为真因果图。}
+
+\begin{warningbox}{attention is not explanation 的本课版本}
+attention 权重说明一次前向计算中哪些 token 参与聚合，不能单独证明必要性、充分性或真实因果作用。更强的验证需要 masking/intervention、反事实性能和 rollout 变化共同支持；本课恰好把这三类证据组合起来，但仍受 object encoder 与 benchmark 限制。
+\end{warningbox}
+
+\subsection{``causal'' 的操作性定义}
+
+讲者主动把术语收窄为 temporally directed predictive dependencies：历史变量对未来对象状态具有稳定预测贡献，方向由时间给出。它不同于经典结构因果模型中的 graph identification，也不要求每个 latent slot 都是可干预的真实变量。这个限定是理解题目而不被标题误导的关键。
+
+\lecturefigure{slide-033.jpg}{本课中 causal 的限定：时间定向的预测依赖}{CS25 V6 official deck, p.~33}
+
+\[
+\mathcal{N}_t^{(i)}
+=\arg\min_{\mathcal{N}\subseteq\mathcal{C}_t}
+|\mathcal{N}|
+\quad\text{s.t.}\quad
+p(z_{t+1}^i\mid\mathcal{N})
+=p(z_{t+1}^i\mid\mathcal{C}_t).
+\]
+其中，$z_{t+1}^i$ 是目标对象下一状态，$\mathcal{C}_t$ 是所有可见 context variables，$\mathcal{N}_t^{(i)}$ 是最小 predictively sufficient set。它可被称为 influence neighborhood，但不保证等于真实 causal parents；隐藏 confounder、下游相关变量与部分可观测性都可能改变这个集合。
+
+\subsection{四项假设与两项刻意不假设}
+
+slide 34 将理论主张的支点写得很清楚：没有同一时刻的 instantaneous causality；不同样本共享 transition mechanism；slot 与对象足够对齐；有限 history 足以预测未来。与此同时，方法不要求 first-order Markov，也不要求没有 confounder。前四项使 masked prediction 可解释，后两项让方法能面对更现实的 latent state，但也放弃了真图可辨识性。
+
+\lecturefigure{slide-034.jpg}{Influence neighborhood：成立条件与不要求的理想假设}{CS25 V6 official deck, p.~34}
+
+\begin{knowledgebox}{四项假设逐项翻译}
+\begin{enumerate}
+  \item \textbf{No instantaneous causality}：作用通过时间滞后表达，不分析同一时间步循环因果；
+  \item \textbf{Shared mechanism}：训练视频遵守相对稳定的动力学规则，例如重力不随样本任意改变；
+  \item \textbf{Object alignment}：slot 是连贯对象状态，而非频繁交换、拆分或混合；
+  \item \textbf{History sufficiency}：给定窗口含有预测所需信息，遗漏的长时记忆不会主导未来。
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{现场问题卡：表示不忠实与真图不可恢复}
+
+完整录像在此处出现了一张官方 deck 未包含的问题卡。它问得比结果表更根本：如果 object-centric representation 不 faithful 会怎样？能否恢复 true causal graph？Hazel 的回答是，小误差仍可能保留有用 inductive bias，严重分解错误会让方法失效；当前方法明确不能恢复真图，因为 confounder 与 latent representation 使 identifiability 不成立。
+
+\videofigure{frame-00-31-25.jpg}{现场问题：object representation 失真时会怎样，能否恢复 true causal graph}{Official Stanford recording, 00:31:25}
+
+\teachervoice{00:30:48--00:32:50，老师给出本课最重要的限制：轻微 slot error 可能仍可工作，严重错误则不行；C-JEPA 不恢复 true causal graph，只学习 masking 下有用的 predictive influence。}
+
+\begin{importantbox}{为何后续论文改名也值得记录}
+课堂时点使用 ``Object-Level Latent Interventions'' 与 causal inductive bias 语言；2026 年 5 月后的修订将标题改为 ``Object-Level Latent Masking''，并更谨慎地区分可观测性偏置与 causal identification。本讲义按 4 月 9 日课堂快照讲解，同时用这个修订提醒读者：强术语必须随着理论边界更新。
+\end{importantbox}
+
+\subsection{回到三项世界模型合同}
+
+第一部分最后回到开场的三列：object representation 回答``现在什么重要''；masking 让 predictor 学习 predictively sufficient context，回答``世界怎样演化''；action as auxiliary node 回答``世界怎样响应你''。这张总结图的价值是把一个论文架构压回可迁移设计原则，而不是记住某个具体网络框图。
+
+\lecturefigure{slide-035.jpg}{Causal-JEPA 对三项世界模型合同的回答}{CS25 V6 official deck, p.~35}
+
+\teachervoice{00:32:50--00:34:51，Hazel 用 object representation、predictive sufficiency 与 action as auxiliary variable 收束前半场，明确表示、转移和动作响应是三个可分别失败的部件。}
+
+\subsection{本章小结}
+
+Causal-JEPA 的 strongest evidence 是同架构 no-mask ablation、counterfactual 指标与 interaction failure 的一致变化。它的 strongest caveat 也同样明确：object alignment 与 history sufficiency 是前提，influence neighborhood 只是 masking 下的 predictively sufficient set，方法不识别 true causal graph。把增益和边界同时保留，才是对这部分课堂内容的忠实重建。
+
+\section{LeWorldModel：用一个可解释正则化阻止端到端坍塌}
+
+Lucas 的后半场换了一个问题：即使不讨论 object structure，JEPA 从 raw pixels 端到端训练仍会坍塌。既有方法用 EMA、stop-gradient、pretrained encoder、proprioception 或多项 covariance/variance loss 绕开问题；LeWorldModel 试图用两个 loss term、一个需要调的权重和约 15M 参数完成同一目标。
+
+\subsection{世界模型概念比 2018 年命名更早}
+
+这里重新定义 world model，不是重复开场，而是强调其历史连续性：系统辨识、model predictive control 与内部模拟的思想远早于深度生成模型。Ha 与 Schmidhuber 在 2018 年普及了现代术语，但数学核心仍是受控制变量影响的状态演化映射。
+
+\lecturefigure{slide-037.jpg}{World model：受控制变量影响的状态演化映射及历史脉络}{CS25 V6 official deck, p.~37}
+
+\[
+s_{t+1}=f(s_t,a_t)+\varepsilon_t.
+\]
+其中，$s_t$ 是系统状态，$a_t$ 是控制变量，$f$ 是未知动力学，$\varepsilon_t$ 表示未建模扰动或随机性。学习 world model 的目标是得到足够准确的 $\hat f$，使 rollout 能支持规划，而不必重建环境的每个视觉细节。
+
+\teachervoice{00:34:51--00:36:53，Lucas 区分 concept 与 terminology：内部世界模拟的思想至少可追溯到 Craik 与早期控制理论，2018 年论文让 ``World Models'' 这一现代名称流行起来。}
+
+\subsection{JEPA 为什么拒绝为无关细节付费}
+
+slide 38 用漫画说明生成目标的负担：一个未来包含很多同样合理的细节，像素 likelihood 必须对整个分布负责；JEPA 只要求抽象表示中的可预测结构一致。对于 control，球的位置和速度通常比纹理中的每片叶子重要。代价是 encoder 必须自己决定什么可丢弃，而错误丢弃会直接损害 planning。
+
+\lecturefigure{slide-038.jpg}{JEPA：在抽象表示中预测，避开不必要的生成细节}{CS25 V6 official deck, p.~38}
+
+\begin{importantbox}{Reconstruction-free 的真正含义}
+它不是``没有 decoder 所以更先进''，而是训练信号不要求恢复完整输入分布。模型可以把容量集中在 dynamics-relevant factors；但若 downstream goal 依赖被丢弃细节，reconstruction-free representation 同样会失败。表示是否足够必须由任务与干预评估，而非由架构口号决定。
+\end{importantbox}
+
+\subsection{常数表示为何是 prediction loss 的全局捷径}
+
+若 $E(o)=c$ 对所有观测都输出常数，predictor 只需输出 $c$，下一 embedding 的 MSE 就能为零。这个坍塌不是 optimization 没收敛，而是目标函数存在一个极好却无信息的解。因此任何端到端 JEPA 都必须引入额外约束，让 batch 中不同样本与特征维度保持足够变化。
+
+\lecturefigure{slide-039.jpg}{Representation collapse：所有输入被编码到同一点}{CS25 V6 official deck, p.~39}
+
+\[
+E_\theta(o_t)=c,\quad
+P_\phi(c,a_t)=c
+\quad\Longrightarrow\quad
+\|P_\phi(E_\theta(o_t),a_t)-E_\theta(o_{t+1})\|_2^2=0.
+\]
+其中，$c$ 是常数向量，$E_\theta$ 是 encoder，$P_\phi$ 是 action-conditioned predictor。等式说明仅有 prediction loss 无法区分``完美预测真实状态''与``所有状态都相同''。
+
+\subsection{已有 anti-collapse recipe 的代价}
+
+V-JEPA 依赖 masking、EMA 与 stop-gradient；DINO-WM 冻结 pretrained encoder，把坍塌问题交给上游表示；PLDM 端到端训练，但需要多项 temporal/spatial VCReg loss。三类方法分别牺牲目标可解释性、表示适应自由或调参简洁性。LeWorldModel 的主张不是它们无效，而是能否用一个明确分布约束替代复杂 recipe。
+
+\lecturefigure{slide-040.jpg}{既有 JEPA recipe：EMA、冻结 encoder 与多项 regularization}{CS25 V6 official deck, p.~40}
+
+\teachervoice{00:36:53--00:38:54，Lucas 将 prior recipes 归纳为三条：V-JEPA 用 heuristic target update，DINO-WM 受 pretrained knowledge 边界限制，PLDM 用六项左右的 loss 维持方差与协方差。LeWM 的目标是端到端、像素输入、少超参，而不是否认这些方法的基线价值。}
+
+\begin{knowledgebox}{Anti-collapse 方法矩阵}
+\begin{tabularx}{\textwidth}{L{0.19\textwidth} L{0.24\textwidth} X}
+\toprule
+方法族 & 如何避免坍塌 & 主要代价 \\
+\midrule
+EMA/stop-gradient & 用慢目标分支制造稳定 target & 优化解释较弱，含额外更新规则 \\
+Frozen encoder & 继承预训练表示的多样性 & 无法针对当前 dynamics 完全适配 \\
+Variance 与 covariance losses & 显式维持维度方差与去相关 & 多项权重、稳定性与扩展性成本 \\
+Distribution matching & 约束整批 embedding 分布 & 需要选择统计检验与采样近似 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{LeWorldModel 的最小训练合同}
+
+slide 41 把设计目标写成一串 ``No'' 与 ``Full''：不依赖 EMA、masking、stop-gradient 或 pretrained encoder，从 raw pixels 在单 GPU 上端到端训练，只保留一个正则权重。真正需要验证的不是清单是否漂亮，而是 slide 42 的代码是否确实对应一个完整可优化目标。
+
+\lecturefigure{slide-041.jpg}{LeWorldModel 的设计目标：端到端、少启发式与单一超参数}{CS25 V6 official deck, p.~41}
+
+\lecturefigure{slide-042.jpg}{LeWorldModel：encoder、action-conditioned predictor、MSE 与 SIGReg}{CS25 V6 official deck, p.~42}
+
+\[
+\hat z_{t+1}=P_\phi(z_t,a_t),
+\qquad z_t=E_\theta(o_t),
+\qquad
+\mathcal{L}_{\text{pred}}=\|\hat z_{t+1}-z_{t+1}\|_2^2.
+\]
+其中，$o_t$ 是原始像素观测，$E_\theta$ 是 ViT encoder，$z_t$ 是 compact latent state，$a_t$ 是动作，$P_\phi$ 是 Transformer predictor，$\hat z_{t+1}$ 是下一 latent 预测。prediction loss 让表示保留可预测 dynamics，但单独使用会坍塌。
+
+\begin{lstlisting}[language=Python,caption={LeWorldModel 的两项 loss 训练伪代码}]
+def train_step(observations, actions, weight):
+    embeddings = encoder(observations)
+    predicted = predictor(embeddings[:, :-1], actions[:, :-1])
+    prediction_loss = mse(predicted, embeddings[:, 1:])
+    anti_collapse = mean(sigreg(step) for step in embeddings.transpose(0, 1))
+    loss = prediction_loss + weight * anti_collapse
+    loss.backward()
+    optimizer.step()
+\end{lstlisting}
+
+\teachervoice{00:38:54--00:40:59，老师强调 ``what you see is what you get''：真实代码就是 encode、predict、MSE、SIGReg 四步；唯一需要联合搜索的 loss 权重是 $\lambda$，可以用 logarithmic/bisection 风格缩小范围。}
+
+\subsection{SIGReg：把高维正态性拆成随机一维检验}
+
+Sketched Isotropic Gaussian Regularizer（SIGReg）要求 batch 中 latent embeddings 近似各向同性高斯。直接在高维检验分布很困难，于是它采样多个单位方向，把 embedding 投影到一维，在每个方向上使用 normality statistic，再平均这些统计量。Cramér--Wold 直觉是：若所有一维投影都与目标分布一致，联合分布也被约束。
+
+\lecturefigure{slide-043.jpg}{SIGReg：随机投影、一维正态性检验与联合分布约束}{CS25 V6 official deck, p.~43}
+
+\[
+Z\in\mathbb{R}^{NB\times d},
+\qquad
+h^{(m)}=Zu^{(m)},\quad u^{(m)}\in\mathbb{S}^{d-1},
+\qquad
+\operatorname{SIGReg}(Z)=\frac{1}{M}\sum_{m=1}^{M}T\!\left(h^{(m)}\right).
+\]
+其中，$N$ 是 history length，$B$ 是 batch size，$d$ 是 embedding dimension，$Z$ 汇总所有 latent，$u^{(m)}$ 是第 $m$ 个随机单位方向，$h^{(m)}$ 是一维投影，$T$ 是 Epps--Pulley 等 normality statistic，$M$ 是投影数。
+
+\[
+\mathcal{L}_{\text{LeWM}}
+=\mathcal{L}_{\text{pred}}+\lambda\operatorname{SIGReg}(Z).
+\]
+其中，$\lambda$ 平衡 dynamics prediction 与 anti-collapse。$\lambda$ 太小会接近平凡常数解，太大则可能为了匹配高斯而牺牲任务相关预测；单一超参数只是搜索空间更小，不代表无需验证。
+
+\teachervoice{00:40:59--00:42:59，Lucas 用随机箭头解释 SIGReg：每次把高维 latent 投影到一维，优化投影分布的正态性；大量方向共同约束联合分布。课堂把数学细节留给论文，但明确指出这是防坍塌而非生成建模。}
+
+\begin{warningbox}{Gaussian regularization 不等于 latent factors 独立}
+各向同性高斯约束鼓励总体方差与方向覆盖，不能保证每个维度对应可解释物理量，也不能排除非线性缠结。它解决的是 ``不要全部相同'' 与分布退化，不直接解决 object structure、causal identification 或 downstream controllability。
+\end{warningbox}
+
+\subsection{本章小结}
+
+LeWorldModel 把端到端 JEPA 写成 prediction MSE 加 SIGReg：前者学习可预测状态，后者排除常数表示。随机一维 normality tests 提供可扩展的 distribution constraint，使模型不再依赖冻结 encoder 或复杂多项 regularizer。接下来必须检验的是：这种 compact latent 是否真的能用于在线规划，以及它的速度优势来自哪里。
+
+\section{潜空间规划：模型预测如何变成动作}
+
+世界模型本身只回答``采取这串动作会发生什么''；controller 还要反向寻找``为了到达目标应采取什么动作''。LeWorldModel 使用 model predictive control（MPC）：在 latent space 中反复 rollout 候选动作，计算终点与目标的距离，让 solver 更新动作序列，然后只执行前几步并重新观察环境。
+
+\subsection{Latent MPC 的预测--优化闭环}
+
+slide 45 应从左到右、再从右下回到动作读：当前图像与目标图像先被同一 encoder 映射为 $z_1,z_g$；predictor 根据动作序列产生 $\hat z_2,\ldots,\hat z_H$；cost 比较终点与目标；solver 更新动作并重复。encoder 不生成像素，因而每个候选 rollout 都只在小 latent 上运行。
+
+\lecturefigure{slide-045.jpg}{LeWorldModel 的 latent model-predictive control 闭环}{CS25 V6 official deck, p.~45}
+
+\[
+\hat z_{h+1}=P_\phi(\hat z_h,a_h),\quad \hat z_1=E_\theta(o_1),
+\qquad
+J(a_{1:H})=\|\hat z_{H+1}-E_\theta(o_g)\|_2^2+\beta R(a_{1:H}).
+\]
+其中，$H$ 是 planning horizon，$o_1$ 是当前观测，$o_g$ 是目标图像，$a_{1:H}$ 是候选动作序列，$J$ 是规划 cost，$R$ 是动作平滑、幅值或边界 penalty，$\beta$ 是约束权重。实际 MPC 会执行首个动作后重新编码观测，以减少 open-loop 累积误差。
+
+\begin{lstlisting}[language=Python,caption={Latent MPC 的最小预测--优化循环}]
+actions = initialize_action_sequence(horizon)
+for _ in range(num_solver_steps):
+    state = encoder(current_observation)
+    for action in actions:
+        state = predictor(state, action)
+    cost = latent_distance(state, encoder(goal_observation))
+    cost += action_constraint_penalty(actions)
+    actions = solver.update(actions, cost)
+execute(actions[0])
+\end{lstlisting}
+
+\teachervoice{00:42:59--00:47:04，Lucas 把评估分成 online control 与 intuitive physics 两条。规划时先采样或初始化动作轨迹，在 latent 中 rollout，再用 goal embedding 的距离更新动作；这正是 world model 与 controller 的接口。}
+
+\begin{knowledgebox}{首次使用：Model Predictive Control}
+MPC 每次只承诺一个短 horizon：预测未来、优化动作、执行第一步、获取新观测、再规划。它与一次性 open-loop plan 的区别是持续闭环纠错；与直接 policy 的区别是测试时仍显式调用 world model 和 optimizer，因此更慢但更容易处理新目标。
+\end{knowledgebox}
+
+\subsection{四个环境不能只比较平均成功率}
+
+slide 46 横跨 Two-Room、Reacher、Push-T 与 OGBench-Cube，难度和 action geometry 不同。LeWM 在部分复杂任务上优于端到端 PLDM，并与使用 DINOv2 的 DINO-WM 竞争；它并非所有最简单环境都最优。应分别看最终成功率、方差、是否使用 proprioception，以及每次 planning 的计算量。
+
+\lecturefigure{slide-046.jpg}{多环境 control 结果：不同 baseline 的成功率与任务差异}{CS25 V6 official deck, p.~46}
+
+\begin{knowledgebox}{读图：比较 control baseline 的四个问题}
+第一，输入是 pixels only 还是额外含 proprioception；第二，encoder 是冻结 foundation model 还是端到端训练；第三，solver、horizon 与 candidate 数是否一致；第四，成功率差异是否大于误差条。只有控制这些条件，速度与成功率才可放在同一 Pareto 图上解释。
+\end{knowledgebox}
+
+\subsection{48 倍规划加速来自 compact model，不是免费午餐}
+
+slide 47 把完整 planning time 与成功率并列。LeWM 约 15M 参数、compact latent 和较少 token，使一次 action-search loop 可在单 GPU 上低于一秒，并相对 foundation-model world model 达到最高约 $48\times$ 的 speedup。这个数字依赖固定 planning setup；换 solver、batch size、horizon 或硬件后比例会变化。
+
+\lecturefigure{slide-047.jpg}{规划速度与成功率：LeWorldModel 的 systems-level tradeoff}{CS25 V6 official deck, p.~47}
+
+\teachervoice{00:47:04--00:49:08，老师把优势归因于 compact end-to-end representation：foundation encoder 产生的大量 token 让每次 imagination 更贵。课堂同时承认 LeWM 是 competitive 而非所有任务全面领先。}
+
+\begin{warningbox}{Planning speed 不能脱离 controller 配置}
+``模型更小''只减少每次 rollout 成本；总延迟还乘以候选轨迹数、solver iterations、horizon 与 replanning 频率。若为了弥补模型误差需要更多采样，端到端收益可能缩小。工程报告应同时给模型 FLOPs、solver budget、wall-clock 与成功率。
+\end{warningbox}
+
+\subsection{本章小结}
+
+latent MPC 把世界模型变成可执行控制器：encoder 定义状态与目标，predictor rollout 动作后果，cost 与 solver 反向搜索动作。LeWM 的主要系统优势来自 compact latent 与小模型，使大量候选 rollout 更便宜；其证据是特定环境和固定 controller budget 下的速度--成功率 Pareto，而不是无条件实时控制保证。
+
+\section{模型是否学到物理结构：probe、surprise 与 rollout}
+
+Control success 可能来自任务特定捷径，因此课程增加三种 representation diagnostics：probe 检查物理量是否可解码，surprise 检查环境被突然改变时预测误差是否升高，latent geometry 检查状态轨迹是否形成连续结构。它们共同提高解释力，但仍不能替代真实机器人与长 horizon 验证。
+
+\subsection{Latent probing：可读出不等于被显式使用}
+
+slide 49 用 linear probe 和 MLP probe 从冻结 latent 预测 mass、position、velocity 等 ground-truth quantities。若简单线性 probe 已能恢复变量，说明表示中存在较直接的几何编码；若只有 MLP 能恢复，信息可能以非线性方式缠结。probe 结果不保证 predictor 规划时真的依赖该变量。
+
+\lecturefigure{slide-049.jpg}{物理量 latent probing：linear 与 MLP probe 的可解码性}{CS25 V6 official deck, p.~49}
+
+\[
+\hat y=Wz+b,
+\qquad
+R^2=1-\frac{\sum_n(y_n-\hat y_n)^2}{\sum_n(y_n-\bar y)^2}.
+\]
+其中，$z$ 是冻结 world-model latent，$y$ 是真实物理量，$W,b$ 是 probe 参数，$R^2$ 衡量可解释方差。训练 probe 时不能更新 encoder，否则测试的是新监督任务学习能力，而不是原表示中已有信息。
+
+\begin{warningbox}{Decodable does not mean causal}
+一个变量能从 latent 解码，可能只是与真正决策因素相关；要证明模型使用它，需要对 latent、输入或环境做 intervention，并观察预测与动作如何变化。probe 是 representation evidence 的第一层，不是机制终点。
+\end{warningbox}
+
+\subsection{World-model violation：用受控突变测 surprise}
+
+slide 50 在 rollout 中突然改变 cube color 或 teleport cube，再观察 prediction error。颜色变化若不影响动力学，理想 state representation 不应过度惊讶；位置瞬移破坏连续 dynamics，应产生明显 error spike。这个设计把``理解物理''改写成可测的 sensitivity profile。
+
+\lecturefigure{slide-050.jpg}{受控环境突变：颜色改变、瞬移与 latent prediction surprise}{CS25 V6 official deck, p.~50}
+
+\[
+\operatorname{Surprise}_t
+=\left\|P_\phi(E(o_{t-1}),a_{t-1})-E(o_t^{\text{intervened}})\right\|_2^2.
+\]
+其中，$o_t^{\text{intervened}}$ 是被受控改变的观测，$E$ 是 encoder，$P$ 是 predictor。若 intervention 改变 dynamics-relevant state，surprise 应上升；若只改变被表示忽略的 nuisance factor，surprise 可能较小。
+
+\teachervoice{00:49:08--00:53:13，Lucas 先用 probe 问 latent 是否编码物理量，再用 sudden environmental change 问模型是否对不合理事件感到 ``surprised''。两种测试分别测可读出性与预测一致性。}
+
+\begin{importantbox}{好的 intervention test 必须有对照}
+只看 teleportation error spike 不够，还应与 no perturbation、视觉但非动力学变化、不同幅度干预比较。否则模型可能只是对像素分布变化敏感。slide 50 把颜色变化与瞬移并列，正是为了区分 appearance shift 与 state violation。
+\end{importantbox}
+
+\subsection{Latent geometry：轨迹是否保持状态邻近关系}
+
+slide 51 将 Push-T 的物理 state grid 与二维投影后的 latent geometry 对照。若相近物理状态在 latent 中也相近，goal distance 才更可能成为有意义的 planning cost。二维投影会丢信息，因此应关注全局连续性、局部折叠和明显撕裂，而不是把某个漂亮形状当成定量证明。
+
+\lecturefigure{slide-051.jpg}{物理状态网格与 learned latent geometry 的相对距离}{CS25 V6 official deck, p.~51}
+
+\begin{knowledgebox}{读图：latent map 支持什么结论}
+可支持：表示大致保留某些状态邻近与方向结构。不能支持：每个轴有固定物理语义、所有任务都共享该几何、欧氏距离必然等于控制代价。更可靠的验证应结合 neighborhood preservation、probe、planning success 与 intervention sensitivity。
+\end{knowledgebox}
+
+\subsection{Open-loop rollout：长 horizon 会怎样累积误差}
+
+最后一张分析图比较 context input 与 open-loop prediction。前几步往往保持对象与方向，随后误差逐渐累积，尤其在接触、碰撞与多体互动后。这个现象解释了为何当前方法更适合短 horizon MPC：闭环重新观察可以不断重置 latent，纯 open-loop world simulation 则会离开训练分布。
+
+\lecturefigure{slide-052.jpg}{Context-conditioned 与 open-loop latent rollout 的长时行为}{CS25 V6 official deck, p.~52}
+
+\teachervoice{00:53:13--00:55:14，课堂用 latent distance 与 open-loop rollout 分析表示结构，同时没有回避 compounding error。模型在短期保持合理轨迹，不等于已经解决长期 hierarchical planning。}
+
+\subsection{本章小结}
+
+probe、surprise 和 geometry 分别从可解码信息、干预响应和状态空间结构审视 latent。三者与 control 结果互补：一个能规划的模型可能表示难解释，一个 probe 很高的模型也可能不会用这些信息。最可信的判断来自任务成功、机制干预、表征诊断和失败案例的交叉验证。
+
+\section{限制、工具与课堂 Q\&A：把研究原型接到真实系统}
+
+课程最后没有用 SOTA 数字收尾，而是集中讨论哪些接口尚未解决：短 horizon、单时间尺度、toy environments、image goal、真实机器人、agent architecture 与 policy distillation。Q\&A 也反复提醒，JEPA 是训练框架而非新网络类型，world model 可以与 diffusion、Transformer、RL policy 和 classical control 组合。
+
+\subsection{四个公开限制对应四条研究路线}
+
+slide 53 把 limitation 写成 research opportunity。短 horizon 要求更稳的 rollout 或 closed-loop correction；单一时间尺度要求 hierarchical state；toy setup 要求真实感知与 domain shift；不现实的 goal image 要求语言、任务约束或 reward interface。任何一条都不仅是``扩大模型''即可解决。
+
+\lecturefigure{slide-053.jpg}{LeWorldModel 的限制：短 horizon、单尺度、toy environment 与 goal interface}{CS25 V6 official deck, p.~53}
+
+\begin{knowledgebox}{从 limitation 到系统模块}
+\begin{tabularx}{\textwidth}{L{0.24\textwidth} X}
+\toprule
+限制 & 需要补上的系统能力 \\
+\midrule
+short-term planning & uncertainty-aware rollout、replanning、policy/world-model hybrid \\
+single temporal level & hierarchical latent、event abstraction、long-term memory \\
+toy environments & robust perception、sim-to-real、partial observability、safety constraints \\
+unrealistic image goal & language/task encoder、reward model、constraint specification \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{00:55:14--00:57:15，Lucas 明确把这些项目称为 limitations or research opportunities：当前 planner 主要是短期、单层 temporal representation，环境和目标接口仍远离开放世界机器人。}
+
+\subsection{stable-worldmodel：可复现比较也是方法贡献}
+
+slide 54 展示一个统一库，将 LeWM、PLDM、DINO-WM 等 baselines，与 CEM、MPPI、Adam 等 solvers，以及 Push-T、TwoRoom、OG-Bench、DMC 等 environments 放到同一接口。它的科学价值是减少每篇论文因不同数据预处理和 planner 实现造成的不可比性。
+
+\lecturefigure{slide-054.jpg}{stable-worldmodel：统一 baseline、solver 与 environment 的实验层}{CS25 V6 official deck, p.~54}
+
+\teachervoice{00:57:15--00:59:16，老师邀请学生使用和贡献 `stable-worldmodel`，并强调 baselines、solvers、environments、测试与文档都已统一。这里的重点是 reproducibility，而非把某个库当作唯一标准。}
+
+\begin{importantbox}{统一 API 不能替代统一协议}
+同一库仍需固定 observation resolution、action normalization、dataset split、planner budget、random seeds 与 success definition。API 解决代码接口，benchmark protocol 才解决科学可比性；两者缺一不可。
+\end{importantbox}
+
+\subsection{Physical AI：为什么动作后果预测是独立训练目标}
+
+Q\&A 中 Lucas 对当前 VLA 是否具有可靠 world understanding 持怀疑态度：若模型没有被训练去预测自身动作后果，它可能在熟悉模仿任务中表现良好，却缺少面向新交互的显式检查。Hazel 补充 world model 还可作为 policy evaluator。这个观点应作为 speaker judgment，而非对所有 VLA 的实证定论。
+
+\teachervoice{00:59:16--01:01:17，Lucas 认为 physical agent 若不能预测 action consequence，就难以可靠互动；Hazel 补充 world model 可以评估候选 policy。讲义提醒：这是前瞻判断，需要真实机器人对照实验验证。}
+
+\begin{warningbox}{VLA 与 world model 不是互斥类别}
+VLA 可以内部包含 predictive objective、latent simulator 或 value/world model；world model 也可用语言与视觉 Transformer 实现。真正差别在训练接口：模型是否显式学习 $p(s_{t+1}\mid s_t,a_t)$，以及部署时是否用该预测检查或搜索动作。
+\end{warningbox}
+
+\subsection{Masking 是否必要：必要的是排除 shortcut}
+
+学生问 prediction loss 是否不足。Hazel 的回答很谨慎：对所有 world model，masking 不是逻辑上唯一方法；但在 object-centric setup 中，无遮挡 prediction 容易学 self-dynamics，无法保证 interaction-based dynamics。masking 是一种把 shortcut 移出可行解空间的手段，而非普适定理。
+
+\teachervoice{01:01:17--01:03:15，老师回答 ``masking necessary?''：prediction loss 本身可以学习某些 world model，但可能只学对象自己的运动；object masking 强化了 interaction dynamics，不应被写成所有系统必需的唯一 recipe。}
+
+\begin{importantbox}{设计自监督目标的通用问题}
+不要只问 ``loss 能否下降''，而要问：\textbf{最便宜的 shortcut 是什么？} 若目标任务需要关系、长期记忆或动作后果，训练时就要系统性移除只靠局部统计、身份泄漏或静态相关性即可完成的路径。
+\end{importantbox}
+
+\subsection{JEPA-native agent 与 LLM tool agent 的接口差异}
+
+Lucas 把 JEPA-native agent 描述为 action-conditioned predictive model 加 classical control：输入当前 state 与动作，预测未来，再用 MPC 零样本搜索。LLM agent 常通过 text/tool-call loop 学习使用工具，未必显式学习连续物理动作的状态转移。两者可组合，例如语言模型分解目标，world model 负责低层 action consequence。
+
+\teachervoice{01:03:19--01:05:20，课堂强调 JEPA-native agent 的不同点是 action-conditioned future model，而不是使用某种新 backbone。学到 dynamics 后，可以直接接 MPC，无需先把每个目标都 post-train 成 policy。}
+
+\begin{knowledgebox}{Agent stack 的可组合分层}
+语言模型可负责任务解释与高层 subgoal；world model 负责预测连续环境状态；planner/solver 负责搜索动作；policy 负责快速执行；verifier 与 safety shield 负责约束。把这些层分开，才能定位失败来自语义、动力学、优化还是执行。
+\end{knowledgebox}
+
+\subsection{JEPA 不是 Transformer 的反义词}
+
+``JEPA 是否比 Transformer 更少 hallucination'' 这个问题混合了 framework 与 architecture。Lucas 明确指出 LeWorldModel 的 encoder 和 predictor 本身就是 Transformers；JEPA 描述训练时预测什么，Transformer 描述 token 如何交互。world model 仍会因数据不足、容量不足、模型误差或 controller 搜索到越界动作而产生错误未来。
+
+\teachervoice{01:05:20--01:07:22，Lucas 纠正类别错误：JEPA 不是新 architecture，而是学习 world model 的 framework。即便使用 JEPA，坏数据或坏模型仍会 hallucinate；只是错误类型与 LLM 的无 grounding 文本生成并不完全相同。}
+
+\begin{warningbox}{World-model hallucination 的四个来源}
+\begin{enumerate}
+  \item encoder 丢失决策相关状态；
+  \item predictor 在长 horizon 累积误差；
+  \item training distribution 缺少关键 interaction；
+  \item planner 提出环境无效或越界动作。
+\end{enumerate}
+因此 ``更 grounded'' 是可检验假设，不是由 JEPA 名称自动保证的属性。
+\end{warningbox}
+
+\subsection{Diffusion、MPC 与 policy distillation 可以共存}
+
+另一个问题把 diffusion model 与 world model 当成竞争品。讲者指出 diffusion 可以作为 world-model predictor、action proposal 或 policy；world model 是功能角色，不限定概率模型家族。对于长 horizon，系统还可以用昂贵 MPC 生成高质量行为，再蒸馏成快速 policy，熟悉场景走反射路径，困难场景回退到规划。
+
+\teachervoice{01:07:22--01:10:59，课堂给出两条系统答案：diffusion 可以嵌入 JEPA/world-model pipeline；未来 agent 可能像 fast/slow system，简单情况直接 policy，困难情况调用 MPC，并把规划经验再蒸馏回 policy。}
+
+\begin{importantbox}{Fast policy 与 slow planner 的工程闭环}
+离线 world model 学 dynamics；在线 MPC 在新目标上产生动作；成功轨迹进入 replay buffer；policy distillation 学习快速映射；低置信度或分布外状态重新触发 planner。这个闭环把模型、控制和持续数据收集连接起来，但也引入 model bias、policy drift 与安全验证问题。
+\end{importantbox}
+
+\subsection{本章小结}
+
+真实系统不会在 JEPA、Transformer、diffusion、MPC 与 policy 中五选一。它们分别回答训练目标、网络结构、概率建模、在线搜索和快速执行。当前研究原型的主要缺口是 long horizon、hierarchy、真实环境与目标接口；统一 benchmark tooling 能提高比较质量，但不能替代真实部署与安全证据。
+
+\section{总结与延伸}
+
+\subsection{一条贯穿全课的主线：控制模型能看见的捷径}
+
+两篇工作看似一个讲 object，一个讲 Gaussian regularization，实则都在重新设计可行解空间。Causal-JEPA 删除目标对象自身历史，让 interaction shortcut 之外的关系信息变得必要；LeWorldModel 约束 embedding distribution，让常数表示不再是 prediction loss 的合法最优解。高质量 self-supervised learning 的共同原则，就是让``便宜但错误''的解难以满足目标。
+
+\begin{importantbox}{本课最可迁移的八问}
+\begin{enumerate}
+  \item 状态表示保留了哪些决策相关变量？
+  \item 最容易利用的 shortcut 是什么？
+  \item anti-collapse 约束排除了哪些平凡解？
+  \item 动作以什么接口进入 predictor？
+  \item 训练时可见的信息与推理时是否一致？
+  \item 结果增益来自表示、architecture、loss 还是 controller？
+  \item probe、attention 与漂亮 rollout 各自不能证明什么？
+  \item 长 horizon、分布外动作和真实环境怎样失败？
+\end{enumerate}
+\end{importantbox}
+
+\subsection{结构偏置与优化偏置必须协同}
+
+只有 object masking、没有稳定 representation，模型可能在退化 latent 上学习所谓 interaction；只有 SIGReg、没有任务结构，模型可能保持丰富方差却仍依赖背景相关性。下一代 world model 需要同时设计 representation units、observability interventions、anti-collapse distribution、action interface 与 planner。它们应在同一 evidence protocol 中被逐项 ablate。
+
+\begin{knowledgebox}{Causal-JEPA 与 LeWorldModel 的互补关系}
+Causal-JEPA 主要回答 ``预测应依赖哪些变量''；LeWorldModel 主要回答 ``encoder 怎样保持有信息''。前者目前依赖冻结 object-centric encoder，后者目前使用全局 compact latent。一个自然延伸是端到端学习稳定 object slots，同时保留 interaction-forcing masks 与可扩展 anti-collapse regularizer。
+\end{knowledgebox}
+
+\subsection{三条证据边界}
+
+第一，controlled benchmarks 中的 counterfactual、planning 与 surprise gains 不等于开放世界 causal understanding。第二，latent 可解码与 attention 集中不等于 predictor 真正使用了正确机制。第三，课堂时点的论文标题和理论表述会随审稿与后续分析修订；研究讲义应保存历史快照，也应标出后来更谨慎的边界。
+
+\begin{warningbox}{不要把世界模型写成万能中间层}
+世界模型会压缩观测，压缩就会丢信息；会 rollout，rollout 就会累积误差；会被 planner 调用，planner 就可能 exploit model error。它是把预测、控制与验证连接起来的强接口，不是自动消除 hallucination、safety 与 distribution shift 的魔法层。
+\end{warningbox}
+
+\subsection{开放问题}
+
+值得继续追踪的方向包括：如何在真实视频中稳定发现和追踪对象；如何把多个时间尺度与事件抽象放进 latent；如何用 uncertainty 标记模型不知道的未来；如何让 language goal、reward、constraint 与 image goal 共存；如何让 planner 不利用 model error；以及如何用真实机器人干预区分相关性、predictive sufficiency 与可识别 causal mechanism。
+
+\subsection{拓展阅读}
+
+建议按课堂时点阅读 Causal-JEPA v1 与 LeWorldModel v1，再对照 Causal-JEPA 后续修订，观察 causal wording 如何变得更谨慎。背景材料可依次阅读 Slot Attention、V-JEPA、V-JEPA 2 与 DINO-WM；实现层面可查看两篇工作的官方代码和 `stable-worldmodel` 统一实验库。阅读时继续使用本课的八问，而不是只比较 leaderboard 数字。
+
+\end{document}

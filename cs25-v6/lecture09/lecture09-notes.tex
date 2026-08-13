@@ -1,0 +1,969 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 09：生产环境中的 Transformer 推理服务}
+\renewcommand{\noteauthors}{基于 Charles Frye 官方讲座、73 页官方 deck、英文字幕与课堂日前一手系统资料整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-05-28；上传 2026-06-04}
+\renewcommand{\videoduration}{1:22:31}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=ZUdIsRZhWXI}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.46\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{为什么 inference 是一门完整的系统工程}
+
+前面的 CS25 课程大量讨论了模型能力、训练规模与新架构；本讲把视角移动到模型真正被用户调用的地方。核心问题不是“怎样把一个 checkpoint 放进 API”这么窄，而是：\textbf{怎样把应用需求翻译成可测量的 workload 与 correctness contract，再沿着模型、引擎、GPU、网络、容器、监控和优化逐层实现？} 这条链上任一层定义错误，都可能让更快的 kernel 变成无效劳动。
+
+\lecturefigure{slide-002.jpg}{从训练转向推理：模型最终要被人使用}{官方 deck 第 2 页；课堂 00:01:55--00:02:42}
+
+\begin{importantbox}{本讲的 inference working definition}
+推理服务不是一次前向传播，而是一个持续接收请求、管理 token 与 KV cache、调度 CPU/GPU 工作、满足延迟和可靠性目标、记录可调试证据并控制成本的在线或批处理系统。模型 forward 只是数据路径的一部分；SLO、排队、缓存、故障恢复与 eval 同样属于系统语义。
+\end{importantbox}
+
+\teachervoice{00:00:56--00:01:55，老师说训练研究回答“模型从哪里来”，而 inference 回答“模型最终怎样被人使用”。即使读者只想做训练，也应理解自己的架构、tokenizer、精度和并行选择会怎样约束后续 serving。}
+
+\subsection{从 cost center 到可交付系统}
+
+训练把资金、数据与算力转换成权重，但权重本身并不自动形成一个可收费、可依赖、可维护的产品。推理把权重包进交互接口、业务流程与可靠性机制；同时，现代 post-training 会大量调用当前策略生成 rollout，再把结果回流到优化过程，因此“训练”和“推理”也不再是完全分开的两套基础设施。
+
+\lecturefigure{slide-003.jpg}{为什么 inference 会吸引更多工程资源}{官方 deck 第 3 页；课堂 00:02:42--00:05:59}
+
+\begin{knowledgebox}{读图：四条理由其实是一条因果链}
+先看经济层：训练主要消耗预算，服务承接用户价值；再看组织层：能做大规模预训练的机构很少，但几乎所有 AI 产品都要运行推理；第三条把 post-training 接回推理；最后一条说明推理横跨 application、scheduler、algebra、network 与 hardware。由此得到的教学结论不是“训练不重要”，而是：模型能力只有在一个跨层系统中才会转化为稳定体验。
+\end{knowledgebox}
+
+\begin{warningbox}{不能把 revenue center 理解成“推理一定赚钱”}
+推理只有在质量、利用率、价格与可靠性同时成立时才可能创造正向单位经济。低利用率 GPU、过度配置、失败重试、长输出和不可控 agent loop 都会迅速吞掉收入；这里讨论的是价值交付位置，不是财务保证。
+\end{warningbox}
+
+\subsection{经验来源与证据边界}
+
+生产经验很有价值，但经验性建议必须标出适用范围。讲者的视角来自 Modal 的 serverless GPU 平台、对数百或数千张 GPU 的客户部署支持、内部 profiling/metrics 工作，以及自己运行推理服务。这解释了为什么本讲特别强调 bursty traffic、cold start、host overhead 与 observability，也提醒读者不要把单个平台的统计量当成所有数据中心的物理定律。
+
+\lecturefigure{slide-004.jpg}{讲者的生产推理经验背景}{官方 deck 第 4 页；课堂 00:06:00--00:07:35}
+
+\begin{warningbox}{来源边界}
+本讲义把 slide 上的数字视为讲者在特定生产环境中的经验摘要。尤其是 provider price、GPU failure rate 与 speedup，必须连同 workload、hardware、software version、baseline 和 measurement window 一起解释；缺少这些条件时，只能作为设计提示，不能外推成通用承诺。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Inference 的难点来自端到端约束：应用定义正确性和体验，系统把它们变成资源与调度问题，硬件和软件共同决定可行边界。后面的所有技巧都服从同一顺序：\textbf{先定义任务与测量，再选择架构，最后优化实现。}
+
+\section{把应用翻译成 workload 与 SLO}
+
+系统工程不能从“我们要部署某个模型”开始，因为同一模型可以服务完全不同的产品。更稳健的起点是识别请求由谁发起、谁等待结果、输入输出多长、流量多突发、允许多慢、质量怎样判定。讲者先给出三类 archetype，不是为了给产品贴标签，而是为了展示三组完全不同的目标函数。
+
+\subsection{三个应用 archetype}
+
+交互助手（Chatbot+）让人持续留在交互回路中；后台代理（background agent）执行分钟到小时级任务；数据处理器（data processor）把非结构化输入转成可存储、可检索的结果。它们可能调用同一个 Transformer，但对尾延迟、吞吐、缓存与弹性的优先级截然不同。
+
+\lecturefigure{slide-007.jpg}{面向基础设施的三类 LLM 应用}{官方 deck 第 7 页；课堂 00:08:13--00:11:12}
+
+\begin{knowledgebox}{读图：先找 downstream consumer}
+判断类别时不要先看产品名，而要问“谁消费结果”。若每个 token 都直接影响人的等待感受，属于交互型；若最后一个 token 或最终 artifact 才交付价值，属于后台 agent；若结果写入数据库或索引供以后消费，属于 data processor。这个判断会直接决定 batching、autoscaling 与 retry 策略。
+\end{knowledgebox}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm}YYY}
+\toprule
+类型 & 典型消费者与回路 & 主导约束 & 合理的 figure of merit \\
+\midrule
+Chatbot+ & 人类逐 token 观看，频繁多轮交互 & TTFT、TPOT/ITL、p95/p99 抖动 & output tokens/s/user \\
+Background agent & 人等待最终 PR、报告、图像或行动 & TTLT、工具调用、失败恢复、成本 & task completion time / success \\
+Data processor & 数据库、对象存储或后续 pipeline & 总吞吐、峰谷弹性、单位成本 & megatokens per dollar \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\teachervoice{00:10:52--00:11:12，老师特别提醒 data processor 的流量可能长时间稀疏、随后突然集中写入；“平均吞吐”掩盖了真正决定容量与弹性的 burst。}
+
+\subsection{SLO 是产品与系统的接口}
+
+下一步不是立刻挑 GPU，而是把应用需求写成 workload definition 与 service-level objective（SLO，服务级目标）。SLO 是内部工程目标；SLA（service-level agreement）通常是带有业务或合同后果的外部承诺。二者都应明确测量窗口、分位数、错误定义和适用流量，否则“快”“稳定”“便宜”没有可操作含义。
+
+\lecturefigure{slide-009.jpg}{Workload 与 SLO 定义系统设计空间}{官方 deck 第 9 页；课堂 00:11:17--00:12:11}
+
+\begin{importantbox}{Workload contract}
+可以把一次部署的最小合同写成
+\[
+W=(M,\lambda,L_{\mathrm{in}},L_{\mathrm{out}},r_{\mathrm{prefix}},B_{\mathrm{lat}},Q,C),
+\]
+其中 $M$ 是模型与精度，$\lambda$ 是请求/查询到达率，$L_{\mathrm{in}}$ 与 $L_{\mathrm{out}}$ 是输入和输出 token 分布，$r_{\mathrm{prefix}}$ 是可复用前缀比例，$B_{\mathrm{lat}}$ 是延迟预算，$Q$ 是质量/eval 约束，$C$ 是成本上限。注意每个量都应是分布或分位数，而不只是均值。
+\end{importantbox}
+
+\lecturefigure{slide-010.jpg}{用 advisor 把模糊需求改写成可测 workload}{官方 deck 第 10 页；课堂 00:12:11--00:13:15}
+
+\begin{knowledgebox}{读图：表单的价值是强迫团队暴露假设}
+图中的模型、token 长度、吞吐和延迟选项不是自动给出最佳部署，而是把产品经理、应用开发者和 infra engineer 的隐含假设放在同一张表里。若团队说不出输入/输出长度、峰值流量和可接受质量退化，就还没有足够信息做硬件采购或 engine benchmark。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={工作负载定义的最小机器可读结构}]
+workload = {
+    "model": "candidate-and-precision",
+    "qps": {"avg": 18, "p95": 42, "peak": 90},
+    "input_tokens": {"p50": 1200, "p95": 8000},
+    "output_tokens": {"p50": 180, "p95": 1200},
+    "prefix_reuse": 0.55,
+    "slo": {"ttft_p95_ms": 450, "tpot_p95_ms": 40},
+    "quality_gate": "application_eval_v12",
+}
+\end{lstlisting}
+
+\subsection{QPS、TPQ、prefix reuse 与 latency budget}
+
+有了合同框架，才可以逐项定义指标。QPS（queries per second）描述模型实际收到的查询；RPS（requests per second）更接近外部 API 请求，一次 agent 请求可能触发多次模型 query。TPQ（tokens per query）应拆成 prefill 的输入 token 与 decode 的输出 token。Prefix reuse 表示不同请求共享开头上下文的程度，它决定 KV cache 是否能被重复利用。
+
+\lecturefigure{slide-011.jpg}{定义 LLM workload 的核心指标}{官方 deck 第 11 页；课堂 00:13:20--00:19:10}
+
+\begin{knowledgebox}{系统术语速查}
+\begin{tabularx}{\textwidth}{L{2.5cm}YY}
+\toprule
+术语 & 定义 & 设计影响 \\
+\midrule
+QPS / RPS & 内部模型查询率 / 外部请求率 & Agent tool loop 会让 QPS 高于 RPS \\
+TPQ & 每次查询的输入与输出 token 数 & 决定 prefill、decode、KV cache 与成本 \\
+Prefix reuse & 多请求共享相同 token 前缀 & 高命中可跳过重复 prefill，但要付存储与路由代价 \\
+TTFT & time to first token，首 token 返回时间 & 受排队、prefill、网络和启动时间影响 \\
+TPOT / ITL & time per output token / inter-token latency & 决定流式输出是否顺滑 \\
+TTLT & time to last token & 近似由 TTFT、输出长度和 TPOT 共同决定 \\
+Replica & 一套可独立接收请求的 engine/worker 资源单元 & 先测单副本容量，再横向扩展 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+对不含复杂工具调用的流式生成，可以用近似式
+\[
+T_{\mathrm{last}}\approx T_{\mathrm{first}}+(L_{\mathrm{out}}-1)T_{\mathrm{pot}}.
+\]
+其中 $T_{\mathrm{first}}$ 是 TTFT，$L_{\mathrm{out}}$ 是生成 token 数，$T_{\mathrm{pot}}$ 是平均或目标分位数下的 TPOT。进入 agent loop 后，还要加入每轮 tool latency、网络等待、重试和新的 prefill；因此端到端 TTLT 常常只能用真实 trace 估计。
+
+\begin{warningbox}{均值 QPS 与均值 token 长度会制造虚假安全感}
+容量规划应至少保留峰值/季节性、输入输出长度分布与请求相关性。长上下文请求若恰好在峰值同时出现，会同时增加 prefill、KV cache 和排队压力；分别取三个均值再相乘，往往低估真正尾部。
+\end{warningbox}
+
+\teachervoice{00:17:55--00:19:10，老师建议先在单 replica 上理解“多少请求能在目标延迟内被服务”，再用副本数匹配总 QPS。推理请求通常可在副本间独立分配，这与必须维护强一致状态的数据库扩展问题不同。}
+
+\subsection{每种应用优化不同的标量}
+
+Slide 12 把三类应用再次放在一起，是为了防止团队用同一个 dashboard 数字评价所有产品。交互系统可能牺牲总吞吐换取单用户流畅；后台 agent 可以接受较慢的 token，只要最终任务更快、更可靠；数据处理器甚至可以等待更大的 batch，以更低成本完成全部工作。
+
+\lecturefigure{slide-012.jpg}{三类应用的 figure of merit}{官方 deck 第 12 页；课堂 00:19:10--00:20:02}
+
+\begin{importantbox}{优化目标必须与价值交付对齐}
+同一个改动可能让 aggregate tokens/s 上升，却让每个用户的 TPOT 变差；也可能让单请求 TTFT 下降，却因为 GPU 利用率过低而使成本翻倍。只有先声明 figure of merit 和不可违反的 quality/SLO gate，所谓“更快”才有方向。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Workload 与 SLO 是后续所有工程选择的输入。最关键的不是记住缩写，而是把它们连成因果链：应用消费者决定 latency/cost objective，token 与流量分布决定资源需求，prefix 与 agent loop 决定缓存和查询结构，单副本测量决定扩容单位。
+
+\section{单副本 benchmark：画出 latency--throughput frontier}
+
+当 workload 已经可测，下一步应隔离一个 replica，而不是直接在整个集群上跑一个不透明的峰值数字。单副本 benchmark 的目标是找到两个端点与中间可行区域：最小延迟端告诉我们独享资源时有多快，最大吞吐端告诉我们暴露全部并行性时能处理多少工作，二者之间的 sweep 才是实际 SLO 的选点空间。
+
+\subsection{Serial、burst 与 rate sweep}
+
+本节先把 frontier 的测量过程拆成三个可复现实验。最小延迟测试一次只提交一个请求，等它完成后再发下一个；最大吞吐测试把 $N$ 个请求同时提交，让 scheduler 尽可能 batch。前者几乎不给排队，后者充分利用并行，但单请求等待通常更长。然后在两者之间逐步提高到达率，记录延迟分位数、吞吐与错误率。
+
+\lecturefigure{slide-013.jpg}{Benchmark 一个 replica 的三步法}{官方 deck 第 13 页；课堂 00:20:02--00:20:49}
+
+\begin{lstlisting}[caption={单副本 latency--throughput sweep 伪代码}]
+for offered_qps in rates_between(serial_qps, burst_qps):
+    results = replay_requests(
+        replica=engine,
+        arrival_rate=offered_qps,
+        token_distribution=production_sample,
+        duration="long-enough-for-steady-state",
+    )
+    record(
+        throughput=results.completed_qps,
+        ttft=percentiles(results.ttft, [50, 95, 99]),
+        tpot=percentiles(results.tpot, [50, 95, 99]),
+        queue=percentiles(results.queue_time, [95, 99]),
+        errors=results.error_rate,
+    )
+\end{lstlisting}
+
+\lecturefigure{slide-014.jpg}{最小延迟与最大吞吐是同一 frontier 的两个端点}{官方 deck 第 14 页；课堂 00:20:49--00:21:30}
+
+\begin{knowledgebox}{读图：横线和竖线分别表示什么}
+上方串行时间线中，请求之间几乎没有重叠，所以每个请求最早完成，但硬件空隙较多；下方 burst 把请求堆叠到同一时间窗口，scheduler 能形成更大 batch，总完成时间更短，却把排队延迟分摊到每个请求。实际部署通常位于两端之间，而且 SLO 限制会把 frontier 的一部分判为不可用。
+\end{knowledgebox}
+
+若单副本在目标 SLO 下可稳定完成 $c$ QPS，而总峰值到达率为 $\lambda_{\mathrm{peak}}$，最粗的副本数下界是
+\[
+N_{\mathrm{replica}}\geq \left\lceil\frac{\lambda_{\mathrm{peak}}}{c\rho_{\mathrm{target}}}\right\rceil,
+\]
+其中 $\rho_{\mathrm{target}}<1$ 是为抖动、故障与扩容延迟预留的目标利用率。这个式子没有替代 queueing simulation；它只是迫使团队显式写出 headroom。
+
+\subsection{为什么 p95/p99 token latency 会变成肉眼可见的卡顿}
+
+前一小节画出了单请求与 aggregate throughput 的边界；本节进一步说明 percentile 怎样变成真实体验。Slide 15 指向一个 token timing simulator。讲者在现场保持中位数很快、只抬高尾部延迟，输出立刻出现“快一段、停一下”的 stutter。原因是一个回答包含许多 token，用户会经历多次独立或相关的延迟事件，而不是只抽样一次分位数。
+
+\lecturefigure{slide-015.jpg}{Token timing simulator 的指标入口}{官方 deck 第 15 页；课堂 00:21:30--00:22:55}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.46\textheight,keepaspectratio]{images/token-timing-demo-002207.jpg}
+  \caption{现场演示：中位 token 很快，尾部延迟仍会造成流式输出停顿}
+  \figsource{官方录像 00:22:07；完整五秒采样视觉审计中唯一的 deck 外教学 demo}
+\end{figure}
+
+\begin{knowledgebox}{读图：用户看到的是一条序列，不是一枚 percentile}
+先看页面中的 token 流，而不是单个 p50 数字。若每个 token 有概率 $p$ 落入“明显卡顿”区间，一个长度为 $T$ 的回答至少遇到一次卡顿的概率近似为
+\[
+1-(1-p)^T.
+\]
+例如 $p=0.01$、$T=200$ 时，该概率约为 $86.6\%$。真实延迟事件还会因排队、batch 与 GC/host stall 相关，因此独立假设往往过于乐观。
+\end{knowledgebox}
+
+\begin{warningbox}{Benchmark 必须复现生产 token 分布与到达过程}
+固定短 prompt、固定短输出、无 prefix reuse 的合成测试，可能完全错过生产中的长上下文、cache churn、工具调用与 burst。端点测试用于理解上限；上线决策仍要用带时间戳的真实或去敏 trace 回放，并报告 p50/p95/p99 与 per-replica 结果。
+\end{warningbox}
+
+\subsection{本章小结}
+
+一个可信 benchmark 应给出 workload、模型与精度、engine version、hardware、arrival process、token 分布、warmup、测量窗口、分位数和错误率。最小延迟与最大吞吐不是互相竞争的“最终分数”，而是帮助我们理解 scheduler 与硬件的两个边界。
+
+\section{模型与 inference engine：先选问题，再选实现}
+
+Benchmark 方法确定之后，模型和 engine 才能被放进同一个决策框架。模型决定质量上限、参数规模、tokenizer 与 KV 结构；engine 决定请求如何排队、batch、缓存和落到 GPU。生产上最常见的错误，是先被某个 leaderboard 或框架吸引，再倒推一个 workload 来证明选择正确。
+
+\subsection{Efficiency-bound 与 capability-bound}
+
+讲者把模型选择分成两个 regime。Efficiency-bound 表示已有多种模型能通过应用 eval，主要矛盾变成成本与性能；capability-bound 表示最强模型仍可能不够好，质量优先于成本。两类系统会自然走向不同的参数规模、GPU 数、供应方式与替换频率。
+
+\lecturefigure{slide-017.jpg}{不同约束会导向不同模型选择}{官方 deck 第 17 页；课堂 00:23:00--00:25:58}
+
+\begin{knowledgebox}{读图：bound 指当前最紧的约束，不是模型的永久标签}
+同一个模型在文档抽取任务上可能 capability 充足、进入 efficiency-bound；在复杂代码 agent 的 orchestrator 上又可能质量不足、进入 capability-bound。判断方法不是看参数量，而是先运行 application eval：若多个候选都过线，再优化成本；若没有候选过线，继续压价格没有意义。
+\end{knowledgebox}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{L{3cm}YY}
+\toprule
+维度 & Efficiency-bound & Capability-bound \\
+\midrule
+首要目标 & 在质量 gate 之上降低 cost/latency & 尽可能提高任务成功率或智能上限 \\
+模型选择 & 多个 open model family、尺寸与模态可选 & 少量最大/最新模型，常先用 proprietary API \\
+典型 replica & 单 GPU；低延迟时可多 GPU & 多 GPU，必要时多 node \\
+应用位置 & data processor、background subagent & chatbot+、background agent orchestrator \\
+迁移策略 & 频繁 benchmark 与替换 & fine-tune 后切换成本高，需更强回归 eval \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Efficiency-bound：单 GPU 不等于不需要并行}
+
+在能力已经足够的任务里，常见模型可以放进一张 GPU 的 HBM（High Bandwidth Memory，高带宽 DRAM 显存），工程目标是以尽可能少的资源达到足够性能。但如果 voice agent 需要约百毫秒级响应，即使容量上单卡可放下模型，也可能用 tensor parallelism 把权重读取分散到多条 HBM 通道，以金钱换 latency。
+
+\lecturefigure{slide-018.jpg}{能力足够后，成本成为主要驱动}{官方 deck 第 18 页；课堂 00:25:58--00:28:47}
+
+\begin{knowledgebox}{术语：多 GPU 的两种完全不同动机}
+\textbf{Capacity parallelism} 是因为模型或 KV cache 放不进一张卡，必须切分；\textbf{latency parallelism} 是模型本来放得下，但希望多张卡并行读取权重或计算以缩短关键路径。两者都可能使用 tensor parallelism，却有不同的成本合理性与通信容忍度。
+\end{knowledgebox}
+
+\teachervoice{00:27:09--00:27:28，老师用 voice agent 举例：任务可能不需要“超级智能”，却要求极低响应延迟，因此会出现 efficiency-bound 模型配多 GPU 的反直觉部署。}
+
+\subsection{Capability-bound：把最强模型放在 orchestrator}
+
+能力受限时，模型往往大到必须跨 GPU 或跨 node。Agent 系统常把最强模型放在 orchestrator，负责分解任务、分配权限与整合结果，再让更快、更便宜的 subagent 执行局部工作。这种层次结构也改变 serving：tool call 让同一前缀反复出现，prefix cache 更有价值；工具延迟从毫秒到小时不等，模型 token latency 只是端到端 TTLT 的一部分。
+
+\lecturefigure{slide-019.jpg}{能力不足时，latency 与多 GPU 成为主要约束}{官方 deck 第 19 页；课堂 00:28:47--00:32:12}
+
+\begin{warningbox}{不要把“大模型 orchestrator + 小模型 subagent”当成免费路由}
+分层模型需要可靠的任务分解、权限隔离、上下文传递与失败升级。小模型若错误地执行高风险工具，或 orchestrator 无法检测错误，节省的推理成本会转化为更高的业务损失。模型路由必须由 task-level eval 和 trace 支持。
+\end{warningbox}
+
+\subsection{市场 frontier 只能做候选生成}
+
+Artificial Analysis 一类工具把能力代理指标与 provider price 放在同一张图上，适合快速发现候选与判断市场移动方向。然而 y 轴“intelligence”是多个 benchmark 的压缩，x 轴价格来自共享 provider；它们没有直接包含你的 prompt 分布、structured output 约束、cache hit、工具调用或自托管利用率。
+
+\lecturefigure{slide-020.jpg}{能力--价格平面上的 provider snapshot}{官方 deck 第 20 页；课堂 00:32:12--00:33:12}
+
+\begin{knowledgebox}{读图：第一眼看 Pareto frontier，第二眼看缺失变量}
+优先关注没有被另一模型同时在能力和价格上支配的点，再把这些点带回 application eval。图中不能回答 self-hosting 是否更便宜，因为自托管成本取决于 GPU 填充率、运维、故障和峰谷流量；讲者的经验是“击败 provider price 很难但并非不可能”，前提是有足够稳定负载填满硬件。
+\end{knowledgebox}
+
+\subsection{Inference engine 到底包含什么}
+
+Engine 不是一组 CUDA kernel 的别名。外层 server 处理 HTTP/RPC、streaming、authentication 与 metrics；tokenizer 把字符串变成 token ID；scheduler 决定哪些 sequence 在本轮进入 batch；model worker 在一张或多张 GPU 上执行 forward；detokenizer 再把 ID 变回文本。CPU host 与 GPU data path 之间的协调常常就是性能瓶颈。
+
+\lecturefigure{slide-022.jpg}{一个现代 inference engine 的完整进程结构}{官方 deck 第 22 页；课堂 00:33:20--00:35:10}
+
+\begin{knowledgebox}{读图：沿一条请求追踪 CPU 与 GPU 边界}
+请求先进入 server I/O process，再并行 tokenization；scheduler 维护 sequence 状态、KV block 与 batch，向 model worker 发出本轮工作；GPU 完成 logits/采样后，token ID 回到 host，被 detokenize 并流式发送。图中红色循环表示 decode 会重复经过这条控制路径，因此每 token 的 Python、IPC 与 launch overhead 都可能累积。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Inference engine 的简化控制循环}]
+while active_requests:
+    arrivals = server.poll()
+    scheduler.add(tokenize_in_parallel(arrivals))
+    batch = scheduler.select_next_step()
+    token_ids = model_workers.forward(batch)
+    scheduler.update_kv_and_finished(token_ids)
+    server.stream(detokenize(token_ids))
+\end{lstlisting}
+
+\begin{importantbox}{Continuous batching 与 PagedAttention 的位置}
+Continuous batching（连续批处理）允许每个 decode iteration 都加入新请求、移除已完成请求，而不是等整个 static batch 一起结束。PagedAttention 把 KV cache 切成 block，并通过类似页表的映射避免为每个 sequence 预留连续大块显存。前者解决调度粒度，后者解决 KV memory fragmentation；它们互补但不是同一个机制。
+\end{importantbox}
+
+\subsection{TRT-LLM、vLLM 与 SGLang 的选择维度}
+
+三个 engine 都能运行 Transformer，却代表不同工程折中。TRT-LLM 的 compiled C++ runtime 可以降低 host overhead，但开发和扩展成本高；vLLM 强调模型/API 兼容与开放生态；SGLang 强调快速性能迭代、RadixAttention 和 program-aware serving。实际选择还要看 model support、quantization、speculation、distributed execution、observability 与团队维护能力。
+
+\lecturefigure{slide-023.jpg}{三类主流 inference engine 的直观定位}{官方 deck 第 23 页；课堂 00:35:10--00:35:55}
+
+\begin{knowledgebox}{读图：Logo 不是 benchmark}
+这页用风格化语言概括生态：TRT-LLM 偏低 host overhead 与 NVIDIA stack，vLLM 偏兼容和大规模部署，SGLang 偏激进性能。它没有证明任何 engine 在所有 workload 上更快。必须用同一模型、精度、prompt/output 分布和 SLO 重跑单副本 frontier。
+\end{knowledgebox}
+
+\lecturefigure{slide-024.jpg}{Engine 的 runtime、文化、部署者与治理差异}{官方 deck 第 24 页；课堂 00:35:55--00:38:55}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm}YYY}
+\toprule
+维度 & TRT-LLM & vLLM & SGLang \\
+\midrule
+典型优势 & 编译 runtime、低 host overhead、NVIDIA 新特性 & 模型/API 兼容、PagedAttention、广泛部署 & RadixAttention、快速纳入新优化、性能文化 \\
+典型代价 & 开发调试复杂、绑定 NVIDIA stack & 通用性可能增加路径与 host 工作 & 快速变化带来版本与兼容维护成本 \\
+适用判断 & 小 batch/低延迟、团队能承受编译栈 & 需要广泛模型支持与成熟生态 & prefix-heavy 或愿意跟随高频优化 \\
+验证方式 & 真实 workload benchmark + correctness eval & 同左 & 同左 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\lecturefigure{slide-025.jpg}{通过简化实现与源码 walkthrough 理解 engine}{官方 deck 第 25 页；课堂 00:38:55--00:39:45}
+
+\begin{importantbox}{学习 engine 的正确顺序}
+先用 mini-sglang、nano-vllm 等简化实现建立 server--scheduler--worker--KV 的 mental model，再读生产仓库的具体实现；最后用本地代码 agent 或 profiler 回答“这条请求为何经过这些函数”。只看架构图容易忽略 backpressure、memory ownership 与失败路径，只看源码又容易失去系统边界。
+\end{importantbox}
+
+\subsection{本章小结}
+
+模型选择由 application eval 划分为 capability-bound 与 efficiency-bound；engine 选择由 workload、SLO、支持特性和团队约束决定。把二者分开测量：先确认模型质量，再在固定模型上比较 engine；否则质量差异会被误报成 serving 性能差异。
+
+\section{Prefill、decode 与 GPU roofline}
+
+确定模型和 engine 后，硬件问题仍不能只看“这张卡有多少 TFLOP/s”。Transformer serving 同时包含 prefill 与 decode：前者一次处理大量输入 token，矩阵乘法容易获得较高 arithmetic intensity；后者每步只生成少量 token，却反复读取庞大权重与 KV cache，常被 HBM bandwidth 限制。同一模型因此会在 roofline 图上落入两个区域。
+
+\subsection{两个 sub-workload}
+
+Prefill 把整个 prompt 并行送入模型，计算量随 token 数增长但矩阵尺寸较大；decode 是 autoregressive loop，每产生一个 token 都要再次执行模型层。Batch 可以提高 decode 的矩阵利用率，却会增加排队、KV cache 和单用户 latency，所以不能无限扩大。
+
+\lecturefigure{slide-027.jpg}{Prefill 与 decode 搬运相似权重，却执行不同数量的 FLOP}{官方 deck 第 27 页；课堂 00:39:55--00:41:20}
+
+\begin{knowledgebox}{读图：先比较“bytes moved per useful token”}
+两边都要读取模型权重；prefill 对一批输入 token 复用权重，单位字节可以做更多乘加，因而偏 compute-bound。Decode 每步新增一个位置，若 batch 较小，读取许多 GiB 权重只服务少量 token，因而偏 memory-bandwidth-bound。图没有表示 prefill 永远 compute-bound：极短 prompt、特殊 kernel 或低 batch 仍会改变位置。
+\end{knowledgebox}
+
+\subsection{Arithmetic intensity 与 roofline}
+
+Arithmetic intensity（算术强度）定义为每搬运一字节数据完成的运算数：
+\[
+I=\frac{F}{B}\quad [\mathrm{FLOP/byte}],
+\]
+其中 $F$ 是 FLOP 数，$B$ 是从目标 memory level 搬运的字节数。Roofline 上界写成
+\[
+P\leq \min(P_{\mathrm{peak}},\; BW\cdot I),
+\]
+其中 $P$ 是可达性能，$P_{\mathrm{peak}}$ 是峰值算力，$BW$ 是内存带宽。低 $I$ 落在斜线 bandwidth roof，高 $I$ 才可能碰到水平 compute roof。
+
+\lecturefigure{slide-028.jpg}{用 roofline 判断 workload 是 bandwidth-bound 还是 compute-bound}{官方 deck 第 28 页；课堂 00:41:20--00:42:45}
+
+\begin{knowledgebox}{读图：ridge point 是硬件与 workload 的交界}
+横轴是 arithmetic intensity，纵轴是 FLOP/s；斜线斜率由 memory bandwidth 决定，水平线由 compute peak 决定。两线交点 $I^*=P_{\mathrm{peak}}/BW$ 是 ridge point。若 decode 落在交点左侧，增加 Tensor Core 峰值几乎无效；降低权重字节、提高 batch 或减少 HBM traffic 更重要。
+\end{knowledgebox}
+
+\begin{warningbox}{Roofline 是上界模型，不是性能预测器}
+它通常不包含 kernel launch、同步、通信、cache miss、load imbalance、shape inefficiency 与 host stall。一个点远低于 roofline 时，需要 profiler 找出原因；一个点接近 roofline 时，才说明该 memory/compute resource 可能接近物理上限。
+\end{warningbox}
+
+\subsection{HBM、SRAM、SM 与 Tensor Core}
+
+GPU 规格表里最容易混淆的是“容量”“带宽”和“算力”。HBM（High Bandwidth Memory，高带宽内存）是 GPU 外部封装上的高带宽 DRAM，用来存权重、KV cache 与 activation；SRAM（Static Random-Access Memory，静态随机存取存储器）位于芯片上，构成 register、cache 与 programmer-controlled shared memory，容量小但速度高。SM（Streaming Multiprocessor）是执行线程块的计算单元，Tensor Core 是 SM 内面向矩阵乘加的专用数据通路。
+
+\lecturefigure{slide-029.jpg}{为什么生产推理偏好 data-center Tensor-Core GPU}{官方 deck 第 29 页；课堂 00:42:45--00:45:00}
+
+\begin{knowledgebox}{硬件术语与 serving 关系}
+\begin{tabularx}{\textwidth}{L{2.4cm}YY}
+\toprule
+术语 & 是什么 & 对推理的影响 \\
+\midrule
+HBM & 高带宽 DRAM 显存 & 权重/KV 容量与 decode bandwidth 上限 \\
+SXM & 高功耗 GPU module form factor，不是 PCIe 插卡 & 允许更高 power envelope 与紧密互联 \\
+NVLink & node 内 GPU 高带宽互联 & tensor/pipeline parallel 的通信路径 \\
+InfiniBand & node 间低延迟高带宽网络 & 多机 replica、prefill/decode disaggregation \\
+SM & 执行 warp、shared memory 与 Tensor Core 的单元 & occupancy、调度和 kernel 并行度 \\
+Tensor Core & 专用矩阵乘加硬件 & BF16/FP8/FP4 matmul 峰值主要来源 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\lecturefigure{slide-030.jpg}{GPU Glossary 与 Tensara：建立可操作的硬件直觉}{官方 deck 第 30 页；课堂 00:45:00--00:45:25}
+
+\begin{importantbox}{规格表阅读顺序}
+先问模型权重与 KV cache 是否装得下，再看 HBM bandwidth 是否支持 decode SLO，然后看目标 dtype/shape 是否能使用 Tensor Core，最后检查 node 内外互联。只比较峰值 TFLOP/s 会系统性高估小 batch decode，并忽略分布式通信。
+\end{importantbox}
+
+\subsection{为什么不直接用 CPU、TPU 或任意 inference ASIC}
+
+CPU 生态成熟、内存大，但一般缺少 HBM 级带宽与可编程片上 shared memory，难以满足严格交互延迟；TPU 可以高效运行，但端到端供应、软件和调度选择更集中；其他 ASIC 可能在特定模型上优秀，却要承担编译器、kernel、debugger 与供应商锁定。硬件选择是“性能乘以可运营性”，不是单一 benchmark。
+
+\lecturefigure{slide-031.jpg}{CPU、TPU 与专用 inference chip 的现实边界}{官方 deck 第 31 页；课堂 00:45:25--00:48:55}
+
+\begin{warningbox}{“GPU 是唯一选择”是课堂时点的工程判断}
+它表示在 2026-05-28 的通用大模型生产生态里，NVIDIA data-center GPU 在可编程性、模型支持、互联与工具链上最稳妥，并不证明其他硬件在未来或特定 workload 中没有优势。采购决策要重新验证当时可用软件和供应。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Prefill 与 decode 共享模型，却有不同 arithmetic intensity；硬件评估必须同时看 HBM 容量/带宽、Tensor Core dtype、SM 利用、互联与 host path。Roofline 先给出“该优化理论上该打哪里”，profiler 再回答“实现为什么没接近上界”。
+
+\section{部署：在稀缺、故障与 burst 中满足 SLO}
+
+单副本在实验室里稳定，并不意味着生产部署已经解决。集群还要面对 GPU 稀缺、跨地域网络、机器失败、容器镜像、JIT 编译、CUDA Graph capture 与突发流量。讲者把 serverless GPU 的冷启动拆成多个可独立优化的阶段，说明“多开几台机器”为什么既昂贵又不一定够快。
+
+\subsection{四种 utilization 与网络预算}
+
+Allocation utilization 衡量分到 GPU 的时间里有多少在承载有用工作；kernel utilization 衡量 GPU 是否持续有 kernel；SM utilization 看计算单元是否活跃；bandwidth/FLOP utilization 看活跃时是否接近硬件上界。它们可以彼此矛盾：GPU 一直有 kernel，不代表 kernel 使用了足够 SM 或 HBM bandwidth。
+
+\lecturefigure{slide-033.jpg}{硬件约束决定部署选项}{官方 deck 第 33 页；课堂 00:49:05--00:50:40}
+
+\begin{knowledgebox}{读图：先把不可回收的网络延迟从预算里扣掉}
+交互请求可能先花约区域内十毫秒或全球百毫秒量级穿越网络，剩余预算才分给排队、prefill 与 decode。若 TTFT SLO 只有数百毫秒，部署地域、连接复用与路由会与 GPU 同等重要。图中的网络数字是数量级提示，不是固定 RTT。
+\end{knowledgebox}
+
+\begin{importantbox}{利用率不是一个标量}
+当 dashboard 显示“GPU utilization 90\%”时，必须问它测量的是 allocation、kernel active、SM active、HBM bandwidth 还是 Tensor Core FLOP。不同定义对应不同修复：缩容/调度、消除 host gap、改 kernel shape、提高 batch、减少 bytes，不能混用。
+\end{importantbox}
+
+\subsection{GPU failure 是常态事件}
+
+大规模 fleet 会把低概率硬件故障放大成日常事件。Slide 34 用 CPU、SSD 与 H100 的 mean time to failure（MTTF）做强烈对比；重点不是记住一个年化百分比，而是理解推理服务必须具备 health checking、draining、retry 与 replica replacement。与同步训练相比，独立 replica 失败更容易隔离，但仍会制造请求失败和容量缺口。
+
+\lecturefigure{slide-034.jpg}{生产环境中的硬件故障数量级对比}{官方 deck 第 34 页；课堂 00:50:40--00:51:25}
+
+\begin{warningbox}{如何读 annualized failure rate}
+若故障近似 Poisson process，单设备在时间 $t$ 内至少一次失败的概率可写为 $1-e^{-t/\mathrm{MTTF}}$。当 MTTF 小于一年，年化“事件数/设备年”可以大于 100\%，并不表示概率超过 1；它表示同一设备或替换后的设备一年内可能经历多次事件。真实故障也未必独立或指数分布。
+\end{warningbox}
+
+\lecturefigure{slide-035.jpg}{在大规模 GPU fleet 中持续维护健康容量}{官方 deck 第 35 页；课堂 00:51:25--00:51:55}
+
+\begin{knowledgebox}{读图：健康容量是动态资源，不是静态 inventory}
+这张图把 fleet 中的 GPU 状态聚合成时间序列。工程上应区分硬故障、温度/功耗异常、ECC/Xid、互联退化与应用误报；health signal 触发隔离时，还要避免所有 replica 同时被驱逐造成 capacity cliff。
+\end{knowledgebox}
+
+\subsection{Bursty demand 的三种结果}
+
+接下来的五张图构成一个控制问题。真实需求有明显峰谷；固定 over-provision 保住 SLO 却浪费 GPU；allocation 太慢会在峰值前半段排队，峰值过去后才拿到机器；目标是快速自动分配，让 provisioned capacity 贴近 demand，同时保留足够 buffer 吸收预测误差。
+
+\lecturefigure{slide-036.jpg}{一个月尺度的突发推理流量}{官方 deck 第 36 页；课堂 00:51:55--00:52:25}
+
+\begin{knowledgebox}{读图：容量问题由峰形而非平均值决定}
+图中长时间基线后出现多个尖峰。若按月平均购买容量，尖峰会形成巨大 queue；若按最大峰值长期预留，大部分时间 GPU 空闲。真正需要测量的是峰值高度、持续时间、上升斜率、可预测性与冷启动时间。
+\end{knowledgebox}
+
+\lecturefigure{slide-037.jpg}{固定 over-provision：SLO 稳定但利用率低}{官方 deck 第 37 页；课堂 00:52:25--00:52:55}
+
+\begin{knowledgebox}{读图：红线长期高于绿色 demand 的含义}
+Provisioned capacity 维持在高位，尖峰被吸收，但阴影差值代表付费却没有完成请求的 GPU 时间。这种方案对极高价值、不可排队的流量可能合理；对稀疏 data processor 则通常过贵。
+\end{knowledgebox}
+
+\lecturefigure{slide-038.jpg}{分配过慢：利用率与 QoS 同时受损}{官方 deck 第 38 页；课堂 00:52:55--00:53:25}
+
+\begin{warningbox}{慢扩容会出现“最差的两头”}
+需求上升时容量不足，用户排队；需求下降后迟到的 GPU 仍被分配，形成空闲。于是既没守住 latency，又付了闲置成本。只看平均 utilization 甚至可能把这种系统误判为“很忙、很高效”。
+\end{warningbox}
+
+\lecturefigure{slide-039.jpg}{快速自动 allocation：让 capacity 贴近需求}{官方 deck 第 39 页；课堂 00:53:25--00:53:50}
+
+\begin{knowledgebox}{读图：目标不是零空闲，而是受控 headroom}
+粉色 provisioned line 应在绿色 application demand 之前或同时上升，并在峰值后及时回落。完全零 buffer 会让任何预测误差变成排队；过大 buffer 又回到固定 over-provision。工程目标是用 SLO、failure rate 和 allocation latency 定义最小安全 headroom。
+\end{knowledgebox}
+
+\lecturefigure{slide-040.jpg}{把 serverless GPU 启动从分钟级拆成可优化阶段}{官方 deck 第 40 页；课堂 00:53:50--00:54:05}
+
+\begin{importantbox}{Cold-start critical path}
+可以把启动时间粗略拆成
+\[
+T_{\mathrm{cold}}=T_{\mathrm{machine}}+T_{\mathrm{container}}+T_{\mathrm{weights}}+T_{\mathrm{compile}}+T_{\mathrm{capture}}+T_{\mathrm{ready}}.
+\]
+机器 allocation、容器文件、权重加载、JIT/Torch compile、CUDA Graph capture 与 health readiness 都可能成为主导项。只优化镜像下载，无法修复等待 GPU 或 graph capture 的分钟级延迟。
+\end{importantbox}
+
+\subsection{Cloud Buffer：把稀缺 GPU 变成可快速分配的池}
+
+Cloud Buffer 的思想是在多个底层 cloud/region 上维持一小部分已获取、健康、可重配置的机器，使应用峰值不必等待完整云供应流程。它类似 memory allocator 的 free list：平台先承担资源碎片和预测，再把近乎即时的 machine allocation 暴露给上层应用。
+
+\lecturefigure{slide-043.jpg}{Cloud Buffer 的完整 warm-capacity 网格}{官方 deck 第 43 页；课堂 00:54:05--00:54:40；pages 041--042 为递进 build}
+
+\begin{knowledgebox}{读图：彩色块表示可被不同应用重用的 warm capacity}
+最终 build 展示多台机器与不同占用状态。关键不是让每个应用永久预留自己的 GPU，而是让平台在共享池中维持健康空闲或可迁移容量，再按需求重新绑定。这样把“云厂商分钟级供应”转换成“平台内部秒级调度”。
+\end{knowledgebox}
+
+\lecturefigure{slide-044.jpg}{Cloud Buffer 的控制平面与排队模型}{官方 deck 第 44 页；课堂 00:54:40--00:55:00}
+
+\begin{knowledgebox}{读图：区分 cloud allocation 与 application scheduling}
+一侧是 provider/region 中的机器供应，另一侧是 application queue 与 worker。控制器观察 demand、buffer health 与启动时间，决定何时补充或释放底层机器；上层 scheduler 决定哪个应用拿到哪台 warm machine。两个控制环的时间尺度和失败模式不同。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={带 headroom 与启动延迟的简化扩容控制器}]
+required = ceil(peak_forecast / per_replica_capacity)
+healthy = count_ready_replicas()
+starting = count_starting_replicas()
+
+if healthy + starting < required + failure_headroom:
+    request_from_cloud_buffer(
+        required + failure_headroom - healthy - starting
+    )
+elif healthy > required + scale_down_margin:
+    drain_then_release(healthy - required)
+\end{lstlisting}
+
+\subsection{Container cache：lazy、eager 与 content-addressed}
+
+拿到 GPU 后，容器文件系统仍可能很大。Lazy loading 只在实际访问时拉取 layer/page，缩短首次可运行时间；eager prefetch 提前拉取已知关键路径；content-addressed cache 按内容 hash 复用相同文件块，使不同镜像或版本共享依赖。三者结合，比每次完整下载镜像更适合高 churn 的推理 replica。
+
+\lecturefigure{slide-045.jpg}{容器文件系统的 lazy、eager 与内容寻址云缓存}{官方 deck 第 45 页；课堂 00:55:00--00:55:55}
+
+\begin{knowledgebox}{读图：启动与稳态需要不同策略}
+顶部长条表示镜像内容，粉色块是启动早期真正触碰的文件。Lazy 让应用先启动，eager 把已知热块提前送达，content hash 让重复库从共享 cache 命中。若预测错了热集合，lazy page fault 仍会进入请求关键路径，所以要用真实 startup trace 更新 prefetch 集合。
+\end{knowledgebox}
+
+\subsection{Checkpoint/restore：进程最终也是数据}
+
+SGLang、vLLM 启动时可能执行 JIT compilation、Torch compile、权重初始化和 CUDA Graph capture。讲者的关键直觉是：除 socket 等需要特殊处理的外部状态外，Linux process 与 GPU memory 最终都是可序列化状态；若恢复保存的状态比重新创建快，就可以把昂贵初始化移出用户冷启动路径。
+
+\lecturefigure{slide-046.jpg}{通过进程与 GPU checkpoint/restore 缩短应用启动}{官方 deck 第 46 页；课堂 00:55:55--00:56:55}
+
+\begin{knowledgebox}{读图：左边是需要重做的初始化，右边是可恢复状态}
+图中把 memory mapping、线程/文件状态、GPU allocation 与 graph 连接到持久存储。恢复不是简单复制权重：需要确保 driver/runtime 兼容、设备拓扑一致，并处理 TCP socket、外部服务连接与时间相关状态。Checkpoint 越靠近 ready state，恢复越快，但可移植性越差。
+\end{knowledgebox}
+
+\begin{warningbox}{Model checkpoint 与 activation/process checkpoint 不同}
+Model checkpoint 保存参数，供重新构建模型；activation checkpointing 是训练时少存 forward activation、backward 时重算；这里的 process/GPU checkpoint 保存已经初始化甚至 capture 后的运行时状态。三者解决不同问题，不应混称。
+\end{warningbox}
+
+\subsection{本章小结}
+
+生产部署的关键路径从 cloud allocation 一直延伸到 application ready。稳定系统需要多层 headroom、健康检查、排队与恢复：Cloud Buffer 缩短机器供应，content-addressed filesystem 缩短容器路径，checkpoint/restore 缩短 engine 初始化。它们共同服务于同一个 SLO，而不是三个独立产品特性。
+
+\section{Debugging、observability 与 evals}
+
+系统已经部署后，真正困难的问题从“能不能跑”变成“为什么今天某些请求变差”。LLM 服务同时包含传统软件错误、模型行为变化与性能退化；如果只记录 HTTP status 和最终字符串，许多 tokenizer、queue、KV、replica 或硬件问题都无法复现。本章把 correctness evidence 与 performance telemetry 放到同一套观测设计里。
+
+\subsection{三类 production bug}
+
+Application-level bug 可能来自 prompt、tool permission、业务规则或用户体验；model-quality bug 表现为输出质量下降，可能由 distribution shift、tokenizer 或 chat template 引起；performance bug 则是 SLO regression、straggler 或 replica 差异。三类 bug 可以互相伪装，例如 tokenizer 错误既降低质量，也可能改变 token 长度和 latency。
+
+\lecturefigure{slide-048.jpg}{生产推理常见的三类 bug}{官方 deck 第 48 页；课堂 00:57:08--00:59:24}
+
+\begin{knowledgebox}{读图：先定位 ownership，再找共同证据}
+应用错误由产品与 infra 共同负责；模型质量错误需要 eval、trace 与 token 证据；性能错误需要队列、分阶段 latency 与硬件 telemetry。不要因为团队边界不同就分别记录不兼容的数据：request ID、model/version、token IDs、replica、timestamps 与 eval outcome 应能跨层关联。
+\end{knowledgebox}
+
+\teachervoice{00:58:13--00:59:08，老师说 tokenizer 与 chat template 在新 open model 发布初期“几乎肯定有 bug”，而且随着 special token 与模板变复杂，问题并未自动消失。记录并修复这类问题是高价值的开源贡献。}
+
+\begin{warningbox}{Train--serve skew 不只来自数据分布}
+训练/评测时的 tokenizer version、chat template、system prompt、sampling、stop token、tool schema 与 quantization 只要和生产不同，就可能造成行为漂移。上线清单应把这些配置当作模型 artifact 的一部分，而不是散落在应用代码中。
+\end{warningbox}
+
+\subsection{Observability：能否只靠日志重建问题}
+
+Observability 的工程目标是：面对未预先列举的故障，系统是否输出了足够状态，让工程师从 trace/log/metric 推断内部发生了什么。它不是“图表数量很多”，而是外部信号对内部状态具有辨识力。对 LLM 服务，token IDs 尤其关键，因为 Unicode 字符串可能掩盖 special token、byte fallback 或模板边界。
+
+\lecturefigure{slide-049.jpg}{不同故障层所需的 observability 证据}{官方 deck 第 49 页；课堂 00:59:24--01:01:27}
+
+\begin{knowledgebox}{读图：三条日志策略围绕同一个 request identity}
+应用层可用 OpenTelemetry/Datadog 或专用 LLM trace；模型质量层要保存 eval baseline、采样参数、反馈与 token IDs；性能层要记录比当前 dashboard 更多的原始字段。三类证据只有共享 request/trace ID 才能回答“这次错误输出是否发生在特定 replica、特定 queue spike 或特定 tokenizer version”。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={可关联 correctness 与 performance 的结构化日志}]
+event = {
+    "trace_id": trace_id,
+    "request_id": request_id,
+    "model": model_revision,
+    "engine": engine_revision,
+    "tokenizer": tokenizer_revision,
+    "input_token_ids": input_ids,
+    "output_token_ids": output_ids,
+    "replica": replica_id,
+    "queue_ms": queue_ms,
+    "prefill_ms": prefill_ms,
+    "decode_ms": decode_ms,
+    "eval_tags": online_eval_results,
+}
+\end{lstlisting}
+
+\begin{warningbox}{日志也有隐私与成本边界}
+Prompt、token IDs、tool output 与用户反馈可能包含敏感信息。生产系统应定义去敏、采样、访问控制、保留期和删除流程；“log more”不是无限复制用户数据，而是先设计可关联 schema，再按风险保存必要字段。
+\end{warningbox}
+
+\subsection{Evals 是应用层 observability}
+
+如果没有一组稳定任务与评分规则，团队无法区分模型退化、deployment bug 与产品目标改变。Evals 可以从 notebook 或 spreadsheet 起步，随后变成 model-agnostic regression suite，用于比较模型、quantization、fine-tune、speculator、prompt 和 engine。它们至少要活得比一次模型切换更久。
+
+\lecturefigure{slide-050.jpg}{用 eval 建立 LLM application 的可观测性}{官方 deck 第 50 页；课堂 01:01:27--01:02:55}
+
+\begin{importantbox}{老师强调：Models and deployments are temporary; evals are forever}
+这里的 “forever” 不是字面永久，而是说明 eval 通常必须跨越多个模型与部署版本，才能让比较成立。一个好的 eval case 应保存输入、期望行为、评分方法、失败解释与业务重要性；只保存一个总分会让 regression 无法定位。
+\end{importantbox}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{L{2.8cm}YY}
+\toprule
+Eval 层级 & 解决的问题 & 典型输出 \\
+\midrule
+Unit / protocol & tokenizer、template、tool schema 是否正确 & exact tokens、JSON validity、stop behavior \\
+Task regression & 关键业务任务是否退化 & success rate、rubric score、failure clusters \\
+Safety / permission & 高风险行为是否被阻止 & policy violations、tool authorization \\
+Performance-quality joint & 优化是否破坏质量 & quality delta 对 latency/cost delta \\
+Online shadow / canary & 真实流量下是否稳定 & drift、tail latency、user feedback \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{最小生产 metric set}
+
+服务端应同时记录 user-facing、engine-stage 与 hardware-level 指标。TTFT、TPOT/ITL、TTLT 是结果；queueing、prefill、cached prefill、decode 是分解；temperature、power、kernel/SM/memory utilization 是底层解释。每项至少保留 per-replica 与 aggregate、p50/p95/p99/mean，避免平均值吞掉 straggler。
+
+\lecturefigure{slide-051.jpg}{生产推理应记录的最小指标集合}{官方 deck 第 51 页；课堂 01:02:55--01:05:45}
+
+\begin{knowledgebox}{Queue 是 tail latency 的首要嫌疑}
+从 ingress、load balancer、scheduler、tokenizer pool 到 GPU work queue，系统可能有多层等待。Little's law 给出稳态直觉
+\[
+L=\lambda W,
+\]
+其中 $L$ 是系统内平均在途请求数，$\lambda$ 是完成率，$W$ 是平均停留时间。它不直接给出 p99，但提醒我们：当到达率接近服务率时，queue 会迅速积累，TTFT 首先恶化。
+\end{knowledgebox}
+
+\lecturefigure{slide-052.jpg}{Endpoint dashboard 把 workload、SLO 与硬件状态放到同一界面}{官方 deck 第 52 页；课堂 01:05:45--01:06:45}
+
+\begin{knowledgebox}{读图：Dashboard 应支持 drill-down 而不只是展示}
+顶部 aggregate 曲线用于发现时间窗口，下一层按 model、replica、region、hardware、prompt bucket 与 engine version 切分，最后链接到 trace 和 profiler。若 dashboard 只能显示“整体变慢”，却不能定位到哪一层 queue 或哪组 replica，它仍不具备可调试性。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+可运营的 inference system 把 correctness 与 performance 绑定到同一 request evidence。Token IDs、版本、queue/stage latency、replica 与 eval outcome 是最小关联键；eval 则把模糊的“质量不错”变成可回归的长期资产。
+
+\section{性能优化：先改架构，再清 host，最后碰 kernel}
+
+进入优化阶段前，必须确认 workload、SLO、correctness eval 与 telemetry 都已建立。否则 speedup 无法归因，也无法知道质量是否受损。讲者给出的优先级非常明确：speculative decoding 和 quantization 可能改变数量级；host overhead 常有几十个百分点；成熟 kernel 通常只剩若干百分点。
+
+\subsection{Optimization funnel}
+
+优化顺序应按理论上限与实现成本排序。先寻找能减少 autoregressive step、bytes 或空闲时间的结构性改变，再消除 CPU/launch gap，最后才在已经高效的 kernel 上争取百分点。这个顺序也降低风险：越靠近底层，越容易投入大量专业工作却只优化一个非瓶颈。
+
+\lecturefigure{slide-054.jpg}{大改动、host grind 与 kernel percentage points}{官方 deck 第 54 页；课堂 01:06:45--01:07:45}
+
+\begin{importantbox}{优化前的四个 gate}
+1）应用 eval 能检测质量退化；2）benchmark 复现生产 workload；3）trace 能分解 queue、host、GPU 与 network；4）目标指标明确。缺一项时，先补测量系统，而不是继续调参数。
+\end{importantbox}
+
+\subsection{Speculative decoding：用便宜 drafter 换少量 target step}
+
+Autoregressive decode 的串行依赖来自“下一个 token 必须等上一个 token”。Speculative decoding 让便宜的 drafter 一次提出多个候选，target model 并行验证这段序列；在 lossless 版本中，接受/拒绝规则保证最终采样分布与直接 target sampling 一致。加速取决于 drafter 成本、接受长度、target verification 效率与 batch pressure。
+
+\lecturefigure{slide-055.jpg}{Speculative decoding 的 draft--verify 流水线}{官方 deck 第 55 页；课堂 01:07:45--01:09:20}
+
+\begin{knowledgebox}{读图：并行验证不等于候选全部接受}
+Drafter 生成 $k$ 个 token，target 一次 forward 计算这些位置的分布；从左到右接受满足校正规则的 token，遇到拒绝则从 target 分布采样并重新开始。若接受率低，drafter 工作被浪费；若 $k$ 太大，verification 占用 batch 与 KV，反而伤害高并发吞吐。
+\end{knowledgebox}
+
+若每轮平均接受 $a$ 个 draft token，并额外产生一个 target token，粗略的每 target call 产出为 $a+1$。令 drafter 成本相对 target verification 为 $r$，可用直觉式
+\[
+S\approx \frac{a+1}{1+r+o},
+\]
+其中 $o$ 汇总调度、树/采样和未充分 batch 的开销。它只用于理解变量方向，不是精确性能模型。
+
+\lecturefigure{slide-056.jpg}{增加匹配数据后，speculator 可显著改变吞吐曲线}{官方 deck 第 56 页；课堂 01:09:20--01:10:50}
+
+\begin{knowledgebox}{读图：先确认横纵轴与 baseline，再看“Just add data”}
+两幅曲线展示 speculator 随数据/训练改善后可获得更高吞吐或更好 scaling。它支持“drafter 与 target 分布越匹配，接受率越高”的机制，但不证明任何模型都能得到相同倍数。应报告 target、draft architecture、sequence distribution、batch、hardware 与 quality equivalence。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Lossless speculative decoding 的概念流程}]
+while not finished:
+    draft_tokens, draft_probs = drafter.propose(prefix, k)
+    target_probs = target.verify(prefix, draft_tokens)
+    accepted, correction = rejection_sampling(
+        draft_tokens, draft_probs, target_probs
+    )
+    emit(accepted)
+    if correction is not None:
+        emit(correction)
+    prefix = update(prefix, accepted, correction)
+\end{lstlisting}
+
+\subsection{N-gram、MTP、EAGLE 与 DFlash}
+
+不同 speculation 方法主要区别在 drafter 从哪里获得预测能力。N-gram 直接复用 prompt/历史中的局部重复；MTP（multi-token prediction）在 base model 训练时加入多步预测头；EAGLE 使用 target hidden state 预测未来 feature/token；DFlash 用 block diffusion drafter 并行去噪多个候选。它们的训练成本、适配性、接受率和 host/scheduler 复杂度不同。
+
+\lecturefigure{slide-057.jpg}{多类 speculative drafting 方法}{官方 deck 第 57 页；课堂 01:10:50--01:13:20}
+
+\begin{knowledgebox}{术语消化：四类 drafter 各解决什么}
+\begin{tabularx}{\textwidth}{L{2.2cm}YY}
+\toprule
+方法 & 核心机制 & 适用与代价 \\
+\midrule
+N-gram & 从当前 prompt/历史查找重复 continuation & 无训练、便宜；对代码/重复文本有效，泛化有限 \\
+MTP & 模型训练时直接预测未来多个 token & 与 base model 深度集成；需要训练时支持 \\
+EAGLE & 利用 target hidden features 训练轻量 drafter & 接受率高；需要额外模型与版本匹配 \\
+DFlash & diffusion drafter 一次并行生成一个 token block & 降低串行 draft 成本；为 2026 年新方法，部署证据仍在积累 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{01:12:30--01:13:20，老师明确把“我们押注 DFlash 这一类方法”表达为团队的经验判断，而非全领域定论。讲义保留这一口吻，同时把论文版本冻结在课堂日前公开的 arXiv:2602.06036。}
+
+\subsection{Quantization：减少 bytes，也改变模型}
+
+Quantization 把权重、activation 或 KV cache 从高精度映射到更少 bit。对 bandwidth-bound decode，权重字节减少可直接提高 token/s；对 Tensor Core 支持的低精度 matmul，峰值 FLOP/s 也可能提高。但 scale、outlier、累积误差、长上下文和特定硬件指令都会影响实际质量与速度。
+
+\lecturefigure{slide-058.jpg}{Quantization 需要 hardware、kernel 与 application 全栈协同}{官方 deck 第 58 页；课堂 01:13:20--01:16:10}
+
+\begin{knowledgebox}{读图：BF16、FP8 与 FP4 是风险梯度，不是版本号}
+BF16（16-bit brain floating point）通常作为高质量推理基线；FP8 用 8 bit 浮点格式降低 bytes 并利用新 GPU Tensor Core；FP4/MXFP4 等 4 bit 浮点更激进，硬件与 calibration 要求更高。Attention/KV cache 对误差和动态范围常比大 matmul 更敏感，因此“整模型统一压到某个 bit”不是可靠默认。
+\end{knowledgebox}
+
+含 $P$ 个参数、每参数 $b$ bit 的纯权重存储下界约为
+\[
+M_{\mathrm{weight}}=\frac{Pb}{8}\ \mathrm{bytes},
+\]
+但真实显存还包括 scale/zero point、padding、KV cache、workspace 与 graph buffers。对有 $L$ 层、$n_{kv}$ 个 KV head、head dimension $d_h$、上下文长度 $T$、每元素 $b_e$ bytes 的 decoder，KV cache 量级为
+\[
+M_{KV}\approx 2L n_{kv}d_h T b_e,
+\]
+前面的 2 表示 key 与 value。长上下文时，KV 精度可能重新成为容量与 bandwidth 主导项。
+
+\begin{warningbox}{任何量化都必须穿过 application eval}
+Perplexity（PPL，交叉熵的指数，可粗略理解为模型在每个 token 上面对的“有效选择数”）或通用 benchmark 不足以证明你的 structured output、tool use、长上下文与 safety 行为不变。量化上线应做 paired replay、failure clustering、长度分桶与 canary；若应用定义允许有限损失，也要把允许的质量预算写入 SLO。
+\end{warningbox}
+
+\subsection{Host overhead：不要让 GPU 等 Python}
+
+当结构性优化完成后，trace 中常出现 GPU kernel 之间的空隙：Python scheduler、tokenization、sampling、IPC、memory allocation 或 kernel launch 没有及时准备下一步。GPU 很贵，任何 host gap 都是在为闲置 HBM 与 Tensor Core 付费。目标不是“CPU utilization 越高越好”，而是让关键 host path 在 GPU 完成前准备好下一批工作。
+
+\lecturefigure{slide-059.jpg}{Host overhead 在 GPU timeline 中形成可见空洞}{官方 deck 第 59 页；课堂 01:16:10--01:16:55}
+
+\begin{knowledgebox}{读图：彩色 kernel 之间的黑色空隙就是机会}
+先确认 gap 是否由 host launch、同步、allocation、communication 或真正的数据依赖造成。若 GPU kernel 本身很短，固定 launch overhead 占比会更大；若多 replica 只有少数出现 gap，则可能是 CPU contention、NUMA、温度或 Python path 差异。
+\end{knowledgebox}
+
+\subsection{CUDA Graph：把重复 launch 序列一次 capture}
+
+CUDA Graph 把一串 kernel launch、dependency 和部分 memory operation 记录成可重复 replay 的图，减少每个 decode step 由 host 逐个提交 kernel 的开销。它特别适合 shape 与 control flow 相对稳定的 decode，但 dynamic batch、variable sequence 与 memory address 会要求 padding、bucket 或多 graph 管理。
+
+\lecturefigure{slide-060.jpg}{CUDA Graph capture 将重复 GPU 工作压成可 replay 图}{官方 deck 第 60 页；课堂 01:16:55--01:17:20}
+
+\begin{importantbox}{Launch-overhead 模型}
+若一步 decode 有 $N$ 次 kernel launch，每次 host launch 开销为 $t_l$，则
+\[
+T_{\mathrm{step}}\approx T_{\mathrm{GPU}}+Nt_l+T_{\mathrm{Python}}+T_{\mathrm{sync}}.
+\]
+CUDA Graph 主要压缩 $Nt_l$ 与部分调度开销，不会自动减少 $T_{\mathrm{GPU}}$。当 kernel 很长时收益有限；当 step 很碎时收益显著。
+\end{importantbox}
+
+\subsection{先用系统级信号找 straggler}
+
+在深入代码前，温度、功耗与 utilization 能快速识别异常 replica。功耗偏低可能表示 GPU 没有收到足够工作，温度/时钟异常可能触发 throttling。然后用 Nsight Systems、Torch Profiler 或 CUPTI timeline 对齐 CPU thread、CUDA launch、communication 与 kernel，找到慢 replica 的差异。
+
+\lecturefigure{slide-061.jpg}{低功耗可以暴露没有吃满工作的慢 replica}{官方 deck 第 61 页；课堂 01:17:20--01:17:35}
+
+\begin{knowledgebox}{读图：功耗不是性能目标，而是旁路证据}
+同一 workload 下，一台 replica 的功耗明显更低，可能是 host starvation、较低 clock、通信等待或更小 batch。它不能单独证明根因，但能帮助从数百副本中挑出需要 trace 的异常样本。
+\end{knowledgebox}
+
+\lecturefigure{slide-062.jpg}{Nsight Systems / Torch Profiler 在 timeline 上定位 straggler}{官方 deck 第 62 页；课堂 01:17:35--01:18:00}
+
+\begin{knowledgebox}{读图：先比较 replica，再解释 kernel}
+图中多条 timeline 里有一条明显偏慢。第一步对齐相同请求阶段，比较 host gap、collective、kernel duration 与 overlap；只有确认差异落在某个 kernel 内部，才进入 Nsight Compute。否则低层 counter 会让人精确优化错误位置。
+\end{knowledgebox}
+
+\subsection{普通 Python profiler 仍可能带来两位数收益}
+
+前面的系统级 trace 已确认 GPU 在等待 host；本节继续用普通 CPU profiler 缩小根因。Slides 63--64 强调一个反常识案例：多模态 SGLang 路径每次请求重复构造对象/张量，py-spy flame graph 直接暴露热点；用 Python dictionary 缓存指针/对象后，端到端性能提升超过 10\%。这不是“dict 总能加速”，而是说明 host path 仍值得用最简单工具观察。
+
+\lecturefigure{slide-063.jpg}{py-spy flame graph 直接暴露 host 热点}{官方 deck 第 63 页；课堂 01:18:00--01:18:20}
+
+\begin{knowledgebox}{读图：横向宽度代表采样时间占比}
+Flame graph 中宽 frame 表示更多 CPU samples 落在该调用路径。先找请求热路径上可消除的重复工作、allocation 与 serialization，而不是先重写所有 Python。采样 profiler 对低侵入线上诊断尤其有价值。
+\end{knowledgebox}
+
+\lecturefigure{slide-064.jpg}{一个 Python dictionary 消除重复构造并获得两位数加速}{官方 deck 第 64 页；课堂 01:18:20--01:18:42}
+
+\begin{importantbox}{案例可迁移的不是代码，而是方法}
+1）用端到端 trace 确认 GPU 等待；2）用 host profiler 找最宽调用路径；3）验证对象是否能按稳定 key 复用；4）检查缓存失效、内存增长与并发安全；5）重新跑 correctness + workload benchmark。不要从“dict 很快”跳到无界缓存。
+\end{importantbox}
+
+\subsection{Kernel optimization 为什么排最后}
+
+矩阵乘、attention 与 collective kernel 往往由 NVIDIA、模型团队和专门研究者长期优化，并通过 cuBLAS、cuDNN、CUTLASS、FlashAttention、FlashInfer、DeepGEMM 等库复用。若系统仍有排队、低 batch、host gap 或错误 dtype，手写 kernel 很难得到可见端到端收益。
+
+\lecturefigure{slide-065.jpg}{只有在大项完成后才进入 kernel optimization}{官方 deck 第 65 页；课堂 01:18:42--01:19:03}
+
+\begin{knowledgebox}{Fused kernel 的第一使用定义}
+Fused kernel（融合 kernel）把多个原本独立的 GPU operation 合进一次 kernel 执行，减少 HBM 中间结果读写、kernel launch 与同步。它的收益取决于是否减少真正瓶颈的 bytes/launch；融合过大也会增加 register pressure、降低 occupancy 或限制 shape 通用性。
+\end{knowledgebox}
+
+\lecturefigure{slide-066.jpg}{Nsight Compute 把硬件 counter 映射到 C++、PTX 与 SASS}{官方 deck 第 66 页；课堂 01:19:03--01:19:25}
+
+\begin{knowledgebox}{读图：三个层级回答不同问题}
+C++/Triton source 表示算法意图，PTX 是虚拟 ISA，SASS 是目标 GPU 真正执行的机器指令。Nsight Compute 用 memory throughput、Tensor Core utilization、occupancy、stall reason 与 instruction mix 解释 kernel 离 roofline 多远；只有结合 shape 与数据依赖，counter 才有意义。
+\end{knowledgebox}
+
+\lecturefigure{slide-067.jpg}{白板先于 profiler：先推导瓶颈与上界}{官方 deck 第 67 页；课堂 01:19:25--01:19:49}
+
+\begin{importantbox}{Kernel 优化的分析顺序}
+先写出输入输出 shape、理论 FLOP、必要 bytes 与依赖；计算 arithmetic intensity 和可达 roofline；选择 tiling、data layout、fusion 与并行分解；最后用 profiler 验证。白板不是替代测量，而是缩小实验空间并防止对 counter 过拟合。
+\end{importantbox}
+
+\subsection{本章小结}
+
+优化顺序可以浓缩为：减少 target step（speculation）、减少 bytes/提高低精度算力（quantization）、填平 GPU 前后的 host gap（graph 与 profiling）、最后提升 kernel 接近物理上限的程度。每一步都必须通过相同 workload benchmark 与 application eval。
+
+\section{下一步：lossy systems、异构硬件与 agentic engineering}
+
+课程最后把 correctness 从模型供应商重新交回应用。共享 provider 面向许多未知 workload，必须保守；单应用部署知道自己的 eval、prompt 与错误成本，可以尝试更激进的 layer skip、pruning、heavy quantization 或 lossy speculation。与此同时，draft model 与特殊 layer 可能被编成 megakernel，prefill/decode 也可能迁移到不同加速器。
+
+\subsection{应用定义 correctness，才有资格做 lossy optimization}
+
+所谓 “unhinged” optimization 不是忽略质量，而是用应用自己的 eval 明确允许损失。若某类 data extraction 能容忍极小字段错误并由规则校验，就可能接受更激进 quantization；若是医疗、金融或安全 tool call，质量预算可能接近零。
+
+\lecturefigure{slide-069.jpg}{未来的 lossy optimization、megakernel 与新硬件}{官方 deck 第 69 页；课堂 01:19:56--01:20:44}
+
+\begin{knowledgebox}{读图：三条未来路线共享“specialization”}
+Lossy optimization 针对单应用正确性；megakernel 针对固定模型层或 draft workload；异构硬件针对 prefill/decode 不同算术强度。它们都用更窄适用范围换取更高效率，因此必须同时投资 compiler、routing、fallback 与 eval。
+\end{knowledgebox}
+
+\begin{warningbox}{预测不是承诺}
+讲者关于 prefill/decode 使用不同 accelerator、analog/optical/memristive computing 的判断属于未来方向。硬件可用性、软件栈、精度、网络与经济性都未由这张 slide 证明，不能写进当前容量计划的 guaranteed roadmap。
+\end{warningbox}
+
+\subsection{Agent 不会取消 correctness engineering}
+
+如果 agent 负责 benchmark、configuration、on-call 或写 bespoke engine，工程师的工作会转向定义正确性、权限、工具和反馈。把 AWS root account 交给 agent 并不会自动产生可靠 infra；必须提供可验证目标、sandbox、可回滚操作、metrics、trace 与 human escalation。
+
+\lecturefigure{slide-071.jpg}{Agentic software engineering 的核心仍是 correctness system}{官方 deck 第 71 页；课堂 01:20:50--01:22:19}
+
+\begin{knowledgebox}{读图：现在与以后分别需要什么}
+近期 agent 可以辅助 benchmark、配置搜索与监控，但前提是系统有清晰指标和权限边界；更长期的设想是按模型--硬件--workload 自动生成 bespoke engine。VibeServe（arXiv:2605.06068）在课堂日前展示了多 agent 搜索、实现、correctness check 与性能测量的闭环，但它仍是研究证据，不是无需监督的生产替代品。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={Agentic inference engineering 的安全闭环}]
+while budget_remaining:
+    candidate = agent.propose_change(
+        workload, source_code, allowed_tools, constraints
+    )
+    build_in_sandbox(candidate)
+    if not correctness_suite_passes(candidate):
+        reject(candidate)
+        continue
+    metrics = benchmark(candidate, production_trace_sample)
+    if dominates_baseline(metrics) and rollback_is_ready():
+        canary(candidate)
+    else:
+        reject(candidate)
+\end{lstlisting}
+
+\begin{importantbox}{CI/CL 的合理解释}
+Deck page 072 提出 continuous integration / continuous learning loop，但实际录像在 page 071 后结束，因此本讲义不把该页当成课堂已讲内容。作为延伸，可把它理解为：更多用户产生更多经治理的数据，数据支持 eval、distillation/speculator training 与模型更新，改进 UX 后再产生新反馈。任何自动学习都必须有数据许可、质量 gate 与 rollback。
+\end{importantbox}
+
+\subsection{本章小结}
+
+未来 serving 会更加 specialized，但 specialization 不等于放弃系统纪律。应用越了解自身正确性，越能安全使用 lossy optimization；agent 越能修改系统，越需要强 eval、observability、sandbox 和权限模型。自动化提高的是搜索与执行速度，工程责任转移到目标与验证。
+
+\section{总结与延伸}
+
+这堂课最重要的贡献不是一份 engine 或 GPU 推荐清单，而是一条可复用的 production inference 方法论：从应用语义开始，用 workload/SLO 固化目标，在单副本上画 frontier，选择模型与 engine，把 prefill/decode 映射到硬件，再设计弹性、故障、观测和正确性，最后按数量级依次优化。
+
+\subsection{十步部署检查表}
+
+\begin{importantbox}{从需求到 kernel 的十步顺序}
+\begin{enumerate}
+  \item 用 application eval 定义 correctness 与允许损失；
+  \item 记录 QPS/RPS、输入输出 token、prefix reuse、burst 与 tool loop；
+  \item 声明 TTFT、TPOT/ITL、TTLT、成本与可靠性 SLO；
+  \item 在单 replica 上跑 serial、burst 与 rate sweep；
+  \item 判断 capability-bound 或 efficiency-bound，再选模型；
+  \item 用相同 workload 比较 engine，而不是比较不同 demo；
+  \item 用 arithmetic intensity、HBM、Tensor Core 与 interconnect 选硬件；
+  \item 设计 allocation、health、cache、checkpoint 与 headroom；
+  \item 统一记录 token IDs、queue/stage latency、replica、hardware 与 eval；
+  \item 按 speculation/quantization、host、kernel 的顺序优化并 canary。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{最常见的因果混淆}
+
+\begin{warningbox}{六个“看起来更快”但可能不成立的结论}
+\begin{enumerate}
+  \item Aggregate tokens/s 更高，不代表 tokens/s/user 或 p99 更好；
+  \item GPU utilization 高，不代表 SM、HBM 或 Tensor Core 有效利用；
+  \item Provider price 低，不代表你的 workload 自托管更贵或更便宜；
+  \item Quantized perplexity（交叉熵的指数，可粗略理解为每个 token 的有效选择数）接近，不代表 tool use 与长上下文正确性不变；
+  \item Kernel microbenchmark 加速，不代表端到端 latency 改善；
+  \item Agent 能生成代码，不代表系统具备 correctness、权限和 rollback。
+\end{enumerate}
+\end{warningbox}
+
+\subsection{一张端到端 mental model}
+
+\begin{knowledgebox}{Production inference control loop}
+应用与 eval 定义目标 $\rightarrow$ workload/SLO 定义负载与约束 $\rightarrow$ model/engine/hardware 给出单副本 frontier $\rightarrow$ allocator 与 scheduler 把总流量映射到 replica $\rightarrow$ logs/metrics/evals 观测质量和性能 $\rightarrow$ optimizer/agent 提出改动 $\rightarrow$ correctness gate、benchmark、canary 与 rollback 决定是否上线。任何跳过测量或验证的捷径，都会把未知风险推到用户侧。
+\end{knowledgebox}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+  \item vLLM / PagedAttention：arXiv:2309.06180；
+  \item Orca iteration-level scheduling：OSDI 2022；
+  \item SGLang / RadixAttention：arXiv:2312.07104；
+  \item FlashAttention-2：arXiv:2307.08691；
+  \item FlashInfer：arXiv:2501.01005；
+  \item Lossless speculative decoding：arXiv:2211.17192；
+  \item EAGLE：arXiv:2401.15077；
+  \item DFlash：arXiv:2602.06036；
+  \item FP8 formats：arXiv:2209.05433；
+  \item VibeServe：arXiv:2605.06068；
+  \item NVIDIA CUDA Graph / Nsight 官方文档；
+  \item Modal LLM Almanac、GPU Glossary 与 serverless GPU 工程文章。
+\end{itemize}
+
+\begin{knowledgebox}{Lecture snapshot：2026-05-28}
+本讲义冻结在课堂日期可获得的一手资料。Slides 070、072、073 未作为课堂内容重建：070 是短暂过渡笑话，072 的 CI/CL appendix 未在录像中讲到，073 是招聘页。完整录像以五秒间隔审计 990 帧、17 张 contact sheets；除 token timing simulator 外，没有 deck 外独立白板或 live coding 视觉证据。
+\end{knowledgebox}
+
+\end{document}

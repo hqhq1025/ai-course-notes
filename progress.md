@@ -1,5 +1,55 @@
 # Progress Log
 
+## 2026-08-11 CS25 + CS153 rewrite
+
+- 用户要求继 CS336 2026 后，对 CS25 与 Frontier Systems 全部讲义做同标准重写。
+- 初始本地范围为 CS25 40 讲、CS153 11 讲；后续官方播放列表核验确认 CS25 V1--V5 实际为 41 讲，本地缺 Lecture 37，V6 另有 9/9 场公开录像。
+- 已核验 wdkns upstream commit，开始建立逐讲素材与质量基线。
+- 完成第一轮基线：51/51 当前均为 `⭐`，没有本地生成 PDF、manifest 或 canonical QA；CS153 11 讲与 CS25 大多数讲次都只有字幕和封面。
+- 下一步核验官方课程范围、视频/slide 可访问性，并抽样读取旧稿判断可复用内容比例。
+- 已完成 CS153 Lecture 01 新标准样板：替换为 Stanford Online 官方视频 `O5PfU_uDhS0`、官方人工字幕和官方封面，新增 27 张完整教学 slide、manifest、blueprint、coverage matrix 与 teacher-voice ledger。
+- Lecture 01 重写后为 31 页、27 图、38 个教学盒；strict coverage 零 warning，质量 `⭐⭐⭐`，最终双遍 XeLaTeX 无版式溢出。
+- 已生成 canonical QA，检查 contact sheet 与第 24/27/31 页原图并签署 QA 报告。下一步进入 Lecture 02 官方源核验和 slide/frame 重建。
+- 已完成 CS153 Lecture 02：确认历史视频 `yeA-opPcYxk` 已 private，保留本地时间戳字幕与官方封面，新增可复现 `lecture02-diagrams.py` 和 12 张 transcript-grounded 教学图。
+- Lecture 02 重写后为 20 页、12 图、30 个教学盒；strict coverage 零 warning、质量 `⭐⭐⭐`、最终双遍 XeLaTeX 无版式 warning。
+- 已修复二级目录造成的近空白页，改为一级目录并加入社区平台变更评审附录；canonical QA 无 near-blank page，检查 contact sheet 与第 16/20 页原图并签署报告。
+- 已启动 CS153 Lecture 03：确认历史视频 `jB13kCmWT2k` 已 private，完成 5 分钟字幕时间窗与 Apollo/Rubix/Maven/Warp Speed/隐私等主题锚点抽取，并找到 Palantir 官方 Apollo 与 Rubix 一手架构资料。
+- 已完成 CS153 Lecture 03：以本地时间戳字幕为课堂主线，结合 Palantir Apollo Demo Day 与当前 Rubix 官方架构材料，新增 13 张 transcript-grounded diagrams 和 8 张官方产品/架构图。
+- Lecture 03 最终为 24 页、21 图、33 个教学盒；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无 overflow/undefined warning。
+- 已人工检查 canonical QA contact sheet 及 Apollo、Rubix、privacy-security frontier、末页等全尺寸页面并签署报告。CS153 当前完成 3/11，下一步进入 Lecture 04。
+- 已完成 CS153 Lecture 04：确认历史视频 `qzT8I-J8sQ8` 已 private，以本地 1208 条时间戳字幕为课堂主线，并补入无监督机器翻译、HTPS、Chinchilla、LLaMA、Mistral 7B 五篇一手论文与欧盟委员会现行 GPAI 指引。
+- Lecture 04 新增 16 张可复现 transcript-grounded diagrams，正文重构为 research question → formal verifier → scaling objective → training debugging → checkpoint-to-solution → product feedback → post-training operating system。
+- Lecture 04 最终为 24 页、16 图、31 个教学盒；strict coverage 零 warning、8 个 teacher-voice markers、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式 warning，canonical QA 已人工签署。CS153 当前完成 4/11。
+- 同步修复质量工具：SRT 转换支持点号毫秒；coverage/quality 正确识别 figure 与 teacher-voice 宏；manifest 自动列出 `source-materials/`；相关测试 9/9 通过。
+- 已完成 CS153 Lecture 05：历史视频 `9SqYFxp9yRM` 已 private，以本地 931 条时间戳字幕为课堂主线，并用 Vercel/Next.js 官方资料核验 Framework-Defined Infrastructure、Build Output API、ISR、Fluid Compute、Spend Management 与 Observability。
+- Lecture 05 新增 16 张可复现 transcript-grounded diagrams，正文重构为 application intent → IR → infrastructure 与 traffic → telemetry/metering → developer decision 两个闭环。
+- Lecture 05 最终为 22 页、16 图、29 个教学盒、7 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。CS153 当前完成 5/11。
+- 修复术语检查器将 `scale-to-zero` 误判为 `ZeRO` 的大小写/边界问题；质量脚本测试现为 10/10 通过。
+- 已完成 CS153 Lecture 06：确认历史视频 `LriOr64E8D8` 已 private，以本地 1266 条时间戳字幕为课堂主线，并用 Saudi DGA、KFSHRC、Groq/Aramco Digital、`AI and Memory Wall` 与 in-memory computing 一手资料校验关键机制。
+- Lecture 06 新增 16 张可复现 transcript-grounded diagrams，正文按 hardware efficiency → application diffusion → governance/accountability 三层重构，并显式区分讲者估计、官方事实和工程判断。
+- Lecture 06 最终为 27 页、16 图、43 个教学盒、7 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。CS153 当前完成 6/11。
+- 已完成 CS153 Lecture 07：确认历史视频 `4jDQi9P9UIw` 已 private，以本地 1288 条时间戳字幕为课堂主线，并用 Cursor secure indexing/privacy/Fast Apply/CursorBench/Router、turbopuffer、PostgreSQL 与 S3 一手资料校验持久机制。
+- Lecture 07 新增 16 张可复现 transcript-grounded diagrams，正文按 context loop、edit loop 与 reliability loop 重构，覆盖 Merkle sync、embedding cache、blast radius、retry cascade、MVCC/vacuum、object-storage search、global inference、provider routing、security 和 abuse。
+- Lecture 07 最终为 24 页、16 图、37 个教学盒、8 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。CS153 当前完成 7/11。
+- 已完成 CS153 Lecture 08：历史视频 `MBD0Ah9cpYU` 当前要求登录，以本地 833 条时间戳字幕为课堂主线，并用 Thorn、NCMEC 与 NIST 一手资料校验 Match/Predict、Safety by Design、报告口径和 AI risk management。
+- Lecture 08 新增 16 张非敏感、可复现 transcript-grounded diagrams；正文按 response loop、trusted-data loop 与 governance loop 重构，覆盖 hash matching、predictive triage、moderator wellbeing、calibration/queue capacity、E2EE/privacy、conversation/graph signals、startup safety 和 ecosystem roles。
+- Lecture 08 最终为 25 页、16 图、36 个教学盒、11 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。初版 26 页存在仅两条参考资料的空尾页，已压缩为 25 页。CS153 当前完成 8/11。
+- 视觉抽查时 `magick montage` 不可用，按仓库兼容说明改用 ImageMagick 6 的 `montage` 成功完成关键页拼图。
+- 已完成 CS153 Lecture 09：以本地 1033 条时间戳字幕为课堂主线，并用 Okta Universal Directory/Identity Engine、官方 incident RCA、Auth0 并购资料、NIST Zero Trust 与 OAuth/OIDC/SCIM/WebAuthn 标准校验关键机制。
+- Lecture 09 新增 16 张可复现 transcript-grounded diagrams，正文按 access loop、trust/incident loop 与 technology-transition loop 重构，覆盖 identity lifecycle、front-door SLO、board information loop、security-first culture、agent delegation/token lifecycle 与 two-platform acquisition boundary。
+- Lecture 09 最终为 24 页、16 图、31 个教学盒、8 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。CS153 当前完成 9/11。
+- 已完成 CS153 Lecture 10：以本地 1025 条时间戳字幕为课堂主线，并用 scaling laws、GPT-3、InstructGPT、Constitutional AI/RLAIF、Anthropic evaluation/interpretability、RSP v3.0 与 API lifecycle 官方资料校验关键机制。
+- Lecture 10 新增 16 张可复现 transcript-grounded diagrams；正文按 scaling loop、training recovery loop、safety loop 与 chat-to-API product loop 重构，并显式区分 2025 课堂 ASL framing 与 2026-02-24 发布的 RSP v3.0。
+- Lecture 10 最终为 23 页、16 图、29 个教学盒、7 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。CS153 当前完成 10/11。
+- 已完成 CS153 Lecture 11：以 Joe Sullivan 39:17 时间戳字幕为课堂主线，并用 CISA/DOJ VDP、NIST SP 800-61 Rev. 3、SEC disclosure rule、第九巡回法院与美国最高法院官方记录校验 VDP、事件响应、披露治理与案件状态。
+- Lecture 11 最终为 26 页、16 图、45 个教学盒、7 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式或引用 warning，canonical QA 已人工签署。
+- CS153 Winter 2025 全量重写完成 11/11，共 270 页。全课 strict coverage、`⭐⭐⭐`、QA 五项签署与 LaTeX artifact hygiene 均通过；focused regression tests 26/26 通过。下一阶段进入 CS25 V1--V5 共 40 讲重写。
+- 已完成 CS25 Lecture 01 新标准样板：定位 Stanford Online 官方视频 `P127jhj-8-Y`，从视频恢复 17 张 distinct teaching slides，新增 `cs25-preamble.tex`、sanitized metadata、manifest、blueprint、coverage matrix、teacher-voice ledger 与 source index。
+- Lecture 01 重写为 25 页、17 图、35 个教学盒、9 个公式块、1 个 attention 伪代码 listing 与 6 个 teacher-voice markers；strict coverage 零 warning、质量 `⭐⭐⭐`、双遍 XeLaTeX 无版式 warning，canonical QA 已人工签署。按修正后的官方 V1--V5 范围，CS25 当前完成 1/41。
+- 官方 CS25 播放列表实时返回 50 个条目：V1--V5 41 讲、V6 9 讲。V1--V5 完成后需要补建本地缺失的 Lecture 37，并继续 V6 九讲，不再使用“V6 仅前三讲公开”的旧快照。
+
+---
+
 ## 2026-05-04
 - Started update batch after user approval.
 - Loaded planning, YouTube PDF, Bilibili PDF, and verification skills.
@@ -337,3 +387,325 @@
 - Started EP95 `VdWEE6vOYRw` Manus founder Xiao Hong interview: metadata, cover, and description downloaded. It is distinct from EP128 Peak/Manus final interview; YouTube exposes no subtitles or auto captions; queue status set to `in_progress`.
 - Completed EP95 Manus founder Xiao Hong interview note: `youtube/zhangxiaojun/ep95-VdWEE6vOYRw/ep95-notes.pdf` (20 pages, quality `⭐⭐⭐`, coverage check clean with `figs=12 readfig=10 boxes=33 term_digest=4 teacher_voice=6 summaries=8`, visual QA checked; cover plus generated concept diagrams only, no repeated body speaker frames).
 - Updated Zhang Xiaojun queues to mark EP95 done; next AI/internet selected target should be discovered from `ai-internet-queue.json`.
+- Completed and accepted CS25 Lecture 02: 46 pages, 45 recovered teaching slides, 56 teaching boxes, strict coverage clean, `⭐⭐⭐`, double-pass XeLaTeX with no layout warnings, and signed canonical PDF QA.
+- Updated CS25 V1--V5 tracking to 2/41; Lecture 03 Vision Transformers is now the active rewrite target.
+- Prepared CS25 Lecture 03 source-first rewrite: verified official Stanford video `BP5CM0YxbP8` and V1 playlist, recovered and persisted 36 distinct teaching slides, added sanitized metadata, source index, blueprint, coverage matrix, teacher-voice ledger, and a manifest with 36 required visual nodes plus 12 spoken-explanation nodes.
+- The legacy Lecture 03 note currently fails strict coverage (`3` figures, `0` read-figure explanations, all `36` required visual nodes missing); it will be replaced wholesale rather than incrementally patched.
+- Replaced and accepted CS25 Lecture 03 as a 40-page source-first Vision Transformers note with 36 original teaching slides, 48 boxes, VTAB/BiT/ViT/Scaling ViT/MLP-Mixer coverage, strict zero-warning coverage, `⭐⭐⭐`, clean two-pass XeLaTeX, and signed canonical PDF QA.
+- Updated CS25 V1--V5 tracking to 3/41; Lecture 04 is now the next rewrite target.
+- Audited CS25 Lecture 04 against official Stanford Online video `w4Bw8WYL8Ps`, the V1 course page, manual `en-US` captions, Decision Transformer/CQL/D4RL primary sources, and latest `wdkns/wdkns-skills` HEAD `39f1a04`. Recovered 24 final teaching-slide states from the local 1080p recording and documented the visible title-slide date conflict.
+- Replaced the legacy Lecture 04 note with a 34-page source-first Decision Transformer note: 24 figures, 40 teaching boxes, 10 teacher-voice markers, 15 formula blocks, 2 captioned code listings and 18,579 prose characters. Strict coverage is clean, quality is `⭐⭐⭐`, cross-references stabilize after three XeLaTeX passes, and canonical PDF visual QA is signed.
+- Updated CS25 V1--V5 tracking to 4/41; Lecture 05 Mixture of Experts / Switch Transformer is now the active rewrite target.
+- Audited CS25 Lecture 05 against official Stanford Online video `U8J32Z3qV8s`, official manual `en-US` captions, the V1 course page, and primary Switch Transformer / GShard / T5 / mT5 / V-MoE sources. Recovered and reviewed 38 complete teaching-slide states from the local 1080p recording, with redundant builds and repeated Q\&A navigation documented as intentional omissions.
+- Replaced and accepted CS25 Lecture 05 as a 43-page source-first Switch Transformer note with 38 original teaching slides, 42 teaching boxes, 15 teacher-voice markers, 9 formula blocks, 2 captioned listings, and 16,621 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, two-pass XeLaTeX is clean apart from existing Fandol/underfull warnings, and canonical visual QA is signed.
+- Updated CS25 V1--V5 tracking to 5/41; Lecture 06 Perceiver and Perceiver IO (`GV8-6ZgJVRk`) is the next source-first rewrite target.
+- Resolved CS25 Lecture 06 source drift: historical Stanford Online ID `GV8-6ZgJVRk` is unavailable, while the current official replacement is `wTZ3o36lXoQ` (58:58, published 2022-07-15). Replaced the old 3,553-cue repeated subtitle track with 1,399 parsed official manual `en-US` captions and downloaded the current 1080p work video/thumbnail.
+- Recovered and reviewed 39 complete teaching slides from 92 scene-difference candidates, including two distinct optical-flow qualitative examples while omitting repeated Q\&A navigation and intermediate video frames.
+- Replaced and accepted CS25 Lecture 06 as a 38-page source-first Perceiver / Perceiver IO note with 39 original teaching slides, 35 teaching boxes, 12 teacher-voice markers, 7 formula blocks, 2 captioned listings, and 13,835 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, two-pass XeLaTeX is clean apart from existing Fandol warnings, and canonical visual QA is signed.
+- Updated CS25 V1--V5 tracking to 6/41; Lecture 07 is the next source-first rewrite target.
+- Audited CS25 Lecture 07 against official Stanford Online video `zejXBg-2Vpk`, 1,476 parsed manual captions, the V1 course page, and the NPT / Transformer / BERT / set-modeling primary sources. A 2-second scene scan produced 73 candidates; manual review retained 28 final teaching states and documented duplicate builds, Q\&A revisits, blank transitions, and bumpers as intentional omissions.
+- Replaced the legacy Lecture 07 note wholesale, removing unsupported AI-SRE, incident, governance, and drift-monitoring material. The accepted note teaches self-attention, multi-head attention, teacher forcing, causal masking, dataset-as-input, ABD/ABA, permutation equivariance, stochastic target/feature masking, tabular rank evidence, corruption, duplicate intervention, and scaling boundaries.
+- Accepted CS25 Lecture 07 as a 37-page source-first Self-Attention / Non-Parametric Transformer note with 28 original teaching slides, 30 teaching boxes, 26 teacher-voice markers, 19 formula blocks, 2 captioned listings, and 17,406 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stabilized two-pass XeLaTeX has no layout warnings, and canonical visual QA is signed after contact-sheet plus full-size page checks.
+- Updated CS25 V1--V5 tracking to 7/41; Lecture 08 is now the next source-first rewrite target.
+- Audited CS25 Lecture 08 against official Stanford Online video `pC4zRb_5noQ`, 1,557 parsed manual captions, the V1 course page, Transformer Circuits framework/induction-head primary sources, and the lecture/article/upload date boundary. Manual review retained 64 teaching states from 108 recovered candidates and omitted duplicate builds, blank transitions, bumpers, the end slate, and low-resolution intermediate Lexoscope states.
+- Replaced and accepted Lecture 08 as a 55-page source-first Transformer Circuits / Induction Heads note with 64 original teaching slides, 24 teaching boxes, 21 teacher-voice markers, 19 formula blocks, 2 captioned listings, and 17,849 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐` at 278 prose characters per figure, stabilized two-pass XeLaTeX has no layout/reference/hyperref warnings, and canonical visual QA is signed after contact-sheet plus full-size table, formula, composition, spectrum, ablation, and soft-induction checks.
+- Updated CS25 V1--V5 tracking to 8/41; Lecture 09 is now the next source-first rewrite target.
+- Audited CS25 Lecture 09 against official Stanford Online video `wvE2n8u3drA`, 981 official manual-caption cues, the V1 course schedule, and classroom-era primary papers for raw-audio generation, generative/contrastive representation learning, and Audio Transformers. Recovered 47 final teaching states and preserved the 2021 `2105.00335v1` result boundary instead of importing the later revision.
+- Replaced and accepted Lecture 09 as a 46-page source-first audio Transformer note with 47 original teaching slides, 28 teaching boxes, 18 teacher-voice markers, 18 formula blocks, 2 captioned listings, and 16,960 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐` at 360 prose characters per figure, stabilized two-pass XeLaTeX has no layout/reference/hyperref warnings, and canonical visual QA is signed after contact-sheet plus full-size formula, metric, hierarchy, result-table, filterbank, and summary checks.
+- Updated CS25 V1--V5 tracking to 9/41; Lecture 10 is now the next source-first rewrite target.
+- Began CS25 Lecture 10 source-first regeneration. Confirmed official Stanford Online video `CYaju6aCMoQ` (V2, 52:48, uploaded 2022-08-11), replaced the 15,755-line rolling subtitle dump with 1,122 parsed official manual captions, downloaded a local 1080p working video, and recovered 32 distinct teaching slides from 1,584 two-second samples after removing bumpers, duplicate builds, Q&A revisits, and the end slate.
+- Verified the lecture against Hinton's 44-page GLOM paper (`arXiv:2102.12627`, one public 2021 version). The central boundary is that GLOM is an imaginary design system / research proposal, not an empirically validated trained architecture. Source index, teacher-voice ledger, blueprint, coverage matrix, and the full note rewrite remain in progress.
+- Replaced and accepted CS25 Lecture 10 as a 41-page source-first GLOM note with 32 original teaching slides, 38 teaching boxes, 12 in-note teacher-voice markers synthesized from a 30-row ledger, 13 formula blocks, 2 captioned listings, and 20,710 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐` at 647 prose characters per figure, stabilized two-pass XeLaTeX has no layout/reference/hyperref warnings, and canonical visual QA is signed after contact-sheet plus full-size mechanism, formula, code, table, and final-page checks.
+- Updated CS25 V1--V5 tracking to 10/41; Lecture 11 is now the next source-first rewrite target.
+- Audited CS25 Lecture 11 against Stanford Online `XfpMkf4rD6E`: taught 2023-01-10, uploaded 2023-05-19, 1:11:40, with 1,667 parsed official manual-caption intervals. The legacy note's 2023-02-23 upload date was incorrect.
+- Recovered 61 distinct teaching slides from 2,150 two-second 1080p samples and 139 high-recall candidates. Added a primary-source index, 35-row teacher-voice ledger, 61-slide manifest, blueprint, and coverage matrix; removed unsupported RLHF governance, deployment, drift, prompt-review, and team-process material from the old draft.
+- Replaced and accepted CS25 Lecture 11 as a 67-page source-first Karpathy introduction with 61 teaching slides, 34 teaching boxes, 11 in-note teacher-voice markers, 16 formula blocks, 4 captioned listings, and 21,389 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐` at 350 prose characters per figure, two-pass XeLaTeX is clean, and canonical visual QA is signed after full contact-sheet and enlarged dense-page checks.
+- Updated CS25 V1--V5 tracking to 11/41; Lecture 12 is now the next source-first rewrite target.
+- Audited CS25 Lecture 12 against official Stanford Online replacement video `DJ1Yy6Aquug`, 1,264 manual-caption cues, the V2 course archive, and six pre-lecture primary papers. Recovered 17 distinct teaching slides and documented that the formal deck ends at 00:30:54 while the remaining half hour is an information-dense Q\&A.
+- Replaced and accepted Lecture 12 as a 27-page source-first language-alignment note with all 17 teaching slides, 32 teaching boxes, a 35-row teacher-voice ledger, 10 formula blocks, 2 captioned listings, and 14,325 prose characters. The note removes post-lecture Superalignment/deployment material and restores the actual 2023 lecture chain from human intent and RLHF through scalable oversight, targeted perturbations, preference payload, tools, outer/inner alignment, and interpretability.
+- Strict coverage is zero-warning, quality is `⭐⭐⭐` at 842 prose characters per figure, all slides are referenced exactly once, stabilized two-pass XeLaTeX is clean, and canonical visual QA is signed after fixing an orphaned definition line and a mostly empty final page.
+- Updated CS25 V1--V5 tracking to 12/41; Lecture 13 is now the next source-first rewrite target.
+- Audited CS25 Lecture 13 against official Stanford Online video `tVtOevLrt5U`, the V2 archive, 1,439 manual-caption cues, Jason Wei's 37-page official deck, and eight classroom-date-compatible primary papers. Extracted two clean Playground frames showing the no-CoT wrong answer 33 and CoT derivation of 9.
+- Replaced and accepted Lecture 13 as a 42-page source-first emergence and chain-of-thought note with all 36 teaching slides, 2 live-demo figures, 43 teaching boxes, a 43-node teacher-voice manifest, 13 in-note teacher markers, 8 formula blocks, 2 captioned listings, and 20,281 prose characters.
+- Strict coverage is zero-warning, quality is `⭐⭐⭐` at 533 prose characters per figure, two-pass XeLaTeX is clean apart from repository-wide Fandol glyph notices, and canonical PDF QA is signed after correcting the official slide 22/23 mapping and rerendering all 42 pages.
+- Updated CS25 V1--V5 tracking to 13/41; Lecture 14 is now the next source-first rewrite target.
+- Completed CS25 Lecture 14 source-first rewrite and acceptance: official manual subtitles, 42 manually recovered teaching slides, source index, manifest, blueprint, coverage matrix, and teacher-voice ledger are in place.
+- Final Lecture 14 artifact is 44 pages with 42 figures, 31 teaching boxes, 13 teacher-voice markers, 6 formulas, 2 captioned listings, and 17,277 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 411 chars/figure.
+- Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical PDF QA is signed after full contact-sheet and enlarged-page review.
+- CS25 V1--V5 progress is 14/41; Lecture 15 is the next source-first rewrite target.
+- Completed and accepted CS25 Lecture 15 against Stanford Online `ct4tdyyNDY4`, official manual captions, 45 recovered teaching states, and five classroom-date-compatible primary papers.
+- Final Lecture 15 artifact is 48 pages with 45 full-width figures, 29 teaching boxes, 12 teacher-voice markers, 6 formula blocks, 2 captioned listings, and 18,626 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 413 chars/figure.
+- Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical QA is signed after full contact-sheet review, enlarged critical-page inspection, TOC compaction, table-width repair, and replacement of all cropped slide assets with full `1920x1080` frames.
+- CS25 V1--V5 progress is 15/41; Lecture 16 is the next source-first rewrite target.
+- Completed and accepted CS25 Lecture 16 against Stanford Online `sTQaJyrI-zg`, the official manual captions, 56 recovered teaching states, the V2 course archive, and the five primary papers used by the lecture.
+- Final Lecture 16 artifact is 50 pages with 56 full-width figures, 18 teaching boxes, 9 teacher-voice markers, 9 formula blocks, 3 captioned listings, and 20,134 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 359 chars/figure.
+- Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical QA is signed after full contact-sheet review and enlarged critical-page inspection.
+- CS25 V1--V5 progress is 16/41; Lecture 17 is the next source-first rewrite target.
+- Completed and accepted CS25 Lecture 17 against Stanford Online `nz7_wg5iOlA`, official manual captions, 84 manually recovered full-width teaching states, the V2 course archive, and the Med-PaLM, Performer, ProtNLM, DeepConsensus, and Enformer primary sources.
+- Replaced the unsupported legacy draft with a 68-page source-first Biomedical Transformers note covering the true 2023 lecture chain from biomedical sequence representations and MultiMedQA through clinical human evaluation, efficient protein attention, protein annotation, sequencing correction, regulatory genomics, and foundation biomedical AI.
+- Final Lecture 17 artifact has 84 figures, 38 teaching boxes, 14 teacher-voice markers, 10 formula blocks, 3 captioned listings, and 21,962 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 261 chars/figure.
+- Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical QA is signed after full contact-sheet review and enlarged critical-page inspection.
+- Corrected CS25 Lecture 18 to the official Stanford Online recording `L4DC7e6g2iI` (classroom date 2023-03-07), replacing an unrelated 2025 PhD-defense link and removing unsupported production/MoE/governance material from the legacy draft.
+- Completed the source-first two-speaker note for Trenton Bricken's Attention/SDM talk and Will Dorrell's cognitive-map/TEM talk: 61 pages, 66 recovered teaching states, 26 teaching boxes, 11 teacher-voice markers, 17 formula blocks, 3 captioned listings, and 17,886 prose characters.
+- All 66 required visuals are referenced exactly once; strict coverage is warning-free, quality is `⭐⭐⭐` at 271 chars/figure, and stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices.
+- Canonical 61-page PDF QA is signed after full contact-sheet review and enlarged inspection of formulas, tables, code, handwritten derivations, synthesis, and references. CS25 V1--V5 progress is now 18/41; Lecture 19 is next.
+- Completed and accepted CS25 Lecture 19 against the official Stanford Online video `fz8wf9hN20c`, official manual captions, 55 manually selected teaching states, and the PaLM-E, RT-1, RT-2, RT-X, Language Table, and Language-to-Rewards primary sources.
+- Replaced the one-figure legacy summary with a 48-page source-first note covering physical-world failure cases, simulation and Moravec's paradox, data/interface bottlenecks, PaLM-E model consolidation, RT-2 action tokens and co-fine-tuning, RT-X transfer, reward-program interfaces, MPC, sim-to-real, Q&A tradeoffs, and physical safety.
+- Final Lecture 19 artifact has 55 figures, 28 teaching boxes, 11 teacher-voice markers, 8 formula blocks, 3 captioned listings, and 18,174 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 330 chars/figure.
+- Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical QA is signed after full contact-sheet and enlarged critical-page inspection. CS25 V1--V5 progress is now 19/41; Lecture 20 is next.
+- Completed and accepted CS25 Lecture 20 against Stanford Online `wwQ1LQA3RCU`, official manual captions, 61 manually selected teaching states, and the MineDojo, Voyager, Eureka, VIMA, VPT, RT-2, and RoboCat primary sources.
+- Replaced the one-figure legacy summary with a 54-page source-first Generalist Agents note covering active versus passive experience, the generalist-agent recipe, MineDojo/MineCLIP, Voyager code/memory/curriculum, Eureka reward reflection, three internet-video learning routes, multimodal prompting, VIMA, RT-2, RoboCat, and the human-level Minecraft challenge.
+- Final Lecture 20 artifact has 61 figures, 38 teaching boxes, 18 teacher-voice markers, 9 formula blocks, 3 captioned listings, and 23,915 prose characters; strict coverage is warning-free and quality is `⭐⭐⭐` at 392 chars/figure.
+- Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical 54-page QA is signed after full contact-sheet and enlarged critical-page inspection, including TOC and references compaction. CS25 V1--V5 progress is now 20/41; Lecture 21 is next.
+
+## CS25 Lecture 21 completion
+- Verified the official Stanford CS25 V3 entry and Stanford Online video `1GbDTTK3aR4` for Ashish Vaswani's 2023-11-07 lecture, using the official manual `en-US` captions and a November 2023 evidence boundary. No public standalone deck was found, so 1,613 three-second samples were audited and deduplicated to 43 distinct full-width teaching states.
+- Replaced the thin legacy summary and fabricated 2026 date/source URL with a source-first 48-page note covering consolidation history, RNN/convolution/attention tradeoffs, scaled dot-product and multi-head attention, position representations, Music Transformer, long context, FLOPs versus memory hierarchy, MQA/GQA, online softmax, tool use, product loops, research directions, and Q\&A.
+- Accepted 43/43 required figures referenced exactly once, 50 teaching boxes, 22 teacher-voice markers, 15 displayed formula blocks, 3 captioned listings, and 25,143 prose characters. Strict coverage is warning-free and quality is `⭐⭐⭐` at 584 prose characters per figure.
+- Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical 48-page QA is signed after complete contact-sheet and enlarged critical-page inspection. CS25 V1--V5 progress is now 21/41; Lecture 22 is next.
+
+## CS25 Lecture 22 completion
+- Verified the Stanford CS25 V3 October 31, 2023 entry and official Stanford Online video `mcep6W8oB1I` with 1,431 parsed manual-caption cues. The speaker site exposed two deck variants; video-frame comparison at 00:26:30--00:26:40 proved the 71-page `transformers_united.pdf` is the final classroom deck because it includes the shown Zephyr/distillation pages omitted from the 67-page variant.
+- Replaced the thin legacy note and unsupported fixed-recipe framing with a 60-page source-first treatment of SFT and preference-data distributions, Surge collection, iterative vendor endpoints, Zephyr alignment distillation, training/evaluation graphs, human Elo/AlpacaEval/Arena/MT-Bench, RM/red-team gaps, metric reversals, and GPT-4 judge bias.
+- Accepted all 66 required teaching slides exactly once, with five pure divider/closing pages intentionally optional, 72 teaching boxes, 23 teacher-voice markers, 6 displayed formula blocks, 3 captioned listings, and 22,805 prose characters. Strict coverage is warning-free and quality is `⭐⭐⭐` at 345 prose characters per figure.
+- Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond standard Fandol notices. Canonical 60-page QA is signed after full contact-sheet and enlarged critical-page inspection; an orphan final reminder page was removed before acceptance. CS25 V1--V5 progress is now 22/41; Lecture 23 is next.
+
+## CS25 Lecture 23 completion
+- Verified the official Stanford CS25 V3 November 14, 2023 entry, Stanford Online `ckNMsUuLryM`, the 52:28 1080p recording, and 1,210 parsed manual-caption cues. The legacy note contained unsupported Padlet, dashboard, priority-formula, governance-cadence, and deployment claims that were removed rather than preserved.
+- No public standalone classroom deck was found. Three-second sampling produced 1,049 frames and 133 high-recall change candidates; contact-sheet review retained 39 distinct teaching states after removing repeated progressive builds, dividers, speaker-only Q&A frames, open-source repeats, and closing bumpers. The retained classroom region was cropped to remove the conferencing strip without redrawing content.
+- Accepted `cs25/lecture23/lecture23-notes.pdf` at 48 pages with all 39 required teaching figures referenced exactly once, 70 teaching boxes, 19 in-note teacher-voice markers, 16 displayed formula blocks, 3 captioned listings, and 20,411 prose characters.
+- Strict coverage is zero-warning and quality is `⭐⭐⭐` at 523 prose characters per figure. Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond repository-standard Fandol notices.
+- Canonical visual QA is signed after reviewing the full 48-page contact sheet and enlarged NLLB-Seed, model challenge, MoE terminology, curriculum, relative-BLEU, toxicity, Q&A, and final synthesis pages. CS25 V1--V5 rewrite progress is now 23/41; Lecture 24 is next.
+
+## CS25 Lecture 24 completion
+- Verified Stanford Online `ylEk1TE1uBo`, the CS25 V3 November 28, 2023 classroom boundary, the 1:00:13 1080p recording, and 1,297 parsed manual-caption cues. The legacy note's prompt-dashboard, SLI/SLO, drift-monitoring, rollback, production-pipeline, observability, and generic deployment-checklist claims were unsupported and removed.
+- No public standalone classroom deck was found. Three-second sampling produced 1,204 frames and 174 high-recall change candidates; manual review retained 64 distinct teaching states across emergence, Chain-of-Thought/ToT/Socratic/PAL/PoT, BabyLM, MultiOn demos, autonomy, Action API, memory, multi-agent communication, plan divergence, LLM OS, permissions, and sandboxing.
+- Accepted `cs25/lecture24/lecture24-notes.pdf` at 65 pages with all 64 required teaching figures referenced exactly once, 79 teaching boxes, 25 in-note teacher-voice markers, 13 displayed formula blocks, 4 captioned listings, and 24,715 prose characters.
+- Strict coverage is zero-warning and quality is `⭐⭐⭐` at 386 prose characters per figure. Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond repository-standard Fandol notices.
+- Canonical visual QA is signed after reviewing the full 65-page contact sheet and enlarged Agent-stack, checkout, autonomy, Action API code, multi-agent, reliability, generalized-system, safety, and synthesis pages. A sparse trailing summary page was removed before acceptance. CS25 V1--V5 rewrite progress is now 24/41; Lecture 25 is next.
+
+## CS25 Lecture 25 source audit and acceptance
+- Verified Stanford Online `mE7IDf2SmJg`, the CS25 V3 December 5, 2023 classroom boundary, the 1:19:26 1080p recording, and 1,795 parsed official manual-caption cues. No public standalone classroom deck was found, so the visual spine was recovered from the official recording.
+- Three-second sampling produced 1,589 frames and 77 high-recall candidates; manual review retained 49 distinct cropped teaching states. Repeated speaker windows, revisits, bumpers, and non-teaching transitions were omitted intentionally.
+- Accepted `cs25/lecture25/lecture25-notes.pdf` at 56 pages with all 49 teaching figures referenced exactly once, 68 teaching boxes, 25 in-note teacher-voice markers, 17 displayed formula blocks, 3 captioned listings, and 23,845 prose characters.
+- Strict coverage is zero-warning and quality is `⭐⭐⭐` at 486 prose characters per figure. Stabilized final two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond repository-standard Fandol notices.
+- Canonical visual QA is signed after reviewing the full 56-page contact sheet and enlarged title/TOC, RAG equations, Frankenstein/FiD, Atlas objectives and result tables, Lost-in-the-Middle, multimodal RAG, RAG 2.0, and synthesis pages. CS25 V1--V5 rewrite progress is now 25/41; Lecture 26 is next.
+
+## CS25 Lecture 26 source audit and acceptance
+- Verified Stanford Online `fKMB5UlVY1E`, the official April 4, 2024 classroom date, April 23 upload, 1:17:28 1080p recording, and 1,795-cue official `en-US` manual subtitle track. The normalized transcript contains 891 timed lines and supports a 29-entry teacher-voice ledger.
+- The official Google Slides deck linked in the video description exports to 114 pages. A fresh export on 2026-08-11 is byte-for-byte identical to local `slides.pdf` at SHA-256 `b16b112aa5b4b35a8b1ca221205e3bce24650a761609dc68b25edf2cb086091c`.
+- Page review retained 91 teaching-bearing slides. Twenty-three pages are intentionally omitted: instructor/logistics material, pure dividers, the closing card, and four redundant intermediate communication-diagram builds whose distinct baseline, verification, conflict, and final correction states remain covered.
+- The legacy note cited only 9/114 slides and invented prompt-calibration, dataset-drift, clinician-override, compliance-dashboard, incident-ticket, rollback, synthetic-replay, and regulator-checklist material. The replacement removes those unsupported claims and restores the actual Transformer/LLM/agent lecture.
+- Accepted `cs25/lecture26/lecture26-notes.pdf` at 83 pages with all 91 required teaching figures referenced exactly once, 90 teaching boxes, 22 in-note teacher-voice markers, 28 displayed formula blocks, 3 captioned listings, and 25,357 prose characters.
+- Strict coverage is zero-warning and quality is `⭐⭐⭐` at 278 prose characters per figure. Stabilized two-pass XeLaTeX has no layout/reference/rerun/hyperref warnings beyond repository-standard Fandol notices.
+- Canonical visual QA is signed after compressing a sparse third TOC page, reviewing the full 83-page contact sheet, and enlarging attention, emergence, DPO, Phi, reasoning, agent, autonomy, multi-agent, plan-divergence, LLM-OS, synthesis, and reference pages. CS25 V1--V5 rewrite progress is now 26/41; Lecture 27 is next.
+
+## 2026-08-12 CS25 Lecture 27 completion
+
+- Replaced the source-inaccurate legacy note for `3gb-ZkVRemQ` with a source-first dual-speaker lecture using Jason Wei's 20-page official deck, Hyung Won Chung's 67-page official deck, and the 1,551-cue official `en-US` manual-caption track.
+- Verified the canonical classroom date (2024-04-11), upload date (2024-05-06), 1:17:07 runtime, speaker boundary, two official Google Slides exports, and SHA-256 provenance for both local PDFs.
+- Classified all 87 pages: 66 required teaching pages and 21 intentional omissions limited to a contact card, divider, empty scaffold, or redundant progressive builds. Every required image appears exactly once and no optional page leaks into the note.
+- Rewrote the lecture around Jason's data inspection / latent-task / scaling / emergence / U-shaped analysis and Hyung Won's dominant-force / Bitter Lesson / architecture transformation / inductive-bias lifecycle analysis, including the learning-objective and compute-trajectory Q&A extensions.
+- Final acceptance: 61 pages, 66 figures, 36 teaching boxes, 24 teacher-voice markers, 20 formula blocks, 4 captioned listings, and 19,201 prose characters (290 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, two-pass XeLaTeX is clean beyond Fandol notices, and signed visual QA found no blank/cropped figures, overflow, orphan captions, stranded headings, malformed boxes, or URL defects.
+- CS25 V1--V5 rewrite progress is now 27/41. Lecture 28 is next.
+
+## 2026-08-12 CS25 Lecture 28 source audit and acceptance
+
+- Verified Stanford Online `AdLgPmcrXwQ`, “Stanford CS25: V4 I Aligning Open Language Models,” taught by Nathan Lambert on 2024-04-18 and uploaded on 2024-05-10. The 1:16:21 1080p recording provides a 1,693-cue official `en-US` manual-caption track.
+- Detected and removed a severe source-contamination defect: the legacy `slides.pdf` was byte-identical to Lecture 27's Hyung Won Chung deck at SHA-256 `24114d8f2d108454eb730efc9d2e8e4de42ddb5f10d6331e9eacb089c8e6fa36`. It is replaced by Nathan Lambert's correct 77-page official Google Slides export at SHA-256 `3c3470dea235227cc43134b87106b8a913716b72bf8324edb8d0a34f79502268`.
+- Classified the official deck into 67 required teaching pages and 10 intentional omissions limited to pure dividers, empty or superseded builds, one QR-only atlas state, and the closing contact card. Every required image appears exactly once; no optional page leaks into the note.
+- Rewrote the lecture around open-model alignment history, base/IFT/SFT/RLHF/DPO distinctions, Alpaca/self-instruct, Vicuna/ShareGPT, OpenAssistant, LoRA/QLoRA/Guanaco, safety backlash, Arena/AlpacaEval/MT-Bench/Leaderboard, RLHF and reward modeling, DPO, Zephyr/Tulu 2/SteerLM/Starling, Llama 3, preference-data scarcity, and synthetic-data limits.
+- Final acceptance: 57 pages, 67 figures, 30 teaching boxes, 30 teacher-voice markers, 14 formula blocks, 3 captioned listings, and 17,716 prose characters (264 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, two-pass XeLaTeX has no overfull/reference/rerun/hyperref warnings, and signed visual QA found no blank/cropped figures, overflow, orphan captions, stranded headings, malformed boxes, mostly empty trailing pages, or URL defects.
+- CS25 V1--V5 rewrite progress is now 28/41. Lecture 29 is next.
+
+## 2026-08-12 CS25 Lecture 29 source audit and acceptance
+
+- Verified Stanford Online `RcJ1YXHLv5o`, “Stanford CS25: V4 I Demystifying Mixtral of Experts,” taught by Albert Jiang on 2024-04-25 and uploaded on 2024-05-16. The 1:04:31 official 1920x1080 recording provides a 2,830-cue automatic `en-orig` subtitle track, normalized into 276 readable timed segments.
+- Detected and removed another severe source-contamination defect: the legacy 77-page `slides.pdf` and its rendered images were Nathan Lambert's Lecture 28 deck, byte-identical at SHA-256 `3c3470dea235227cc43134b87106b8a913716b72bf8324edb8d0a34f79502268`. No independent Mixtral deck is publicly linked, so the visual spine was rebuilt from the official recording.
+- Audited 3,871 one-second samples and 58 high-recall visual-change candidates, then retained 26 required high-resolution teaching states. Seventeen omitted states are limited to bumpers, pure dividers, the closing card, and superseded progressive builds; Q\&A revisits add teacher voice but no new visual state.
+- Rewrote the lecture around the Mistral 7B dense baseline, top-two routing, total/active/system cost accounting, Mixtral performance evidence, four architecture myths, load balance, compression/offload, routing interpretation, domain and token persistence experiments, community ablation, and the edge/cloud, batch, topology, RAG, expert-swapping, and gradient-flow Q\&A.
+- Final acceptance: 38 pages, 26 figures, 37 teaching boxes, 31 teacher-voice markers, 26 formula blocks, 4 captioned listings, and 21,898 prose characters (842 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, two-pass XeLaTeX has no overfull/reference/rerun/hyperref warnings, and signed visual QA found no rendering or layout defects.
+- CS25 V1--V5 rewrite progress is now 29/41. Lecture 30 is next.
+
+## 2026-08-12 CS25 Lecture 30 source audit and acceptance
+
+- Verified Stanford Online `zL9B3eXq0gY`, “Stanford CS25: V4 I Transformers that Transform Well Enough to Support Near-Shallow Architectures,” taught by Jake Williams on 2024-05-02 and uploaded on 2024-05-23. The 1:19:56 official 1920x1080 recording provides 1,487 manual `en-US` caption cues, normalized into 634 readable timed segments.
+- Removed the contaminated legacy framing, including the fictitious 2026 course date, nonexistent Stanford lecture URL, `SAFU` misspelling, and unsupported governance/rollback material. With no public standalone deck, audited 4,796 one-second samples and recovered 27 independent teaching states from 3,409 slide-like frames and 68 high-recall candidates.
+- Rewrote the lecture around standard attention versus SAFFU, deterministic bit-cipher embeddings, generalized co-occurrence and explicit softmax initialization, warm/freeze/thaw evidence, near-shallow computation, dynamic context and packing, frozen-embedding caching, PLM/BabyLM training, and the Le Potato edge pipeline with explicit evidence boundaries.
+- Final acceptance: 38 pages, 27 figures, 44 teaching boxes, 34 teacher-voice markers, 28 formula blocks, 4 captioned listings, and 20,846 prose characters (772 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering or layout defects after enlarged review of the final self-test and references pages.
+- CS25 V1--V5 rewrite progress is now 30/41. Lecture 31 is next.
+
+## 2026-08-12 CS25 Lecture 31 source audit and acceptance
+
+- Verified Stanford Online `cYfKQ6YG9Qo`, “Stanford CS25: V4 I From Large Language Models to Large Multimodal Models,” taught by Ming Ding of Zhipu AI on 2024-05-09 and uploaded on 2024-05-30. The 1:20:03 official 1920x1080 recording provides a manual `en-US` caption track normalized into 983 timestamped segments.
+- Removed the legacy fictitious 2026-04-04 course date and unsupported monitoring, drift-detection, rollback, governance, fairness, privacy, and deployment checklists. With no public standalone deck, audited all 4,803 one-second samples, recovered 76 high-recall candidates, and selected 31 independent teaching states after excluding bumpers, pure dividers, transitions, duplicate shares, and changing frames inside one video demo.
+- Rewrote the lecture around the BERT/GPT-3/ChatGPT moments, modern decoder recipe, ZeRO/Megatron/context parallelism, SFT/RLHF/DPO, data-algorithm-architecture equivalence, BLIP-2/LLaVA, CogVLM/CogAgent/Vary/GLM-4V, autoregressive image tokens, DDPM/Relay Diffusion/CogView3/DiT/MM-DiT, video scaling, dated research predictions, and Q\&A evidence limits.
+- Final acceptance: 40 pages, 31 figures, 36 teaching boxes, 26 teacher-voice markers, 26 formula blocks, 5 captioned listings, and 20,701 prose characters (667 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering/layout defects or sparse trailing page.
+- CS25 V1--V5 rewrite progress is now 31/41. Lecture 32 is next.
+
+## 2026-08-12 CS25 Lecture 32 source audit and acceptance
+
+- Verified Stanford Online `jm2hyJLFfN8`, “Stanford CS25: V4 I Behind the Scenes of LLM Pre-training: StarCoder Use Case,” taught by Loubna Ben Allal of Hugging Face on 2024-05-23 and uploaded on 2024-06-07. The 1:01:36 official 1920x1080 recording provides 1,259 manual `en-US` caption cues normalized into 1,230 timestamped segments; the speaker's official site links the 71-page Google Slides deck.
+- Replaced the thumbnail-only legacy note, which had no canonical video URL and omitted the entire official deck. The source audit rendered all 71 pages, retained 58 required teaching slides, and documented 13 intentional omissions limited to pure dividers, intermediate animation builds, completion marks, one duplicate FineWeb page, and the closing slide.
+- Rewrote the lecture around open-model transparency, Kaplan/Chinchilla and lifecycle-optimal scaling, Common Crawl/FineWeb, The Stack v1/v2 and Software Heritage, synthetic data, filter ablations, MinHash/LSH near-deduplication, PII and decontamination, metadata/FIM/mixture design, BigCode governance, responsible release, pass@k and membership testing, HumanEval contamination, LiveCodeBench, and the domain/tokenizer/dataset-governance Q\&A.
+- Final acceptance: 55 pages, 58 figures, 43 teaching boxes, 27 teacher-voice markers, 13 formula blocks, 5 captioned listings, and 22,475 prose characters (387 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX has no layout/reference/rerun warnings beyond standard Fandol notices, and signed visual QA found no rendering, readability, overflow, or sparse-page defects.
+- CS25 V1--V5 rewrite progress is now 32/41. Lecture 33 is next.
+
+## 2026-08-12 CS25 Lecture 33 source audit and acceptance
+
+- Verified official playlist item 33, Stanford Online `orDKvo8h71o`, “Stanford CS25: V4 I Hyung Won Chung of OpenAI,” recorded on 2024-04-11 and uploaded on 2024-06-11. The standalone 36:30 1920x1080 edit provides 376 manual `en-US` captions and links Hyung Won Chung's 67-page `Shaping the Future of AI from the History of Transformer` deck.
+- Established the exact relationship to Lecture 27: Lecture 33 is the official standalone edit of the Hyung Won Chung half of combined upload `3gb-ZkVRemQ`; its deck is byte-identical to `cs25/lecture27/hyung-slides.pdf` at SHA-256 `24114d8f2d108454eb730efc9d2e8e4de42ddb5f10d6331e9eacb089c8e6fa36`. The standalone ends before the combined video's joint Q\&A, so Q\&A-only MLE/RLHF and compute-limit claims were explicitly excluded.
+- Replaced the 11 KB legacy summary with a source-complete lecture on dominant-force modeling, compute per dollar, the Bitter Lesson, inductive-bias lifecycle, three Transformer families, the four-step encoder-decoder-to-decoder-only transformation, translation and FLAN natural experiments, representation hierarchy, bidirectionality, and KV-cache reuse.
+- Final acceptance: 41 pages, 47 required official figures, 23 teaching boxes, 16 teacher-voice markers, 11 formula blocks, 3 captioned listings, and 12,585 prose characters (267 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering, overflow, readability, or sparse-tail defects.
+- CS25 V1--V5 rewrite progress is now 33/41. Lecture 34 is next.
+
+## 2026-08-12 CS25 Lecture 34 source audit and acceptance
+
+- Verified official playlist item 34, Stanford Online `JKbtWimlzAE`, “Stanford CS25: V5 I Overview of Transformers,” taught by Steven Feng, Karan Singh, Jenny Duan, and Chelsea Zou on April 1, 2025 and uploaded April 18. The 1:01:28 official 1920x1080 recording supplies 1,298 manual-caption cues normalized into 1,264 timed segments, and the official source provides a 123-page deck.
+- Corrected the legacy note's missing canonical video URL, incorrect presenter names, zero-slide visual coverage, absent teacher voice, and major content gaps. The source audit retains 100 required teaching pages and classifies 23 biography, administration, divider, QR/contact, and closing pages as intentional omissions.
+- Rewrote the lecture as a systems map spanning embeddings/QKV/attention, data quality and scheduling, TinyDialogues, two-phase pretraining, CoT/ToT/PoT and latent reasoning, RLHF/DPO/RLAIF/GRPO/KTO, agent refinement/ReAct/LATS, ViT/CLIP/VLM, fMRI tokenization and cross-attention, scaling limits, model editing, and continual learning.
+- Final acceptance: 80 pages, all 100 required figures referenced exactly once, 42 teaching boxes, 25 teacher-voice markers, 22 formula blocks, 5 captioned listings, and 26,118 prose characters (261 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering, overflow, caption, box, URL, or sparse-tail defects.
+- CS25 V1--V5 rewrite progress is now 34/41. Lecture 35 is next.
+
+## 2026-08-12 CS25 Lecture 35 source audit and acceptance
+
+- Verified official playlist item 35, Stanford Online `gLwiPrwUDJ8`, “RL as a Co-Design of Product and Research,” taught by Karina Nguyen on April 8, 2025 and uploaded April 29. The 1:12:10 official 1920x1080 recording provides 1,325 manual-caption cues normalized into 1,288 valid timed segments.
+- No standalone deck is publicly linked. A full one-second audit of all 4,330 seconds produced 2,540 slide-like frames and 208 high-recall candidates; manual review retained 60 independent teaching states and classified 148 progressive, repeated, administrative, speaker-only, or superseded states as optional.
+- Replaced the legacy zero-figure, zero-teacher-voice note and its duplicated 3,135-cue subtitle artifact. The new lecture connects product belief, interface evidence, behavior evals, refusal diagnosis, real-world RL environments, reward design, reward hacking, deployment evidence, and Q\&A into a seven-layer product/research co-design loop.
+- Final acceptance: 56 pages, all 60 required figures referenced exactly once, 42 teaching boxes, 17 teacher-voice markers, 24 formula blocks, 6 captioned listings, and 20,268 prose characters (337 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering, readability, overflow, caption, box, URL, or sparse-page defects.
+- CS25 V1--V5 rewrite progress is now 35/41. Lecture 36 is next.
+
+## 2026-08-12 CS25 Lecture 36 source audit and acceptance
+
+- Verified Stanford Online `nEHNwdrbfGA`, “The Advent of AGI, Div Garg,” taught on 2025-04-15 and uploaded on 2025-05-13. The 1:01:01 official 1920x1080 recording is the canonical visual source because no standalone public deck is linked; 1,365 manual-caption cues were normalized into 1,296 timed transcript segments.
+- Replaced the legacy duplicated 3,161-cue subtitle track and thin visual treatment. The exhaustive no-brightness-gate audit scanned the slide-led portion through 00:46:09, classified 544 candidate states, retained 58 required teaching states, and preserves the remaining Q\&A through the teacher-voice ledger and prose.
+- Rewrote the lecture around AGI product form factors, agent contracts, interface/action loops, autonomy levels, REAL Bench, AgentQ demos and failure recovery, MCTS/self-critique/process supervision, preference learning, neural compute and memory, personalization, multi-agent coordination, MCP/A2A, and deployment evidence boundaries.
+- Final acceptance: 51 pages, 58 figures, 29 teaching boxes, 15 teacher-voice markers, 16 formula blocks, 5 captioned listings, and 15,174 prose characters (261 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering, crop, overflow, orphan, readability, or sparse-tail defects.
+- CS25 V1--V5 rewrite progress is now 36/41. Missing Lecture 37 is next.
+
+## 2026-08-12 CS25 Lecture 37 source audit and acceptance
+
+- Added the previously missing official playlist lecture: Stanford Online `ebnX5Ur1hBk`, “Large Language Model Reasoning,” taught by Denny Zhou on 2025-04-29 and uploaded on 2025-05-21. The 1:06:07 official 1920x1080 recording supplies 1,089 manual-caption cues, and Zhou's official 49-page Stanford deck is the canonical visual source.
+- Rendered and reviewed all 49 deck pages, retaining 48 independent teaching pages and omitting only the final closing card. A 132-frame full-recording audit sampled every 30 seconds and found no deck-external live demo, whiteboard, code screen, or other independent teaching visual.
+- Wrote the missing lecture around the operational definition of reasoning, serial computation from intermediate tokens, CoT decoding, prompting/SFT limits, model-generated traces, RL finetuning, verifier design, output-length scaling, marginalization, self-consistency/USC, analogical and step-back reasoning, deep research, and the full Q\&A evidence boundary.
+- Final acceptance: 45 pages, 48 figures, 21 teaching boxes, 19 teacher-voice markers, 16 formula blocks, 5 captioned listings, and 15,942 prose characters (332 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices and one harmless table underfull, and signed visual QA found no rendering, crop, overflow, orphan, readability, or sparse-tail defects.
+- CS25 V1--V5 rewrite progress is now 37/41. Lecture 38 is next; the local V1--V5 directory set is now complete at 41/41.
+
+## 2026-08-12 CS25 Lecture 38 source audit and acceptance
+
+- Verified Stanford Online `vRQs7qfIDaU`, “On the Biology of a Large Language Model,” taught by Joshua Batson of Anthropic on 2025-05-13 and uploaded on 2025-06-05. The official 1:12:32 1920x1080 recording supplies 1,581 manual `en-US` caption cues normalized into 1,527 valid timed segments; the CS25 schedule links Anthropic's interactive article rather than a standalone public deck.
+- Replaced the six-page, one-figure legacy note and its 18,675-line rolling-caption dump. A complete one-second scan of all 4,352 seconds produced 357 high-recall candidates; manual review retained 62 independent teaching states and classified 295 bumper, speaker-only, repeated, progressive, transition, or live-browser micro-states as optional.
+- Rewrote the lecture around the biology analogy, token-level forward passes, polysemantic neurons, sparse features, Cross-Layer Transcoders, reconstruction error, attribution graphs, original-model interventions, medical and multilingual representations, parallel addition, metacognitive unfaithfulness, IDK inhibition, hallucinations, jailbreak competition, rhyme planning, and motivated reasoning.
+- Final acceptance: 48 pages, all 62 required figures referenced exactly once, 21 teaching boxes, 10 in-note teacher-voice markers synthesized from an 18-row ledger, 7 formula blocks, 4 captioned listings, and 16,178 prose characters (260 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices, and signed visual QA found no rendering, overflow, readability, box, URL, or sparse-tail defects after eliminating an initial orphan page 49.
+- CS25 V1--V5 rewrite progress is now 38/41. Lecture 39 is next.
+
+## 2026-08-12 CS25 Lecture 39 source audit and acceptance
+
+- Verified Stanford Online `8kXIaUM3h1E`, “Multimodal World Models for Drug Discovery,” taught by Eshed Margalit of Noetik.ai on 2025-05-20 and uploaded on 2025-06-13. The official recording is 4,262 seconds (1:11:02) at 1920x1080; the video description and CS25 schedule link no standalone public deck.
+- Refreshed the manual `en-US` subtitle track: 1,643 raw SRT cues parse into 1,622 timed segments, replacing the legacy 3,771-cue / 18,855-line rolling-caption artifact. The official thumbnail and temporary 279 MB source video are retained outside the repository as audit inputs.
+- Completed a no-brightness-gate one-second scan of all 4,262 seconds. It produced 441 high-recall candidates, all OCRed and arranged into 28 contact sheets plus a global overview; manual review retained 60 independent teaching states and classified 381 administrative, speaker-only, repeated, progressive, transition, or embedded-video micro-states as optional.
+- Replaced the thin one-figure legacy note with a source-first lecture spanning operational world models, translation versus disambiguation, contrastive/direct/cross-attention/token/AdaLN fusion, tumor immunology, aligned H\&E/protein/spatial-transcriptomic/genetic data, masked gene modeling, spatial-neighborhood conditioning, virtual cells, model counterfactuals, H\&E imputation, multimodal Transformers, biological feature interpretation, hierarchical bottlenecks, and the full Q\&A evidence boundary.
+- Final acceptance: 51 pages, all 60 required figures referenced exactly once, 25 teaching boxes, 13 in-note teacher-voice markers synthesized from a 24-row ledger, 13 formula blocks, 4 captioned listings, and 17,532 prose characters (292 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is clean beyond standard Fandol notices and harmless terminology-table underfulls, and signed visual QA found no rendering, crop, overflow, orphan, URL, box, or sparse-tail defects after fixing an initial page-52 orphan and split Q\&A box.
+- CS25 V1--V5 rewrite progress is now 39/41. Lecture 40 is next.
+
+## 2026-08-12 CS25 Lecture 40 source audit and acceptance
+
+- Verified Stanford Online `Y0H8D5ZKb5A`, “Diffusion Transformers,” taught by Sayak Paul on 2025-05-27. The canonical visual source is the speaker's official 66-page deck; the full 1:14:32 recording supplies the architecture, evaluation, parameter-sharing, and deployment Q\&A teacher voice.
+- Replaced the legacy thin treatment with a source-complete lecture covering diffusion and Flow Matching, UNet/UViT/DiT transitions, patching and adaLN-Zero, PixArt-α, quadratic-attention cost, SANA, MMDiT/SD3, modality-specific projections, parameter sharing, structural controls, video generation, in-context generation, MoE, and open directions.
+- Final acceptance: 49 pages, all 62 required deck pages referenced exactly once, 20 teaching boxes, 12 teacher-voice markers, 12 formula blocks, 4 captioned listings, and 17,316 prose characters (279 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX has no overfull boxes, and signed visual QA inspected the complete contact sheet plus the final terminology and reading pages.
+- CS25 V1--V5 rewrite progress is now 40/41. Lecture 41 is next.
+
+## 2026-08-12 CS25 Lecture 41 source audit and acceptance
+
+- Verified Stanford Online `YGHF8_tf--g`, “Transformers for Video Generation,” taught by Andrew Brown of Meta GenAI on 2025-06-03 and uploaded on 2025-07-03. The official 1:13:35 recording and 1,504-cue manual captions are canonical because no public standalone deck is linked; the Movie Gen primary paper supplies formula and system-detail verification.
+- Audited all 4,415 seconds at one-second resolution, reviewed 780 high-recall candidates, and retained 32 independent teaching/evidence states. The complete 00:54:10--01:13:20 Q\&A contributes required teacher voice even though it adds no independent visual state.
+- Rewrote the lecture around temporal autoencoding, 8×8×8 compression and token accounting, Flow Matching and ODE inference, the randomly initialized Llama-style bidirectional backbone, three text encoders, cross-attention/AdaLN/MHA, 73K-token context parallelism, data filtering, progressive curriculum, editing, personalization, audio, Net Win Rate, scaling evidence, and open failure boundaries.
+- Final acceptance: 37 pages, all 32 required figures referenced exactly once, 27 teaching boxes, 15 teacher-voice markers, 17 formula blocks, 3 captioned listings, and 15,067 prose characters (470 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX has no overfull boxes, and signed visual QA passed after replacing two mis-captured video states with the actual penguin-editing and personalization evidence frames.
+- CS25 V1--V5 is complete at 41/41. The next active batch is the official 9-lecture CS25 V6 series.
+
+## 2026-08-12 CS25 V6 Lecture 01 source audit and acceptance
+
+- Re-verified the live CS25 V6 schedule and the official Stanford Online playlist: V6 contains nine public lectures. Local numbering follows classroom chronology; Lecture 01 is Stanford Online `bHSDPgZYie0`, “Overview of Transformers,” taught by Steven Feng and Karan Singh on 2026-04-02 and uploaded on 2026-04-22.
+- Downloaded and hashed the official 156-page deck, 1,558-cue manual `en-US` captions, cover, and temporary 1080p recording. All deck pages were reviewed through ten contact sheets; 116 independent teaching pages are required and 40 administrative, divider, paper-title/QR, repeated, progressive, or closing pages are optional.
+- Audited the complete 4,606-second recording at five-second resolution. Of 921 samples, 882 were slide-like and 194 stable high-recall candidates were reviewed; no independent deck-external teaching visual was found, so the official deck is the visual spine and spoken material is preserved through a 32-row teacher-voice ledger.
+- Final acceptance: 90 pages, all 116 required figures referenced exactly once, 42 teaching boxes, 32 teacher-voice markers, 30 formula blocks, 6 captioned listings, and 30,192 prose characters (260 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX has no overfull boxes, and signed visual QA inspected all 90 pages in six enlarged segments plus full-size dense table and closing pages.
+- CS25 V6 progress is now 1/9. Lecture 02, `From Representation Learning to World Modeling through Joint Embedding Predictive Architectures`, is next.
+
+## 2026-08-12 CS25 V6 Lecture 02 source audit and acceptance
+
+- Verified Stanford Online `GBd7iuJkW08`, “From Representation Learning to World Modeling,” taught by Heejeong “Hazel” Nam and Lucas Maes on 2026-04-09 and uploaded on 2026-04-22. The official 55-page deck and 1,371-cue manual `en-US` captions are canonical; Causal-JEPA v1 and LeWorldModel v1 preserve the lecture-date paper snapshot.
+- Rendered and reviewed all 55 deck pages, retaining 47 required teaching pages. The complete 4,263-second recording was sampled every five seconds; 853 samples and 198 high-recall candidates revealed one required deck-external question card at 00:31:25 on object-representation fidelity and causal-graph recovery.
+- Rewrote the lecture around controlled state transition, latent prediction and energy, object-centric slots, permutation-aware identity anchoring, object-history masking, action-node conditioning, counterfactual reasoning, planning efficiency, physical plausibility, predictive-sufficiency assumptions, SIGReg anti-collapse, latent MPC, physical probes, surprise, open-loop error, limitations, reproducibility tooling, and substantive physical-AI/agent/hallucination Q\&A.
+- Final acceptance: 51 pages, all 48 required figures referenced exactly once, 35 teaching boxes, 27 teacher-voice markers, 19 formula blocks, 4 captioned listings, and 22,603 prose characters (470 per figure). Strict coverage has zero warnings, quality is `⭐⭐⭐`, stabilized double XeLaTeX is free of overfull and underfull boxes, and signed visual QA inspected all 51 pages in five enlarged segments plus full-size dense table, Q\&A, corrected question-card, and closing pages.
+- CS25 V6 progress is now 2/9. Lecture 03, `SSM vs Transformers`, is next.
+## 2026-08-12 — CS25 V6 Lecture 03 started
+
+- Closed Lecture 02 after strict coverage, `⭐⭐⭐`, stable double XeLaTeX, and signed 51-page visual QA.
+- Confirmed the active goal and moved the execution plan to Lecture 03.
+- Re-verified upstream `wdkns-skills` HEAD and the official Stanford/YouTube metadata for Albert Gu's 2026-04-16 SSM-versus-Transformer seminar.
+- Confirmed that the official course page provides no deck link, so Lecture 03 will use recording-derived slide reconstruction with official article/paper supplementation.
+- Downloaded the 1920x1080 official recording to a private `/tmp` workspace, preserved the public cover and LF-normalized English original automatic captions, and generated deterministic timed/clean/chunked transcript derivatives.
+- Hashed the private recording and public caption/cover artifacts into sanitized `metadata.json`; no raw `yt-dlp` metadata or video was added to the repository.
+- Sampled the full Albert Gu segment every two seconds and completed an initial high-recall direct/projector/camera classification. The remaining visual task is to resolve camera-only slide states before freezing the selection manifest.
+
+## 2026-08-12 — CS25 V6 Lecture 03 accepted
+
+- Froze 33 recording-derived slide states after reviewing 1,999 two-second samples: 32 independent teaching states are required and the title card is optional because its metadata is preserved on the cover.
+- Completed the 50-row teacher-voice ledger and rewrote the lecture around memory interfaces, KV-cache versus compressed state, modern SSM ingredients, hybrid models, token resolution, raw-data modeling, H-Net dynamic chunking, scaling evidence, and the final SSM/attention tradeoff.
+- Final acceptance: 40 pages, 32 required figures exactly once, 34 teaching boxes, 16 teacher-voice markers, 13 formula blocks, 5 captioned listings, and 21,059 prose characters (about 658 per figure).
+- Strict coverage has zero hard errors or warnings, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull or underfull boxes, and the 40-page visual QA is signed after contact-sheet and full-size focused review.
+- Recomputed the selection, slide-tree, and teacher-voice hashes; all already match sanitized `metadata.json`. README/tracking totals now reflect 362 source notes, 163 Stanford notes, and CS25 V6 progress 3/9.
+- Lecture 04, `The Ultra-Scale Talk: Scaling Training to Thousands of GPUs`, is now the active target; `The Future of Pretraining` is Lecture 05 in classroom chronology.
+
+## 2026-08-12 — CS25 V6 Lecture 04 accepted
+
+- Verified the live course row, official video `I5BKi32IEa8`, manual captions, 106-page official deck, class/upload dates, runtime, resolution, and primary systems references.
+- Rendered and reviewed all 106 deck pages, freezing 75 required teaching states and 31 intentional optional pages; the 742-frame five-second recording audit found no independent deck-external teaching visual.
+- Rewrote the lecture around resource accounting, DP collectives and bucket overlap, ZeRO/FSDP state ownership, TP/SP algebra, PP schedules, CP/Ring Attention, EP all-to-all and hardware bottlenecks, five-dimensional composition, Q&A, and energy responsibility.
+- Final acceptance: 56 pages, 75 required figures exactly once, 25 teaching boxes, 12 teacher-voice markers, 11 formula blocks, 4 captioned listings, and 19,514 prose characters (260 per figure).
+- Strict coverage has zero warnings, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull or underfull boxes, and signed visual QA inspected the complete contact sheet plus full-size code, schedule, Ring Attention, EP, decision-table, infrastructure, energy, and closing pages.
+- README/tracking totals now reflect 363 source notes, 164 Stanford notes, and CS25 V6 progress 4/9. Lecture 05 `The Future of Pretraining` is next; its duplicated course-page slide link must be resolved independently before use.
+
+## 2026-08-12 — CS25 V6 Lecture 05 accepted
+
+- Confirmed that the live course-page slide URL is erroneous: it repeats Lecture 04's 106-page Ultra-Scale deck. Lecture 05 therefore uses the official 1920x1080 recording and manual `en-US` captions as the canonical source.
+- Completed the full 695-frame, 12-contact-sheet five-second visual audit and froze 44 recording-derived states: 41 required teaching visuals plus three optional title/divider cards.
+- Verified the lecture-date paper snapshot for two-phase pretraining v1, front-loading reasoning v1, RLP v2, Quiet-STaR, RPT, and RLPT; built sanitized metadata, sources, transcript derivatives, selection, manifest, 49-row teacher-voice ledger, blueprint, and coverage matrix.
+- Rewrote the lecture around data weighting and ordering, two-phase curriculum, durable early reasoning, RLP's thought/no-think counterfactual, dense information-gain rewards, EMA, fair compute comparison, early-reasoning literature, engineering reproduction, and Q&A limits.
+- Final acceptance: 46 pages, 41 required figures exactly once, 35 teaching boxes, 10 teacher-voice markers, 11 formula blocks, 5 captioned listings, and 19,358 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stable double XeLaTeX is free of overfull/underfull boxes, and visual QA is signed.
+- README/tracking totals now reflect 364 source notes, 165 Stanford notes, and CS25 V6 progress 5/9. Lecture 06 `Distinct Modes of Generalization from Parameters and Context` is next.
+
+## 2026-08-12 — CS25 V6 Lecture 06 accepted
+
+- Verified the official Stanford Online recording `dJtHauhRasc`, manual `en-US` captions, 50-page official deck, class/upload dates, 1920×1080 source, and lecture-date versions of the controlled-generalization, latent-learning, test-time-compute, reversal-curse, and ICL-as-optimization primary papers.
+- Completed a full 870-frame, 15-contact-sheet five-second recording audit. No independent deck-external teaching visual appears; 45 official teaching pages are required and five title/divider/closing pages are intentional optional nodes.
+- Built sanitized metadata, deterministic transcript derivatives, source manifest, selection table, 33-row teacher-voice ledger, blueprint, coverage matrix, and a 47-page source-first lecture covering reversal, syllogism, codebooks, explicit versus latent information, in-context augmentation, oracle episodic retrieval, RL regeneration, compute tradeoffs, Q&A engineering constraints, and complementary memory systems.
+- Final acceptance: 45 required figures exactly once, 32 teaching boxes, 14 teacher-voice markers, 12 formula blocks, 5 captioned listings, and 17,318 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull/underfull boxes, and visual QA is signed after complete contact-sheet and focused full-size review.
+- README/tracking totals now reflect 365 source notes, 166 Stanford notes, and CS25 V6 progress 6/9. Lecture 07 `Advancing Science and Medicine with Collaborative AI Agents` is next.
+
+## 2026-08-13 — CS25 V6 Lecture 07 accepted
+
+- Verified Stanford Online recording `jFdH7n6BAl0`, manual `en-US` captions, 1920×1080 source, class/upload dates, and the absence of an independent official deck. The official description advertises both AI co-scientist and AMIE, but the actual recording covers only AI co-scientist before Q&A, so no AMIE material was reconstructed.
+- Audited the full 01:06:32 recording at two-second resolution: 1,996 samples across 34 complete contact sheets. The frozen selection contains 23 required teaching states and three optional title/context cards; no independent whiteboard or live-demo visual was found.
+- Built sanitized metadata, source manifest, selection table, 31-row teacher-voice ledger, blueprint, coverage matrix, and a 38-page source-first lecture covering scientific discovery as search, collaborative agents, tournament ranking, tool/memory architecture, verification bottlenecks, AMR, AML, liver fibrosis, plant assemblies, rejuvenation, Alzheimer mechanisms, inverse comorbidity, report triage, and layered safeguards.
+- Froze evidence to the 2026-05-14 classroom boundary: AI co-scientist `2502.18864v1`, AMR bioRxiv `2025.02.19.639094v1`, liver fibrosis bioRxiv `2025.04.29.651320v1`, and plant assemblies bioRxiv `2026.05.03.722499v1`; later revisions and publications are explicitly excluded from lecture-time claims.
+- Final acceptance: 23 required figures exactly once, 57 teaching boxes, 20 teacher-voice markers, 12 formula blocks, 6 captioned listings, and 19,991 prose characters. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull/underfull boxes, and signed visual QA reviewed all 38 rendered pages.
+- README/tracking totals now reflect 366 source notes, 167 Stanford notes, and CS25 V6 progress 7/9. Lecture 08 `From Language Models to Native Multimodal Intelligence` is next.
+
+## 2026-08-13 — CS25 V6 Lecture 08 accepted
+
+- Verified Stanford Online recording `NDdc39KYqDU`, manual `en-US` captions, the 56-page official Google Drive deck, 1920×1080 source, class/upload dates, and lecture-date versions of Chameleon, VQ-VAE-2, Transfusion, Mind the Gap, Mixture-of-Transformers, LMFusion, BAGEL, and π0.7.
+- Completed a full 776-frame, 13-contact-sheet five-second recording audit. No deck-external whiteboard, demo, question card, or teaching diagram appears; the prepared talk ends at 00:41:39 and the remainder is camera-only Q&A over the conclusion slide.
+- Froze 37 required teaching pages exactly once and 19 intentional optional pages. Progressive builds collapse to their complete states, while deck pages 53--55 on Interaction Models remain optional because the actual recording jumps from page 52 to page 56 without presenting them.
+- Built sanitized metadata, source manifest, selection table, 38-row teacher-voice ledger, blueprint, coverage matrix, and a 45-page source-first lecture covering mixed-modal sequence interfaces, continuous versus discrete representations, text-only versus omni losses, Chameleon, Transfusion, modality-aware sparsity, MoT/MoE routing, BAGEL, π0.7, transfer asymmetry, physical-world intelligence, and Q&A engineering boundaries.
+- Final acceptance: 37 required figures exactly once, 62 teaching boxes, 16 in-note teacher-voice markers, 17 formula blocks, 6 captioned listings, and 25,986 prose characters, or 702 prose characters per figure. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull/underfull boxes, and signed visual QA reviewed all 45 pages plus dense full-size pages.
+- README/tracking totals now reflect 367 source notes, 168 Stanford notes, and CS25 V6 progress 8/9. Lecture 09 `Serving Transformers: Lessons from the Trenches of Production Inference` is next.
+
+## 2026-08-13 — CS25 V6 Lecture 09 accepted; course complete
+
+- Acquired and hashed the official 73-page deck, 1920×1080/60 fps recording, `en-US` subtitles, and cover for Charles Frye's `Serving Transformers: Lessons from the Trenches of Production Inference`.
+- Parsed 1,759 subtitle cues into 950 timed utterances and completed a full 990-frame, 17-contact-sheet five-second recording audit. One live token-timing demo is retained beyond the deck; no missing whiteboard or live-coding visual was found.
+- Froze 57 required deck pages + 1 live frame and 16 optional title/divider/progressive/unpresented nodes. Deck pages 070, 072, and 073 remain explicitly optional rather than being invented as classroom content.
+- Produced the complete source-first artifact set: sanitized metadata, source manifest, selection TSV, 38-row teacher-voice ledger, blueprint, coverage matrix, primary-source register, 73 rendered slide images, transcript derivatives, TeX, PDF, and signed QA report.
+- Final note metrics: 59 pages, 71 teaching boxes, 12 formula blocks, 7 captioned listings, 23,900 checker prose characters, and 419 prose characters per deck figure. Strict coverage has zero warnings, quality is `⭐⭐⭐`, stable double XeLaTeX has no overfull/underfull/reference warnings, and full visual QA passes.
+- CS25 V6 now stands at 9/9 and the complete batch totals 472 pages, 474 teaching figures, and 393 teaching boxes. Global tracking is updated to 368 source notes and 169 Stanford notes.

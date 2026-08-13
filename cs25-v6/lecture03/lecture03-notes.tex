@@ -1,0 +1,692 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 03：SSM 与 Transformer 的取舍——压缩状态、有效 Token 与 H-Net}
+\renewcommand{\noteauthors}{基于 Albert Gu 官方讲座、33 个录像还原视觉状态与英文原始字幕整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-04-16；上传 2026-04-27}
+\renewcommand{\videoduration}{1:17:07（主讲与 Q\&A 至约 1:06:35）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=OyimE74UMF8}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.49\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{为什么 recurrent / linear models 又回来了}
+
+这堂课表面上讨论 State Space Model（SSM，状态空间模型）与 Transformer 的效率取舍，真正要回答的却是更基础的问题：\textbf{一个自回归模型用什么形式保存过去？} 如果过去被保存为逐 token 可寻址的缓存，模型擅长精确查找；如果过去被压缩进固定状态，模型更适合在线更新与抽象。二者的复杂度差异只是这种记忆接口的外在结果，而不是全部本质。
+
+\subsection{从研究潮流到生产系统}
+
+先看讲者为什么把这件事称为“复兴”。Mamba 之后出现了 xLSTM、DeltaNet、Gated DeltaNet、Test-Time Training 等多条路线；更重要的是，它们已经进入 Jamba、Zamba、Samba、Hunyuan、Qwen、Kimi Linear、OLMo Hybrid、Megatron--NeMo 等大型混合模型。读图时不要急着比较名字，而要先辨认两层信息：左边是机制家族，右边是这些机制如何进入 production-scale hybrid model。
+
+\lecturefigure{slide-002.jpg}{现代 recurrent / linear model 家族及其在大型混合模型中的采用}{Stanford 官方录像，00:03:20--00:04:09}
+
+\teachervoice{00:01:28--00:03:55，Albert Gu 强调这些方法已经广泛进入大规模模型；本课因此不逐篇介绍论文，而是上升到共同特征、共同瓶颈与 Transformer 的根本差异。}
+
+同一个机制在不同社区里会被叫作 SSM、linear attention、linear RNN、modern recurrent model 或 linear model。下图把这些词放在同一页，不是说所有公式完全相同，而是说明本课只关心它们共享的\textbf{有限 recurrent state + 线性/次二次序列计算}接口。所谓 hybrid model，则是在网络深度方向交错放置这类层与 quadratic attention 层。
+
+\lecturefigure{slide-003.jpg}{本课采用的 umbrella taxonomy：SSM、linear attention 与 modern recurrent model}{Stanford 官方录像，00:04:10--00:05:09}
+
+\begin{knowledgebox}{术语消化：名字不同，比较轴相同}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}X X}
+\toprule
+术语 & 常见出发点 & 本课关心的共同接口 \\
+\midrule
+SSM & 连续/离散状态空间、结构化转移 & 用有限状态递推压缩历史 \\
+Linear attention & 把 attention 核写成可递推统计量 & 不保存完整 $L\times L$ attention matrix \\
+Linear RNN & 线性 recurrent update 与并行训练 & 状态更新可组合、可 scan \\
+Modern recurrent model & 相对 LSTM/GRU 的新一代 recurrence & 扩大状态、增强 gating、适配加速器 \\
+Hybrid model & 工程上交错不同 layer type & recurrent 层负责大部分处理，attention 层补精确检索 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\begin{warningbox}{不要把 umbrella label 当作数学等价}
+Mamba、Gated DeltaNet、xLSTM 与 TTT 的状态形状、更新式、训练算法和 kernel 都不相同。本课把它们分在一组，只是为了比较“有限压缩状态”与“token-resolution cache”这条主轴；任何具体实现结论仍需回到对应论文和硬件。
+\end{warningbox}
+
+\subsection{为什么用 autoregressive modeling 做显微镜}
+
+自回归生成把联合分布分解为逐步条件概率：训练时并行预测下一 token，推理时却必须把刚生成的 token 重新送回模型。因此，解码过程中“步骤之间留下什么”会暴露架构的真实记忆合同。
+
+\[
+p(x_{1:L})=\prod_{t=1}^{L}p(x_t\mid x_{<t}),
+\qquad
+x_{t+1}\sim p_\theta(\cdot\mid x_{\le t}).
+\]
+其中，$L$ 是序列长度，$x_t$ 是第 $t$ 个 token，$x_{<t}$ 是此前上下文，$p_\theta$ 是参数为 $\theta$ 的模型。训练可以一次处理整段序列；生成必须按 $t=1,2,\ldots$ 顺序推进。
+
+\lecturefigure{slide-004.jpg}{Autoregressive modeling：训练预测下一 token，推理逐步采样并回灌}{Stanford 官方录像，00:05:10--00:06:09}
+
+\teachervoice{00:05:10--00:05:49，讲者选择 autoregressive modeling 有两层原因：它既是当前语言模型的核心范式，也最容易把不同 sequence model 的状态与复杂度暴露出来。}
+
+\begin{importantbox}{本课的比较单位不是 layer，而是 generation state}
+比较两个架构时，先问：生成完第 $t$ 步后，模型必须保留什么才能生成第 $t+1$ 步？这个跨步持久对象就是 autoregressive state。后续所有关于 recall、compression、online processing 与 token resolution 的讨论，都从这里展开。
+\end{importantbox}
+
+\subsection{本章小结}
+
+现代 recurrent / linear model 的价值已不止是论文中的复杂度改写，而是生产模型的真实设计空间。为了穿过模型名称迷雾，本课固定一个比较镜头：观察自回归生成中跨步保存的状态。下一章将看到，Transformer 把过去保存在逐 token cache 中，SSM 则把过去压进有限 recurrent state；这两个接口同时决定能力、归纳偏置与成本。
+
+\section{两种记忆接口：token cache 与 compressed state}
+
+上一章定义了比较镜头，本章把它用于一次真实解码。关键不是重新推导 multi-head attention，而是把读者带到 serving loop：每生成一个 token，系统要读取哪些历史、写入什么状态、下一步的成本如何变化？只有先建立这个资源账本，才能理解为什么“quadratic versus linear”既重要又不够。
+
+\subsection{Attention inference：为什么 KV cache 会随上下文增长}
+
+Transformer 解码时，新 query 需要与所有历史 key/value 表示交互。实际系统不会每一步重新计算过去的 hidden states，而是缓存每层的 key 和 value；这就是 KV cache（Key--Value cache，键值缓存）。图中弧线越来越长，表示后续 token 的 query 必须访问越来越多历史位置。
+
+\lecturefigure{slide-005.jpg}{Attention inference：逐 token cache 使内存与每步读取随 context 增长}{Stanford 官方录像，00:06:40--00:07:49}
+
+若模型有 $n_\ell$ 层、每个 token 每层保存 $n_{kv}$ 个 KV head、每个 head 维度为 $d_h$，元素字节数为 $b$，则单条序列的 KV cache 近似为
+\[
+M_{\mathrm{KV}}\approx 2L\,n_\ell n_{kv}d_h b.
+\]
+因子 $2$ 来自 key 与 value，$L$ 是已缓存 token 数。第 $t$ 步 attention 读取 $O(t)$ 个历史位置，整段 naive decoding 的 attention work 累加为 $O(L^2)$；但这不等于所有 wall-clock latency 都严格按同一常数增长，因为 kernel、batching、memory bandwidth 与并行度都会改变实际曲线。
+
+\begin{knowledgebox}{第一次出现：KV cache 与 MQA / GQA}
+KV cache 保存的是每层历史 token 的 key/value 表示，而不是原始文本。Multi-Query Attention（MQA）让多个 query head 共用一组 KV head，Grouped-Query Attention（GQA）让一组 query head 共用一组 KV head；二者都通过减小 $n_{kv}$ 降低缓存，但仍保留随 $L$ 线性增长的 token-resolution state。
+\end{knowledgebox}
+
+\teachervoice{00:07:07--00:08:03，Gu 提醒“KV cache”只是 Transformer 公式产生的名字；更高层的事实是模型维护一个不断扩张的 token 数据库，而这个数据库才定义了它的 memory / compute characteristics。}
+
+\subsection{SSM inference：把整段历史折叠进有限状态}
+
+SSM 不保留每个 token 的独立记录，而是每来一个输入就更新状态 $h_t$。读图时应对照上下两排：上排 attention 的历史 token 仍可被单独寻址；下排 recurrent model 只留下蓝色状态球，早期 token 已被“写进”状态，原位置被丢弃。压缩不是附带优化，而是状态定义本身。
+
+\lecturefigure{slide-006.jpg}{高层取舍：attention 保存历史 token，SSM 更新并保留压缩状态}{Stanford 官方录像，00:07:50--00:08:49}
+
+一类结构化 SSM 可以写为
+\[
+h_t=A_t h_{t-1}+B_t x_t,
+\qquad
+y_t=C_t^{\top}h_t.
+\]
+其中，$x_t\in\mathbb{R}$ 表示一个输入通道，$h_t\in\mathbb{R}^{N}$ 是状态，$A_t\in\mathbb{R}^{N\times N}$ 控制旧状态如何保留，$B_t\in\mathbb{R}^{N}$ 控制新输入如何写入，$C_t\in\mathbb{R}^{N}$ 从状态读出输出 $y_t$。具体模型通常利用 diagonal、block、low-rank 或 head-wise structure，不能把这里的 dense matrix 直接当作实现成本。
+
+\begin{lstlisting}[caption={Attention cache 与 recurrent state 的解码接口对比}]
+def attention_decode(prompt, steps, model):
+    kv_cache = model.prefill(prompt)
+    token = prompt[-1]
+    for _ in range(steps):
+        logits, kv_cache = model.decode_one(token, kv_cache)
+        token = sample(logits)
+        yield token
+
+def recurrent_decode(prompt, steps, model):
+    state = model.scan_prompt(prompt)
+    token = prompt[-1]
+    for _ in range(steps):
+        logits, state = model.step(token, state)
+        token = sample(logits)
+        yield token
+\end{lstlisting}
+
+\begin{importantbox}{复杂度来自记忆接口}
+Attention 的优势是任意历史位置仍可被精确访问，代价是状态随 context 增长；SSM 的优势是状态大小与 context length 解耦，代价是过去必须共享有限容量。所谓 quadratic 与 linear，不是两个孤立 Big-O 标签，而是“保留逐 token 细节”与“持续压缩历史”的计算后果。
+\end{importantbox}
+
+\begin{warningbox}{Linear-time 不等于永远更快}
+线性 recurrence 若没有高效 kernel，可能在真实 GPU 上输给高度优化的 attention。反过来，FlashAttention 之类 fused kernel（把多个 GPU 操作合并为一个 kernel，以减少 HBM（High Bandwidth Memory，高带宽显存）读写和 launch overhead）能显著改善 attention 常数。讲义后续比较的是建模接口；部署结论必须同时做硬件 benchmark。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Transformer 的 generation state 是随上下文增长的 token-resolution KV cache；SSM 的 generation state 是固定大小的 compressed recurrent state。前者把精确 recall 写进接口，后者把在线更新和压缩写进接口。接下来需要回答：有限状态怎样才能既装得下、写得准，又在训练时算得快？这正是现代 SSM 的三项核心设计。
+
+\section{现代 SSM 的三项核心：容量、选择性与可训练性}
+
+把 recurrence 写成两行公式还远远不够。传统 RNN 已经有 hidden state，早期 linear attention 也能递推；现代 SSM 真正有效，是因为同时解决了三个互相牵制的问题：状态容量是否足够，更新是否能选择性记忆，训练是否能绕开逐步串行。三张 replacement slide 必须分别阅读，因为它们不是同一张累计页。
+
+\subsection{Ingredient 1：state expansion 扩大记忆瓶颈}
+
+若每个输入通道只用一个标量状态，模型很快遇到容量瓶颈。State expansion（状态扩张）让每个输入通道对应 $N$ 维状态，使模型可以在同一时间尺度上维护多种衰减、频率或记忆特征。图右侧的问题“state 有多大、能记多少”是架构问题，不等同于把整层 model width 盲目放大。
+
+\lecturefigure{slide-007.jpg}{SSM Ingredient 1：state size 与 state expansion}{Stanford 官方录像，00:09:49--00:10:56}
+
+对 batch size 为 $B$、序列长度为 $L$、通道数为 $D$ 的输入，概念上的状态张量可以看成 $B\times D\times N$。训练时通常不能把每个时间步的完整状态全部 materialize 到 HBM（High Bandwidth Memory，高带宽显存），否则 activation memory 近似随 $BLDN$ 增长；因此后面的 scan / recomputation / fused implementation 与状态扩张是同一个设计包。
+
+\begin{knowledgebox}{State size 不等于“可记住 $N$ 个 token”}
+$N$ 是状态维度，不是一个离散槽位计数器。状态以分布式数值表示叠加信息；更大 $N$ 提高表示容量，却不能保证精确保留任意 $N$ 个历史事实。能否记住还取决于 update、训练信号、数值稳定性与任务结构。
+\end{knowledgebox}
+
+\subsection{Ingredient 2：selectivity 决定写什么、忘什么}
+
+容量足够后，模型还要控制信息流。固定 $A,B$ 的 Linear Time-Invariant（LTI）系统对每个 token 使用同一更新规则，适合平稳、可压缩信号，却难以处理语言中变化很大的 information rate。Selective SSM 令参数依赖输入，使当前 token 能决定旧状态保留多少、新信息写入多少。
+
+\lecturefigure{slide-008.jpg}{SSM Ingredient 2：input-dependent transition 带来 selectivity / gating}{Stanford 官方录像，00:10:57--00:12:22}
+
+把更新抽象为
+\[
+h_t=f_\theta(h_{t-1},x_t)
+=A(x_t)h_{t-1}+B(x_t)x_t.
+\]
+若某一维上 $A(x_t)\approx 1,B(x_t)\approx 0$，模型近似“保持旧记忆、忽略当前输入”；若 $A(x_t)\approx 0$ 且 $B(x_t)$ 较大，则近似“清空旧内容、写入当前输入”。实际模型使用连续门控，不是硬开关，但这两个极限给出了 selectivity 的教学直觉。
+
+\begin{lstlisting}[caption={Selective recurrent update 的教学版伪代码}]
+def selective_step(x_t, state, parameters):
+    keep = sigmoid(parameters.keep_projection(x_t))
+    write = parameters.write_projection(x_t)
+    candidate = parameters.input_projection(x_t)
+    next_state = keep * state + write * candidate
+    output = parameters.readout(next_state, x_t)
+    return output, next_state
+\end{lstlisting}
+
+\begin{warningbox}{Selectivity 不是免费获得的逻辑记忆}
+Input-dependent transition 提高了“什么时候写、什么时候忘”的表达力，但不会自动学习符号变量、栈或数据库索引。若 supervision 不要求保存某条信息，门控仍可能把它遗忘；若状态容量和数值条件不足，再聪明的 gate 也无处存放。
+\end{warningbox}
+
+\subsection{Ingredient 3：parallel scan 把 sequential semantics 改写成 parallel training}
+
+Recurrence 的定义按时间串行，但训练不一定真的逐 token 执行。对线性更新，可以把相邻时间段表示成 affine transform，再利用结合律做 tree reduction / associative scan。这样保留 recurrent semantics，同时把训练深度从 $O(L)$ 降到 $O(\log L)$ 级别的并行阶段；Mamba-2、Gated DeltaNet 等还会进一步改写为 chunked matrix multiplication。
+
+\lecturefigure{slide-009.jpg}{SSM Ingredient 3：associative scan 与 matmul rewrite 解决训练效率}{Stanford 官方录像，00:12:23--00:13:39}
+
+定义单步变换 $T_t(h)=A_t h+b_t$，其中 $b_t=B_t x_t$。两个变换的组合为
+\[
+(A_2,b_2)\circ(A_1,b_1)
+=\left(A_2A_1,\;A_2b_1+b_2\right).
+\]
+该组合满足结合律，因此可以并行 scan。这里的关键不是把 recurrence 变成 attention，而是找到一个可结合的 summary，使多个时间段先各自压缩，再合并为更长前缀的状态变换。
+
+\begin{lstlisting}[caption={Affine recurrence 的 associative composition}]
+def compose(right, left):
+    A_right, b_right = right
+    A_left, b_left = left
+    return A_right @ A_left, A_right @ b_left + b_right
+
+# parallel_prefix_scan applies compose in a tree schedule.
+prefix_transforms = parallel_prefix_scan(compose, step_transforms)
+\end{lstlisting}
+
+\teachervoice{00:12:23--00:13:29，讲者强调扩大状态和增强 update 会让模型更难计算；现代工作的核心之一就是利用线性结构、scan 与 chunked matmul，在不按时间逐步 materialize 大状态的情况下完成训练。}
+
+\subsection{Mamba：创新在组合，而不是三件孤立发明}
+
+State expansion 在早期 SSM / linear attention 中存在，gating 来自经典 RNN，parallel scan 也早有先例。Mamba 的关键贡献是把三者组合成一个在信息密集语言上真正有竞争力的系统。读图时应把三个 bullet 当作联合必要条件：少一个，模型可能容量不足、更新过于僵硬或训练不可承受。
+
+\lecturefigure{slide-010.jpg}{Mamba 作为 selective SSM：组合 state size、state update 与 efficiency}{Stanford 官方录像，00:14:20--00:14:59}
+
+\begin{importantbox}{Mamba 的教学定位}
+这堂课不把 Mamba 讲成“Transformer 的线性替代品”，而把它讲成一次系统综合：用更大的 state 提供容量，用 selectivity 控制信息，用硬件可执行的 scan / matmul rewrite 保住训练效率。三者共同改变了 recurrent model 的可用边界。
+\end{importantbox}
+
+\subsection{现代模型表：相似之处比公式差异更值得先学}
+
+下表式 slide 汇总 Linear Attention、DeltaNet、S4、Mamba、GLA、RWKV、mLSTM、Mamba-2 等模型的 recurrence 与 readout。第一遍不要逐项背公式，而应先横向找共性：它们都在决定状态如何衰减、如何写入外积或向量、如何读出 query-dependent output。只有明确任务需要后，才值得深入某一行的 parameterization。
+
+\lecturefigure{slide-011.jpg}{现代 recurrent / linear model 的 recurrence 对照与共同问题}{Stanford 官方录像，00:15:00--00:16:19}
+
+\begin{knowledgebox}{课堂工程判断：冻结在 2026-04-16}
+讲者当时把 Mamba-2 与 Gated DeltaNet 称为更“tried-and-true”的大规模选择：后者通常更强但更慢；Mamba-3 刚在 2026-03-16 发布，尚未充分经历大规模验证。这个判断是课堂快照，不应被写成永久排名。
+\end{knowledgebox}
+
+\begin{warningbox}{Perplexity parity 不是 capability parity}
+Perplexity（困惑度）是交叉熵的指数 $\exp(H)$，可直观理解为模型在每个 token 上面对的“有效选项数”，越低通常越好。但它高度依赖 tokenizer 与数据分布，不能单独证明 retrieval、reasoning、state tracking 或 downstream task 等价。Gu 也明确说“recurrent models 可竞争”首先是 coarse-grained perplexity 结论。
+\end{warningbox}
+
+\subsection{本章小结}
+
+现代 SSM 的可用性来自三项协同：足够大的 state 提供容量，input-dependent update 提供选择性，associative scan / matmul rewrite 提供训练可执行性。Mamba 把这些历史组件组合成有效系统；后续模型主要在 state parameterization 与计算路径上继续优化。理解这一共同骨架后，下一章可以把具体公式暂时放下，直接比较两种 autoregressive state 的能力边界。
+
+\section{Autoregressive state：database、brain 与 hybrid}
+
+前一章解释了 recurrent state 怎样被构造，本章转向它怎样改变模型行为。Gu 的主张是：任何自回归模型都携带一个跨步状态，架构差异可以先还原成“状态里保存什么、怎样访问”。这种抽象把 Transformer 与 SSM 放到同一坐标系，也让 recall、state tracking、online interaction 与 hybrid design 变成同一个问题的不同侧面。
+
+\subsection{每个自回归模型都有 state}
+
+对通用生成器，可把第 $t$ 步写成
+\[
+s_t=U_\theta(s_{t-1},x_t),
+\qquad
+p(x_{t+1}\mid x_{\le t})=R_\theta(s_t).
+\]
+其中，$s_t$ 是 autoregressive state，$U_\theta$ 是更新，$R_\theta$ 是 readout。SSM 的 $s_t$ 是固定形状 recurrent state；Transformer 的 $s_t$ 则包括所有层的 KV cache。两者都符合状态机描述，只是状态空间与访问方式截然不同。
+
+\lecturefigure{slide-012.jpg}{关键抽象：所有 autoregressive model 都可视为携带跨步状态}{Stanford 官方录像，00:16:20--00:17:19}
+
+\begin{importantbox}{状态是“步骤之间留在内存里的东西”}
+这个定义比“模型有没有 recurrence layer”更宽。Transformer 在网络图上不是传统 RNN，但在 autoregressive decoding loop 中，它仍把 KV cache 从一步传给下一步，因此也有 state。用这个定义比较模型，可以避免把计算图标签误当成能力本质。
+\end{importantbox}
+
+\subsection{Database versus brain：一个有用但危险的类比}
+
+Transformer 的 cache 像数据库：每个历史 token 有自己的记录，新 query 可以对任意记录做内容寻址。SSM 的固定状态更像人类工作记忆：新经验持续改写同一状态，细节可能丢失，但系统可以不断在线运转。图中“database”与“brain”不是褒贬，而是在对比精确索引与分布式压缩。
+
+\lecturefigure{slide-013.jpg}{粗粒度类比：Transformer 像数据库，SSM 像压缩式大脑状态}{Stanford 官方录像，00:17:20--00:18:39}
+
+\teachervoice{01:01:22--01:03:31 的 Q\&A 中，Gu 主动警告这些 brain analogies “very, very coarse”，自己并非 neuroscientist；人脑只被当作“有限在线状态仍可支持智能”的存在性启发，不能用来证明 SSM 具有生物合理性。}
+
+\begin{warningbox}{类比的适用范围}
+“Database”不意味着 Transformer 真的执行 SQL；“brain”也不意味着 SSM 复现神经回路。这个类比只描述 memory interface：一个保留逐位置记录并支持精确寻址，一个把历史写入有限分布式状态。超出这个接口的生物学、意识或 AGI 推论都没有证据。
+\end{warningbox}
+
+\subsection{SSM 的一体两面：online processing 与 retrieval loss}
+
+固定状态使 recurrence 可以按恒定接口持续接收流数据，适合 speech、control、time series 与交互式 agent；同一压缩也会让 exact string、associative recall、needle-in-a-haystack 与 general QA 中的细粒度证据变弱。读图时应把绿色优点与灰色缺点看成同一机制的两面，而不是两组互不相关的 benchmark 现象。
+
+\lecturefigure{slide-014.jpg}{早期取舍总结：stateful online processing 与 fine-grained retrieval 的冲突}{Stanford 官方录像，00:18:40--00:19:39}
+
+可以用信息瓶颈直觉表达这种冲突：若 $s_t$ 的容量有限，而过去 $x_{\le t}$ 包含的任务相关信息不断增长，更新 $U_\theta$ 必须选择保留哪些统计量。对控制任务，最近动态与低维 sufficient state 可能足够；对逐字引用任务，任何不可逆压缩都可能删除答案。
+
+\begin{knowledgebox}{State tracking 与 retrieval 不是同一能力}
+State tracking 要求持续更新“现在处于什么状态”，例如计数器、游戏位置或控制系统隐变量；retrieval 要求从长上下文中精确取回某个旧事实。有限 state 可以非常擅长前者却弱于后者。Mamba-3 的一项目标正是提升复杂状态跟踪，但这仍不等同于获得完整 token database。
+\end{knowledgebox}
+
+\subsection{Hybrid：让压缩状态做主处理，让 attention 做外部查找}
+
+若内部压缩与外部精确查找互补，最自然的系统就是 hybrid。图中列出的 H3、Jamba、Zamba、Samba 等把 recurrent / linear layers 与 attention layers 交错。讲者借用“brain + scratchpad”直觉解释为什么网络可能需要较多 compressive layers，再用少量 attention 层补 exact lookup。
+
+\lecturefigure{slide-015.jpg}{Hybrid models：交错 SSM 与 attention，并追问合理层数比例}{Stanford 官方录像，00:20:00--00:21:39}
+
+\begin{lstlisting}[caption={按周期插入 attention 的 hybrid stack 教学伪代码}]
+def build_hybrid_stack(depth, attention_period):
+    layers = []
+    for layer_index in range(depth):
+        if (layer_index + 1) % attention_period == 0:
+            layers.append(AttentionBlock())
+        else:
+            layers.append(RecurrentBlock())
+    return layers
+\end{lstlisting}
+
+\teachervoice{00:20:31--00:21:26，较早工作常在 perplexity 上得到约 10:1 的 SSM-to-attention ratio；到 2026 年讲者观察到新模型常用至少 3:1 或 4:1。这个变化本身说明 ratio 不是常数，而会随模型、训练与能力目标漂移。}
+
+\begin{warningbox}{不要把 10:1 写成最优定律}
+比例依赖 layer width、state size、attention type、训练数据、tokenizer、参数预算与 evaluation。更重要的是，旧实验主要看 perplexity；需要 retrieval、tool use 或 multimodal alignment 时，最优 attention 频率可能完全不同。合理做法是把比例当作 ablation 起点。
+\end{warningbox}
+
+\begin{importantbox}{Compression 可能是能力，不只是妥协}
+多组 hybrid ablation 在不计速度时仍偏好更多 linear / recurrent layers，这削弱了“有限状态只是为了省算力”的解释。压缩迫使模型形成 task-relevant summary，可能帮助 state tracking 与 abstraction building；后面的 H-Net outer-stage ablation 会给出更直接证据。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Autoregressive state 把不同架构还原成统一接口。Transformer 的 database-like cache 擅长细粒度 recall；SSM 的 brain-like compressed state 擅长在线更新，却会牺牲精确回忆。Hybrid 不是折中拼盘，而是把两种 memory primitive 分工。下一章进一步追问：attention 为什么对 token 的“粒度与语义”如此敏感？
+
+\section{Attention 的隐藏前提：数据必须处在正确抽象层}
+
+“Attention is all you need”常被误读为只要把任意原始序列切成位置就能直接送进 Transformer。真实系统几乎总有 encoder、patchifier 或 tokenizer，把高分辨率原始信号变成更少、更稳定、更有语义的单位。本章把 preprocessing 从工程脚注提升为 architecture contract：attention 对它收到的 token 负责，却没有自动重新定义 token 的自由。
+
+\subsection{Myth：raw data 直接进 Transformer}
+
+下面这张简图刻意画得很诱人：input 进入 Transformer，output 自然出现。这个 pipeline 在 API 层面似乎成立，却隐藏了数据表示的全部工作。讲者称它为 myth，不是因为 Transformer 不强，而是因为成功应用通常先把原始数据变成适合逐 token 比较的表示。
+
+\lecturefigure{slide-016.jpg}{误解：把任意原始数据直接交给 Transformer}{Stanford 官方录像，00:23:00--00:23:29}
+
+\subsection{Reality：attention 位于 encoder 与 decoder 之间}
+
+现实 pipeline 往往是 encoder $\rightarrow$ Transformer $\rightarrow$ decoder。Encoder 的作用不只是降采样，而是把局部、噪声或连续信号映射到 attention 可以有效比较的 abstraction level。图中的红字“right level of abstraction”是后半堂课的中心句。
+
+\lecturefigure{slide-017.jpg}{现实：attention 通常作用于已经 pre-compressed 的表示}{Stanford 官方录像，00:23:30--00:23:59}
+
+\begin{importantbox}{Attention 对 tokenization 是“beholden”的}
+Softmax attention 可以重新混合 token 表示，却不能撤销最初 segmentation 已经丢失的信息，也不能在不增加序列长度的情况下把一个 token 自动拆成多个可寻址单位。输入单位的分辨率、边界与语义因此会深刻改变模型的学习难度。
+\end{importantbox}
+
+\subsection{Perceptual modalities：patchifier 先制造 vision token}
+
+Vision Transformer 不对每个像素做全局 attention，而是把图像切成 patch，线性投影为 token，再进入 Transformer。Patch size 决定了计算与细节：更小 patch 提高分辨率却使序列更长；更大 patch 减少 attention 成本却可能把多个对象或边界混在一起。
+
+\lecturefigure{slide-018.jpg}{图像、视频、音频等 perceptual modality 先经过 patchifier}{Stanford 官方录像，00:24:00--00:24:29}
+
+若图像高宽为 $H,W$，patch size 为 $P\times P$，则 token 数近似为
+\[
+L_{\mathrm{vision}}=\frac{H}{P}\frac{W}{P}.
+\]
+将 $P$ 减半会使 token 数约增至四倍，full attention 的 pairwise work 约增至十六倍。这里的瓶颈并非视觉数据“不能用 Transformer”，而是原始分辨率必须先被组织成可承受的 token stream。
+
+\subsection{Discrete modalities：tokenizer 先定义语言单位}
+
+语言与基因序列看似已经离散，但 character / byte / base pair 往往不是最有用的建模单位。Byte Pair Encoding（BPE，字节对编码）用频繁合并规则把低级符号组合成较长 token；它既缩短序列，也注入了边界和重复模式的 inductive bias。
+
+\lecturefigure{slide-019.jpg}{语言与 genomics 常先经过 tokenizer，再交给 Transformer}{Stanford 官方录像，00:24:30--00:24:59}
+
+\begin{knowledgebox}{第一次出现：Token、Tokenizer 与 Vocabulary}
+\term{Token} 是模型一次处理和寻址的离散单位；\term{tokenizer} 把原始字符串映射为 token id；\term{vocabulary} 是可用 token 的有限集合。BPE token 不必等于一个完整词，也不天然具有“真实语义”，但常包含词、词根、前后缀与空格边界等重复结构，因此比单字符更接近 attention 擅长的可组合单位。
+\end{knowledgebox}
+
+\subsection{Tokenization 的问题真实存在，但工程上也确实好用}
+
+Karpathy 的列表展示 spelling、数字、空格、罕见字符串等 tokenizer edge cases。讲者没有声称这些问题让现有 LLM 不可用；相反，他承认 data engineering 与 prompt tricks 能修掉很多症状。研究动机在于：若模型能从 raw data 端到端学出单位，就不必把人为 heuristic 永久冻结在数据入口。
+
+\lecturefigure{slide-020.jpg}{没有 tokenization 会怎样：工程可用性与 end-to-end 理想之间的张力}{Stanford 官方录像，00:25:00--00:26:39}
+
+\teachervoice{00:25:18--00:26:39，Gu 把问题放在 bitter lesson 下解释：feature engineering 在当前尺度可能有效，但更通用、从 raw data 自动学习的系统通常更能从长期 scaling 中获益。}
+
+\begin{warningbox}{“去 tokenizer”不是删除 preprocessing}
+Tokenizer-free model 仍需 byte embedding、local encoder、routing、downsampling 与 decoder。区别在于这些步骤是否与语言模型联合学习、是否能随 context 改变，而不是系统从此没有表示变换。
+\end{warningbox}
+
+\subsection{Character / byte-level evidence：多花 attention compute 也没有抹平差距}
+
+这张图比较 MambaByte 与 LlamaByte。横轴是训练字节数，纵轴是验证损失；模型与 FLOPs 被尽量匹配。先比较蓝色 MambaByte 与紫色 sliding-window attention，再看 dashed global-attention baseline：即使全局 attention 使用更多计算，曲线仍未追上 MambaByte，说明差距不只是“attention 太慢”。
+
+\lecturefigure{slide-021.jpg}{Character / byte-level language modeling：MambaByte 与 attention baseline 的 scaling 曲线}{Stanford 官方录像，00:26:40--00:28:49}
+
+常用 byte-level 指标 bits per byte（BPB，每字节比特数）定义为
+\[
+\mathrm{BPB}=-\frac{1}{L\ln 2}\sum_{t=1}^{L}\ln p(x_t\mid x_{<t}).
+\]
+其中 $L$ 是 byte 数，$p(x_t\mid x_{<t})$ 是正确 byte 的条件概率。BPB 越低越好；与 token-level perplexity 相比，它避免了不同 tokenizer 直接比较时单位不一致的问题，但仍受数据集、context length 与模型预算影响。
+
+\begin{knowledgebox}{读图：先看 matched condition，再看 global attention}
+第一层结论是同尺寸、同数据条件下 recurrent model 的曲线更低；第二层才是 global attention 即使付出更多 FLOPs 仍未反转结果。图不能证明所有 byte task 都由 SSM 统治，但支持“输入分辨率改变了 attention 的 modeling efficiency”。
+\end{knowledgebox}
+
+\subsection{DNA evidence：没有自然语言式 tokenizer 时差距更明显}
+
+DNA 序列只有少量碱基符号，单个 base pair 通常不是可独立寻址的高层语义单元。图中的 parameter scaling 显示，在该 human-genome autoregressive setup 下，Mamba 达到相近结果所需参数约为 Transformer++ 的三分之一。这里应读取“在该任务和指标中的 parameter efficiency”，而不是“DNA 上所有 SSM 都比 Transformer 好三倍”。
+
+\lecturefigure{slide-022.jpg}{DNA language-model scaling：Mamba 与 Transformer++ 的参数效率比较}{Stanford 官方录像，00:28:50--00:29:29}
+
+\begin{warningbox}{跨领域曲线不能直接外推}
+Genome pretraining 的 alphabet、long-range dependency、evaluation target 与自然语言不同。一个架构在 next-base prediction 上占优，不自动意味着 variant interpretation、gene regulation 或 clinical task 同样占优；下游能力仍要单独验证。
+\end{warningbox}
+
+\subsection{Effective token：什么单位值得被缓存？}
+
+讲者给出两个实用问题。第一，是否值得为每个输入单位缓存一份 representation？第二，hard attention 到单个单位是否有意义？Subword 常是可组合词素，字符与 DNA base 多数时候不是独立语义单位，视觉 patch 则取决于是否包含对象、纹理或空白背景。这个 checklist 比“永远用某架构”更可迁移。
+
+\lecturefigure{slide-023.jpg}{Effective tokens for attention：缓存价值、hard attention 与模态粒度}{Stanford 官方录像，00:29:30--00:32:59}
+
+标准 attention 可写为
+\[
+\operatorname{Attn}(q,K,V)
+=\sum_{i=1}^{L}\alpha_i v_i,
+\qquad
+\alpha_i=\frac{\exp(q^\top k_i/\sqrt d)}{\sum_j\exp(q^\top k_j/\sqrt d)}.
+\]
+其中 $q$ 是当前 query，$k_i,v_i$ 是第 $i$ 个 token 的 key/value，$d$ 是 head dimension，$\alpha_i$ 是 soft attention 权重。Hard-attention heuristic 指的是：若一个合理决策经常需要把权重集中到少数单元，逐 token cache 很自然；若单元本身噪声大、语义弱，模型先压缩再寻址可能更合理。
+
+\begin{importantbox}{一个可操作的架构诊断}
+先不要问“Transformer 还是 SSM 更先进”，而要问：\textbf{我当前的数据单位是否值得长期缓存？单个单位是否值得被精确召回？} 如果答案经常是否，优先考虑 learned compression、hierarchy、local encoder 或 recurrent layer；如果答案经常是是，attention 的 token database 很有价值。
+\end{importantbox}
+
+\subsection{Compressive model 为什么在多模态中普遍出现}
+
+图中的圆环按 Mamba 早期论文应用领域分类，vision/image 占比最大，language/NLP 只是其中一部分。这个分布不能作为性能 benchmark，因为包含 trend-following 与不同成熟度工作；它更适合作为需求信号：在视觉、时间序列、音频与机器人中，人们普遍缺少像 BPE 那样成熟的 tokenization heuristic。
+
+\lecturefigure{slide-024.jpg}{Compressive model 的广泛模态应用：不只语言}{Stanford 官方录像，00:33:00--00:34:09}
+
+\teachervoice{00:32:59--00:34:12，Gu 明确保留怀疑：某些 Mamba 应用可能只是跟风；但 audio、time series、vision 难以找到好 tokenizer，使 natural compression 成为有吸引力的 inductive bias。}
+
+\subsection{本章小结}
+
+Attention 的力量建立在合适 token 上。Patchifier 与 tokenizer 同时做降分辨率、加边界和引入语义单位；当这些 heuristic 缺失时，逐 character、byte、base 或 patch 缓存可能浪费容量并增加 distractor。Byte 与 DNA 曲线支持 architecture-by-resolution interaction，但不允许普遍化为单一赢家。下一章介绍 H-Net：把“先压缩成有效 token”从离线规则变成模型内部可学习过程。
+
+\section{H-Net：把 tokenization 变成可学习的 hierarchy}
+
+前一章指出 tokenization 的作用不仅是缩短序列，还在于制造 attention 能有效处理的单位。H-Net 的设计目标不是简单换一个 tokenizer，而是把 segmentation、compression 与 sequence modeling 放进同一端到端网络，并允许模型递归学习多层 abstraction。它同时说明 Transformer 与 SSM 可以在同一架构中承担不同分辨率的工作。
+
+\subsection{Dynamic chunking：边界是 context-dependent prediction}
+
+H-Net 从 byte 等低级单位开始，由 encoder 产生表示，再预测哪些位置是 chunk boundary。图右侧的绿色/彩色边界在训练早期不断探索，后期逐渐对齐空格、subword 与更高层组合；它们不是人工标签，也不保证等于语言学 token，而是由 language-modeling loss 共同塑造的压缩决策。
+
+\lecturefigure{slide-025.jpg}{H-Net：从 raw sequence 中学习 data-dependent dynamic chunks}{Stanford 官方录像，00:34:10--00:37:19}
+
+令 encoder 输出 $z_1,\ldots,z_L$，routing head 给出边界概率
+\[
+r_t=\sigma(w^\top z_t+b),
+\qquad
+m_t\in\{0,1\},\quad m_t\sim\operatorname{Route}(r_t).
+\]
+其中，$r_t$ 表示位置 $t$ 作为 chunk end 的倾向，$m_t$ 是路由决定。若第 $j$ 个 chunk 覆盖区间 $I_j$，其 summary 可写为
+\[
+c_j=\operatorname{Pool}\{z_t:t\in I_j\}.
+\]
+实际 H-Net 需要 differentiable routing、smoothing、normalization 与 stage-aware optimization；上式只展示“预测边界并聚合区间”的接口。
+
+\teachervoice{00:35:07--00:37:17，讲者描述训练动画：模型最初不知道边界，随后稳定到接近空格和有意义 subword 的位置；多层组合还能形成 phrase-like group。这个现象是 learned compression 的证据，不是 tokenizer ground truth。}
+
+\subsection{完整架构：chunking、main model 与 dechunking}
+
+左图是 hourglass hierarchy：细粒度序列先经过 outer encoder 和 chunking 变短，中间 main model 在较粗单位上处理，再通过 dechunking 把表示扩回原分辨率，经过 decoder 做 autoregressive prediction。右图展开 routing / smoothing module。读这张图要注意，main model 可以是 Transformer；H-Net 并非“全网禁用 attention”。
+
+\lecturefigure{slide-026.jpg}{H-Net 架构：多阶段 chunking、主模型、dechunking 与信号稳定化}{Stanford 官方录像，00:37:20--00:40:39}
+
+\begin{lstlisting}[caption={H-Net 单层 hierarchy 的教学版数据流}]
+def hnet_stage(fine_sequence, outer_encoder, router, main_model, decoder):
+    fine_features = outer_encoder(fine_sequence)
+    boundary_scores = router(fine_features)
+    coarse_features, routing_map = chunk(fine_features, boundary_scores)
+    coarse_outputs = main_model(coarse_features)
+    expanded_outputs = dechunk(coarse_outputs, routing_map)
+    return decoder(fine_features, expanded_outputs)
+\end{lstlisting}
+
+\begin{knowledgebox}{为什么 outer stage 倾向 SSM，inner stage 可以用 Transformer}
+Outer encoder 直接面对 byte / character 等高分辨率、弱语义单位，需要在线压缩并形成 chunk；有限 recurrent state 对这种任务有合适 inductive bias。Inner model 接收的已是更少、更高层的 chunk，逐 chunk attention 变得合理。架构因此不是二选一，而是让 primitive 匹配 resolution。
+\end{knowledgebox}
+
+\begin{warningbox}{Dynamic routing 是困难的离散优化}
+边界决定会改变序列长度和后续计算路径，训练容易出现全切、全不切、梯度不稳定或 stage collapse。讲者明确说 published H-Net 是“第一个可工作的步骤”，依赖 routing module、smoothing、normalization、projection 与 stage-aware optimization，不能从四行伪代码推断实现简单。
+\end{warningbox}
+
+\teachervoice{00:40:00--00:40:43，Gu 说这是 non-trivial discrete optimization；00:57:23--00:59:08 的 Q\&A 又强调 H-Net 还未在最大尺度充分验证，chunking mechanism 和每个 stage 都有很大改进空间。}
+
+\subsection{本章小结}
+
+H-Net 把离线 tokenizer--LM--detokenizer pipeline 改写为可学习 hierarchy：低层 encoder 形成 context-dependent chunk，内层模型在粗粒度单位上计算，再扩回原分辨率预测。它最重要的系统启示是按 resolution 分工：SSM 在原始细粒度边界承担压缩，attention 在高层 chunk 上承担精确组合。下一章将用 scaling 与 ablation 检查这种设计是否真的产生更好 inductive bias。
+
+\section{Dynamic chunking 的证据：何时学习边界胜过硬编码 token}
+
+H-Net 的机制看起来合理，但“可学习”并不自动等于“更好”。本章用三组证据区分不同问题：第一组问 learned chunk 是否在足够数据后超过 BPE；第二组问即便输入已经是 BPE，outer stage 为什么仍偏好 Mamba；第三组把方法放到 DNA，观察没有成熟 tokenizer heuristic 时 scaling slope 是否改变。读图必须同时看 matched compute、crossover 与 domain boundary。
+
+\subsection{Compute-matched crossover：先输后赢是 bitter lesson 的典型形状}
+
+下图横轴是 total training bytes，纵轴是 bits per byte，模型 FLOPs 与大致规模被匹配。黑色 Transformer 直接使用 BPE；一层 byte H-Net 初期更差，因为它必须同时学语言与边界，数据足够后曲线交叉；两层 H-Net 进一步学习多级 abstraction，但也引入更多参数和优化难度。
+
+\lecturefigure{slide-027.jpg}{Dynamic chunking scaling：isobitropic BPE、单层与多层 H-Net 的 compute-matched 比较}{Stanford 官方录像，00:40:40--00:44:09}
+
+\begin{knowledgebox}{读图：三步检查 crossover}
+第一，确认曲线是否在近似相同 FLOP budget 下比较，而不是只匹配参数；第二，观察 learned-chunk model 在低数据区的劣势，承认 hand-engineered BPE 提供了强 inductive bias；第三，关注高数据区 slope 与交叉点，判断额外 scaling 是否偿还了学习边界的成本。
+\end{knowledgebox}
+
+可把这类经验 scaling 写成
+\[
+\mathcal{L}(C)\approx \mathcal{L}_\infty + aC^{-\alpha},
+\]
+其中，$C$ 是训练 compute 或近似等价的数据预算，$\mathcal{L}_\infty$ 是不可约损失，$a$ 是常数，$\alpha$ 是 scaling exponent。图中的“scale better”不是说某个点更低，而是随着 $C$ 增大，learned hierarchy 的曲线保持更有利的下降趋势。有限区间拟合仍可能受 optimizer、data mixture 与 model sizing 影响。
+
+\teachervoice{00:42:37--00:44:21，Gu 用 bitter lesson 解释 crossover：手工 feature 在 data-constrained regime 帮助很大；learned chunk 需要先花数据学会分段，但一旦学到比 BPE 更适合任务的单位，就可能继续受益于 scaling。}
+
+\begin{warningbox}{“学习 token”并不保证无限外推}
+当前曲线只覆盖有限规模和数据区间。更深 hierarchy 可能因 routing collapse、参数分配、优化不稳定或系统效率提前饱和。判断下一数量级是否继续占优，需要真正扩大模型和数据，而不是把直线延长到图外。
+\end{warningbox}
+
+\subsection{最关键 ablation：输入已是 BPE，outer Mamba 仍然重要}
+
+如果 SSM 的优势只来自“byte sequence 太长”，那么把输入换成 BPE token 后，outer encoder 使用 Transformer 应当足够。图中却显示：即便整个系统操作 BPE，outer stages 加入 Mamba 仍明显改善 BPB。这里 outer stage 的任务不是简单读取输入，而是为 routing 制造可压缩表示；有限 state 的 inductive bias 因而可能直接帮助 abstraction formation。
+
+\lecturefigure{slide-028.jpg}{在 BPE 输入上，H-Net outer stage 的 Mamba ablation 仍显示压缩式归纳偏置}{Stanford 官方录像，00:44:10--00:46:09}
+
+\begin{importantbox}{本课最强的“compression is a feature”证据}
+当输入单位已经是 BPE 时，resolution 解释不足以说明 outer Mamba 的收益。更合理的假设是：routing 前的 encoder 需要把局部历史整合成适合分块的表示，而 finite recurrent state 迫使网络形成 summary。这个结果仍是特定 H-Net ablation，却比单纯 byte benchmark 更直接地支持 compression-as-inductive-bias。
+\end{importantbox}
+
+\begin{warningbox}{Ablation 仍不能证明因果机制唯一}
+Mamba 与 Transformer outer stage 可能还在 parameterization、normalization、optimization、kernel 或 effective depth 上不同。结果说明“使用 Mamba 的系统更好”，但不能单独证明全部增益只来自有限状态压缩。更严格的机制验证需要 matched architecture 与 representation probe。
+\end{warningbox}
+
+\subsection{dnaHNet：当没有语义 tokenizer 时，hierarchy 改变 scaling slope}
+
+DNA 没有像英语空格、词根和词频那样成熟的 segmentation heuristic。图中每个点对应不同 FLOP budget，并在该 budget 下 sweep model/data allocation。H-Net 曲线不仅整体平移，还显示不同 slope；讲者据此认为 learned hierarchy 找到了 off-the-shelf tokenizer 无法提供的模式。
+
+\lecturefigure{slide-029.jpg}{dnaHNet scaling laws：无成熟 tokenization heuristic 时 dynamic chunking 的增长趋势}{Stanford 官方录像，00:47:20--00:49:19}
+
+本课按课堂日期采用 `dnaHNet` 的 arXiv v3（2026-04-09），因为它是 2026-04-16 前最新版本。图中引用的是 genomic autoregressive pretraining，不应把更低 loss 直接翻译为生物因果理解。真正的下游价值还取决于 regulatory element、variant effect 与 cell-type context 等任务验证。
+
+\begin{knowledgebox}{为什么 DNA 是比 character English 更强的检验}
+英语虽然可做 byte modeling，但已有成熟 BPE，研究者总可以问“为什么不用 tokenizer”。DNA 的单碱基序列缺少类似普适词边界，hand-engineered token 更难定义；若 learned chunking 在这里改变 scaling，更接近它最初要解决的原始数据问题。
+\end{knowledgebox}
+
+\teachervoice{00:47:17--00:49:18，讲者把 character English 称为仍带学术性质的长期方向，而把 DNA 视为 tokenizer 真正难以语义化的场景；这也是他认为 dynamic chunking 更有现实意义的原因。}
+
+\subsection{本章小结}
+
+H-Net 证据形成递进链：byte-level learned chunks 在足够数据后越过 BPE；BPE 输入上的 outer-stage ablation 仍偏好 Mamba，指向 compression inductive bias；DNA 在缺乏语义 tokenizer 时呈现更强 scaling 差异。链条支持“压缩可能帮助形成抽象”，但仍受有限规模、架构匹配与 domain transfer 限制。
+
+\section{终局取舍：效率是表象，状态接口才是本质}
+
+前面的模型、token 与 H-Net 例子都服务于最终修正：SSM 不只是“更快但更弱”，attention 也不只是“更强但二次”。两者的优缺点由 autoregressive state 的形式共同产生。最后四张图先重申 attention 的适用分辨率，再分别改写 SSM 与 attention 的 tradeoff，最终把架构研究压缩成 FLOPs-to-capabilities 问题。
+
+\subsection{Attention 真正强在 pre-compressed abstraction 上}
+
+本节回到整堂课反复出现的 abstraction 问题。漫画把 Transformer 在 raw high-resolution input 上的尴尬画成误会：模型并非天然理解任何粒度，它在有意义、可组合、可单独寻址的单位上最强。图右侧红字不是否定 attention，而是在给它定位——先把数据压到合适层，再利用全局内容寻址。
+
+\lecturefigure{slide-030.jpg}{Attention 最有效的区域：pre-compressed data 与正确 abstraction level}{Stanford 官方录像，00:49:20--00:50:09}
+
+\begin{importantbox}{架构选择应该是 resolution-aware 的}
+同一模态可以在不同层使用不同 primitive：像素/byte 层先做 local or recurrent compression，object/word/chunk 层再做 attention，最终决策层可能再接 external memory。把整个 pipeline 强制成单一 layer type，往往是在让架构适应错误的单位。
+\end{importantbox}
+
+\subsection{SSM：把 efficiency 划掉，保留 statefulness 与 compression}
+
+图中先写“linear-time scaling, constant-time inference”，随后把 efficiency 划掉，换成 stateful / compressive model，并标注 brain-like state。讲者不是说效率不重要，而是说它不足以解释为什么这种模型在 state tracking、online interaction 与 abstraction building 上可能更合适；这些能力与 retrieval weakness 都来自有限状态。
+
+\lecturefigure{slide-031.jpg}{最终 SSM 取舍：stateful compression、state tracking 与 fine-grained retrieval loss}{Stanford 官方录像，00:50:10--00:51:19}
+
+\teachervoice{00:50:05--00:51:27，Gu 说 efficiency 是 red herring：SSM 的 pros and cons 是同一枚硬币的两面，即 brain-like autoregressive state。有限状态既丢精确细节，也创造追踪与抽象的压力。}
+
+\subsection{Attention：把 quadratic 划掉，保留 resolution dependence}
+
+Attention 的强项是对过去 context 做 fine-grained access，尤其适合 recall 与 retrieval。图中把“quadratic scaling”划掉，不是取消复杂度，而是指出更深的限制：模型对输入 token 的分辨率与语义高度敏感，database-like cache 会忠实保存它被给到的单位，却不会替设计者决定这些单位是否值得保存。
+
+\lecturefigure{slide-032.jpg}{最终 attention 取舍：database-like cache、精确检索与 token-resolution dependence}{Stanford 官方录像，00:51:20--00:53:09}
+
+\begin{warningbox}{Quadratic attention 在需要精确记忆时并不“浪费”}
+若任务确实要求逐项保留合同条款、代码 token、证据段落或外部工具返回，$O(L)$ cache 与 $O(L)$ 每步读取可能是完成任务所需的信息成本。正确问题不是“能否消灭 quadratic”，而是“哪些层、哪些 token、哪些时间尺度值得支付这个成本”。
+\end{warningbox}
+
+\begin{table}[H]
+\centering
+\caption{两种 autoregressive state 的对称取舍}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+比较轴 & Token-resolution attention state & Compressed recurrent state \\
+\midrule
+跨步状态 & 随 $L$ 增长的 KV cache & 与 $L$ 解耦的有限 state \\
+精确访问 & 强；历史位置可单独寻址 & 弱；细节混入 shared state \\
+在线更新 & 每步读取历史 cache & 固定接口递推更新 \\
+归纳偏置 & database、retrieval、copy & tracking、smoothing、compression \\
+敏感因素 & token resolution 与 semantic unit & state capacity 与 update expressivity \\
+典型补救 & MQA/GQA、KV compression、retrieval routing & 扩大 state、selectivity、插入 attention \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{架构研究的中心问题：每个 FLOP 是否花在有意义的结构上}
+
+最后一张图把训练系统画成黑箱：左边投入 FLOPs 与数据，右边得到 capabilities。真正目标不是最小 FLOPs，也不是最大模型，而是提高 compute 到能力的转换效率。若 Transformer 在 character stream 中缓存每个字符却很少需要单字符寻址，这些 FLOPs 没有匹配任务结构；若任务必须精确回忆每个细节，支付 attention 成本反而合理。
+
+\lecturefigure{slide-033.jpg}{FLOPs $\rightarrow$ model $\rightarrow$ capabilities：模型是否明智地使用计算？}{Stanford 官方录像，00:53:10--00:54:34}
+
+\[
+\text{system efficiency}
+=\frac{\text{useful capabilities}}{\text{training dollars}}
+=\frac{\text{FLOPs}}{\text{dollars}}
+\times
+\frac{\text{capabilities}}{\text{FLOPs}}.
+\]
+第一项受 hardware、kernel、parallelism 与 utilization 影响；第二项受 architecture、data、objective 与 representation 影响。Gu 主要研究第二项，但部署系统必须同时优化两项。一个 FLOP 在数学上相同，在信息结构上却可能完全不同：它可以用于比较有意义 chunk，也可以用于反复处理无意义高分辨率单位。
+
+\begin{importantbox}{最终设计准则}
+不要先选架构再强迫数据适配，而应先画出信息在不同时间尺度上的结构：哪些细节必须保留，哪些可压缩，哪些需要随机访问，哪些只需状态追踪。然后把 attention、SSM、convolution、local encoder 与 external memory 放到最匹配的层级。
+\end{importantbox}
+
+\subsection{Q\&A：backprop、硬件与“局部最优”}
+
+一位同学质疑：现代 SSM 为了 backprop-through-time 与 GPU 并行牺牲 recurrence expressivity，而人脑并不保存许多副本做反向传播。Gu 的回答很谨慎：他认为当前架构、backprop 与 hardware 可能处在共同 local optimum；backprop 的 activation memory 会对可学习 dependency length 施加物理限制，但现实任务是否已能通过工程手段绕过，仍不确定。
+
+\teachervoice{00:55:10--00:57:22，Gu 认为重新设想 learning algorithm 与 hardware constraint 可能产生 fundamentally better models；同时承认自己没有给出可替代 backprop 的成熟方案。}
+
+\begin{warningbox}{开放问题不等于已证实缺陷}
+“人脑不用 backprop”不能推出 backprop 对机器学习无效；“显存装不下超长 sequence”也不等于模型绝对学不到长依赖，因为 curriculum、synthetic task、retrieval 与 recurrent training 都可能提供间接路径。课堂观点应作为研究假设，而不是结论。
+\end{warningbox}
+
+\subsection{Q\&A：H-Net 的边界、memory 与 tiny models}
+
+关于 H-Net，讲者明确说当前版本只是 first working step，尚未在最大尺度验证。动态 chunk 没有无限 vocabulary：初始 byte 进入有限 embedding，后续全部在 latent space 中选择 boundary、汇聚 chunk representation。对于 long context，他设想递归压缩成越来越高层的 memory，再让 inner model attention 更少、更有意义的条目，但尚无后续验证。
+
+\teachervoice{00:59:09--01:03:31，chunk representation 不通过词表 lookup，而是在 encoder latent space 中保留被选中的位置或 pooled summary；hierarchical memory 是与 H-Net philosophy 一致的未来方向，不是当前结果。}
+
+对 data-constrained / tiny model，Gu 直接回答“不知道一般规律”。他只提到当时一个很小的 Mamba-3 experiment 仍发现少量 attention 很关键。这种不确定性本身值得保留：归纳偏置在不同 scaling regime 可能改变，不能从 billion-parameter curve 反推 tiny model。
+
+\subsection{Q\&A：SSM 能否像 attention map 一样解释}
+
+某些 SSM / linear-attention 形式可展开为 token-to-token dependence map，视觉上类似 attention map。Gu 的观察是，softmax attention 有时表现为近似 hard attention，只集中到少数 token；SSM dependence 往往更 diffuse，符合“把信息揉进状态”的直觉。但这只是一个 proxy，mechanistic interpretability 仍在进行。
+
+\teachervoice{01:04:52--01:06:29，讲者说 attention-like visualization 可以揭示两类模型的行为差异，却不是唯一解释工具；更完整的 SSM mechanistic interpretability 仍是 open work。}
+
+\subsection{本章小结}
+
+终局比较不再是“二次模型 versus 线性模型”，而是 database-like cache versus brain-like compressed state。Attention 用逐 token 成本换取精确访问，SSM 用不可逆压缩换取在线状态与抽象压力；hybrid 与 hierarchy 让两者按分辨率分工。架构研究最终要优化的，是每个 FLOP 与任务信息结构的匹配程度。
+
+\section{总结与延伸}
+
+\subsection{一条贯穿全课的主线：先设计 memory interface}
+
+这堂课可以压缩为四步推理。第一，每个 autoregressive model 都有跨步 state。第二，state 的形式决定访问接口：token database 支持精确检索，finite state 支持持续压缩。第三，数据单位的 resolution 决定哪种接口自然；attention 需要有效 token，SSM 更能处理需要先压缩的高分辨率流。第四，H-Net 展示一种组合方式：低层学习 chunk，高层对 chunk 做更强关系建模。
+
+\begin{importantbox}{四句带走}
+\begin{enumerate}
+  \item Mamba 的核心是 state expansion、selectivity 与 efficient scan 的系统组合。
+  \item Attention 的真正资产是 token-resolution random access，不只是一个 $QK^\top$ 公式。
+  \item Tokenization / patchification 改变建模问题，而不仅是缩短序列。
+  \item 最有前景的系统通常是 resolution-aware hybrid，而不是单一 primitive 通吃所有层。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{三条证据边界}
+
+第一，perplexity、BPB 与 pretraining loss 是局部指标，不能直接替代 retrieval、reasoning、control 与 downstream science。第二，byte / DNA 结果说明 architecture 与 token resolution 相互作用，不能推出所有原始模态都由 SSM 获胜。第三，H-Net 的 learned boundaries 与 outer-stage ablation 支持 compression hypothesis，却没有唯一识别“有限状态”就是增益因果来源。
+
+\subsection{面向系统设计的检查表}
+
+\begin{enumerate}
+  \item \textbf{定义状态：}每个生成步后保存什么？状态是否随 context 增长？
+  \item \textbf{定义检索：}任务是否需要精确回看某个历史单位，还是只需 sufficient summary？
+  \item \textbf{检查粒度：}当前 token / patch / event 是否有独立语义？边界是否应当 context-dependent？
+  \item \textbf{匹配算力：}理论复杂度、HBM traffic、kernel utilization 与 batch behavior 是否一致？
+  \item \textbf{做 ablation：}匹配参数、FLOPs、数据和训练 recipe 后，再比较 state type 与 layer ratio。
+  \item \textbf{保留边界：}不要把一个 pretraining curve 夸大为普遍智能结论。
+\end{enumerate}
+
+\subsection{开放问题}
+
+未来值得追踪的问题包括：dynamic chunking 能否扩展到 frontier scale；hierarchical memory 能否同时保留 coarse summary 与可恢复细节；SSM 的 diffuse dependence 怎样做 causal tracing；learning algorithm 能否摆脱 backprop memory 对超长依赖的限制；hardware 是否会为 true recurrence 提供不同最优点；以及 hybrid 中 attention layer 应由固定周期、动态路由还是任务条件触发。
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+  \item Albert Gu，\href{https://goombalab.github.io/blog/2025/tradeoffs/}{On the Tradeoffs of SSMs and Transformers}：本课的长文版概念来源。
+  \item Gu 与 Dao，\href{https://arxiv.org/abs/2312.00752}{Mamba}；Dao 与 Gu，\href{https://arxiv.org/abs/2405.21060}{Mamba-2 / Structured State Space Duality}。
+  \item Lahoti 等，\href{https://arxiv.org/abs/2603.15569v1}{Mamba-3 v1}：课堂前一个月发布的 inference-first SSM 更新。
+  \item Hwang、Wang 与 Gu，\href{https://arxiv.org/abs/2507.07955v2}{H-Net v2}：dynamic chunking 的完整方法与 scaling 结果。
+  \item Wang 等，\href{https://arxiv.org/abs/2401.13660}{MambaByte}：byte-level selective SSM；Shah 等，\href{https://arxiv.org/abs/2602.10603v3}{dnaHNet v3}：课堂快照中的 genomic hierarchy。
+\end{itemize}
+
+\end{document}

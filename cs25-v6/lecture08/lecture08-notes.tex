@@ -1,0 +1,840 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 08：从语言模型到原生多模态智能}
+\renewcommand{\noteauthors}{基于 Victoria Lin 官方讲座、56 页官方 deck、英文人工字幕与课堂日前一手论文整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-05-21；上传 2026-06-04}
+\renewcommand{\videoduration}{1:04:39（主讲至 41:39，其后为 Q\&A）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=NDdc39KYqDU}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.47\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{从语言模型到原生多模态：问题到底变了什么}
+
+这堂课不是简单罗列“能看图、能说话”的产品，而是追问一个更基础的系统问题：\textbf{LLM 的成功究竟有多少来自可迁移的 sequence-modeling 原理，又有多少依赖语言这种特殊的信息载体？} Victoria Lin 先把 language model 的成功拆成 next-token prediction、规模化数据、instruction following、reasoning 与 planning，再逐步加入 image、audio、video 和 physical interaction。读者需要始终区分三层目标：接受多模态输入、生成非文本输出、在物理世界中持续感知与行动。三者不是同义词，也不应由同一张产品截图推断。
+
+\begin{warningbox}{来源边界：本讲不代表 Thinking Machines 的内部实现}
+讲者在 00:00:59--00:01:12 明确声明，课堂只讨论 public materials，观点也不代表雇主。本讲义因此只使用 Stanford 官方 deck、公开录像、manual captions 与课堂日前公开论文；不会把 deck 中的概念外推成 Thinking Machines 的未公开系统细节。
+\end{warningbox}
+
+\subsection{先复盘 LLM scaling baseline}
+
+在进入多模态之前，先看语言模型为什么成为一个可迁移的设计模板。基础接口很简单：把离散文本转成 token 序列，使用 Transformer 对条件分布建模，再通过预训练、post-training 和 inference-time computation 获得知识、指令遵循、工具使用与规划能力。关键不是每项能力都由 next-token prediction 自动保证，而是这个统一接口让数据、模型、优化与部署可以共同规模化。
+
+\lecturefigure{slide-005.jpg}{语言模型从问答、代码到 agent 的能力栈}{官方 deck 第 5 页；课堂 00:01:20--00:02:52}
+
+\begin{knowledgebox}{读图：不要把应用图标当成机制证明}
+这张图把 ChatGPT、coding assistant 与 agent-style workflow 放在同一页，是为了说明语言接口已从“回答问题”扩展到“执行多步任务”。先比较中间的共同核心：所有应用都把复杂目标压成符号序列，再让模型预测、调用工具或迭代修正。图中没有证明 emergent capability 必然来自某个单一组件；它提供的是后续迁移问题的 baseline：多模态系统能否保留同样统一、可扩展的接口？
+\end{knowledgebox}
+
+\teachervoice{00:01:20--00:02:52，老师把知识、instruction following、chain-of-thought 与 planning 描述为规模化语言模型逐步显现的能力。讲义提醒：这里是经验性能力栈，不是“只要增加参数就必然出现所有能力”的定理。}
+
+\subsection{为什么 language modeling alone 不够}
+
+语言高度压缩了人类经验，但互联网和物理世界并不只由文字构成。图像携带空间结构，音频携带时间、说话人和环境信号，视频携带变化与因果线索，机器人还要把感知转成连续控制。若系统只能把这些信息先交给外部工具，再让 LLM 阅读一段文字摘要，它仍可能是强大的 orchestration layer，却还不是本讲所谓的 native multimodal model。
+
+\lecturefigure{slide-006.jpg}{从“语言足够”转向“语言不够”的核心命题}{官方 deck 第 6 页；课堂 00:02:56--00:03:00}
+
+\begin{importantbox}{本讲的 native multimodality 工作定义}
+原生多模态系统把不同 modality 的表示、序列位置、训练目标或参数路径纳入同一模型设计，使模型能够联合感知、条件化、推理，并在需要时直接生成非文本模态。它不是“给文本模型接一个 OCR/API”这么宽泛，也不要求所有 modality 必须共享完全相同的 encoder、loss 或参数。
+\end{importantbox}
+
+这一页只有一句话，却承担了全讲最重要的转折。它不否定 language model，而是把问题从“怎样扩大语言模型能力”改写为“怎样让 sequence model 处理语言之外的高带宽信号，同时保留规模化训练的优点”。
+
+\lecturefigure{slide-007.jpg}{数字世界的信息处理与物理世界的多模态经验}{官方 deck 第 7 页；课堂 00:03:00--00:04:18}
+
+\begin{knowledgebox}{读图：左半边与右半边的难度不对称}
+左侧 digital world 中的文档、图表、代码、网页与音频通常已被切成可离线处理的对象；模型可以等待完整输入，再生成回答。右侧 physical world 则要求持续感知、低延迟反应、空间一致性和动作闭环。图中最值得比较的不是“有多少 modality”，而是 information arrival、latency budget 与 consequence：漏读一张图表通常可重试，机器人在真实环境中的错误动作可能不可逆。
+\end{knowledgebox}
+
+\teachervoice{00:03:23--00:03:49，老师强调若 AI 要与人实时互动，就必须直接处理 image、audio、video 等信号。这里的“实时”不仅是 streaming UI，而是感知、状态更新和响应都处在环境时间约束内。}
+
+\subsection{现有系统位于哪一层}
+
+市场上常把“multimodal”作为统一标签，但工程上至少应问四个问题：输入是否多模态？输出是否多模态？表示是否联合训练？模型是否在实时物理闭环中运行？同一个系统可能在第一项很强、第二项有限、后两项仍依赖外部组件。
+
+\lecturefigure{slide-008.jpg}{课堂列举的 native multimodal model 语境}{官方 deck 第 8 页}
+
+\begin{warningbox}{读图时不要进行产品能力倒推}
+Gemini、Kimi、Qwen 等名称用于说明 2026 年已有多模态产品与研究系统；这张图不是统一 benchmark，也没有证明它们采用相同 architecture、loss 或 modality coverage。后文的技术结论应来自机制图和论文，而不是根据品牌名称猜测内部实现。
+\end{warningbox}
+
+\subsection{本章小结}
+
+LLM 提供了一个可规模化的 sequence-modeling baseline，但 native multimodality 增加了三类压力：representation 不再天然离散，output objective 不再只有 categorical next-token loss，physical interaction 还引入实时性与行动后果。后续所有模型都可以放进同一个设计空间：\textbf{如何表示、如何排序、预测什么、哪些参数共享、哪些能力真正正迁移。}
+
+\section{统一序列接口：tokenization、autoregression 与 training objective}
+
+上一章说明了为什么需要多模态；本章回答“如何把不同信号送进 Transformer”。最容易犯的错误是把 token 等同于整数 ID。课堂使用的 token 更像一个\textbf{按时间或空间排列的 model input unit}：文本可以是离散 subword ID，图像可以是 patch embedding 或 VQ code，音频可以是 frame-level vector。统一的是序列接口，不一定是表示类型。
+
+\subsection{混合序列的 globally autoregressive view}
+
+假设一个样本被展开为混合序列
+$$
+\mathbf{x}=(x_1,x_2,\ldots,x_T),\qquad m_t\in\{\text{text},\text{vision},\text{audio}\},
+$$
+其中 $m_t$ 表示第 $t$ 个位置的 modality。全局自回归建模写成
+$$
+p(\mathbf{x})=\prod_{t=1}^{T}p\!\left(x_t\mid x_{<t},m_{\le t}\right).
+$$
+这里 $x_t$ 可以是离散 token，也可以是连续 latent；后一种情形中，右侧的“概率”需要由 Gaussian、diffusion 或其他连续目标实现，而不能机械套用 vocabulary softmax。
+
+\lecturefigure{slide-010.jpg}{把 text、image patch 与 audio frame 放进同一因果序列}{官方 deck 第 10 页；课堂 00:06:31--00:07:26}
+
+\begin{knowledgebox}{读图：统一的是顺序与条件关系}
+图中的 T、V、A 分别代表 text token、visual patch 与 audio frame。先看底部顺序：不同 modality 可以交错出现，Transformer 在一个 causal context 中读取它们。再看顶部两条原则：tokenization across the board 负责把信号变成可排列单元，globally autoregressive generation 负责规定“当前位置依赖此前全部位置”。这并不要求三个 modality 使用同一种 decoder 或 loss。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={将多模态样本打包成一个带 modality 标签的序列}]
+def pack_sequence(text_ids, image_patches, audio_frames):
+    sequence = []
+    sequence += [("text", token) for token in text_ids]
+    sequence += [("vision", patch) for patch in image_patches]
+    sequence += [("audio", frame) for frame in audio_frames]
+    return add_positions_and_boundaries(sequence)
+\end{lstlisting}
+
+\begin{warningbox}{autoregressive 不等于所有输出都逐像素生成}
+“Globally autoregressive”描述 modality block 之间及序列位置之间的因果顺序。一个 image block 内部仍可由 diffusion 一次并行去噪，audio 也可使用专门 codec。若把它误读为“每个像素都像文字一样从左到右预测”，就会错过 Transfusion 的核心设计。
+\end{warningbox}
+
+\subsection{Token 不一定离散：四类表示接口}
+
+不同 modality 的统计结构不同，因此 tokenization 的目标也不同。文本 tokenizer 追求 compact vocabulary 与语义复用；图像 patch embedding 保留局部连续特征；VQ tokenizer 用 codebook 压缩成离散 ID；音频 frame/codec token 在时间分辨率、音质与序列长度之间折衷。
+
+\lecturefigure{slide-011.jpg}{文本、图像、视频和音频的 tokenization 入口}{官方 deck 第 11 页；课堂 00:05:19--00:06:20}
+
+\begin{knowledgebox}{读图：先比较“切什么”，再比较“丢什么”}
+文本通常切 subword；图像切空间 patch；视频在 patch 之外还切时间；音频切 frame 或 codec unit。切分越细，序列越长、计算越贵；切分越粗，局部细节和时间变化越容易丢失。真正的设计变量不是“有没有 tokenizer”，而是单位粒度、是否离散、压缩率、可逆性以及它服务 understanding 还是 generation。
+\end{knowledgebox}
+
+\lecturefigure{slide-012.jpg}{连续 embedding、离散 code 与生成 latent 的表示谱系}{官方 deck 第 12 页；课堂 00:06:20--00:07:10}
+
+\begin{knowledgebox}{术语消化：multimodal representation}
+\begin{longtable}{L{0.20\textwidth}L{0.27\textwidth}L{0.42\textwidth}}
+\toprule
+术语 & 解决的问题 & 核心机制与课程关系 \\
+\midrule
+Patch embedding & 把高分辨率图像变成有限序列 & 将固定大小 patch 线性投影为连续向量，适合理解，但不直接给出像素级生成分布。 \\
+VQ token & 让图像进入离散 LM vocabulary & 每个 patch 选择最近 codebook entry，接口统一但存在 quantization information loss。 \\
+Continuous latent & 降低像素空间生成难度 & VAE/encoder 把图像压到连续空间，后续可用 diffusion 预测，通常更适合生成。 \\
+Audio frame / codec token & 表示高频时间信号 & frame 保留连续声学特征；codec token 更离散、更紧凑，但音质与语义粒度受 codec 限制。 \\
+Modality boundary & 防止模型混淆序列语义 & 特殊 token、位置编码或 type embedding 标记 modality 与 block 边界。 \\
+\bottomrule
+\end{longtable}
+\end{knowledgebox}
+
+\teachervoice{00:07:00--00:07:10，老师特别提醒，dense vector 也可以被称为 token。讲义采用“序列单元”这一宽定义，避免把后文 continuous image latent 错判为不属于 tokenization。}
+
+\subsection{Multimodal input 不等于 multimodal output}
+
+若模型只在 text position 上计算 loss，它可以学会根据图像回答问题，却没有被训练去还原 image/audio distribution。令 $\mathcal{T}$ 是 text-output positions，文本交叉熵为
+$$
+\mathcal{L}_{\text{text-only}}
+=-\sum_{t\in\mathcal{T}}\log p_\theta(x_t\mid x_{<t}).
+$$
+图像和音频 token 在这里是 conditioning context，而不是被预测目标。
+
+\lecturefigure{slide-013.jpg}{多模态输入、仅文本输出的训练目标}{官方 deck 第 13 页；课堂 00:07:33--00:07:55}
+
+\begin{knowledgebox}{读图：看 loss 落在哪些位置}
+底部序列同时有 T、V、A，但顶部气泡只指向 text output。模型可以在 self-attention 中使用视觉和音频信息，却只因文字预测误差而更新。这样容易获得 captioning、VQA、document understanding 等能力，但不会自动获得 image synthesis 或 speech generation。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={只对文本输出位置计算交叉熵}]
+def text_only_loss(hidden, targets, modality):
+    logits = text_head(hidden)
+    mask = modality == "text"
+    return cross_entropy(logits[mask], targets[mask])
+\end{lstlisting}
+
+\lecturefigure{slide-014.jpg}{课堂列举的 text-output multimodal model regime}{官方 deck 第 14 页；课堂 00:07:58--00:08:12}
+
+\begin{warningbox}{模型名称不等于固定 capability contract}
+slide 以 2026 年产品名称说明“多模态输入、文本输出”这一常见训练/交互模式，但产品会持续迭代，且公开接口不等于完整训练目标。本讲义只保留 regime 层面的结论：\textbf{conditioning modality 与 predicted modality 必须分别审计。}
+\end{warningbox}
+
+\subsection{Omni objective：每个 modality 都有自己的预测头}
+
+若模型要生成 text、image 与 audio，就需要让非文本位置也产生可优化误差。一个抽象写法是
+$$
+\mathcal{L}_{\text{omni}}
+=\lambda_T\mathcal{L}_{T}
++\lambda_V\mathcal{L}_{V}
++\lambda_A\mathcal{L}_{A},
+$$
+其中 $\mathcal{L}_{T}$ 常是 categorical cross-entropy，$\mathcal{L}_{V}$ 可以是 diffusion/flow matching，$\mathcal{L}_{A}$ 可以是 codec-token CE 或连续声学目标。$\lambda_m$ 不只是数学权重，还决定 optimization bandwidth：某个 modality 的 gradient 是否会淹没其他任务。
+
+\lecturefigure{slide-015.jpg}{Omni model 对 text、vision 与 audio 输出共同训练}{官方 deck 第 15 页；课堂 00:08:12--00:09:16}
+
+\begin{importantbox}{Omni model 的最小判据}
+Omni model 至少应把多个 modality 作为可生成目标，而不只是输入条件。它可以共享一个 backbone，也可以拥有 modality-specific heads、losses 或参数；“omni”描述 capability coverage，不代表 architecture 必须完全 homogeneous。
+\end{importantbox}
+
+\begin{warningbox}{Joint training 不保证 positive transfer}
+把 losses 相加只保证梯度同时存在，不保证任务互相帮助。不同 modality 可能共享高层语义，也可能在低层统计、序列长度和梯度尺度上冲突。后面的 modality gap、MoT 与 understanding-generation asymmetry 都是在处理这个未解决问题。
+\end{warningbox}
+
+\subsection{本章小结}
+
+统一多模态序列需要同时回答 representation、ordering 与 objective。Token 是序列单元，不必离散；global autoregression 规定跨 block 的条件关系，不排斥 block 内 diffusion；multimodal input 与 multimodal output 由 loss mask 明确区分。到这里，我们有了统一接口，但还不知道它是否能像语言模型一样规模化。
+
+\section{把 LLM scaling recipe 迁移到多模态}
+
+前两章建立了接口，本章讨论训练路线。课堂不是从零发明一套 multimodal science，而是把 LLM 的成功经验拆成四项可检验假设：instruction following 能否跨 modality、reasoning 能否利用视觉/音频上下文、规模扩大是否持续改善、sparse architecture 能否控制成本。每一项都可能成立，也都可能因 modality 的高维、冗余和目标差异而失效。
+
+\subsection{四个迁移支柱}
+
+本节把上一章的统一序列接口推进到训练路线：先明确哪些 LLM 经验值得迁移，再检查每一项在高维 modality 上可能出现的失效条件。读图时应按行为能力、规模效应和基础设施三层理解，而不是把四列当成已完成清单。
+
+\lecturefigure{slide-019.jpg}{从 LLM paradigm 迁移出的四项 multimodal scaling 原则}{官方 deck 第 19 页；课堂 00:09:16--00:11:33}
+
+\begin{knowledgebox}{读图：按从“行为”到“基础设施”的顺序阅读}
+第一列是 prompting 与 instruction following，解决用户如何控制模型；第二列是 multimodal planning，解决模型如何在不同信息源间组织中间步骤；第三列是 data/model scaling，提出性能是否随规模连续改善；第四列是 architectural scaling，用 MoE、attention sparsity 或 modality specialization 降低 active compute。前两列主要改变 behavior，后两列决定训练和推理能否负担。
+\end{knowledgebox}
+
+\begin{importantbox}{Scaling hypothesis，而不是 scaling guarantee}
+若增加数据或参数得到性能曲线 $Q(N,D)$，语言模型经验提示 $\partial Q/\partial N>0$、$\partial Q/\partial D>0$ 在一段区间内成立。但多模态数据的质量、同步误差、重复帧、缺失标注和 loss mismatch 会改变曲线。真正要验证的是 matched-compute scaling，而不是只展示更大模型的最终分数。
+\end{importantbox}
+
+\teachervoice{00:09:16--00:11:33，老师把 instruction following、planning、scale 与 architecture sparsity 视为从 LLM 迁移的原则。这里最重要的语气是“approach”：这些是研究路线，不是已经解决的工程清单。}
+
+\subsection{两条问题轴组织全讲}
+
+前一节列出 scaling recipe，本节把它收束成两个可检验问题：非文本输出怎样生成，以及联合训练是否产生 capability transfer。后续模型的差异都可以回到这两条轴上比较；读者还应分别记录 representation、loss 与 parameter sharing，避免用“统一模型”掩盖不同实验条件。
+
+\lecturefigure{slide-021.jpg}{Omni model 的两条核心研究问题}{官方 deck 第 21 页；课堂 00:11:37--00:12:18}
+
+\begin{knowledgebox}{读图：generation 与 transfer 是两个独立问题}
+问题一问“怎样生成非文本 modality”，关注 representation 与 loss；问题二问“understanding 与 generation 是否正迁移”，关注共享 backbone 是否产生协同。一个模型可以解决第一问却在第二问上出现 negative transfer。Chameleon 与 Transfusion主要探索第一问；MoT 同时处理 capacity conflict；讲座后半段才正面讨论第二问。
+\end{knowledgebox}
+
+接下来可把模型设计写成五元组：
+$$
+\mathcal{M}=(R, O, L, P, C),
+$$
+其中 $R$ 是 representation，$O$ 是 ordering/sequence interface，$L$ 是 losses，$P$ 是 parameter sharing/routing，$C$ 是 compute and capacity allocation。不同论文并非互相替代，而是在五个维度上做不同选择。
+
+\begin{knowledgebox}{阅读后续论文的统一问题表}
+看到一个新 multimodal model 时，先问：输入和输出各是什么 modality？图像是离散 code 还是 continuous latent？跨 modality 是否 autoregressive？每种输出用什么 loss？attention/FFN 哪些共享？路由是 deterministic 还是 learned？比较时 active parameters、tokens、FLOPs 和数据是否匹配？如果这些问题没有答案，单看“统一模型”四个字没有足够技术含义。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+多模态 scaling 的目标不是把所有信号强行塞进同一个 vocabulary，而是保留 sequence model 的统一控制面，同时允许 modality-specific representation、objective 与 sparse capacity。后面的三个模型族分别回答：完全离散化能走多远？连续生成目标如何与语言模型共存？参数共享何时应该被确定性稀疏化？
+
+\section{Chameleon：把所有 modality 离散成 token}
+
+第一条路线追求最大程度的接口统一：如果 text 和 image 都能变成离散 ID，就可以直接沿用 causal language modeling。Chameleon 的历史意义在于证明 mixed-modal early fusion 可以在大规模预训练中成立；它也清楚暴露了统一接口的代价——codebook 压缩会丢失细粒度视觉语义，而图像生成的离散预测效率未必优于 continuous latent diffusion。
+
+\subsection{Early fusion 的强假设}
+
+上一章留下的第一个选择是 representation。本节从最彻底的方案开始：把 image 也离散化，并在进入 Transformer 之前完成融合。读图时先看 tokenizer 位于何处，再看统一序列换来了什么训练便利。
+
+\lecturefigure{slide-022.jpg}{Chameleon：把所有 modality 编码为离散 token 的 early-fusion 模型}{官方 deck 第 22 页；Chameleon arXiv 2405.09818v2}
+
+\begin{knowledgebox}{读图：early fusion 发生在模型输入之前}
+图中 image 先被 tokenizer 转成离散视觉 token，再与 text token 交错进入同一个 Transformer。所谓 early fusion，是在深层模型之前就形成统一序列，而不是分别跑完视觉 encoder 与语言模型后才拼接 logits。它的优点是所有位置都能参与同一 causal context；风险是视觉 tokenizer 的 information bottleneck 被带入所有后续任务。
+\end{knowledgebox}
+
+令 encoder 产生连续 patch latent $z_e(x)$，codebook 为 $\{e_k\}_{k=1}^{K}$。VQ assignment 写成
+$$
+k^*(x)=\arg\min_{k\in\{1,\ldots,K\}}\left\|z_e(x)-e_k\right\|_2^2,
+\qquad z_q(x)=e_{k^*(x)}.
+$$
+$K$ 是 codebook size，$z_q$ 是量化后的 latent。压缩越强，序列越短；但若多个细节不同的 patch 落到同一 code，模型将无法从 token ID 恢复被丢掉的信息。
+
+\lecturefigure{slide-023.jpg}{VQ-VAE 把连续图像 patch 映射到离散 codebook}{官方 deck 第 23 页；VQ-VAE-2 arXiv 1906.00446v1；课堂 00:12:55--00:14:18}
+
+\begin{knowledgebox}{读图：VQ-VAE 同时承担 compression 与 vocabulary construction}
+左侧 encoder 把像素压到 latent grid；中间 quantizer 为每个位置选择最近 codebook vector；右侧 decoder 尝试重建图像。对 Chameleon 而言，最关键的输出不是重建图本身，而是 code index sequence。这个序列可以像文字一样进入 cross-entropy，但重建质量和 semantic fidelity 受 codebook 容量、下采样率与训练目标共同限制。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={VQ 图像 tokenization 的最小伪代码}]
+def vq_tokenize(image, encoder, codebook):
+    latent = encoder(image)                 # [H, W, D]
+    distance = pairwise_l2(latent, codebook)
+    token_ids = distance.argmin(axis=-1)    # [H, W]
+    return token_ids.flatten()
+\end{lstlisting}
+
+\teachervoice{00:12:27--00:12:55，老师称“把多模态世界视为离散 token sequence”是一个 very powerful view。强大之处是可直接迁移 LM 训练栈；但“powerful”描述建模统一性，不等于表示没有损失。}
+
+\subsection{一个序列为什么能生成任意 text-image order}
+
+当 text 与 image code 被放进同一因果序列，模型可以学习
+$$
+p(t_1,\ldots,t_i,v_1,\ldots,v_j,t_{i+1},\ldots),
+$$
+因此既能 text-to-image，也能 image-to-text，还能交替生成多段文本和图像。关键不是新增一个特殊“图片模式”，而是训练数据中本来就存在 interleaved ordering，模型学习在 modality boundary 后继续预测正确 target space。
+
+\lecturefigure{slide-024.jpg}{Chameleon 的 arbitrary-order interleaved text-image generation}{官方 deck 第 24 页；课堂 00:14:23--00:14:50}
+
+\begin{knowledgebox}{读图：任意顺序来自训练分布，不来自无条件自由组合}
+图中可以先图后文、先文后图或交替出现，说明模型具有 mixed-modal continuation 能力。它仍受 context window、训练中见过的 interleaving pattern 与 tokenizer fidelity 限制。若数据几乎只有 caption pair，模型不会仅因 architecture 统一就自动学会复杂图文故事编排。
+\end{knowledgebox}
+
+\lecturefigure{slide-025.jpg}{Chameleon 的 mixed-modal multitask 能力}{官方 deck 第 25 页；课堂 00:14:50--00:15:26}
+
+\begin{knowledgebox}{读图：任务多样性是 early fusion 的真正价值测试}
+图中同时出现 captioning、visual question answering、image generation 与 mixed-modal reasoning。先比较 input/output modality，再比较评价方式：理解任务通常输出文本，可用 accuracy 或 language metric；生成任务输出图像，需要 perceptual 或 human evaluation。把它们列在一页不代表分数可直接相加，也不代表一种 representation 对每项任务都最优。
+\end{knowledgebox}
+
+\subsection{统一 token interface 的两类瓶颈}
+
+Chameleon 的结果证明“可行”，但课堂随后强调两个边界。第一，离散图像 code 对 fine-grained understanding 往往弱于 SigLIP 一类 continuous semantic embedding；第二，生成侧的 diffusion/flow matching 在质量和效率上发展更快。于是出现一个核心矛盾：同一 image representation 很难同时服务 semantic understanding 与 high-fidelity generation。
+
+\lecturefigure{slide-026.jpg}{Chameleon 的贡献、表示限制与 2026 年技术位置}{官方 deck 第 26 页；课堂 00:15:32--00:16:30}
+
+\begin{knowledgebox}{读图：Summary 的第二点比第一点更重要}
+第一点确认 early-fusion from scratch 可以保住 text-only performance 并产生 mixed-modal capability。第二点把结论收窄：VQ token 对细粒度视觉语义有损，生成侧又被 continuous latent diffusion 超越。右下角“and many others”表示后续模型大量采用 continuous input encoder 或混合表示，并不是在宣称 Chameleon 已被完全淘汰。
+\end{knowledgebox}
+
+\begin{warningbox}{不能从 Chameleon 推出的结论}
+不能推出所有 modality 都应该离散；不能推出一个 vocabulary 就能消除 modality gap；不能根据 qualitative sample 断言 reasoning 与 generation 已正迁移；也不能把 text-only performance 保持理解为所有视觉任务达到 state of the art。Chameleon 的核心证据是 early-fusion feasibility，而不是 universal representation optimality。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Chameleon 用最彻底的方式迁移 language modeling：所有输入和输出都变成离散 token，再用统一 cross-entropy。它获得了优雅的 interleaving 与 multitask 接口，也把视觉信息压缩瓶颈暴露得很清楚。下一条路线保留一个共享 Transformer，却放弃“所有输出都必须是离散 ID”的要求。
+
+\section{Transfusion：同一 Transformer，两个预测世界}
+
+Transfusion 的设计抓住一个关键分离：\textbf{sequence-level ordering 可以统一，modality-level loss 不必统一。} 文本继续做 autoregressive next-token prediction，图像则在 continuous latent space 中做 diffusion denoising。这样既保留 mixed-modal context，又避免用 VQ vocabulary 逐 token 生成图像。
+
+\subsection{从离散 code 转向 continuous image latent}
+
+Chameleon 的瓶颈来自量化，因此本节先改变 image target space，再讨论怎样与 text 共用 backbone。读 slide 027 时要把“共享 Transformer”和“连续 image latent”作为两个独立设计决定。
+
+\lecturefigure{slide-027.jpg}{Transfusion 在一个 Transformer 中容纳 text token 与 image latent}{官方 deck 第 27 页；Transfusion arXiv 2408.11039v1}
+
+\begin{knowledgebox}{读图：共享 backbone，不共享 target distribution}
+文本 block 仍然是离散 token；图像 block 由连续 latent patch 构成。Transformer 让两类位置互相条件化，但输出头和损失根据 modality 选择。换句话说，统一的是 context mixing 与 parameter backbone，而不是要求图像也预测一个 vocabulary category。
+\end{knowledgebox}
+
+在 diffusion 中，clean latent $z_0$ 被逐步加噪：
+$$
+z_t=\sqrt{\bar\alpha_t}\,z_0+\sqrt{1-\bar\alpha_t}\,\epsilon,
+\qquad \epsilon\sim\mathcal{N}(0,I).
+$$
+模型根据 mixed-modal context、time step $t$ 和 noisy latent $z_t$ 预测噪声：
+$$
+\mathcal{L}_{\text{diff}}
+=\mathbb{E}_{z_0,t,\epsilon}
+\left[\left\|\epsilon-\epsilon_\theta(z_t,t,\text{context})\right\|_2^2\right].
+$$
+$\bar\alpha_t$ 控制保留多少 clean signal；$\epsilon_\theta$ 是 denoiser。生成时从噪声开始，迭代反演得到 image latent，再经 decoder 还原像素。
+
+\subsection{联合 loss 如何工作}
+
+有了连续 latent 后，下一步是说明两个时间尺度怎样进入同一训练循环。本节连接 sequence autoregression 与 diffusion denoising，并明确 loss weighting 是 optimization design，而不是符号上的简单相加。
+
+\lecturefigure{slide-028.jpg}{Transfusion 把 autoregressive text loss 与 diffusion image loss 放入同一模型}{官方 deck 第 28 页；课堂 00:17:25--00:18:35}
+
+\begin{knowledgebox}{读图：看清两条时间轴}
+文本沿序列位置做 left-to-right prediction；图像 block 内部则沿 diffusion time 从 noisy latent 逐步还原。两种“时间”不可混淆：sequence position 决定 block 之间的因果条件，diffusion step 决定 image latent 的去噪进度。共享 Transformer 接收二者，但每个位置的 supervision 来自不同目标。
+\end{knowledgebox}
+
+联合目标可以抽象为
+$$
+\mathcal{L}_{\text{Transfusion}}
+=\mathcal{L}_{\text{AR-text}}+\lambda_{\text{img}}\mathcal{L}_{\text{diff-image}}.
+$$
+$\lambda_{\text{img}}$ 用来平衡 gradient scale。若图像 block 很长或 diffusion loss 数值更大，不做 normalization 可能让图像梯度主导 backbone；反之，权重过低又会让模型退化为 text model 加弱生成头。
+
+\begin{lstlisting}[caption={Transfusion 风格的 modality-aware joint objective}]
+def transfusion_loss(hidden, batch):
+    text_loss = cross_entropy(
+        text_head(hidden[batch.text_mask]),
+        batch.text_targets,
+    )
+    noise = normal_like(batch.image_latents)
+    noisy = add_noise(batch.image_latents, noise, batch.steps)
+    pred = image_head(hidden, noisy, batch.steps)
+    image_loss = mse(pred, noise)
+    return text_loss + batch.image_weight * image_loss
+\end{lstlisting}
+
+\teachervoice{00:17:49--00:18:35，老师把 Transfusion 概括为“在一个 Transformer 中结合 autoregressive language modeling 与 diffusion image generation”。这里的单一模型不意味着单一 loss；恰恰是允许不同目标，才避免把图像硬压成文字式分类。}
+
+\subsection{定性样例应该证明什么}
+
+机制成立后仍需要检查模型实际输出。本节用 slide 029 训练一种更严格的读图方式：先核对 prompt constraints，再看视觉细节，最后明确 qualitative evidence 不能回答哪些统计问题。
+
+\lecturefigure{slide-029.jpg}{Transfusion 的 mixed-modal generation examples}{官方 deck 第 29 页；Transfusion arXiv 2408.11039v1}
+
+\begin{knowledgebox}{读图：先检查 instruction fidelity，再看视觉质量}
+每个样例同时测试 prompt 中对象、关系、风格与 interleaving。读图时先核对模型是否生成了要求的实体和布局，再看细节、纹理与一致性。漂亮样例支持“模型能产生这类输出”，却不能回答平均成功率、失败分布、训练数据记忆、prompt sensitivity 或安全性。
+\end{knowledgebox}
+
+\begin{warningbox}{Qualitative sample 的证据上限}
+少量 curated samples 不能证明 distribution-wide superiority。需要与 Dense/VQ baseline 在 matched data、FLOPs、sampling steps 与 human protocol 下比较；否则图像更好可能来自更强 decoder、更长采样或筛选。后面的 MoT 结果同时给 loss curve、CLIP、FID 与 captioning score，证据层级更高，但仍不是完整产品评估。
+\end{warningbox}
+
+\subsection{理解与生成仍然使用不同 image representations}
+
+前一节只说明生成质量，本节回到讲座第二条主线：生成 latent 是否也适合理解。答案仍是否定或至少未解决，因此 slide 030 的 open problem 是从 Transfusion 过渡到 modality-aware architecture 的关键。
+
+\lecturefigure{slide-030.jpg}{Transfusion 的贡献与 understanding-generation representation split}{官方 deck 第 30 页；课堂 00:19:22--00:20:25}
+
+\begin{knowledgebox}{读图：第三条是 open problem，不是实现细节}
+前两条说明联合 AR/diffusion 优于 VQ 生成路线；第三条指出 VAE latent 对 image understanding 不够有效。许多系统因此使用一套 continuous semantic encoder 做理解，另一套 generative latent 做图像输出。模型在 backbone 层统一，representation 层却仍分叉，这正是“native multimodal”不等于“所有组件完全共享”的例子。
+\end{knowledgebox}
+
+\begin{importantbox}{Objective sharing 与 representation sharing 是两条独立轴}
+可以共享 backbone 但使用不同 loss；可以共享输入 encoder 但使用不同 output decoder；也可以为理解和生成使用两套 image representation，再在中间语义层对齐。设计评审时应分别记录 $R_{\text{understand}}$、$R_{\text{generate}}$ 与 $L_m$，不要用“统一模型”掩盖这些差异。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Transfusion 证明统一 sequence context 与 modality-specific objective 可以共存。它解决了“怎样生成连续图像”这一问题，却没有自动解决 image understanding。下一章继续问：即使 representation 与 loss 选得合理，把所有 token 都送入同一套 Transformer 参数，是否仍会发生 capacity conflict？
+
+\section{Mixture-of-Transformers：按 modality 分配参数与计算}
+
+Chameleon 统一 token，Transfusion 统一 backbone；MoT 则在共享序列之上重新引入 specialization。核心观察是：不同 modality 在 hidden space 中形成可分结构，且它们对参数容量、优化速度和输出目标的需求不同。与其让所有 token 竞争同一套 attention/FFN，不如利用已知 modality label 做 deterministic routing。
+
+\subsection{Shared backbone baseline 与 modality gap}
+
+为了判断是否需要 specialization，本节先建立 dense shared-backbone baseline，再查看不同层的 representation geometry。两张图要连起来读：slide 031 给出参数共享假设，slide 032 只提供可能反驳它的经验信号。
+
+\lecturefigure{slide-031.jpg}{所有 modality 共用同一 Transformer backbone 的 dense baseline}{官方 deck 第 31 页}
+
+\begin{knowledgebox}{读图：Dense baseline 的优点是简单，代价是全部激活}
+底部不同颜色的 token 全部穿过同一个黄色 Transformer。每个 token 都激活同样参数，因此 implementation 简单、跨 modality attention 自然；但 image/audio token 数量可能远大于 text，且不同输出任务的 gradient 会竞争同一 capacity。后面的 sparse design 不是取消交互，而是改变 token 在每层使用哪套投影与 FFN。
+\end{knowledgebox}
+
+\lecturefigure{slide-032.jpg}{不同层中的 modality gap 与表示分群}{官方 deck 第 32 页；Mind the Gap arXiv 2203.02053v2}
+
+\begin{knowledgebox}{读图：分群是现象，不是因果证明}
+四个 panel 展示不同层的 image/text representation 在投影空间中逐渐形成不同结构。应先比较 layer 1、5、17、32 的分离程度，再问这种 gap 是否来自输入统计、contrastive objective、position encoding 或训练数据。图支持“modality 有可利用的结构差异”，但不能单独证明“分开参数一定更好”。
+\end{knowledgebox}
+
+\begin{warningbox}{Modality gap 的常见误读}
+表示可分并不等于语义无法对齐；相反，跨模态检索常要求不同分布仍在某些方向上可比较。MoT 使用 modality label 做路由，是一种工程选择。要证明它有效，还必须看 matched-compute loss、downstream metric 与稳定性，而不是只看二维散点图。
+\end{warningbox}
+
+\subsection{Deterministic routing 是什么}
+
+设第 $\ell$ 层对 modality $m$ 有参数 $\theta_{\ell,m}$。对 token $h_i^\ell$，已知其 modality $m_i$，则
+$$
+h_i^{\ell+1}
+=h_i^\ell+F_{\theta_{\ell,m_i}}
+\left(h_i^\ell,\operatorname{Attn}_{\theta_{\ell,m_i}}(H^\ell)\right).
+$$
+路由由 $m_i$ 决定，不需要额外 gate 学习。虽然 query/key/value projection 可按 modality 区分，attention 仍可在整个 mixed sequence 上计算，因此 text token 与 image token 仍然交换信息。
+
+\lecturefigure{slide-033.jpg}{MoT 的第一状态：独立 modality 参数与确定性路由}{官方 deck 第 33 页；Mixture-of-Transformers arXiv 2411.04996v2}
+
+\begin{knowledgebox}{读图：黑、橙、绿表示“谁使用哪套参数”}
+输入 token 的 modality 已知，因此路由无需 top-$k$ gate。右侧两个气泡是核心：independent transformer parameters for each modality 与 deterministic routing。图中 token 仍排列在同一序列，区别只是经过 attention/FFN 时选择对应颜色的参数路径。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={MoT 的 deterministic modality routing}]
+def mot_layer(hidden, modality_ids, experts):
+    output = zeros_like(hidden)
+    for modality, transformer_block in experts.items():
+        mask = modality_ids == modality
+        output[mask] = transformer_block(hidden, query_mask=mask)
+    return output
+\end{lstlisting}
+
+\lecturefigure{slide-039.jpg}{完整 MoT architecture：多 modality 参数路径与各自 training objective}{官方 deck 第 39 页；课堂 00:21:48--00:24:30}
+
+\begin{knowledgebox}{读图：从左到右追踪一个 token}
+左侧完整图把 text、image、audio token 分别送入对应颜色的 attention 与 FFN；上方输出仍回到同一 mixed sequence。右侧补充 image diffusion objective 与 language-modeling objective，说明 routing 与 loss 都按 modality 定义。读图重点不是颜色数量，而是：序列保持联合、参数激活稀疏、目标保持专用。
+\end{knowledgebox}
+
+\teachervoice{00:42:42--00:44:08 的 Q\&A 补充了一个容易遗漏的点：参数路径分开后，token 仍通过 self-attention 看到其他 modality 的 context。Specialization 改变 projection/FFN，不等于把信息流切成互不通信的子模型。}
+
+\subsection{MoT 与 Mixture-of-Experts 有何不同}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{0.98\textwidth}{L{0.17\textwidth}Y Y}
+\toprule
+架构 & 路由与解决的问题 & 代价与课程关系 \\
+\midrule
+Dense Transformer & 所有 token 激活同一参数；实现简单、共享充分 & active compute 高，modality 可能竞争 capacity。 \\
+MoT & 根据已知 modality deterministic routing 到专用参数 & 路由稳定、可控；需要维护多套参数，并决定哪些层共享。 \\
+MoE & learned gate 按 token 内容选择 top-$k$ experts & 可在同一 modality 内学习功能分工，但有 load balancing、routing instability 与通信开销。 \\
+MoT + MoE & 先按 modality 选参数族，再在族内学习 expert routing & 同时建模跨 modality 差异与 modality 内多样性，系统复杂度最高。 \\
+\bottomrule
+\end{tabularx}
+\caption{术语消化：Dense、MoT 与 MoE 的路由差异}
+\end{table}
+
+若总参数为 $P_{\text{total}}$，一次 token 只激活其 modality 路径 $P_{m}$，active-parameter ratio 可写成
+$$
+\rho_m=\frac{P_m}{P_{\text{total}}}.
+$$
+稀疏模型比较必须报告 $P_{\text{total}}$ 与 $P_{\text{active}}$。只用总参数宣称“更大”会夸大单次计算，只用 active 参数又会隐藏存储与通信成本。
+
+\subsection{先看实验配置，再看曲线}
+
+架构图之后最容易直接跳到漂亮曲线，但本节先做资源核算。只有确认序列长度、token 数、训练步数与 GPU 配置，才能判断 slide 041 的优势是否来自 routing，而不是额外训练预算；同时还要区分 total parameters 与 active parameters，才不会误读 sparse model 的规模。
+
+\lecturefigure{slide-040.jpg}{MoT 实验从 163M 到 7B 的 matched training configuration}{官方 deck 第 40 页；Mixture-of-Transformers arXiv 2411.04996v2}
+
+\begin{knowledgebox}{读表：资源口径决定结论是否可信}
+四个规模均使用 sequence length 4096、约 2.10M tokens/batch、250k steps，总训练量约 0.524T tokens；较大模型增加 GPU 并降低 per-GPU batch。比较时先确认 token budget 与 steps 一致，再看 hidden dimension、layers、heads 和 GPU 数。这样才能把曲线差异主要归因于 architecture，而不是训练更多数据。
+\end{knowledgebox}
+
+\begin{importantbox}{Matched compute 的最低报告项}
+多模态 sparse model 至少报告：每种 modality 的 token 比例、total/active parameters、每 step FLOPs、训练 tokens、diffusion sampling steps、GPU 数、通信开销与 wall-clock。表中 token budget 匹配是重要基础，但并不自动匹配所有系统成本。
+\end{importantbox}
+
+\lecturefigure{slide-041.jpg}{MoT + Transfusion 7B 的 loss、sample efficiency 与下游指标}{官方 deck 第 41 页；课堂 00:24:30--00:26:58}
+
+\begin{knowledgebox}{读图：五个 panel 回答不同问题}
+左上 red MoT curve 在相同 training step 下达到更低 image loss；右上把 MoE/MoT 达到 Dense loss 所需 steps 画出，红色斜率更小表示更高 sample efficiency。下方 CLIP 越高越好、FID 越低越好、CIDEr 越高越好；slide 报告 MoT 在三项均优于 Dense。它支持 generation 与 captioning 改善，但仍需检查数据、sampling 与统计方差。
+\end{knowledgebox}
+
+\begin{warningbox}{Loss 下降不等于所有能力提升}
+Image diffusion loss、CLIP、FID 与 CIDEr 分别测优化目标、语义对齐、分布质量与 caption overlap。它们不能替代 image understanding accuracy、spatial reasoning、safety 或 human preference。尤其课堂后续明确指出，modality separation 没有改善所讨论的 image-understanding route。
+\end{warningbox}
+
+\lecturefigure{slide-042.jpg}{Dense 与 MoT 的图像生成定性对照}{官方 deck 第 42 页；Mixture-of-Transformers arXiv 2411.04996v2}
+
+\begin{knowledgebox}{读图：看 prompt composition，而不只看美观}
+四列 prompt 都要求不常见的对象组合，如 lychee-inspired chair、sushi city、cheeseburger character 与 chrome duck/turtle interaction。比较上下两行时，先看对象数量、关系和材质是否满足，再看形状稳定性。MoT 样例更接近文字约束，但这仍是 selected qualitative evidence，需要与 slide 041 的量化指标共同阅读。
+\end{knowledgebox}
+
+\subsection{Modality capacity 与 learned experts 可以叠加}
+
+上一节比较 Dense 与 MoT，本节进一步问同一 modality 内部是否也需要功能分工。slide 043 因此不是重复的稀疏图，而是把 deterministic modality routing 与 learned expert routing 组合成两级结构。
+
+\lecturefigure{slide-043.jpg}{在 modality routing 内继续组合 Mixture-of-Experts}{官方 deck 第 43 页；课堂 00:26:58--00:28:20}
+
+\begin{knowledgebox}{读图：两级稀疏解决两种异质性}
+第一层按 modality 做 deterministic routing，处理 text/image/audio 的统计差异；第二层 MoE gate 在某个 modality 内选择 experts，处理任务、风格或语义功能差异。两级都增加 total parameters，但 active path 仍可保持稀疏。工程上还要处理 expert parallelism、load balancing 与跨设备 all-to-all 通信。
+\end{knowledgebox}
+
+\teachervoice{00:27:55--00:28:20，老师给出一条实践观察：增加 experts 对 text performance 的帮助增长更快，而 image generation 未必同速扩展。因此各 modality 不应机械分配相同 expert 数量；capacity allocation 本身是可调超参数。}
+
+\subsection{冻结语言路径并异步扩展新 modality}
+
+两级稀疏解决训练时的 capacity 分配，本节转向模型演化：已有 language model 很强时，怎样增加 image/audio generation 而不重训全部参数。读 slide 044 时应把 stability 与 controllability 理解为训练工作流收益。
+
+\lecturefigure{slide-044.jpg}{MoT 的四项工程结论与 modality-aware follow-up}{官方 deck 第 44 页；课堂 00:28:20--00:29:57}
+
+\begin{knowledgebox}{读图：第三点把 architecture 变成训练工作流}
+前两点总结 deterministic routing 与非文本生成提升；第三点强调 efficiency、stability、controllability，以及跨 stage 异步训练不同 modality。若 text path 已很强，可以冻结它，只训练 image/audio path，从而减少 catastrophic forgetting 与全量 continued pretraining 成本。第四点说明这种思路已扩展成一类 modality-aware architecture。
+\end{knowledgebox}
+
+\begin{lstlisting}[caption={冻结已有 language path，扩展新的 generation modality}]
+def extend_with_new_modality(model, new_loader):
+    freeze(model.text_parameters)
+    trainable = model.image_parameters + model.cross_modal_adapters
+    for batch in new_loader:
+        loss = model.image_generation_loss(batch)
+        update(trainable, loss)
+\end{lstlisting}
+
+\begin{warningbox}{Asynchronous training 的隐含条件}
+冻结旧路径只有在新 modality 能通过有限 cross-modal interface 学到所需对齐时才有效。若任务需要重塑共享 attention、词义或 reasoning behavior，完全冻结会限制 transfer。所谓 controllability 是减少干扰的一种工程手段，不是免费获得联合最优。
+\end{warningbox}
+
+\teachervoice{00:29:57--00:31:36，课堂 Q\&A 给出负面结果：MoT 的 modality separation 对 image generation 有帮助，但没有观察到 image understanding 改善。若输出是 text，text 与 image input 经过共享参数反而可能更合适。这个边界必须与正面曲线一起保留。}
+
+\subsection{本章小结}
+
+MoT 把“共享一个模型”改写成“共享一个序列与交互图，但按 modality 激活不同参数”。它在 matched token budget 下改善 image generation loss、CLIP/FID 与 captioning metric，并支持更可控的 modality extension；同时，它不证明 understanding 与 generation 都受益。下一章看这种 specialization 怎样进入更复杂的统一预训练与机器人系统。
+
+\section{从论文架构到现实系统：BAGEL 与 \texorpdfstring{$\pi_{0.7}$}{pi0.7}}
+
+MoT 的意义不只是一篇 loss-curve 论文，而是提供了一个可组合的 design pattern：让不同 modality 在同一序列中交流，但为生成、理解或控制分配专用参数。课堂选择 BAGEL 与 $\pi_{0.7}$，分别展示这个模式怎样进入统一图文预训练和 embodied control。两者不是同一任务的 benchmark 对手，而是同一架构思想在不同 capability frontier 上的实例。
+
+\subsection{BAGEL：理解共享，生成专用}
+
+前一章建立了 modality-aware routing，本节看它在统一图文模型中的实际组合方式。BAGEL 不是为了证明所有模块都能合并，而是展示怎样让 understanding 保持共享、generation 保留专用路径。
+
+\lecturefigure{slide-045.jpg}{BAGEL 将 modality-aware 参数用于统一理解与生成}{官方 deck 第 45 页；BAGEL arXiv 2505.14683v3；课堂 00:31:39--00:33:33}
+
+\begin{knowledgebox}{读图：BAGEL 不是简单的“一个 encoder 加一个 diffusion head”}
+slide 左侧列出 understanding、generation 与 editing 等任务，右侧论文图强调 unified pretraining。课堂解释的关键是参数路径：image generation 使用专用参数，而理解侧的 multimodal language model 仍可共同处理 text 与 image input。这样既保留 language reasoning，又避免要求 generative latent 与 semantic input embedding 完全相同。
+\end{knowledgebox}
+
+BAGEL 还展示了一个重要顺序：模型可以先在 text space 中规划，再生成 image。可把过程抽象成
+$$
+p(v\mid t)=\sum_r p_\theta(r\mid t)\,p_\theta(v\mid t,r),
+$$
+其中 $r$ 是可见或隐式 reasoning/planning representation，$v$ 是视觉输出。这个分解不是说所有图像都必须先写一段 chain-of-thought，而是说明 language abstraction 可以作为控制与组合接口。
+
+\begin{importantbox}{BAGEL 提供的设计启示}
+Understanding 与 generation 可以共享高层语义和 sequence context，同时使用不同 image representation 与参数路径。统一系统的价值来自任务间可组合，而不是追求每一层、每一 loss、每一 token 都同构。
+\end{importantbox}
+
+\teachervoice{00:32:51--00:33:33，老师再次把当前状态描述为“尚未找到有效方式完全统一 image generation 与 understanding”。BAGEL 是一种实用分工，不是这个 open problem 已经被理论解决。}
+
+\subsection{\texorpdfstring{$\pi_{0.7}$}{pi0.7}：多模态 context 不只是语言指令}
+
+从数字内容生成继续向前，下一步是让 multimodal context 影响真实动作。本节以 $\pi_{0.7}$ 说明 steering signal 可以包含 subgoal image 与 episode metadata，并讨论为何 embodiment 需要不同评价闭环。
+
+\lecturefigure{slide-046.jpg}{$\pi_{0.7}$ 把 modality-aware foundation model 推向机器人控制}{官方 deck 第 46 页；$\pi_{0.7}$ arXiv 2604.15483v2；课堂 00:34:00--00:35:08}
+
+\begin{knowledgebox}{读图：从生成内容转向生成动作}
+图中展示多种 robot、task 与 context 条件。$\pi_{0.7}$ 的 steering 不只依赖一句 language command，还可以利用 subgoal image、episode quality 或策略信息。与图像生成相比，机器人输出的评价更依赖 task success、速度、碰撞和跨 embodiment generalization；一个动作看起来合理，不等于闭环执行成功。
+\end{knowledgebox}
+
+若 policy 以 observation $o_t$、language instruction $g$ 与 multimodal steering context $c$ 为条件，则
+$$
+a_t\sim\pi_\theta(a_t\mid o_{\le t},g,c).
+$$
+$c$ 可以编码“怎样做”而不只是“做什么”。这说明非文本 modality 的价值不仅是提供更多感知，也可以成为 strategy specification。
+
+\begin{warningbox}{Embodiment evidence boundary}
+$\pi_{0.7}$ 的机器人结果支持多任务、跨环境与 steerability，但不能从 slide 推出通用 physical intelligence。真实部署还要求 control frequency、sensor calibration、failure recovery、安全约束和 hardware-specific latency。课堂把它列为 MoT-style specialization 的实例，而非宣告机器人问题已经解决。
+\end{warningbox}
+
+\subsection{本章小结}
+
+BAGEL 与 $\pi_{0.7}$ 表明 modality-aware architecture 可以向两个方向扩展：一是统一内容理解、编辑和生成，二是把 multimodal context 变成动作策略条件。共同规律是\textbf{允许高层交互、保留低层专用性}。这也把问题带回讲座的第二条主线：理解、生成与行动之间究竟是否存在稳定的 positive transfer？
+
+\section{理解与生成能否正迁移}
+
+前面展示了许多“统一模型”，但 architecture unification 不等于 capability transfer。一个模型可能使用同一 backbone 完成 VQA 与 image generation，却仍需要两套 representation；也可能生成逼真视频，却没有更好的 spatial reasoning。讲座后半段把这种不确定性放到中心，并提出语言与视觉信号的信息结构差异可能是根因之一。
+
+\subsection{先把 transfer direction 画清楚}
+
+前面所有“统一模型”都可能让人默认任务会互相帮助。本节先纠正这个直觉：transfer 有方向，也需要 matched single-task baseline；slide 047--048 因此负责定义实验，而不是宣布答案。
+
+\lecturefigure{slide-047.jpg}{第二条研究主线：understanding 与 generation 是否正迁移}{官方 deck 第 47 页；课堂 00:35:11--00:35:30}
+
+\begin{importantbox}{Positive transfer 的可检验定义}
+在控制数据量、compute、参数和评价协议后，联合训练使目标任务 $B$ 的性能优于只训练 $B$ 的 baseline，才可称任务 $A\rightarrow B$ positive transfer。若只是总模型更大、训练更久或使用额外标注，不能把增益归因于 transfer。
+\end{importantbox}
+
+\lecturefigure{slide-048.jpg}{Understanding $\rightarrow$ Generation 与 Generation $\rightarrow$ Understanding 的两条路径}{官方 deck 第 48 页；课堂 00:35:30--00:36:10}
+
+\begin{knowledgebox}{读图：两条箭头需要不同实验}
+左侧 understanding-to-generation 假设 perception、captioning 或 reasoning representation 能提高 prompt fidelity、layout 与 editing；右侧 generation-to-understanding 假设生成式 world modeling 帮助模型掌握对象、运动或因果。要验证左箭头，需要固定 generator 并加入理解训练；验证右箭头，则要固定理解 benchmark 并加入生成目标。不能用同一组 qualitative samples 同时证明两条方向。
+\end{knowledgebox}
+
+\begin{warningbox}{共享参数不是 transfer 的证据}
+两个任务经过同一 Transformer 只说明它们可能交互。若 gradient 冲突、loss scale 不平衡或 representation 不兼容，联合训练甚至可能 negative transfer。MoT 的结果已提供反例边界：image generation specialization 有收益，但没有观察到相应 image-understanding 提升。
+\end{warningbox}
+
+\subsection{为什么语言更像“压缩后的认知接口”}
+
+语言 token 往往已经经过人类选择：一句话保留对象、关系、意图与异常，丢掉大量像素细节。图像和视频则接近 raw sensory observation，包含照明、纹理、背景、相机运动和重复帧。于是同样的 next-step prediction 在两类数据上拥有不同 signal-to-noise ratio。
+
+\lecturefigure{slide-051.jpg}{语言压缩、视觉被动观察、loss geometry 与帧冗余}{官方 deck 第 51 页；课堂 00:36:10--00:39:11}
+
+\begin{knowledgebox}{读图：四个气泡构成一个因果假说，而非已证定律}
+左侧指出 language 是高度压缩的 cognition abstraction；右侧列出 image/video 的三个困难：被动观察、loss landscape 与 frame correlation。它们共同解释为什么视觉 loss 可能很低但生成仍不自然，也解释为什么视频拥有海量 bytes 却未必提供等量独立 supervision。图支持研究假设，尚不能证明语言天然优于一切视觉表示。
+\end{knowledgebox}
+
+若相邻视频 frame 的相关系数近似为 $\rho$，一个常用的 AR(1) 直觉是
+$$
+N_{\text{eff}}\approx N\frac{1-\rho}{1+\rho}.
+$$
+$N$ 是 frame 数，$N_{\text{eff}}$ 是近似独立样本数。$\rho$ 越接近 1，新增 frame 带来的独立信息越少。这个公式只是统计直觉，不适合直接用于复杂视频；它提醒我们“更多 frames”不等于“更多 semantic events”。
+
+\begin{warningbox}{低 perceptual loss 不保证高人类质量}
+Pixel/latent MSE 会平均化多个可能未来，diffusion loss 又在噪声空间优化。某些误差对人类视觉极其显著，却只占很小数值；另一些像素变化数值大但语义不变。因此必须结合 human preference、object relation、temporal consistency 与 task success，而不能只追最低 training loss。
+\end{warningbox}
+
+\teachervoice{00:38:11--00:38:21，老师指出 image/video generation 即使在人看来还不好，loss 也可能已经开始变好。这个提醒把 optimization metric 与 user-visible quality 明确分开。}
+
+\subsection{Digital multimodal processing 仍不是 physical intelligence}
+
+前一节解释了视觉学习信号的困难，本节把范围从 optimization 扩展到 system capability。slide 052 要回答的是：即使模型能处理和生成多种数字内容，距离持续感知、控制与行动还缺哪些层。
+
+\lecturefigure{slide-052.jpg}{从数字信息处理到更广泛的物理世界多模态智能}{官方 deck 第 52 页；课堂 00:39:12--00:40:04}
+
+\begin{knowledgebox}{读图：中间模型只覆盖整张图的一部分}
+左侧是 text、image、video、audio 的 digital information；中间列出 Chameleon、Transfusion、MoT 与 cross-modal generation；右侧 physical world 还要求 spatial awareness、real-time world understanding、control、exploration 与 long-horizon interaction。底部结论很克制：today's models excel at multimodal information processing, but fall far short of full physical-world intelligence。
+\end{knowledgebox}
+
+物理闭环可以写成
+$$
+o_t\xrightarrow{\text{encode}}h_t
+\xrightarrow{\text{reason/plan}}a_t
+\xrightarrow{\text{environment}}o_{t+1}.
+$$
+数字生成通常只评价 $a_t$（输出内容）；机器人系统还要评价环境转移是否安全、状态估计是否漂移、延迟是否满足控制周期，以及失败后能否 recovery。
+
+\begin{importantbox}{从 omni model 到 embodied intelligence 还缺什么}
+缺少的不只是更多 modality，而是 active perception、state estimation、spatial-temporal memory、closed-loop control、uncertainty calibration、real-time infrastructure 与 safety constraints。把一张图送进 LLM 和让机器人持续看、听、动，系统要求相差一个完整闭环。
+\end{importantbox}
+
+\subsection{本章小结}
+
+Understanding 与 generation 的 transfer 必须按方向、baseline 和 matched compute 验证。语言提供高密度抽象信号，视觉提供高带宽但高冗余的感知数据；二者的最佳 representation 和 loss 未必相同。当前 omni model 在数字信息处理中进步显著，但仍未覆盖物理世界所需的实时状态与行动闭环。
+
+\section{Q\&A：把 architecture slogan 还原成工程判断}
+
+主讲结束后约 23 分钟 Q\&A 没有新增 slide，摄像机始终拍摄讲者与 conclusion 背景。它却包含本讲最重要的边界条件：specialization 如何保持 fusion、objective 与 parameters 如何分开审计、哪些想法只是值得实验，以及语言是否必然是 reasoning medium。本章把这些回答按工程问题重组，而不是逐问逐答抄写。
+
+\subsection{参数分开后，信息怎样融合}
+
+MoT 的 modality-specific projection 并没有取消 mixed-sequence attention。设 text query 为 $q_T=W_Q^T h_T$，image key 为 $k_V=W_K^V h_V$，仍可计算
+$$
+\operatorname{score}(T,V)=\frac{q_T^\top k_V}{\sqrt{d}}.
+$$
+$W_Q^T$ 与 $W_K^V$ 属于不同参数族，但 dot product 仍把两种 modality 放进同一 attention graph。模型因此可以“专用地编码，联合地读取”。
+
+\teachervoice{00:42:42--00:44:08，老师用 self-attention 回答“参数隔离是否阻断信息交换”：token 经过不同参数，并不妨碍它们在 attention 中互相看见。读 architecture 图时应分别追踪 parameter path 与 information path。}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{0.98\textwidth}{L{0.23\textwidth}Y Y}
+\toprule
+设计轴 & 可选项 & 核心问题 \\
+\midrule
+Representation & VQ code、semantic embedding、VAE latent、audio codec & 输入/输出保留了什么信息？ \\
+Objective & CE、diffusion、flow matching、action loss & 模型被奖励预测什么？ \\
+Parameter sharing & fully shared、modality-specific、adapter、MoE & 哪些 token 竞争同一 capacity？ \\
+Information mixing & global attention、cross-attention、late fusion & modality 在哪一层交换信息？ \\
+Serving & synchronous、streaming、background reasoning & latency 与用户交互如何组织？ \\
+\bottomrule
+\end{tabularx}
+\caption{多模态系统中必须分开审计的设计轴}
+\end{table}
+
+\subsection{Objective choice 与 parameter sharing 不是一回事}
+
+一个 shared backbone 可以同时优化 CE 与 diffusion；一套 modality-specific 参数也可以输出 text。Q\&A 的价值在于拒绝“看到共享就假设同一 loss”“看到不同 loss 就假设两个模型”的二分法。工程实现应把每个 batch 的 modality mask、loss normalization、gradient norm 与 activated parameters 记录下来，才能定位 interference 来自哪里。
+
+\begin{importantbox}{多任务训练的最小观测面}
+每个 modality 分别记录 sample count、token count、loss、gradient norm、active parameters、吞吐与 validation metric；再记录跨 modality 的 attention/representation probe。没有这些分解，global training loss 下降可能掩盖某个 modality 持续退化。
+\end{importantbox}
+
+\subsection{Video generation 是否就是 world model}
+
+Q\&A 讨论生成未来 frame 是否能帮助 action prediction。若模型能在条件动作下预测 $o_{t+1}$，它确实学到一部分 environment dynamics；但“看起来合理的视频”与“用于控制的 calibrated transition model”仍有差距。后者必须在 counterfactual action、rare failure 和 long-horizon rollout 上保持一致。
+
+\teachervoice{00:46:16--00:48:00，老师把 video generation 视为可能的 predictive feedback，而不是直接宣布生成模型就是可靠 world model。讲义保留这一条件语气：需要任务反馈与闭环验证。}
+
+\begin{warningbox}{World-model claim 的三项检查}
+一看 action conditioning：不改变动作时预测是否相同？二看 rollout consistency：误差会否随时间爆炸？三看 decision utility：使用预测是否真的提高 policy success？若只有漂亮未来帧而没有这三项，最多证明视频生成能力。
+\end{warningbox}
+
+\subsection{“把文字画成图片”是实验问题，不是现成结论}
+
+有同学问能否把 text 渲染成黑白 bitmap，从而用统一视觉 representation 建模一切。讲者明确说没有亲自做过，并判断 clean symbolic token 可能更高效。这个回答值得保留，因为它示范了对新颖想法的正确态度：先定义对照实验，而不是把直觉包装成事实。
+
+一个合理实验应固定语料、model FLOPs 与 context information，比较：原始 text token；bitmap patch；OCR-pretrained bitmap encoder；混合 token。评价除 perplexity 外，还要看序列长度、训练吞吐、reasoning transfer 和 robustness。Bitmap 可能增加视觉共享，却也引入字体、渲染和空间冗余。
+
+\teachervoice{00:48:14--00:53:31，老师反复标记“never tried it myself”“worth trying experiments”，最后只给出 efficiency intuition。讲义不把这个回答升级为 scaling law。}
+
+\subsection{Object-centric representation 与 hierarchy}
+
+Patch grid 方便计算，却不等于世界由固定方块组成。Q\&A 提出 object-oriented embedding、层级 representation 与更语义化的 scene unit。它们试图让模型表示“物体—关系—事件”，减少对像素级变化的敏感性。开放难题是如何在无监督数据中发现稳定对象、处理遮挡与身份连续性，并同时支持 generation。
+
+\begin{knowledgebox}{Representation frontier 的三层结构}
+低层保留纹理、声音频率和运动；中层形成 object、part、speaker、event；高层形成关系、意图和 task state。理解任务偏好高层 invariance，生成任务又需要低层 detail。一个可扩展系统很可能使用 hierarchy，而不是在单一 resolution 上解决所有任务。
+\end{knowledgebox}
+
+\subsection{Language 是当前 reasoning skeleton，但不是逻辑必需品}
+
+最后一个长问题指出：文本 synthetic data 易生成、可隐藏 chain-of-thought，而视频 reasoning frames 昂贵且用户会直接看到。讲者同意 language 目前是非常有效的 abstraction skeleton，也同意视觉生成受效率和 UX 限制；但她没有排除未来纯视觉空间中的 reasoning。若模型准确预测复杂视频未来并支持决策，那也可视为一种非文本推理。
+
+\teachervoice{01:03:32--01:04:21，老师的最终立场是“双重限定”：language skeleton 现在很有帮助；pure visual reasoning 在原则上仍是 open question。不要把当前工程优势改写成认知理论定律。}
+
+\begin{warningbox}{空间推理回答的专业边界}
+00:58:34，老师明确说自己不是 spatial reasoning 专家，只概括 robotics 近期进展。讲义因此不把这段回答作为 state-of-the-art survey；它只支持课程级判断：数字多模态能力与可靠空间推理之间仍有显著距离。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Q\&A 把“统一”和“原生”拆回工程变量：参数可以专用而信息仍融合；loss 与 backbone 是独立轴；video generation 只有在决策中有效才接近 world model；新 representation 假说需要 matched experiment；language 是当前高效的 reasoning interface，但未来形式仍开放。
+
+\section{总结与延伸}
+
+这堂课的主线不是某个单一模型赢了，而是 native multimodal design 从“统一一切”逐步走向“统一接口、专用机制”。Chameleon 用离散 token 证明 early fusion 可行；Transfusion 保留共享 Transformer，却让 text 与 image 使用不同 objective；MoT 再按 modality 稀疏化参数；BAGEL 与 $\pi_{0.7}$ 把 specialization 推向统一内容模型和机器人控制。后半段则提醒：architecture 共存不等于 capability 正迁移，更不等于 physical intelligence。
+
+\subsection{讲座结论与系统约束}
+
+前面已经分别讨论 representation、objective、routing 与 transfer；本节回到 slide 056，把这些局部选择压缩成课程级系统结论。读图时应把 compute pressure 与 specialization 放在同一条因果链中。
+
+\lecturefigure{slide-056.jpg}{课堂结论：open problems、physical-world gap、compute 与 specialization}{官方 deck 第 56 页；课堂 00:40:06--00:41:36}
+
+\begin{knowledgebox}{读图：四点结论形成一条工程链}
+第一，多模态仍是活跃且未定型的研究领域；第二，数字信息处理强，但物理世界能力远未完成；第三，image/video/audio 增加训练与 inference 基础设施压力；第四，短期内可能出现更多 capability-specific models。最后的问题不是“是否统一”，而是怎样在可负担计算与可靠交互下把专用模块组织成 coherent system。
+\end{knowledgebox}
+
+\teachervoice{00:40:41--00:41:32，老师把 computationally heavy 与 capability specialization 放在同一结论中：由于问题空间复杂、成本高，短期内专用模型增多是合理路径；如何再统一成系统将成为后续研究。}
+
+\begin{importantbox}{本讲十条核心结论}
+\begin{enumerate}
+  \item Multimodal input、multimodal output 与 physical intelligence 是不同能力层。
+  \item Token 是序列单元，不必是离散 vocabulary ID。
+  \item Global autoregression 可以与 block 内 diffusion 共存。
+  \item Chameleon 证明 discrete early fusion 可行，也暴露 quantization bottleneck。
+  \item Transfusion 说明共享 backbone 不要求共享 loss。
+  \item Modality gap 是 specialization 动机，不是因果证明。
+  \item MoT 用已知 modality deterministic routing，MoE 用 learned gating。
+  \item Sparse model 必须同时报告 total 与 active parameters 及 matched compute。
+  \item Understanding 与 generation 的 transfer 必须按方向和 baseline 实验验证。
+  \item 当前 language 是高效 reasoning scaffold，但 full physical-world intelligence 仍需闭环状态、控制与安全。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{一张可执行的 architecture review checklist}
+
+\begin{knowledgebox}{从概念演示到可部署系统}
+\begin{enumerate}
+  \item \textbf{Representation}：每个 modality 是离散 code、continuous semantic embedding 还是 generative latent？
+  \item \textbf{Ordering}：跨 modality 的 causal order 与 boundary 怎样定义？
+  \item \textbf{Objective}：每种输出用什么 loss，怎样 normalization 与 weighting？
+  \item \textbf{Routing}：哪些层共享，哪些按 modality 或 learned expert 稀疏化？
+  \item \textbf{Accounting}：total/active parameters、tokens、FLOPs、sampling steps 与 wall-clock 是否同时报告？
+  \item \textbf{Transfer}：联合训练相对 matched single-task baseline 是否真正改善？
+  \item \textbf{Serving}：streaming、latency、KV/cache、non-text decoder 与并发怎样预算？
+  \item \textbf{Embodiment}：若进入物理世界，是否有 state estimation、recovery、safety 与闭环 success metric？
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{Deck appendix 的处理边界}
+
+官方 PDF 还有三页 Interaction Models（pages 53--55），但完整录像从 broader multimodal intelligence 的 page 52 直接跳到 conclusion page 56，主讲与 Q\&A 均未展示或讲解这三页。按 source-first 原则，它们保留在 \texttt{slides-images/} 和 selection table 中，但标记 optional，不作为课堂内容重建。这样既保留官方 deck 完整性，也不把未讲内容误写成 teacher voice。
+
+\begin{warningbox}{不能从本讲推出的结论}
+不能推出所有 modality 最终都会共享一个 representation；不能推出 MoT 对 image understanding 同样有效；不能仅凭更低 diffusion loss 宣称生成更安全或更真实；不能把 BAGEL/$\pi_{0.7}$ 当作 full physical intelligence；也不能把 language 当前的 reasoning 优势解释为任何智能都必须先翻译成文本。
+\end{warningbox}
+
+\subsection{拓展阅读与 lecture snapshot}
+
+建议按设计变量阅读一手论文：先用 Chameleon v2 理解 discrete early fusion，再用 Transfusion v1 对照 continuous diffusion objective；随后读 Mind the Gap v2 与 MoT v2，区分 representation geometry 与 architecture evidence；再读 LMFusion v4 看冻结 language path 的扩展方式，最后用 BAGEL v3 与 $\pi_{0.7}$ v2 比较 digital unified generation 与 embodied steering。
+
+\begin{knowledgebox}{Lecture snapshot：2026-05-21}
+本讲义冻结到课堂日前公开版本：
+\begin{itemize}
+  \item Chameleon \texttt{2405.09818v2}、VQ-VAE-2 \texttt{1906.00446v1}；
+  \item Transfusion \texttt{2408.11039v1}、Mind the Gap \texttt{2203.02053v2}；
+  \item MoT \texttt{2411.04996v2}、LMFusion \texttt{2412.15188v4}；
+  \item BAGEL \texttt{2505.14683v3}、$\pi_{0.7}$ \texttt{2604.15483v2}。
+\end{itemize}
+所有版本均早于 2026-05-21；课后产品变化不倒灌为课堂事实。
+\end{knowledgebox}
+
+最终，native multimodal intelligence 不是把更多输入接到 LLM，也不是追求一张“统一架构图”。它是一组可审计的取舍：抽象与细节、共享与专用、理解与生成、数字内容与物理行动、模型质量与系统成本。真正成熟的系统会保留统一控制面，同时承认不同 modality 需要不同表示、目标、容量和验证方式。
+
+\end{document}

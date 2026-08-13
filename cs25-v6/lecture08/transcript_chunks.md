@@ -1,0 +1,1213 @@
+## Chunk 01 — 00:00:05,360 to 00:05:50,040
+
+- [00:00:05,360–00:00:09,280] All right, so hello, guys, and welcome back to CS25.
+- [00:00:09,280–00:00:13,280] Today, I'm a very glad to welcome Victoria
+- [00:00:13,280–00:00:16,720] Lin from Thinking Machines Lab.
+- [00:00:16,720–00:00:18,960] So she's a member of technical staff
+- [00:00:18,960–00:00:23,200] there, where she focuses on native multimodal intelligence.
+- [00:00:23,200–00:00:26,320] And she is passionate about building AI systems that
+- [00:00:26,320–00:00:30,640] empower humans to tackle complex, knowledge-intensive
+- [00:00:30,640–00:00:32,479] problems effectively.
+- [00:00:32,479–00:00:34,600] And previously, she was a research scientist
+- [00:00:34,600–00:00:38,200] at Meta AI and Salesforce AI Research.
+- [00:00:38,200–00:00:42,460] And she received her PhD from the University of Washington.
+- [00:00:42,460–00:00:45,760] And without further ado, let's give it up for Victoria.
+- [00:00:45,760–00:00:46,320] [APPLAUSE]
+- [00:00:46,320–00:00:49,440] Thank you for having me.
+- [00:00:49,440–00:00:52,600] So can you hear me OK?
+- [00:00:52,600–00:00:54,880] Yeah, so I'm very glad to be here
+- [00:00:54,880–00:00:59,220] today and talk about native multimodal language models.
+- [00:00:59,220–00:01:04,660] So a declaration is this talk is going to be exclusively focused
+- [00:01:04,660–00:01:07,040] on public materials.
+- [00:01:07,040–00:01:12,900] And the talk represents my own opinion, not of my employer.
+- [00:01:12,900–00:01:16,500] So without further ado, let's start it.
+- [00:01:16,500–00:01:20,080] So I think without much argument,
+- [00:01:20,080–00:01:23,900] large language models is one of the most exciting breakthrough
+- [00:01:23,900–00:01:26,740] happened in the past few years.
+- [00:01:26,740–00:01:30,980] I think nowadays, probably everyone sitting in this room
+- [00:01:30,980–00:01:35,220] will use language models a little bit,
+- [00:01:35,220–00:01:37,460] like during your daily life.
+- [00:01:37,460–00:01:40,420] So for example, like asking questions through ChatGPT,
+- [00:01:40,420–00:01:44,700] using Cloud Code, or Codex to help you to code your project.
+- [00:01:44,700–00:01:48,500] So these models were built based on next token prediction
+- [00:01:48,500–00:01:50,520] over symbolic information.
+- [00:01:50,520–00:01:57,970] And they scale to demonstrate amazing emergent capabilities.
+- [00:01:57,970–00:02:01,010] So just as a quick recap.
+- [00:02:01,010–00:02:05,410] How does today's large language model paradigms works?
+- [00:02:05,410–00:02:07,070] So here's architecture.
+- [00:02:07,070–00:02:08,509] You will be familiar with it.
+- [00:02:08,509–00:02:10,210] This is a transformer cell.
+- [00:02:10,210–00:02:13,890] So basically, it carries out next token prediction.
+- [00:02:13,890–00:02:19,570] Predict the probability distributed over a vocabulary.
+- [00:02:19,570–00:02:26,090] And we train such a model using a large number of corpus
+- [00:02:26,090–00:02:29,010] curated over different domains.
+- [00:02:29,010–00:02:33,330] And as we noticed that as the data and model scales,
+- [00:02:33,330–00:02:36,490] they start to demonstrate amazing capabilities such
+- [00:02:36,490–00:02:39,130] as they can acquire a large amount of knowledge.
+- [00:02:39,130–00:02:41,930] They can be post-trained to follow instructions.
+- [00:02:41,930–00:02:44,950] And they are able to carry out a train of thought reasoning.
+- [00:02:44,950–00:02:48,290] And most recently, we also found they are actually
+- [00:02:48,290–00:02:52,810] able to plan to solve complicated tasks.
+- [00:02:52,810–00:02:56,890] However, I'm also going to argue that just the language modeling
+- [00:02:56,890–00:02:59,550] alone is not enough for us.
+- [00:02:59,550–00:03:00,990] So why is it?
+- [00:03:00,990–00:03:05,210] It is because both the digital world we deal with every day
+- [00:03:05,210–00:03:07,610] and also the physical world we live in,
+- [00:03:07,610–00:03:09,870] they are actually filled with information coming
+- [00:03:09,870–00:03:12,030] from different modalities.
+- [00:03:12,030–00:03:15,510] Like images, audio, video.
+- [00:03:15,510–00:03:18,630] So if you surf on the internet, you
+- [00:03:18,630–00:03:20,230] will get what I'm talking about.
+- [00:03:20,230–00:03:23,590] And also, suppose if we're building AI systems that's
+- [00:03:23,590–00:03:27,450] going to interact with us real time in the physical world,
+- [00:03:27,450–00:03:33,230] we have to deal with multimodal information.
+- [00:03:33,230–00:03:35,270] So the goal is to build basically
+- [00:03:35,270–00:03:38,330] AI systems that's not only processing symbolic knowledge,
+- [00:03:38,330–00:03:41,990] but it's also able to seamlessly handle
+- [00:03:41,990–00:03:44,970] these multimodal information sharing to us,
+- [00:03:44,970–00:03:49,150] in terms of visual and auditory information.
+- [00:03:49,150–00:03:51,150] And actually, if you pay attention
+- [00:03:51,150–00:03:54,870] to today's state of the art language model landscape,
+- [00:03:54,870–00:03:58,910] you will see, for a lot of recent models being rolled out,
+- [00:03:58,910–00:04:02,510] they have already been claiming that these models are native,
+- [00:04:02,510–00:04:07,290] multimodal, and are able to process
+- [00:04:07,290–00:04:10,850] large amount of multimodal information, which is true.
+- [00:04:10,850–00:04:14,090] We see very amazing capabilities from these models
+- [00:04:14,090–00:04:17,010] in terms of image, video understanding,
+- [00:04:17,010–00:04:19,930] visual genetic coding, and so on.
+- [00:04:19,930–00:04:22,770] So the first part of this talk is just
+- [00:04:22,770–00:04:28,890] going to dive into the building philosophies of such models.
+- [00:04:28,890–00:04:34,450] So what do we define as native multimodal language models?
+- [00:04:34,450–00:04:36,730] I myself personally find it easier
+- [00:04:36,730–00:04:39,930] to understand this paradigm by thinking
+- [00:04:39,930–00:04:42,930] with an analogy of language models.
+- [00:04:42,930–00:04:46,650] So the state of the art multimodal language model
+- [00:04:46,650–00:04:51,410] architecture is really performing tokenization
+- [00:04:51,410–00:04:55,960] across the board, which means whether the incoming information
+- [00:04:55,960–00:04:58,500] comes as image modality, video modality,
+- [00:04:58,500–00:05:01,080] or is a piece of audio, we try to find a way
+- [00:05:01,080–00:05:05,280] to convert these signals into token information that can be
+- [00:05:05,280–00:05:07,800] processed by the transformer.
+- [00:05:07,800–00:05:12,640] And on top of that, we perform global autoregressive generation
+- [00:05:12,640–00:05:16,400] modeling similar to language models.
+- [00:05:16,400–00:05:18,360] So exactly what do I mean?
+- [00:05:18,360–00:05:20,880] So for text, we can tokenize them
+- [00:05:20,880–00:05:23,820] similar as what we do for large language models.
+- [00:05:23,820–00:05:26,600] Usually, we can use byte pair encoding.
+- [00:05:26,600–00:05:30,480] Break down the text into small pieces of tokens.
+- [00:05:30,480–00:05:34,000] And for images, turns out we can also do similar things.
+- [00:05:34,000–00:05:37,320] So when a whole piece of image coming in,
+- [00:05:37,320–00:05:40,500] we can perform an operation which we call the patchify.
+- [00:05:40,500–00:05:44,200] So basically, we can divide this image into small parts.
+- [00:05:44,200–00:05:50,040] And parts is usually predefined by a standard size, such as 16
+
+## Chunk 02 — 00:05:50,040 to 00:11:11,300
+
+- [00:05:50,040–00:05:52,080] pixels times 16 pixels.
+- [00:05:52,080–00:05:58,320] So once we standardize the image units, we can run, for example,
+- [00:05:58,320–00:06:00,700] encoders on these image units and get
+- [00:06:00,700–00:06:02,500] vector representations of them.
+- [00:06:02,500–00:06:05,300] And then we sequentialize these vectorization
+- [00:06:05,300–00:06:09,300] of the image units, and then we got the image tokens.
+- [00:06:09,300–00:06:12,780] For audio, we can perform similar operation.
+- [00:06:12,780–00:06:16,020] When the waveform comes in, we can perform transforms
+- [00:06:16,020–00:06:17,540] on top of the waveform.
+- [00:06:17,540–00:06:21,500] And we can apply certain operations basically
+- [00:06:21,500–00:06:24,180] to tokenize the resulting representation.
+- [00:06:24,180–00:06:28,600] And accordingly, you can encode your audio tokens as well.
+- [00:06:31,180–00:06:32,600] And for videos.
+- [00:06:32,600–00:06:34,200] So this slide is dense.
+- [00:06:34,200–00:06:36,960] But what really is saying is for videos,
+- [00:06:36,960–00:06:40,980] we can also easily seen them as a sequence of images.
+- [00:06:40,980–00:06:45,320] So if we think of a video segment as a sequence of image,
+- [00:06:45,320–00:06:48,220] we can perform a similar petrification
+- [00:06:48,220–00:06:49,980] on each of the video frame.
+- [00:06:49,980–00:06:53,850] And then we concatenate the patches
+- [00:06:53,850–00:06:56,230] of all the images in this video sequence,
+- [00:06:56,230–00:06:58,490] and then we can still represent the video
+- [00:06:58,490–00:07:00,290] as a sequence of tokens.
+- [00:07:00,290–00:07:04,890] So when I say tokens, they are not necessarily discrete tokens.
+- [00:07:04,890–00:07:06,570] If we encode them into a dense vector,
+- [00:07:06,570–00:07:10,290] we still refer to them as tokens.
+- [00:07:10,290–00:07:13,350] And basically, we perform this tokenization across a board.
+- [00:07:13,350–00:07:16,610] And then we can basically getting multimodal information
+- [00:07:16,610–00:07:17,530] sequence.
+- [00:07:17,530–00:07:19,130] We can train them in the same way
+- [00:07:19,130–00:07:22,250] as we train a large language model.
+- [00:07:22,250–00:07:25,570] So for state of the art multimodal language models,
+- [00:07:25,570–00:07:27,570] when we speak of them, usually there
+- [00:07:27,570–00:07:29,770] are two broad types of them.
+- [00:07:29,770–00:07:33,810] So one type of multimodal models consider multimodality
+- [00:07:33,810–00:07:37,330] as input, but only text modality as output.
+- [00:07:37,330–00:07:41,050] So as is shown here, so we have a multimodal sequence coming in.
+- [00:07:41,050–00:07:43,610] We condition them, but we only calculate the losses
+- [00:07:43,610–00:07:45,130] on the text tokens.
+- [00:07:45,130–00:07:49,730] So this can induce amazing understanding abilities.
+- [00:07:49,730–00:07:52,490] Like we have an image as input, video as input.
+- [00:07:52,490–00:07:55,010] The model can start to answer questions in text.
+- [00:07:58,950–00:08:02,450] And in fact, lots of multimodal language models,
+- [00:08:02,450–00:08:04,310] you are probably familiarized today
+- [00:08:04,310–00:08:09,210] like Gemini, Qwen, and Kimi, they operate in this mode.
+- [00:08:09,210–00:08:12,930] So which means it's multimodal input and text only output.
+- [00:08:12,930–00:08:15,190] Of course, I think these companies have also
+- [00:08:15,190–00:08:18,470] developed other models which is able to generate
+- [00:08:18,470–00:08:19,930] multimodal information.
+- [00:08:19,930–00:08:28,030] But a lot of the core products is doing text only output.
+- [00:08:28,030–00:08:31,270] So there is another categories of models, which
+- [00:08:31,270–00:08:33,470] is called the Omni models.
+- [00:08:33,470–00:08:37,270] So which means they not only take multimodal information
+- [00:08:37,270–00:08:40,150] as input, but they also do multimodal information
+- [00:08:40,150–00:08:41,309] as output.
+- [00:08:41,309–00:08:44,310] In this case, these models, is capable of generating
+- [00:08:44,310–00:08:49,110] not only text, but also images and audios.
+- [00:08:49,110–00:08:53,290] So something like you might be familiar with GPT-4 0, which
+- [00:08:53,290–00:08:56,190] is named Omni, because it can also generate images.
+- [00:08:59,810–00:09:04,130] So this is an important slide for today,
+- [00:09:04,130–00:09:08,890] because I think this summarized that by taking this tokenization
+- [00:09:08,890–00:09:12,650] view, how we could transfer a lot of the architecture
+- [00:09:12,650–00:09:15,890] and training principles from the large language modeling paradigm
+- [00:09:15,890–00:09:17,770] to the multimodal paradigm.
+- [00:09:17,770–00:09:20,850] So there are a couple of benefits we can get from it.
+- [00:09:20,850–00:09:25,510] So first, by designing such architectures,
+- [00:09:25,510–00:09:28,930] this allows us to build multimodal models, which
+- [00:09:28,930–00:09:33,090] is able to allow us to conduct prompting and instruction
+- [00:09:33,090–00:09:34,170] following.
+- [00:09:34,170–00:09:37,530] So we can prompt these models with mixed model prompts
+- [00:09:37,530–00:09:41,970] and and enable them to solve complicated tasks which
+- [00:09:41,970–00:09:45,930] requires multimodality.
+- [00:09:45,930–00:09:49,240] This model will also acquire planning and reasoning
+- [00:09:49,240–00:09:50,060] capabilities.
+- [00:09:50,060–00:09:52,080] And now, even more amazingly, they
+- [00:09:52,080–00:09:54,500] can plan and reason with multimodal information.
+- [00:09:57,640–00:10:00,640] So another exciting thing is we also
+- [00:10:00,640–00:10:03,040] observed that some positive learnings from large language
+- [00:10:03,040–00:10:06,320] modeling, including scaling data and model size, that
+- [00:10:06,320–00:10:08,660] can lead to performance improvement,
+- [00:10:08,660–00:10:10,940] can also be transferred to multimodal.
+- [00:10:10,940–00:10:15,200] Which means for these models, we see significant promise
+- [00:10:15,200–00:10:18,920] that if we further scale up the number of parameters in them
+- [00:10:18,920–00:10:21,113] and also we scale up the training database,
+- [00:10:21,113–00:10:23,280] their performance is going to get better and better,
+- [00:10:23,280–00:10:26,080] and we're going to see more emergent capabilities.
+- [00:10:26,080–00:10:28,840] So the only interesting remaining here
+- [00:10:28,840–00:10:33,760] is I think unlike text modeling, which has very accurate scaling
+- [00:10:33,760–00:10:34,260] laws.
+- [00:10:34,260–00:10:38,120] So basically people is able to derive the power law equation
+- [00:10:38,120–00:10:42,660] and fit the coefficients of the equation,
+- [00:10:42,660–00:10:46,000] I think the exact scaling law study for multimodal
+- [00:10:46,000–00:10:48,300] is underexplored.
+- [00:10:48,300–00:10:51,220] But on a rough trend, we are still seeing
+- [00:10:51,220–00:10:53,060] this scaling capability.
+- [00:10:53,060–00:10:56,620] So I think, for example, trying to find
+- [00:10:56,620–00:10:58,380] the exact fit of multimodal scaling
+- [00:10:58,380–00:11:02,540] law could be a very interesting future research topic.
+- [00:11:02,540–00:11:07,060] The force is a lot of architectural scaling techniques
+- [00:11:07,060–00:11:11,300] and also efficient techniques, such as mixture
+
+## Chunk 03 — 00:11:11,300 to 00:16:43,660
+
+- [00:11:11,300–00:11:14,460] of experts and these variations, we
+- [00:11:14,460–00:11:18,700] can also apply them directly to multimodal language models
+- [00:11:18,700–00:11:21,640] to achieve better scaling performance.
+- [00:11:25,340–00:11:30,060] So next, I basically want to talk
+- [00:11:30,060–00:11:34,620] about the second category of multimodal models, which
+- [00:11:34,620–00:11:37,580] are the Omni models.
+- [00:11:37,580–00:11:41,500] Because my past research group has
+- [00:11:41,500–00:11:43,480] been dedicated to developing such models,
+- [00:11:43,480–00:11:47,080] and I want to present a few variations of these.
+- [00:11:47,080–00:11:51,800] So when we come to Omni models, because they can generate
+- [00:11:51,800–00:11:54,200] not only text modality.
+- [00:11:54,200–00:11:57,440] So there are a few key research questions.
+- [00:11:57,440–00:12:00,720] So the first one is, how do we enable them to generate
+- [00:12:00,720–00:12:04,040] the non-text modalities?
+- [00:12:04,040–00:12:08,400] And the second is, is there a possible transfer
+- [00:12:08,400–00:12:10,480] between understanding and generation
+- [00:12:10,480–00:12:12,180] of the non-text modalities?
+- [00:12:15,640–00:12:18,680] So with these questions in mind, the first model
+- [00:12:18,680–00:12:21,960] I'm going to talk about is the Chameleon family.
+- [00:12:21,960–00:12:27,420] So these models adopt a very simple hypothesis.
+- [00:12:27,420–00:12:29,760] So basically, the question to ask
+- [00:12:29,760–00:12:33,280] is, can we actually simply tokenize
+- [00:12:33,280–00:12:37,480] every modality, converting them into discrete tokens?
+- [00:12:37,480–00:12:39,620] This is a very powerful view.
+- [00:12:39,620–00:12:41,400] If it is successful, basically, it
+- [00:12:41,400–00:12:44,990] will allow us to model the multimodal world
+- [00:12:44,990–00:12:47,010] as a sequence of discrete tokens,
+- [00:12:47,010–00:12:49,670] so that lots of properties of language models
+- [00:12:49,670–00:12:51,870] could potentially transfer.
+- [00:12:51,870–00:12:54,030] So this is basically the hypothesis
+- [00:12:54,030–00:12:55,830] with the Chameleon models.
+- [00:12:55,830–00:13:00,550] And the key here is, how do we discretize images?
+- [00:13:00,550–00:13:03,370] And it turns out, it's not that difficult.
+- [00:13:03,370–00:13:06,790] So remember the patchified view we just talked about.
+- [00:13:06,790–00:13:09,470] So for Chameleon, basically we just
+- [00:13:09,470–00:13:13,590] apply another step of vectorization of these image
+- [00:13:13,590–00:13:14,330] patches.
+- [00:13:14,330–00:13:17,950] So how do we do that is given an image,
+- [00:13:17,950–00:13:20,750] we convert them into patches.
+- [00:13:20,750–00:13:23,790] And then basically, we run a continuous encoders
+- [00:13:23,790–00:13:27,110] on top of them to get the embeddings of these patches.
+- [00:13:27,110–00:13:29,810] And once we get these patches, we don't stop there.
+- [00:13:33,250–00:13:36,950] We follow it up with a learned vector codebook.
+- [00:13:36,950–00:13:40,030] Then basically, we can take our computed embeddings
+- [00:13:40,030–00:13:42,410] and try to match them with a codebook,
+- [00:13:42,410–00:13:48,170] basically to get to the closest discrete correspondence of each
+- [00:13:48,170–00:13:49,570] of the patches.
+- [00:13:49,570–00:13:52,650] And by this way, basically, we can convert an image
+- [00:13:52,650–00:13:56,610] into a sequence of discrete representation.
+- [00:13:56,610–00:13:59,010] And that's how we tokenize the image, which
+- [00:13:59,010–00:14:04,770] is really by finding their corresponding index
+- [00:14:04,770–00:14:07,290] in the codebook.
+- [00:14:07,290–00:14:10,450] So basically, we discretize the images
+- [00:14:10,450–00:14:13,730] using the VQ-VAE technique.
+- [00:14:13,730–00:14:16,490] And then we put the image and text together
+- [00:14:16,490–00:14:18,650] as an interleaved sequence.
+- [00:14:18,650–00:14:21,770] And then basically, we apply cross-entropy language model
+- [00:14:21,770–00:14:23,890] training objective on this.
+- [00:14:23,890–00:14:26,130] So the result of Chameleon model, basically
+- [00:14:26,130–00:14:31,210] found that it is able to generate interleaved text
+- [00:14:31,210–00:14:33,790] and image in arbitrary order.
+- [00:14:33,790–00:14:38,610] So here, I'm showing a sequence of image and text generated
+- [00:14:38,610–00:14:39,702] by this model.
+- [00:14:39,702–00:14:41,410] So basically, you can see we can actually
+- [00:14:41,410–00:14:46,590] generate mixed model documents from this model directly.
+- [00:14:46,590–00:14:49,390] And with this representation, it will also
+- [00:14:49,390–00:14:52,950] allow us to perform multitasking similar as how
+- [00:14:52,950–00:14:54,850] we do with our language models.
+- [00:14:54,850–00:14:57,990] So basically, we can give these models mixed model prompts
+- [00:14:57,990–00:15:02,950] and get output from it, such as we can chat with it,
+- [00:15:02,950–00:15:08,670] do brainstorming, compare images, and so on.
+- [00:15:08,670–00:15:11,630] So this is a model that purely trying
+- [00:15:11,630–00:15:15,710] to apply the large language model technique to mixed model
+- [00:15:15,710–00:15:17,350] modeling.
+- [00:15:17,350–00:15:19,990] So it is one of the first model to show
+- [00:15:19,990–00:15:23,830] that if we train from scratch interleaved text and image
+- [00:15:23,830–00:15:27,630] sequences, it can induce multimodal capabilities
+- [00:15:27,630–00:15:32,390] while preserving the strong text only performance.
+- [00:15:32,390–00:15:35,430] However, we also realize some limitations
+- [00:15:35,430–00:15:37,610] when we discretize the image.
+- [00:15:37,610–00:15:41,280] So basically, one is for image understanding tasks,
+- [00:15:41,280–00:15:45,340] discretization often cause significant information loss.
+- [00:15:45,340–00:15:47,860] So as a result, when we compare it
+- [00:15:47,860–00:15:49,900] to the state of the art multimodal language
+- [00:15:49,900–00:15:53,420] models nowadays, which is running a continuous image
+- [00:15:53,420–00:15:56,220] encoding such as SigLIP, there is usually
+- [00:15:56,220–00:16:00,420] a significant performance gap in terms of image understanding.
+- [00:16:00,420–00:16:03,300] And the second is even on the generative side,
+- [00:16:03,300–00:16:10,420] we also found that basically discretizing the images
+- [00:16:10,420–00:16:14,020] and generate them actually poses some challenges in terms
+- [00:16:14,020–00:16:15,560] of token efficiency.
+- [00:16:15,560–00:16:18,660] So these models, which means these models typically
+- [00:16:18,660–00:16:20,940] needs to be trained on large amounts of data
+- [00:16:20,940–00:16:24,180] to be able to sample well-formed images.
+- [00:16:24,180–00:16:28,980] So in summary, Chameleon presented a very interesting
+- [00:16:28,980–00:16:33,740] paradigm where we can train text and images interleaved
+- [00:16:33,740–00:16:35,300] from scratch.
+- [00:16:35,300–00:16:38,060] But we also found the limitations.
+- [00:16:38,060–00:16:42,040] Basically the assumption that we can discretize information
+- [00:16:42,040–00:16:43,660] in the images might be too strong.
+
+## Chunk 04 — 00:16:46,560 to 00:22:30,800
+
+- [00:16:46,560–00:16:51,420] So transfusion is another approach,
+- [00:16:51,420–00:16:55,760] which is proposed in roughly the similar time as Chameleon.
+- [00:16:55,760–00:16:58,520] So which basically tries to actually overcome
+- [00:16:58,520–00:17:00,520] some of the limitations of Chameleon.
+- [00:17:00,520–00:17:03,600] So transfusion is a very interesting and also impactful
+- [00:17:03,600–00:17:05,359] architecture.
+- [00:17:05,359–00:17:12,119] So basically, it tries to adopt continuous representation
+- [00:17:12,119–00:17:14,980] of the images, using them as input,
+- [00:17:14,980–00:17:17,240] but also tries to directly predict
+- [00:17:17,240–00:17:20,000] these continuous representation of images.
+- [00:17:20,000–00:17:25,000] So how do we predict continuous representation of images?
+- [00:17:25,000–00:17:29,160] So if you are familiar with diffusion models, so basically,
+- [00:17:29,160–00:17:33,160] diffusion models is a very successful approach
+- [00:17:33,160–00:17:34,800] for image generation.
+- [00:17:34,800–00:17:40,390] And it conducts image generation by starting from a noise,
+- [00:17:40,390–00:17:43,310] and continuously predict the noise
+- [00:17:43,310–00:17:45,750] to be removed from this initial noise
+- [00:17:45,750–00:17:49,670] until you arrived at a clear picture.
+- [00:17:49,670–00:17:51,230] So basically what transcription does
+- [00:17:51,230–00:17:54,830] is it combines autoregressive language modeling
+- [00:17:54,830–00:17:57,230] and diffusion based image generation
+- [00:17:57,230–00:17:59,590] in a single transformer.
+- [00:17:59,590–00:18:01,990] So the input to a transfusion model
+- [00:18:01,990–00:18:05,510] is still an interleaved text and image sequence.
+- [00:18:05,510–00:18:09,110] And for the text, we perform standard autoregressive
+- [00:18:09,110–00:18:10,390] modeling.
+- [00:18:10,390–00:18:18,070] But for the image part, instead of autoregressive prediction,
+- [00:18:18,070–00:18:21,510] we take a segment of image representation
+- [00:18:21,510–00:18:25,630] and basically try to do diffusion operation on it.
+- [00:18:25,630–00:18:29,990] The model can perform multiple step of diffusion.
+- [00:18:29,990–00:18:34,047] Get the clear image and then take the clear image as input
+- [00:18:34,047–00:18:35,130] and move autoregressively.
+- [00:18:35,130–00:18:41,950] So some important architectural changes related is for text,
+- [00:18:41,950–00:18:45,330] we can continue to use this causal attention structure.
+- [00:18:45,330–00:18:50,970] And for the images, for the sake of better performance,
+- [00:18:50,970–00:18:55,590] we apply bidirectional attention on top of these images.
+- [00:18:55,590–00:19:00,450] So this is the transformation architecture.
+- [00:19:00,450–00:19:06,770] So basically as shown in the transfusion paper,
+- [00:19:06,770–00:19:10,050] so these models is able to quickly generate
+- [00:19:10,050–00:19:12,290] much better image quality compared
+- [00:19:12,290–00:19:18,130] to discrete token-based image generation using
+- [00:19:18,130–00:19:22,130] much less token budget.
+- [00:19:22,130–00:19:26,570] So in summary, so transformation is a first approach,
+- [00:19:26,570–00:19:28,810] which seamlessly unify autoregressive
+- [00:19:28,810–00:19:32,130] next token prediction and the diffusion objective
+- [00:19:32,130–00:19:34,730] for multimodal modeling.
+- [00:19:34,730–00:19:37,750] It demonstrates a significant better image generation quality
+- [00:19:37,750–00:19:40,230] and token efficiency.
+- [00:19:40,230–00:19:43,390] On the other hand, there is also open research problem.
+- [00:19:43,390–00:19:46,030] Because for the transfusion paper,
+- [00:19:46,030–00:19:49,790] it is still trying to represent--
+- [00:19:49,790–00:19:52,950] it is still trying to represent multimodal information
+- [00:19:52,950–00:19:56,110] in text and image interleaved sequences.
+- [00:19:56,110–00:20:03,030] However, it adopts the VAE representation
+- [00:20:03,030–00:20:08,270] for the images, which is very efficient for generating
+- [00:20:08,270–00:20:09,290] the images.
+- [00:20:09,290–00:20:10,870] But on the other hand, these are not
+- [00:20:10,870–00:20:14,950] very efficient representation for image understanding tasks.
+- [00:20:14,950–00:20:16,990] So this creates a dilemma.
+- [00:20:16,990–00:20:20,750] So which is still an open problem,
+- [00:20:20,750–00:20:22,570] I would say, in the research field today.
+- [00:20:22,570–00:20:25,990] Basically, the field found that for image generation
+- [00:20:25,990–00:20:30,110] and understanding, we sometimes need two types of encodings
+- [00:20:30,110–00:20:31,390] for them.
+- [00:20:31,390–00:20:36,220] So state of the art models today often
+- [00:20:36,220–00:20:40,180] tries to overcome this shortcoming by adopting
+- [00:20:40,180–00:20:41,840] two types of image encodings.
+- [00:20:45,620–00:20:46,520] Cool.
+- [00:20:46,520–00:20:50,160] So we talk about two types of Omni models,
+- [00:20:50,160–00:20:52,060] like using different representation
+- [00:20:52,060–00:20:54,740] for the image modality.
+- [00:20:54,740–00:20:59,420] So what else can we further innovate on this architecture
+- [00:20:59,420–00:21:01,580] to basically to make them more efficient?
+- [00:21:01,580–00:21:05,500] So next, I'm going to talk about a technique which
+- [00:21:05,500–00:21:09,420] modifies the transformer backbone architecture.
+- [00:21:09,420–00:21:13,380] So basically, the motivation comes from that.
+- [00:21:13,380–00:21:16,540] Now we are having the transformers process multimodal
+- [00:21:16,540–00:21:17,620] information.
+- [00:21:17,620–00:21:20,740] However different modalities have different information
+- [00:21:20,740–00:21:22,340] density.
+- [00:21:22,340–00:21:24,740] The nature of the data is also very different
+- [00:21:24,740–00:21:29,660] when it comes to text and images, for example.
+- [00:21:29,660–00:21:32,140] So the question is, is it necessary
+- [00:21:32,140–00:21:35,520] that we have to use unified transformer
+- [00:21:35,520–00:21:40,300] parameters to process these modalities,
+- [00:21:40,300–00:21:43,320] or can we actually introduce something specialized
+- [00:21:43,320–00:21:45,520] to each modality?
+- [00:21:45,520–00:21:51,920] So this basically takes us to an architecture which we call
+- [00:21:51,920–00:21:54,000] the mixture of transformers.
+- [00:21:54,000–00:21:57,440] So basically, the idea behind the mixture of transformers
+- [00:21:57,440–00:22:02,240] is we try to come up with independent set of transformer
+- [00:22:02,240–00:22:05,000] parameters for each of the modalities.
+- [00:22:05,000–00:22:06,960] So by independent set of parameters,
+- [00:22:06,960–00:22:12,320] I'm referring to such as [INAUDIBLE] projection matrices
+- [00:22:12,320–00:22:16,600] in the attention layer, as well as the feed forward layer.
+- [00:22:16,600–00:22:19,320] So basically, we have an independent set
+- [00:22:19,320–00:22:21,960] of parameters for transformer parameters for each
+- [00:22:21,960–00:22:23,120] of the modality.
+- [00:22:23,120–00:22:26,460] For the text modality, as shown here,
+- [00:22:26,460–00:22:30,800] given an input sequence with interleaved modalities,
+
+## Chunk 05 — 00:22:30,800 to 00:28:24,710
+
+- [00:22:30,800–00:22:37,020] we basically select to activate the set of parameters
+- [00:22:37,020–00:22:39,600] based on the modality deterministically.
+- [00:22:39,600–00:22:41,940] If it is a text token, we activate
+- [00:22:41,940–00:22:44,880] the text set of parameters.
+- [00:22:44,880–00:22:48,360] If it is an image token, we activate the image parameters.
+- [00:22:48,360–00:22:54,260] If it's the audio token, we activate the speech parameters.
+- [00:22:54,260–00:23:00,820] So as shown here, we performed this in the attention layer.
+- [00:23:00,820–00:23:04,740] Once we get the QKV projection separately,
+- [00:23:04,740–00:23:07,580] we perform a joint attention over these modality
+- [00:23:07,580–00:23:11,620] tokens to allow them to unify.
+- [00:23:11,620–00:23:14,900] Once we get the unified output from the attention layer,
+- [00:23:14,900–00:23:17,320] we pass them through the feedforward layer.
+- [00:23:17,320–00:23:20,920] And the feedforward layer here, again, is divided by modality.
+- [00:23:20,920–00:23:25,580] So each modality will have its own feedforward parameters.
+- [00:23:25,580–00:23:28,620] And once we pass these tokens through the feedforward layer,
+- [00:23:28,620–00:23:31,450] we get the normal transformer output.
+- [00:23:31,450–00:23:33,610] So basically from the outside, we still
+- [00:23:33,610–00:23:35,390] have a transformer unit.
+- [00:23:35,390–00:23:37,830] We get the token input and output.
+- [00:23:37,830–00:23:42,010] But on the inside, the processing for each modality
+- [00:23:42,010–00:23:45,150] happens differently, using different set of parameters.
+- [00:23:48,410–00:23:51,130] And this technique can basically can
+- [00:23:51,130–00:23:54,170] be combined by with the two models I just
+- [00:23:54,170–00:23:57,890] talked about with the Chameleon models, which is,
+- [00:23:57,890–00:24:03,130] using autoregressive cross-entropy objective for each
+- [00:24:03,130–00:24:04,770] of the modality tokens.
+- [00:24:04,770–00:24:07,730] Or with the transformation technique,
+- [00:24:07,730–00:24:11,050] which is using autoregressive objective for text
+- [00:24:11,050–00:24:13,750] and the diffusion objective for images.
+- [00:24:16,890–00:24:20,010] So I'm going to show some experiments we conducted
+- [00:24:20,010–00:24:21,330] with this architecture.
+- [00:24:21,330–00:24:26,490] So basically, we did a scaling ladder for this one.
+- [00:24:26,490–00:24:30,070] And we scanned them.
+- [00:24:30,070–00:24:33,010] We trained them for different model sizes.
+- [00:24:33,010–00:24:37,510] Like from the smallest, which is 163 million parameters,
+- [00:24:37,510–00:24:40,350] to the largest, which is seven billion parameters.
+- [00:24:40,350–00:24:44,790] So we always compare them with basically the dense baseline.
+- [00:24:44,790–00:24:48,230] And notice that if we directly compare it
+- [00:24:48,230–00:24:51,430] with a dense baseline, basically mixture transformers
+- [00:24:51,430–00:24:56,110] will have an advantage, because it has double the parameters.
+- [00:24:56,110–00:25:00,830] So we also compared with a baseline which is basically
+- [00:25:00,830–00:25:04,110] a mixture of expert model.
+- [00:25:04,110–00:25:07,110] So which has roughly the same amount
+- [00:25:07,110–00:25:10,610] of total parameters as the MoT model.
+- [00:25:13,550–00:25:15,810] So here are some results.
+- [00:25:15,810–00:25:19,990] So basically, we show the training loss.
+- [00:25:19,990–00:25:24,850] And also the validation on the image modality generation.
+- [00:25:24,850–00:25:26,630] So we show the validation loss.
+- [00:25:26,630–00:25:30,330] We also show some basically sampling
+- [00:25:30,330–00:25:34,090] based image generation evaluation metrics.
+- [00:25:34,090–00:25:38,330] So one thing we found is that the mixture of the transformer
+- [00:25:38,330–00:25:41,730] technique is especially effective at improve
+- [00:25:41,730–00:25:44,190] the generation of non-text modalities.
+- [00:25:44,190–00:25:47,830] So here, I didn't show the text modality generation.
+- [00:25:47,830–00:25:49,110] You can refer to the paper.
+- [00:25:49,110–00:25:52,690] But in the paper, we found that actually MoT architecture
+- [00:25:52,690–00:25:56,130] will demonstrate similar comparable text performance
+- [00:25:56,130–00:25:57,730] as a dense variation.
+- [00:25:57,730–00:26:02,410] So what it really shines it is able to, without sacrificing
+- [00:26:02,410–00:26:05,590] the text performance, achieving much better performance,
+- [00:26:05,590–00:26:08,970] generating non-text modalities such as images,
+- [00:26:08,970–00:26:09,910] as is shown here.
+- [00:26:09,910–00:26:12,010] So here, you can see the right curve,
+- [00:26:12,010–00:26:16,570] basically MoT will have a much lower image generation loss.
+- [00:26:16,570–00:26:18,890] And also on the sample evaluation,
+- [00:26:18,890–00:26:21,650] it will show much better performance compared
+- [00:26:21,650–00:26:23,450] to the dense variation.
+- [00:26:23,450–00:26:31,720] So an explanation for this is non-text modality generation
+- [00:26:31,720–00:26:36,240] is probably something unique compared to text generation.
+- [00:26:36,240–00:26:39,760] So if we put everything inside a single transformer,
+- [00:26:39,760–00:26:43,600] there might be severe capacity computation.
+- [00:26:43,600–00:26:47,560] But if we can allow these separate abilities
+- [00:26:47,560–00:26:49,720] with different set of parameters,
+- [00:26:49,720–00:26:51,700] we are able to scale them much better.
+- [00:26:56,560–00:26:59,480] So here are some qualitative results.
+- [00:26:59,480–00:27:05,240] So basically, we show that so for the top line, which
+- [00:27:05,240–00:27:07,880] is the dense baseline, and the bottom line
+- [00:27:07,880–00:27:10,080] is like the mixture of transformer architecture
+- [00:27:10,080–00:27:11,340] for image generation.
+- [00:27:11,340–00:27:15,200] So basically, we found that across many examples,
+- [00:27:15,200–00:27:17,480] the MoT architecture is basically able
+- [00:27:17,480–00:27:21,600] to follow fine-grained instructions much better
+- [00:27:21,600–00:27:24,540] and generate much detailed objects.
+- [00:27:28,020–00:27:31,540] So here is just to mention that the mixture of transformer
+- [00:27:31,540–00:27:35,240] technique can also be combined with mixture of experts.
+- [00:27:37,980–00:27:42,160] So before I was saying for each of the modality,
+- [00:27:42,160–00:27:45,620] we keep one copy of the transformer parameters.
+- [00:27:45,620–00:27:48,660] But we can also use the mixture of expert technique
+- [00:27:48,660–00:27:49,480] to scale them.
+- [00:27:49,480–00:27:51,700] So for example, we can choose to allocate
+- [00:27:51,700–00:27:55,940] different amount of experts to different modalities.
+- [00:27:55,940–00:27:59,780] So I think we used to find that allocating more experts
+- [00:27:59,780–00:28:03,100] is especially helpful for tax performance.
+- [00:28:03,100–00:28:07,500] While for abilities such as image generation,
+- [00:28:07,500–00:28:11,620] usually it doesn't scale as fast as text
+- [00:28:11,620–00:28:13,640] when you're adding the number of experts.
+- [00:28:13,640–00:28:14,720] So which motivates us.
+- [00:28:14,720–00:28:18,660] We can potentially have customized number of experts
+- [00:28:18,660–00:28:20,000] for different modalities.
+- [00:28:23,940–00:28:24,710] Cool.
+
+## Chunk 06 — 00:28:24,710 to 00:33:44,040
+
+- [00:28:24,710–00:28:28,690] So to summarize, so basically the mixture
+- [00:28:28,690–00:28:30,970] of transformer technique I talked about,
+- [00:28:30,970–00:28:35,770] it is a technique which employs modality specific parameters.
+- [00:28:35,770–00:28:39,210] And it performs deterministic routing on the tokens
+- [00:28:39,210–00:28:42,250] when passing them through the transformer.
+- [00:28:42,250–00:28:46,450] These techniques, we found it to be able to substantively improve
+- [00:28:46,450–00:28:49,330] generation quality for non-text modalities,
+- [00:28:49,330–00:28:51,930] including image and speech.
+- [00:28:51,930–00:28:55,210] And we found that it's also a technique which
+- [00:28:55,210–00:28:59,570] is helpful to enable the overall stability and controllability
+- [00:28:59,570–00:29:01,970] of mixed model training, because now we
+- [00:29:01,970–00:29:05,150] have different set of parameters for different modalities.
+- [00:29:05,150–00:29:09,370] This can actually allow us to perform asynchronous training
+- [00:29:09,370–00:29:11,250] for these modalities.
+- [00:29:11,250–00:29:13,810] So a common scenario people use it
+- [00:29:13,810–00:29:17,490] is suppose we have some off the shelf text models
+- [00:29:17,490–00:29:21,750] already been built. It has very strong text capabilities.
+- [00:29:21,750–00:29:24,350] And now we want to add, for example, image generation
+- [00:29:24,350–00:29:26,230] or speech generation to this model.
+- [00:29:26,230–00:29:29,790] So then instead of performing full fine tuning
+- [00:29:29,790–00:29:34,430] or continuous training on this existing off the shelf language
+- [00:29:34,430–00:29:38,630] model, what's possible is to add an additional set of parameters
+- [00:29:38,630–00:29:40,790] for image or speech to it.
+- [00:29:40,790–00:29:43,570] And then we can freeze the text model,
+- [00:29:43,570–00:29:45,830] keeping its text capability unchanged
+- [00:29:45,830–00:29:49,750] and just training the image and speech parameters.
+- [00:29:49,750–00:29:52,190] So this basically allows a simple technique
+- [00:29:52,190–00:29:56,910] to extend existing models with additional modality generation.
+- [00:29:56,910–00:29:57,896] Question?
+- [00:29:57,896–00:30:01,347] [INAUDIBLE]
+- [00:30:02,830–00:30:06,550] --the generation of images are two different systems.
+- [00:30:06,550–00:30:10,710] For example, the text to image is more like large language
+- [00:30:10,710–00:30:15,890] models and image to text is-- no, it's another way around.
+- [00:30:15,890–00:30:18,550] It's like image to text is more like large language models,
+- [00:30:18,550–00:30:22,250] and text to image is more like diffusion models.
+- [00:30:22,250–00:30:26,290] But it's multimodality, meaning that you want to unify these,
+- [00:30:26,290–00:30:31,690] having a single model to achieve the best in both directions.
+- [00:30:31,690–00:30:34,750] Is there a loop, image to text and image and things?
+- [00:30:34,750–00:30:35,297] Yes.
+- [00:30:35,297–00:30:36,630] So this is a very good question.
+- [00:30:36,630–00:30:40,830] So basically, the question asked about--
+- [00:30:40,830–00:30:44,730] so image understanding, which is more image to text,
+- [00:30:44,730–00:30:47,310] versus image generation, which is more text to images.
+- [00:30:47,310–00:30:49,610] They seem to be different capabilities.
+- [00:30:49,610–00:30:52,370] We hear talking about having a single transformer which
+- [00:30:52,370–00:30:54,930] is doing well in terms of both.
+- [00:30:54,930–00:30:56,290] So this is a great question.
+- [00:30:56,290–00:30:59,230] Actually, it is not.
+- [00:30:59,230–00:31:01,650] So here, when I'm talking, so in the mixture
+- [00:31:01,650–00:31:05,690] of transformer context, when I talk about image modality,
+- [00:31:05,690–00:31:08,290] I'm referring to image generation.
+- [00:31:08,290–00:31:15,130] So I think we actually didn't found modality separation
+- [00:31:15,130–00:31:18,410] to help image understanding.
+- [00:31:18,410–00:31:20,760] So it seems that so the capability
+- [00:31:20,760–00:31:23,560] is bounded by whether you are outputting text or outputting
+- [00:31:23,560–00:31:24,260] images.
+- [00:31:24,260–00:31:28,560] But if you're outputting text, your input tokens better
+- [00:31:28,560–00:31:31,100] go through the same set of parameters,
+- [00:31:31,100–00:31:34,440] whether they are text or images.
+- [00:31:34,440–00:31:36,380] Yeah, so that's a great question.
+- [00:31:39,000–00:31:42,120] Yep, so and finally, just to mention,
+- [00:31:42,120–00:31:44,720] since this publication, so MoT has inspired
+- [00:31:44,720–00:31:49,600] a growing line of follow-up work in modality aware architectures.
+- [00:31:49,600–00:31:54,560] So I'm going to quickly talk a few work done
+- [00:31:54,560–00:32:00,080] by other people, which inherited the MoT modeling architecture.
+- [00:32:00,080–00:32:01,800] So the first one I'm going to talk about
+- [00:32:01,800–00:32:04,840] is actually related to the question just now.
+- [00:32:04,840–00:32:10,880] So basically in last, there was a very strong Omni model
+- [00:32:10,880–00:32:12,560] came out named BAGEL.
+- [00:32:12,560–00:32:18,040] So BAGEL employed architecture very closely related to MoT
+- [00:32:18,040–00:32:20,820] So basically, they have separate set of parameters
+- [00:32:20,820–00:32:22,580] for image generation.
+- [00:32:22,580–00:32:24,780] But on the other hand, their base model
+- [00:32:24,780–00:32:28,220] is actually a multimodal language model.
+- [00:32:28,220–00:32:30,980] So basically, they have a separate set of parameters
+- [00:32:30,980–00:32:32,720] for image generation.
+- [00:32:32,720–00:32:35,740] But for the understanding part, the understanding part
+- [00:32:35,740–00:32:40,180] can actually take in both text and images.
+- [00:32:40,180–00:32:42,420] So basically, BAGEL was using a different set
+- [00:32:42,420–00:32:46,780] of encoding representations for image understanding features.
+- [00:32:46,780–00:32:49,860] And also image understanding and image generation
+- [00:32:49,860–00:32:51,940] goes through a separate set of parameters.
+- [00:32:51,940–00:32:56,300] So I think this is also related to a problem I just mentioned
+- [00:32:56,300–00:32:58,540] before, which is the field haven't yet
+- [00:32:58,540–00:33:00,520] found a very effective way.
+- [00:33:00,520–00:33:03,260] So there's currently ongoing research.
+- [00:33:03,260–00:33:05,660] But I think right now, we don't have
+- [00:33:05,660–00:33:08,820] a very effective way to unify image generation
+- [00:33:08,820–00:33:11,260] and understanding.
+- [00:33:11,260–00:33:14,580] So here, one interesting capability
+- [00:33:14,580–00:33:18,320] shown in the BAGEL paper is because recall,
+- [00:33:18,320–00:33:22,440] we are modeling mixed model sequences
+- [00:33:22,440–00:33:25,780] as an autoregressive generation.
+- [00:33:25,780–00:33:27,800] So it unlocks capabilities such as we
+- [00:33:27,800–00:33:31,105] can allow the model to plan before it generates an image.
+- [00:33:31,105–00:33:32,480] So basically, the model can first
+- [00:33:32,480–00:33:36,040] generate thinking tracing text and then generate
+- [00:33:36,040–00:33:37,140] the final image.
+- [00:33:37,140–00:33:39,960] So the paper show that this would
+- [00:33:39,960–00:33:44,040] allow the models to generate images with much better details.
+
+## Chunk 07 — 00:33:44,040 to 00:39:06,280
+
+- [00:33:44,040–00:33:48,120] And I think it's also basically thinking
+- [00:33:48,120–00:33:50,280] before generation is also the technique, which
+- [00:33:50,280–00:33:53,840] is used by lots of the state of the art image generation models
+- [00:33:53,840–00:33:54,540] nowadays.
+- [00:33:57,080–00:34:01,480] So another type of adoption for the mixture of transformer
+- [00:34:01,480–00:34:06,040] architecture was actually in the embodied AI community.
+- [00:34:06,040–00:34:08,880] So basically, it's very interesting that we found--
+- [00:34:08,880–00:34:11,380] so it wasn't included in our original paper.
+- [00:34:11,380–00:34:16,560] But we actually found that in robotics actually,
+- [00:34:16,560–00:34:22,550] lots of current architectures will use MoT style architecture
+- [00:34:22,550–00:34:25,510] to predict the action vectors.
+- [00:34:25,510–00:34:27,690] So basically instead of generating images,
+- [00:34:27,690–00:34:32,070] so for these type of problems, action is a different modality.
+- [00:34:32,070–00:34:34,110] And basically, these models will adopt
+- [00:34:34,110–00:34:37,389] like an extra special set of parameters for action prediction
+- [00:34:37,389–00:34:40,150] using an architecture very similar to MoT.
+- [00:34:40,150–00:34:43,949] So again, basically, the idea is while it
+- [00:34:43,949–00:34:46,230] is having a separate set of architecture,
+- [00:34:46,230–00:34:49,070] the overall language modeling structure
+- [00:34:49,070–00:34:51,150] and the self-attention in the transformer
+- [00:34:51,150–00:34:55,030] will allow the base language models, world knowledge,
+- [00:34:55,030–00:34:59,950] and so on to transform to the action prediction,
+- [00:34:59,950–00:35:02,490] which will make the prediction much better.
+- [00:35:05,550–00:35:07,170] Cool.
+- [00:35:07,170–00:35:07,930] So yes.
+- [00:35:07,930–00:35:11,230] So here, I actually also have a special set
+- [00:35:11,230–00:35:14,310] of slides dedicated to the question we just discussed.
+- [00:35:14,310–00:35:16,730] So basically their positive transfer
+- [00:35:16,730–00:35:19,970] between understanding and generation of the non-text
+- [00:35:19,970–00:35:21,650] modalities.
+- [00:35:21,650–00:35:27,350] So here, I think we need to see them in two directions.
+- [00:35:27,350–00:35:30,490] So basically, in terms of better understanding
+- [00:35:30,490–00:35:33,870] can help generation, the answer is strongly, yes.
+- [00:35:33,870–00:35:36,330] So basically, people found that if we
+- [00:35:36,330–00:35:41,270] build a better understanding capabilities in the base model,
+- [00:35:41,270–00:35:45,090] so this will allow the model to have much better information
+- [00:35:45,090–00:35:48,630] processing ability, planning ability, reasoning ability.
+- [00:35:48,630–00:35:52,770] So it will allow us to generate images, which are
+- [00:35:52,770–00:35:54,510] much more fine grained details.
+- [00:35:54,510–00:35:57,570] And for infographics, it can generate infographics
+- [00:35:57,570–00:36:01,410] with more accurate information, less hallucination.
+- [00:36:01,410–00:36:05,530] But on the other hand, suppose we take Omni model
+- [00:36:05,530–00:36:09,090] and we further train them for generation capabilities
+- [00:36:09,090–00:36:12,250] on the non-text modalities.
+- [00:36:12,250–00:36:13,970] There has been little work showing
+- [00:36:13,970–00:36:16,750] that this has a positive transfer for understanding
+- [00:36:16,750–00:36:17,450] capability.
+- [00:36:17,450–00:36:22,350] So in plain words, which is if we train the model for image
+- [00:36:22,350–00:36:26,210] generation and we train it on a lot of token budget,
+- [00:36:26,210–00:36:28,950] it doesn't necessarily improve the model's ability
+- [00:36:28,950–00:36:32,390] to perform image understanding tasks.
+- [00:36:32,390–00:36:35,110] Which is very interesting.
+- [00:36:35,110–00:36:38,070] So I think related is last year.
+- [00:36:38,070–00:36:41,790] So basically, the Berkeley professor Sergey Levine
+- [00:36:41,790–00:36:44,570] also tweeted on his account.
+- [00:36:44,570–00:36:48,950] Basically, he mentioned that it is puzzling that we can--
+- [00:36:48,950–00:36:53,390] basically, language model can acquire such amazing abilities
+- [00:36:53,390–00:36:55,430] through next token prediction.
+- [00:36:55,430–00:36:59,870] But on the other hand, we don't make video models much stronger
+- [00:36:59,870–00:37:02,430] if we do next frame prediction.
+- [00:37:02,430–00:37:06,630] So this is a very interesting phenomena people have observed
+- [00:37:06,630–00:37:09,450] and a couple of explanations.
+- [00:37:09,450–00:37:13,260] They are a little bit hand-wavy, which is also like--
+- [00:37:13,260–00:37:16,820] some of them is also included in Sergey's original post.
+- [00:37:16,820–00:37:21,460] So one hypothesis is language is fundamentally
+- [00:37:21,460–00:37:23,660] different from the other modalities,
+- [00:37:23,660–00:37:26,140] because it is a highly compressed abstraction
+- [00:37:26,140–00:37:27,740] of human cognition.
+- [00:37:27,740–00:37:30,640] So when we are training on language next token prediction,
+- [00:37:30,640–00:37:34,460] we are actually already trained on basically human's reasoning
+- [00:37:34,460–00:37:35,120] process.
+- [00:37:35,120–00:37:38,380] And also some of the words we see also
+- [00:37:38,380–00:37:41,580] implies actions we are going to take.
+- [00:37:41,580–00:37:44,880] Versus in comparison, the images and videos,
+- [00:37:44,880–00:37:46,900] they are sensory data.
+- [00:37:46,900–00:37:50,720] They are not our subjective interpretation of the word.
+- [00:37:50,720–00:37:52,980] But instead, they are the passive observation
+- [00:37:52,980–00:37:53,900] of the world.
+- [00:37:53,900–00:37:58,220] So training on them, we will have very different consequences
+- [00:37:58,220–00:38:00,540] compared if we train on languages.
+- [00:38:00,540–00:38:04,900] And also for image and videos, the loss landscape
+- [00:38:04,900–00:38:08,780] is more complicated.
+- [00:38:08,780–00:38:11,180] So there has been some experiments basically
+- [00:38:11,180–00:38:16,720] showing that even when the image and video generation is not
+- [00:38:16,720–00:38:20,120] looking great to humans, their loss might have already
+- [00:38:20,120–00:38:21,620] been starting to look good.
+- [00:38:21,620–00:38:25,600] So basically, designing the loss landscape for images and videos
+- [00:38:25,600–00:38:27,760] are also more complicated.
+- [00:38:27,760–00:38:30,300] And there's also other hypotheses.
+- [00:38:30,300–00:38:32,560] For example, if we just look at the real world,
+- [00:38:32,560–00:38:34,840] next frame prediction would be very redundant.
+- [00:38:34,840–00:38:38,360] Because there will be lots of redundant information
+- [00:38:38,360–00:38:41,720] and replication across video frames,
+- [00:38:41,720–00:38:44,340] which could possibly contribute to this.
+- [00:38:44,340–00:38:48,880] But I think overall, this is a very interesting phenomenon
+- [00:38:48,880–00:38:51,880] worth bearing in mind, which could also
+- [00:38:51,880–00:38:56,000] point to us that although we see lots of success,
+- [00:38:56,000–00:38:58,520] applying learnings from large language modeling
+- [00:38:58,520–00:39:03,720] to multimodal modeling, this is likely not the end.
+- [00:39:03,720–00:39:06,280] So there is much more fundamental problems
+
+## Chunk 08 — 00:39:06,280 to 00:44:32,560
+
+- [00:39:06,280–00:39:11,270] to solve when it comes to multimodal models.
+- [00:39:11,270–00:39:12,270] Yeah.
+- [00:39:12,270–00:39:14,750] So here is basically a summary slides.
+- [00:39:14,750–00:39:19,430] So basically what it says is the models
+- [00:39:19,430–00:39:22,630] I just presented, which I call Omni language
+- [00:39:22,630–00:39:24,990] models, like Chameleon, transfusion,
+- [00:39:24,990–00:39:28,310] mixture of experts, so they solve
+- [00:39:28,310–00:39:31,510] a small subset of the multimodal intelligence
+- [00:39:31,510–00:39:33,210] problems we face today.
+- [00:39:33,210–00:39:37,270] So they especially excel at multimodal information
+- [00:39:37,270–00:39:39,030] processing.
+- [00:39:39,030–00:39:43,010] But when it comes to the wild physical world,
+- [00:39:43,010–00:39:46,530] when we talk about things like spatial temporal understanding,
+- [00:39:46,530–00:39:49,630] real time understanding, robotics control,
+- [00:39:49,630–00:39:53,010] there are still lots of unaddressed problems,
+- [00:39:53,010–00:39:56,590] and people are still dedicated to understanding and coming up
+- [00:39:56,590–00:40:00,970] with better representations for these multi-modal information
+- [00:40:00,970–00:40:03,710] when you come to real world processing.
+- [00:40:03,710–00:40:06,630] With this, I also want to conclude my talk.
+- [00:40:06,630–00:40:10,770] So basically, I hope this talk has motivated
+- [00:40:10,770–00:40:14,370] that building models with native multimodal capabilities
+- [00:40:14,370–00:40:16,950] is a very active research field nowadays.
+- [00:40:16,950–00:40:18,830] It has a ton of open problems.
+- [00:40:18,830–00:40:22,810] It's not as figured out as language models.
+- [00:40:22,810–00:40:26,610] And for today, lots of multimodal language
+- [00:40:26,610–00:40:31,650] models we see, they excel at digital information processing.
+- [00:40:31,650–00:40:35,250] But we still are far away from a paradigm
+- [00:40:35,250–00:40:39,010] which could perform powerful physical world multimodal
+- [00:40:39,010–00:40:41,490] intelligence.
+- [00:40:41,490–00:40:44,830] Multimodal models compare with text models,
+- [00:40:44,830–00:40:47,210] they are more computationally heavy,
+- [00:40:47,210–00:40:50,690] which requires additional challenges to be solved in terms
+- [00:40:50,690–00:40:55,050] of training and infrastructure.
+- [00:40:55,050–00:41:00,330] And also, multimodal itself is a very complicated and interesting
+- [00:41:00,330–00:41:02,610] problem space.
+- [00:41:02,610–00:41:08,070] So like we just mentioned, digital information
+- [00:41:08,070–00:41:11,150] understanding would require multimodal processing.
+- [00:41:11,150–00:41:13,890] Physical intelligence would require multimodal processing.
+- [00:41:13,890–00:41:16,330] Robotics would require multimodal processing.
+- [00:41:16,330–00:41:19,230] So in the short term, we will likely
+- [00:41:19,230–00:41:22,630] see an increasing number of multimodal models customized
+- [00:41:22,630–00:41:24,550] for these certain capabilities.
+- [00:41:24,550–00:41:29,590] And how to unify them into a coherent system,
+- [00:41:29,590–00:41:32,390] that will also be a very interesting future research
+- [00:41:32,390–00:41:33,950] paradigm.
+- [00:41:33,950–00:41:36,390] So with this, I will conclude the talk,
+- [00:41:36,390–00:41:39,030] and I'm happy to take more questions.
+- [00:41:39,030–00:41:42,460] [APPLAUSE]
+- [00:41:49,320–00:41:50,070] All right, great.
+- [00:41:50,070–00:41:53,190] We'll be taking questions in person and online.
+- [00:41:53,190–00:41:54,610] I'll go around with the mic.
+- [00:42:05,030–00:42:05,790] Hi.
+- [00:42:05,790–00:42:06,980] Thank you for coming.
+- [00:42:06,980–00:42:10,880] My question is broad, but more generally,
+- [00:42:10,880–00:42:14,000] I think there's certain information that humans
+- [00:42:14,000–00:42:16,500] are able to interpret visually and other information that we
+- [00:42:16,500–00:42:18,420] interpret through words.
+- [00:42:18,420–00:42:20,540] So I'm wondering, when you're coming up
+- [00:42:20,540–00:42:23,628] with these architectures or thinking about these models,
+- [00:42:23,628–00:42:25,420] how do you consider these different streams
+- [00:42:25,420–00:42:31,060] and how to actually trade information between them?
+- [00:42:31,060–00:42:33,080] Because if you do have these mixture of experts,
+- [00:42:33,080–00:42:38,960] you're isolating how they learn their work.
+- [00:42:38,960–00:42:42,760] OK, so the question is, so, for example,
+- [00:42:42,760–00:42:46,300] we just presented a modular architecture,
+- [00:42:46,300–00:42:47,900] like mixture of transformers.
+- [00:42:47,900–00:42:50,500] And if we isolate the representation
+- [00:42:50,500–00:42:53,260] for different modalities, how do we still
+- [00:42:53,260–00:42:55,580] able to unify the information?
+- [00:42:55,580–00:42:59,380] So one thing is definitely, these models
+- [00:42:59,380–00:43:01,980] still have the self-attention mechanism.
+- [00:43:01,980–00:43:05,920] So once we project the different tokens using their customized
+- [00:43:05,920–00:43:09,160] projection, they still go through self-attention.
+- [00:43:09,160–00:43:13,640] So that is one way to allow information still transfer
+- [00:43:13,640–00:43:15,053] across modality.
+- [00:43:15,053–00:43:16,220] So I think that's one thing.
+- [00:43:16,220–00:43:18,820] And I think the other way it goes,
+- [00:43:18,820–00:43:21,440] basically modeling still happens is
+- [00:43:21,440–00:43:23,280] through this causal conditioning.
+- [00:43:23,280–00:43:26,960] So we still have this structure of given input as image,
+- [00:43:26,960–00:43:30,480] you need to do text prediction.
+- [00:43:30,480–00:43:33,780] So even with separate set of parameters.
+- [00:43:33,780–00:43:39,060] So these autoregressive orders is still there.
+- [00:43:39,060–00:43:43,000] So that's why we are still able to model conditioning
+- [00:43:43,000–00:43:45,760] on these text, generate this image conditioning
+- [00:43:45,760–00:43:48,180] on these image generated text.
+- [00:43:48,180–00:43:48,680] Yeah.
+- [00:43:53,680–00:43:56,200] I have a question.
+- [00:43:56,200–00:43:58,440] What are your thoughts on generative role models
+- [00:43:58,440–00:44:00,990] for solving some of the things you discussed,
+- [00:44:00,990–00:44:05,980] like real world interaction, multimodal learning,
+- [00:44:05,980–00:44:07,220] and so forth?
+- [00:44:07,220–00:44:08,900] Because one slide, you mentioned how
+- [00:44:08,900–00:44:14,840] language might be an abstraction of our reasoning or thoughts,
+- [00:44:14,840–00:44:20,100] whereas pixels are more dense.
+- [00:44:20,100–00:44:22,980] But I think, which Japa, is that they're trying
+- [00:44:22,980–00:44:25,020] to abstract that as well.
+- [00:44:25,020–00:44:26,660] Yeah, so I think japa.
+- [00:44:26,660–00:44:29,980] Is a very interesting architecture.
+- [00:44:29,980–00:44:32,560] I recall, I think at the beginning of this series,
+
+## Chunk 09 — 00:44:32,560 to 00:50:01,850
+
+- [00:44:32,560–00:44:35,180] we also have a talk on Japa.
+- [00:44:35,180–00:44:42,220] So how do I see it is think it is because multimodal space is
+- [00:44:42,220–00:44:43,020] so rich.
+- [00:44:43,020–00:44:45,280] So we have different types of problems to solve.
+- [00:44:45,280–00:44:47,660] So we might actually have the need
+- [00:44:47,660–00:44:52,980] for different representations for different applications.
+- [00:44:52,980–00:44:54,580] So nowadays, I think one thing we
+- [00:44:54,580–00:44:58,640] observe is if coming to infographic understanding,
+- [00:44:58,640–00:45:01,740] like PDFs of visual coding.
+- [00:45:01,740–00:45:05,130] So it seems like our current patchify and encoder paradigm
+- [00:45:05,130–00:45:06,290] works very well.
+- [00:45:06,290–00:45:08,170] But on the other hand, infographics
+- [00:45:08,170–00:45:11,210] is also a very different kind of image modality compared
+- [00:45:11,210–00:45:15,810] to real world, especially scenarios where it requires
+- [00:45:15,810–00:45:18,050] physical spatial understanding.
+- [00:45:18,050–00:45:23,770] So I believe Japa, it's architecture specifically
+- [00:45:23,770–00:45:26,810] designed to be more efficient in terms of modeling
+- [00:45:26,810–00:45:28,450] some of these relations.
+- [00:45:28,450–00:45:34,290] So I do think it's worth--
+- [00:45:34,290–00:45:40,030] basically we should explore different architectures,
+- [00:45:40,030–00:45:42,250] especially when it comes to these real world
+- [00:45:42,250–00:45:45,594] physical understanding.
+- [00:45:45,594–00:45:48,530] Yeah, thanks for that response.
+- [00:45:48,530–00:45:50,430] Anybody else have a question?
+- [00:45:57,850–00:46:01,630] Hi, I'm curious to get your thoughts on learning more
+- [00:46:01,630–00:46:04,188] from these multimodal models, where maybe there's
+- [00:46:04,188–00:46:06,230] extra understanding that comes from understanding
+- [00:46:06,230–00:46:09,450] the world that could transfer to just general knowledge work
+- [00:46:09,450–00:46:11,530] and agent capabilities.
+- [00:46:11,530–00:46:16,070] Do you think there is room for that to happen?
+- [00:46:16,070–00:46:18,430] Sorry, would you mind repeat the question?
+- [00:46:18,430–00:46:19,118] Yeah.
+- [00:46:19,118–00:46:20,910] Do you think it's possible that by training
+- [00:46:20,910–00:46:23,930] these multimodal models and Omni models,
+- [00:46:23,930–00:46:27,550] they could get better at general knowledge work, not just at,
+- [00:46:27,550–00:46:28,850] for example, generating videos?
+- [00:46:28,850–00:46:32,190] But as humans, I think we learn a lot from the real world.
+- [00:46:32,190–00:46:34,390] Do you think there is room to make models
+- [00:46:34,390–00:46:37,670] that can learn from video and other forms of modality that
+- [00:46:37,670–00:46:40,070] make them better at just knowledge work, though?
+- [00:46:40,070–00:46:40,790] Yeah, OK.
+- [00:46:40,790–00:46:43,470] I think the question is, if by training these models
+- [00:46:43,470–00:46:46,390] for video generation, can we make them better
+- [00:46:46,390–00:46:48,430] at knowledge work?
+- [00:46:48,430–00:46:55,830] So the short answer, as I just touched a little bit
+- [00:46:55,830–00:46:58,030] in the talk, is so far, we haven't
+- [00:46:58,030–00:47:02,390] found it to be very effective for this type of transfer.
+- [00:47:02,390–00:47:04,650] So in terms of we do video generation
+- [00:47:04,650–00:47:07,510] versus transferring back to knowledge work.
+- [00:47:07,510–00:47:10,250] But on the other hand, I do think
+- [00:47:10,250–00:47:15,330] we have more promising signals now, because I think,
+- [00:47:15,330–00:47:18,450] for example, lots of robotics tasks or training,
+- [00:47:18,450–00:47:22,210] it actually requires-- it's being assisted
+- [00:47:22,210–00:47:25,790] by some video models, like for future state prediction,
+- [00:47:25,790–00:47:27,370] get feedback, and so on.
+- [00:47:27,370–00:47:31,850] So I think there could be a way.
+- [00:47:31,850–00:47:36,370] But I think so far, we are still in a state
+- [00:47:36,370–00:47:39,270] where we haven't seen that.
+- [00:47:39,270–00:47:42,090] We just train a model purely for video generation.
+- [00:47:42,090–00:47:45,670] And then it got massively better at a GenAI task.
+- [00:47:48,570–00:47:51,730] So for example, like the video generation capability
+- [00:47:51,730–00:47:55,810] is used as a feedback for how you do the next action
+- [00:47:55,810–00:47:56,630] prediction.
+- [00:48:04,520–00:48:06,260] Any other interesting questions?
+- [00:48:14,420–00:48:14,920] Hello.
+- [00:48:14,920–00:48:17,840] I was wondering if you've done any kind of scaling law
+- [00:48:17,840–00:48:22,040] where you turn actual texts into some kind
+- [00:48:22,040–00:48:24,380] of black or white pictures?
+- [00:48:24,380–00:48:31,760] Because we do that if you remove those quantization from VAEs.
+- [00:48:31,760–00:48:34,200] The learned tokenization shouldn't be a problem.
+- [00:48:34,200–00:48:37,200] And in fact, if you have a tiny model that
+- [00:48:37,200–00:48:39,080] is conditioned on text and generate
+- [00:48:39,080–00:48:42,560] just an image of that text, that's also doable.
+- [00:48:42,560–00:48:46,923] And so it's just that it's not totally efficient,
+- [00:48:46,923–00:48:48,340] it doesn't work well and all that.
+- [00:48:48,340–00:48:50,720] But is there a scaling law that says it's like 20 times worse
+- [00:48:50,720–00:48:51,420] or something.
+- [00:48:51,420–00:48:55,360] Consider that a lot of the Gemini models
+- [00:48:55,360–00:48:57,900] can now solve Sudoku individually.
+- [00:48:57,900–00:48:59,520] So how worse is that?
+- [00:48:59,520–00:49:01,620] Is there a crossover point where you
+- [00:49:01,620–00:49:06,260] can achieve that with just decent engineering
+- [00:49:06,260–00:49:08,820] and then remove an entire modality and just
+- [00:49:08,820–00:49:10,620] use text and image this way?
+- [00:49:10,620–00:49:11,120] I see.
+- [00:49:11,120–00:49:12,537] So basically, I think the question
+- [00:49:12,537–00:49:15,360] is it possible to just render text as images?
+- [00:49:15,360–00:49:19,220] And that gives us a way to unify the modalities.
+- [00:49:19,220–00:49:22,440] Specifically, because now the VAE seems to be a bottleneck.
+- [00:49:22,440–00:49:25,320] And now that we do pixel level predictions and all that.
+- [00:49:25,320–00:49:30,340] And it seems like, yeah, we're not overly wrongly compressing
+- [00:49:30,340–00:49:35,020] images anymore, because VAE seemed to not have been made
+- [00:49:35,020–00:49:36,860] with that particular use case.
+- [00:49:36,860–00:49:41,340] Yeah, so I haven't done such experience myself.
+- [00:49:41,340–00:49:45,480] But I do remember seeing a paper early on coming out this year.
+- [00:49:45,480–00:49:50,780] So I think I recall the paper is about basically
+- [00:49:50,780–00:49:53,380] they are training language models
+- [00:49:53,380–00:49:56,730] but just giving images as input.
+- [00:49:56,730–00:49:59,130] And they actually got pretty good results.
+- [00:49:59,130–00:50:01,850] So basically, I think basically then later you
+
+## Chunk 10 — 00:50:01,850 to 00:55:04,240
+
+- [00:50:01,850–00:50:07,640] can prompt this model by showing it to OCR images.
+- [00:50:07,640–00:50:09,390] I think we should all check out our paper,
+- [00:50:09,390–00:50:14,630] whether it has efficiency or the scaling loss study.
+- [00:50:14,630–00:50:16,290] So how efficient is.
+- [00:50:16,290–00:50:17,190] My prediction.
+- [00:50:17,190–00:50:19,130] Is it will be less efficient compared
+- [00:50:19,130–00:50:21,190] if we train on raw text.
+- [00:50:21,190–00:50:23,330] I think just because I think texts already have
+- [00:50:23,330–00:50:26,890] this nice symbolic structure.
+- [00:50:26,890–00:50:29,270] I think there is a question whether at large scale,
+- [00:50:29,270–00:50:32,650] for example, this might go away.
+- [00:50:32,650–00:50:37,210] I think to me, at least a very subjective opinion
+- [00:50:37,210–00:50:38,550] is it's still inefficient.
+- [00:50:38,550–00:50:40,430] So in the sense that even if we do OCR,
+- [00:50:40,430–00:50:45,610] there will be how you choose the appearance of the text.
+- [00:50:45,610–00:50:49,807] How do you model the paragraph?
+- [00:50:49,807–00:50:51,390] So there might be certain inefficiency
+- [00:50:51,390–00:50:55,710] with a-- we overlook in this representation.
+- [00:50:55,710–00:50:58,470] So I think one argument OCR could be faster
+- [00:50:58,470–00:51:03,790] is I think OCR input would allow us to actually use a shorter
+- [00:51:03,790–00:51:05,970] context to represent more text.
+- [00:51:05,970–00:51:08,630] Because we can take a screenshot of a paragraph,
+- [00:51:08,630–00:51:12,310] and then we can just take pictures for that paragraph,
+- [00:51:12,310–00:51:14,870] versus we tokenize the entire paragraph.
+- [00:51:14,870–00:51:18,390] So I think there is some argument about that.
+- [00:51:18,390–00:51:20,830] I think it's interesting and someone probably
+- [00:51:20,830–00:51:21,970] should do that experiment.
+- [00:51:21,970–00:51:25,140] So the reason why I was wondering is because you--
+- [00:51:25,140–00:51:27,390] right now, they don't know that, for example, the text
+- [00:51:27,390–00:51:30,190] is highlight or italic and you have to add these markdown
+- [00:51:30,190–00:51:31,168] tags to it.
+- [00:51:31,168–00:51:33,210] And now they will just naturally understand that.
+- [00:51:33,210–00:51:35,750] And you mentioned these infographics.
+- [00:51:35,750–00:51:38,670] It seems like they'll just unify pretty well.
+- [00:51:38,670–00:51:41,810] And more from an engineering perspective,
+- [00:51:41,810–00:51:43,930] I was wondering if you fuse these modalities,
+- [00:51:43,930–00:51:46,710] you end up having a much easier time training that.
+- [00:51:46,710–00:51:50,990] Because you only need audio and picture left.
+- [00:51:50,990–00:51:53,950] And then all the downstream mixture of expert stuff
+- [00:51:53,950–00:51:56,930] will get easier and the training will stabilize.
+- [00:51:56,930–00:51:58,370] Probably easier, too.
+- [00:51:58,370–00:51:59,390] Less babysitting.
+- [00:51:59,390–00:52:03,290] So it seems obviously inefficient.
+- [00:52:03,290–00:52:06,790] But on a larger scale, on a training dynamic scale,
+- [00:52:06,790–00:52:09,390] it seems like it could be much more efficient because of that.
+- [00:52:09,390–00:52:09,910] Yeah.
+- [00:52:09,910–00:52:13,530] I feel like someone should study this.
+- [00:52:13,530–00:52:17,570] The only thing is I feel like at least from what we so far we
+- [00:52:17,570–00:52:20,610] learn, if we want to unify these modalities during training,
+- [00:52:20,610–00:52:22,730] it's actually better to align other things
+- [00:52:22,730–00:52:26,075] onto text versus having text aligned to the others.
+- [00:52:26,075–00:52:27,450] Because I think text, you already
+- [00:52:27,450–00:52:33,090] drive these underlining reasoning agentic capabilities.
+- [00:52:33,090–00:52:38,170] For example, if we represent texts as OCR, for example,
+- [00:52:38,170–00:52:43,530] it might just makes scaling to these capabilities much slower.
+- [00:52:43,530–00:52:44,090] Oh.
+- [00:52:44,090–00:52:47,610] How do you make image into text modality?
+- [00:52:47,610–00:52:50,430] So this is by the tokenization I just mentioned.
+- [00:52:50,430–00:52:53,240] So we just divide them into patches.
+- [00:52:53,240–00:52:55,540] Oh, that's what I was proposing earlier.
+- [00:52:55,540–00:52:58,380] You turn the text into these image patches token,
+- [00:52:58,380–00:53:01,240] and then do the regular auto regression on it.
+- [00:53:01,240–00:53:02,480] Yes.
+- [00:53:02,480–00:53:05,560] Yeah, not a diffusion process wholesale, but just
+- [00:53:05,560–00:53:07,160] auto regression on the image patches
+- [00:53:07,160–00:53:12,186] that happen to contain text stuff.
+- [00:53:12,186–00:53:14,240] Again, never tried it myself.
+- [00:53:14,240–00:53:20,220] So it's probably worth try some experiments.
+- [00:53:20,220–00:53:25,040] But I feel like predicting clean symbolic symbols
+- [00:53:25,040–00:53:29,120] versus this imageified text, I think the former might
+- [00:53:29,120–00:53:30,920] be more efficient.
+- [00:53:30,920–00:53:31,820] Yeah, thank you.
+- [00:53:36,120–00:53:39,440] Any other in-person questions?
+- [00:53:39,440–00:53:41,260] All right, there's some from online.
+- [00:53:45,680–00:53:47,480] Yeah, someone asked, could it help
+- [00:53:47,480–00:53:51,120] to develop higher level, more object oriented embeddings
+- [00:53:51,120–00:53:52,860] for visual elements?
+- [00:53:52,860–00:53:55,780] So infants or humans, we naturally
+- [00:53:55,780–00:54:01,500] understand pieces moving together as one thing.
+- [00:54:01,500–00:54:02,180] Yes.
+- [00:54:02,180–00:54:04,380] I think I believe so.
+- [00:54:04,380–00:54:08,720] I believe this is also the research theme of Japa as well.
+- [00:54:08,720–00:54:11,380] So basically having more semantic representation
+- [00:54:11,380–00:54:13,580] of the visual scenes.
+- [00:54:13,580–00:54:17,820] I definitely think it's a very interesting direction.
+- [00:54:17,820–00:54:20,620] I think people should explore, yeah.
+- [00:54:24,060–00:54:29,078] I think the other questions are somewhat related as well.
+- [00:54:29,078–00:54:30,620] One of them is asking, is it feasible
+- [00:54:30,620–00:54:34,680] for a single representation to capture enough for perception,
+- [00:54:34,680–00:54:38,300] generation and reasoning, or are separate hierarchies
+- [00:54:38,300–00:54:40,220] likely needed?
+- [00:54:40,220–00:54:44,060] Similar to how humans process or think.
+- [00:54:44,060–00:54:44,740] Yeah.
+- [00:54:44,740–00:54:48,120] So I think there has already been research started.
+- [00:54:48,120–00:54:50,260] I think there are papers published this year.
+- [00:54:50,260–00:54:53,020] Super apology, I forgot the title of the paper,
+- [00:54:53,020–00:54:55,280] but it's from [INAUDIBLE] group.
+- [00:54:55,280–00:54:58,840] So I think basically, it's investigating,
+- [00:54:58,840–00:55:02,960] can we unify the representation for image generation
+- [00:55:02,960–00:55:04,240] and understanding?
+
+## Chunk 11 — 00:55:04,240 to 01:00:29,680
+
+- [00:55:04,240–00:55:07,740] I think people are seeing promising results.
+- [00:55:07,740–00:55:09,218] So for example, in the sense there
+- [00:55:09,218–00:55:10,760] has already been experimental results
+- [00:55:10,760–00:55:14,320] showing even if you take standard image encoding
+- [00:55:14,320–00:55:16,880] representation, using that for generation, people
+- [00:55:16,880–00:55:19,140] are able to generate good images out of it,
+- [00:55:19,140–00:55:22,560] sometimes even outperform like the VAE representation.
+- [00:55:22,560–00:55:31,180] So I think philosophically, if this direction got figured out,
+- [00:55:31,180–00:55:34,837] basically that will push image modeling closer to language
+- [00:55:34,837–00:55:35,920] modeling one step further.
+- [00:55:35,920–00:55:37,337] Because for language model, we are
+- [00:55:37,337–00:55:41,800] able to have this unified text input and output.
+- [00:55:41,800–00:55:45,640] So I feel philosophically, this path makes sense.
+- [00:55:45,640–00:55:49,470] And the field is also making progress.
+- [00:55:49,470–00:55:52,550] I have a question that's subjective.
+- [00:55:52,550–00:55:55,070] Do you think we should be trying to make everything
+- [00:55:55,070–00:55:57,330] like large language models, auto regression?
+- [00:55:57,330–00:56:01,990] Because I've talked to some folks, including Andre,
+- [00:56:01,990–00:56:06,870] and we have mixed feelings about next token prediction.
+- [00:56:06,870–00:56:10,190] From a cognitive standpoint or at least the way
+- [00:56:10,190–00:56:14,092] I think about it, I feel like humans
+- [00:56:14,092–00:56:16,050] learn in more structured, hierarchical manners,
+- [00:56:16,050–00:56:19,070] not simply predicting the next token
+- [00:56:19,070–00:56:20,728] given all the previous ones.
+- [00:56:20,728–00:56:22,270] That's more of a statistical learning
+- [00:56:22,270–00:56:25,150] procedure, which works well with LLMs, because you
+- [00:56:25,150–00:56:26,910] have so much data.
+- [00:56:26,910–00:56:29,850] So you're able to estimate this distribution effectively.
+- [00:56:29,850–00:56:34,810] But I feel fundamentally, this is controversial,
+- [00:56:34,810–00:56:39,730] but I feel like auto regression is flawed or it works well.
+- [00:56:39,730–00:56:41,890] It works surprisingly and impressively well.
+- [00:56:41,890–00:56:47,150] But I feel like we need something more.
+- [00:56:47,150–00:56:51,610] I feel like just the next token prediction might not
+- [00:56:51,610–00:56:53,590] be the move.
+- [00:56:53,590–00:56:55,890] But I'm not sure if you have any thoughts.
+- [00:56:55,890–00:56:57,210] Yeah.
+- [00:56:57,210–00:57:00,270] So I think the thought is very interesting.
+- [00:57:00,270–00:57:02,850] So I think there are people trying different things,
+- [00:57:02,850–00:57:04,630] like diffusion language models.
+- [00:57:04,630–00:57:06,690] Discrete diffusion language models.
+- [00:57:06,690–00:57:10,650] Different ways, like compared to next token prediction.
+- [00:57:10,650–00:57:13,530] I personally think next prediction has proved-- sorry,
+- [00:57:13,530–00:57:17,170] next token prediction has proven itself to be very effective.
+- [00:57:17,170–00:57:20,050] And I think the catch is even on the surface,
+- [00:57:20,050–00:57:21,970] it's doing next token prediction.
+- [00:57:21,970–00:57:25,310] Because the network connection is pretty complicated.
+- [00:57:25,310–00:57:29,210] So there could already be in structure learning emerged,
+- [00:57:29,210–00:57:32,250] like in the latent space.
+- [00:57:32,250–00:57:34,390] Which we don't understand well.
+- [00:57:34,390–00:57:41,590] But it could be that next token prediction is the surface form.
+- [00:57:41,590–00:57:45,090] The network is doing more than that.
+- [00:57:45,090–00:57:46,950] No, I think that makes a lot of sense.
+- [00:57:46,950–00:57:47,550] Yeah.
+- [00:57:47,550–00:57:50,450] I feel like because of how the transformer and attention works,
+- [00:57:50,450–00:57:52,070] I think you're right, that there's
+- [00:57:52,070–00:57:54,790] a lot of abstractions or structure
+- [00:57:54,790–00:57:56,830] that's being learned that's hidden.
+- [00:57:56,830–00:57:58,650] And next token prediction, like you said,
+- [00:57:58,650–00:58:00,730] might be the surface way that that's--
+- [00:58:03,470–00:58:05,610] at least it appears like that's--
+- [00:58:05,610–00:58:08,470] well, that's the way it learns, the training objective.
+- [00:58:08,470–00:58:11,790] But it's actually learning more than that.
+- [00:58:11,790–00:58:13,990] Yeah.
+- [00:58:13,990–00:58:15,530] Any other questions, or--
+- [00:58:20,150–00:58:21,650] Thanks for the presentation.
+- [00:58:21,650–00:58:24,350] So what is your take on the state of the art when
+- [00:58:24,350–00:58:26,270] it comes to spatial reasoning?
+- [00:58:26,270–00:58:32,550] So physical environments and modality or multimodal models?
+- [00:58:32,550–00:58:34,510] Yeah.
+- [00:58:34,510–00:58:38,250] I'm not an expert in the area of spatial reasoning,
+- [00:58:38,250–00:58:45,660] so I think in terms of the state of the art,
+- [00:58:45,660–00:58:49,780] so I think we're seeing lots of progress in robotics,
+- [00:58:49,780–00:58:50,740] in robotics labs.
+- [00:58:50,740–00:58:54,100] These vision language action models.
+- [00:58:54,100–00:58:59,300] So I think one interesting observation
+- [00:58:59,300–00:59:02,220] is I think some of these, actually
+- [00:59:02,220–00:59:06,680] they are being accelerated by multimodal language models.
+- [00:59:06,680–00:59:09,620] So for example, even for the models coming out
+- [00:59:09,620–00:59:14,940] from physical intelligence, they leverage vision language models
+- [00:59:14,940–00:59:17,280] as a backbone rather than training from scratch.
+- [00:59:17,280–00:59:20,140] So it seems like there are some interesting positive transfer
+- [00:59:20,140–00:59:21,660] from multimodal language modeling
+- [00:59:21,660–00:59:23,560] to spatial understanding.
+- [00:59:23,560–00:59:25,060] So I think, on the other hand, there
+- [00:59:25,060–00:59:29,000] are definitely more labs, which is taking more unique approach.
+- [00:59:29,000–00:59:32,360] So but I'm less familiar with those approach.
+- [00:59:32,360–00:59:35,700] But I think I'm aware of some approaches, which
+- [00:59:35,700–00:59:40,140] is shifted more further away from leveraging languages.
+- [00:59:40,140–00:59:46,200] But having the model less language
+- [00:59:46,200–00:59:48,700] dependent, but focus more on the visual signal.
+- [00:59:48,700–00:59:51,940] But I'm not too familiar with those approaches.
+- [00:59:51,940–00:59:52,440] Yeah.
+- [01:00:00,000–01:00:02,720] Sorry, I have one more question.
+- [01:00:02,720–01:00:06,600] It's regarding what you said about reasoning being
+- [01:00:06,600–01:00:09,720] done much more effectively in text space rather
+- [01:00:09,720–01:00:11,040] than video space.
+- [01:00:11,040–01:00:16,680] And how much of it is a video data problem
+- [01:00:16,680–01:00:19,780] rather than a pure problem of visual video.
+- [01:00:19,780–01:00:25,880] Because there's no good video data where the person pauses
+- [01:00:25,880–01:00:29,680] a bit and then he monologues a bit and then
+
+## Chunk 12 — 01:00:29,680 to 01:04:31,870
+
+- [01:00:29,680–01:00:32,360] you hear the sound of it or something like that.
+- [01:00:32,360–01:00:37,000] Whereas in text, most texts are full of reasoning and monologue
+- [01:00:37,000–01:00:39,560] and pauses and all these kind of stuff.
+- [01:00:39,560–01:00:43,310] So in theory, if you train a video model and intersperse
+- [01:00:43,310–01:00:46,550] with frames of text or something like that and this reasoning
+- [01:00:46,550–01:00:50,070] problem seems to be solved, like you said,
+- [01:00:50,070–01:00:54,790] it will be either audio, which is an approximation of the text,
+- [01:00:54,790–01:00:56,910] or the text itself.
+- [01:00:56,910–01:01:02,110] So I guess what I'm trying to ask is, in what part of this
+- [01:01:02,110–01:01:05,970] don't we already have a proof that when you want reasoning,
+- [01:01:05,970–01:01:09,470] you have to go down to text anyway?
+- [01:01:09,470–01:01:10,550] Right, OK.
+- [01:01:10,550–01:01:12,950] So OK, I think the question, to repeat
+- [01:01:12,950–01:01:18,350] the question is, the question is, it seems like you can only
+- [01:01:18,350–01:01:21,950] synthetically augment video through text,
+- [01:01:21,950–01:01:25,190] through text in the video, or text in the, I don't know,
+- [01:01:25,190–01:01:29,150] the MP4 frame or text into audio into that channel.
+- [01:01:29,150–01:01:31,210] It seems like that's the only thing we can do.
+- [01:01:31,210–01:01:34,270] And if so, that's much stronger proof
+- [01:01:34,270–01:01:39,510] that we have to do synthetic data with video interspersed
+- [01:01:39,510–01:01:42,410] with text in various formats.
+- [01:01:42,410–01:01:45,330] And that nothing else will work as well.
+- [01:01:45,330–01:01:49,530] OK, so I think basically, this assumption is building on,
+- [01:01:49,530–01:01:54,330] we have to reason with language as a backbone.
+- [01:01:54,330–01:01:58,950] So I think that has been shown to be very effective.
+- [01:01:58,950–01:01:59,730] And I agree.
+- [01:01:59,730–01:02:02,930] Actually, synthetic data is nowadays, very important
+- [01:02:02,930–01:02:04,490] for vision tasks.
+- [01:02:04,490–01:02:06,610] So it's always very important.
+- [01:02:06,610–01:02:09,890] But I think that doesn't rule out the possibilities
+- [01:02:09,890–01:02:13,230] that we can still have pure vision models that can reason.
+- [01:02:13,230–01:02:16,690] So suppose nowadays, if we have very good,
+- [01:02:16,690–01:02:21,290] let's say, video next frame prediction and we just
+- [01:02:21,290–01:02:24,330] prompted with just what's happening in the video,
+- [01:02:24,330–01:02:29,050] if it is able to get next what's happening in the future
+- [01:02:29,050–01:02:32,910] accurately, I would call that a type of reasoning.
+- [01:02:32,910–01:02:33,410] Right.
+- [01:02:33,410–01:02:35,290] But the data would be lacking for lots
+- [01:02:35,290–01:02:37,410] of these video reasoning stuff.
+- [01:02:37,410–01:02:40,110] Because it's hard to generate that as opposed to text.
+- [01:02:40,110–01:02:44,190] And the other thing is, it's the same question.
+- [01:02:44,190–01:02:49,443] Where in a textual chat app, you can just slice out text
+- [01:02:49,443–01:02:52,110] and, for example, you can slice out the reasoning and everything
+- [01:02:52,110–01:02:52,890] is fine.
+- [01:02:52,890–01:02:55,590] Whereas for video generation, we actually give it to the user
+- [01:02:55,590–01:02:58,330] as it is for various reasons.
+- [01:02:58,330–01:03:00,110] And we don't ever get to pause and do
+- [01:03:00,110–01:03:03,990] some special dedicated video reasoning
+- [01:03:03,990–01:03:09,470] frames that we strip away with a post-processing pass
+- [01:03:09,470–01:03:10,830] to the user.
+- [01:03:10,830–01:03:15,010] And so every frame has to just mean something.
+- [01:03:15,010–01:03:16,910] It's like, you don't get to reasoning
+- [01:03:16,910–01:03:18,670] at all in the video space.
+- [01:03:18,670–01:03:21,630] Purely as a UX concern, because it's already slow enough
+- [01:03:21,630–01:03:22,810] to generate, I guess.
+- [01:03:22,810–01:03:23,510] Yes.
+- [01:03:23,510–01:03:27,390] I think efficiency-wise, that's true.
+- [01:03:27,390–01:03:32,770] So I think I would agree.
+- [01:03:32,770–01:03:36,910] So nowadays, if we use language as a skeleton,
+- [01:03:36,910–01:03:40,120] it will help visual reasoning much more.
+- [01:03:40,120–01:03:41,960] So I think that part, I agree.
+- [01:03:41,960–01:03:44,820] But I think that's also partly because language
+- [01:03:44,820–01:03:49,580] compared to visual information is much more abstract.
+- [01:03:49,580–01:03:52,020] But I think in some sense, nowadays,
+- [01:03:52,020–01:03:56,420] we train the model to go back and forth from visual signal
+- [01:03:56,420–01:03:58,640] into this abstract space.
+- [01:03:58,640–01:04:02,460] Because we train it on captioning and other things.
+- [01:04:02,460–01:04:04,560] I think this has proven to be useful.
+- [01:04:04,560–01:04:07,180] At least it's useful nowadays.
+- [01:04:07,180–01:04:08,780] I think it could be an open question
+- [01:04:08,780–01:04:10,900] whether that's what we--
+- [01:04:10,900–01:04:16,860] maybe at some point when computer skill good enough,
+- [01:04:16,860–01:04:21,500] we can do just reasoning, just in pure visual space.
+- [01:04:21,500–01:04:24,180] Yeah.
+- [01:04:24,180–01:04:25,020] OK, awesome.
+- [01:04:25,020–01:04:27,278] Thanks again, Victoria, for the amazing talk.
+- [01:04:27,278–01:04:28,820] Let's give another round of applause.
+- [01:04:28,820–01:04:31,870] [APPLAUSE]

@@ -1,0 +1,723 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 05：从 Next-Token Prediction 到下一代智能——预训练的未来}
+\renewcommand{\noteauthors}{基于 Shrimai Prabhumoye 官方讲座、44 个录像还原视觉状态与英文人工字幕整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-04-30；上传 2026-05-11}
+\renewcommand{\videoduration}{57:56（主讲至约 49:30，其后为 Q\&A）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=e_H_tkpCAK4}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.48\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{真正的新缩放轴：同样的数据，怎样学得更好}
+
+这堂课把预训练从“模型有多大、token 有多少”的问题，推进成“\textbf{模型以什么顺序、什么目标、什么反馈学习这些 token}”的问题。讲者串起三项工作：two-phase pretraining 决定数据混合与顺序，front-loading reasoning 决定推理数据何时进入训练，RLP（Reinforcement as a Pretraining Objective）则把探索式思考直接放进预训练目标。三者都在改变学习过程，而不是简单增加语料。
+
+\subsection{四个组件不是四张独立清单}
+
+课程先给出一个 SOTA LLM 的四组件配方。Smart Data 负责质量、覆盖与去重；Smart Architecture 负责表示与计算结构；Smart Algorithms 决定优化目标、课程和训练阶段；Smart Collaboration 则让 pretraining、post-training、research 与 engineering 不再各自优化局部指标。读图时要注意：本讲重点是第三项，但任何算法收益都依赖另外三项提供可用数据、稳定模型与可执行系统。
+
+\lecturefigure{slide-002.jpg}{构建 SOTA LLM 的四个耦合组件}{Stanford 官方录像，00:01:21--00:02:09}
+
+\teachervoice{00:01:21--00:02:09，讲者把 smart collaboration 与 data、architecture、algorithm 并列。这个口头提醒很重要：预训练 recipe 不是一篇论文里的单一超参数，而是多个团队共享数据定义、算力预算和评测口径后的系统结果。}
+
+\begin{importantbox}{本讲的总命题}
+当模型规模和数据规模继续上升时，新的能力不只来自“更多”，还来自\textbf{更有结构的学习过程}：先看什么数据、何时看推理数据、是否允许模型在预测前探索，以及奖励是否能把有效探索与无效自言自语区分开。
+\end{importantbox}
+
+\subsection{从 smart data 转向 smart algorithms}
+
+讲者先用一页概括其数据工作，包括数学对话、Common Crawl 数学抽取、多样化 synthetic-data generation 与跨域 reasoning data。这里不是要逐一讲数据集，而是说明后面的算法实验并非在真空中进行：数据质量标签、领域覆盖与推理样本定义，都是训练策略可以操作的输入变量。最终展开状态还提示这些资源有公开版本，便于外部复核。
+
+\lecturefigure{slide-003.jpg}{Smart Data 工作概览：数学、网页抽取、多样化合成与跨域推理}{Stanford 官方录像，00:02:09--00:03:15}
+
+接下来，课程明确切换到三个算法问题。第一项问“怎样把既有数据潜力用满”，第二项问“推理数据是否应该更早出现”，第三项问“能否在预训练时让模型通过探索获得奖励”。三项工作逐层深入：先改变采样分布，再改变阶段分配，最后改变训练目标。若把它们混成一个 recipe，就无法判断收益究竟来自数据、顺序还是 objective。
+
+\lecturefigure{slide-004.jpg}{本讲三项算法工作：two-phase、front-loading 与 RLP}{Stanford 官方录像，00:03:15--00:03:37}
+
+\begin{knowledgebox}{术语消化：三个干预层级}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+干预 & 改变什么 & 保持什么相对可比 \\
+\midrule
+Optimal blend & 各数据源权重与重复次数 & 总 token budget 与模型配置 \\
+Two-phase curriculum & 数据在训练进度中的出现顺序 & 总体数据池与目标函数 \\
+Front-loading reasoning & 推理数据进入训练流程的阶段 & 固定总推理数据预算与后训练流程 \\
+RLP & 预测前是否采样 thought、怎样计算 reward & 真实下一 token 与通用预训练流 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{Pascal、Volta、Ampere、Hopper：控制变量的教学隐喻}
+
+四个学习者拥有相同数据，却采用不同策略。Pascal 不做 curriculum、不使用 reasoning-rich data、也不通过思考探索；Volta 只做 curriculum；Ampere 再加入早期 reasoning data；Hopper 最后加入 learning through thinking。最终矩阵不是儿童教育理论，而是一套实验索引：后续每张结果图都在比较某一列从叉号变成勾号后发生什么。
+
+\lecturefigure{slide-005.jpg}{四个学习者对应的 curriculum、front-loading 与 learning-through-thinking 策略}{Stanford 官方录像，00:03:37--00:06:27}
+
+\teachervoice{00:04:15--00:05:18，讲者用“随机读一篇历史、一道高阶数学、再读基础数学”的例子解释无 curriculum，又用提前修 AP 课程解释 front-loading。隐喻的价值在于区分“拥有数据”和“在正确阶段使用数据”。}
+
+\begin{warningbox}{隐喻不是因果证据}
+Pascal 到 Hopper 的人物故事只帮助记忆实验条件。真实模型并不理解“先打基础”的教育学语义；是否有效必须回到受控数据预算、训练 compute、benchmark 与置信区间。后文所有数字都只描述论文中的具体设置。
+\end{warningbox}
+
+\subsection{本章小结}
+
+本章建立了全课比较坐标：smart data 提供可操作的数据源，smart algorithms 决定权重、顺序、阶段和奖励；Pascal 到 Hopper 则把三次干预组织成递进实验。下面先处理最保守的一步——不改模型与损失，只重新设计数据 mixture 与 curriculum。
+
+\section{从“有多少数据”到“怎样构造最优混合”}
+
+数据规模仍在增加，但可用的人类生成文本不是无限的。因此，预训练工程不能只问“再抓多少网页”，还要问每个 token 是否值得出现、出现几次，以及在训练早期还是晚期出现。这里的关键是把 mixture weight 与 temporal order 分开建模，否则会把两个不同的收益来源混在一起。
+
+\subsection{数据来源很多，真正稀缺的是有效训练机会}
+
+法律文书、书籍、论文、网页、数学材料等来源在格式、质量、规模和重复度上差异巨大。大语料库里 token 多，并不意味着训练价值高；小语料库质量高，也不意味着无限上采样不会过拟合。第一张图给出数据多样性，第二张图给出规模增长与 human-generated data frontier，两者共同解释为什么 recipe optimization 变得必要。
+
+\lecturefigure{slide-006.jpg}{LLM 预训练数据的多源构成}{Stanford 官方录像，00:06:28--00:06:51}
+
+读图时先把“来源”与“样本”分开。Web crawl 可能占绝大多数 token，但内部质量分布极宽；论文或法律文书规模较小，却可能在特定能力上提供高密度信号。混合策略不是给来源贴一个永久标签，而是结合过滤、领域、难度、重复次数与下游验证来分配预算。
+
+\lecturefigure{slide-007.jpg}{训练 token 规模增长与人类生成数据边界}{Stanford 官方录像，00:06:51--00:07:49}
+
+\begin{knowledgebox}{读图：蓝色增长曲线应该怎样理解}
+横轴是时间，纵轴对应模型训练消耗的数据量；图中历史点和预测带强调从 GPT-3 时代的数百 billion token 走向 tens of trillions。它支持“单纯增加新的人类文本会越来越困难”的资源判断，但不证明某一年会精确耗尽数据，也不计入 synthetic data、multimodal data、交互轨迹与重复训练的价值。
+\end{knowledgebox}
+
+\subsection{两个问题：权重与顺序}
+
+面对同一批来源，需要回答两个正交问题。第一，\textbf{how to weigh}：一个 batch 中各来源按什么概率被抽到；第二，\textbf{how to order}：这种概率是否随训练进度改变。前者构成 blend，后者构成 curriculum。若只报告最终总体比例，却不报告时间顺序，外部读者无法复现真实训练分布。
+
+\lecturefigure{slide-008.jpg}{最大化数据潜力的两个问题：如何加权、如何排序}{Stanford 官方录像，00:07:49--00:08:22}
+
+\begin{importantbox}{Blend 与 curriculum 的数学区别}
+设数据源为 $D_1,\ldots,D_K$。固定 blend 使用常数权重 $w_k$，满足 $w_k\ge 0$ 且 $\sum_k w_k=1$；curriculum 则使用随训练进度 $s\in[0,1]$ 变化的 $w_k(s)$。即使所有阶段积分后的总 token 数相同，不同的 $w_k(s)$ 仍可能产生不同模型。
+\end{importantbox}
+
+\subsection{质量估计、epoch 估计与 blend creation}
+
+最优混合的第一步是 quality estimation：用规则、classifier、LLM rubric 或人工评测估计数据源在目标能力上的有效性。第二步是 epoch estimation：测试某个领域重复 1、2、4、6 次时，边际收益何时转负。最终权重同时依赖质量和可重复次数；“高质量”不是无限复制许可证。
+
+\lecturefigure{slide-009.jpg}{最优数据混合的三步：质量估计、重复次数估计与 blend construction}{Stanford 官方录像，00:08:22--00:09:29}
+
+设源 $k$ 的唯一 token 数为 $N_k$，计划重复 $e_k$ 次，总预算为 $B$，则一个教学化权重可以写为
+\[
+w_k=\frac{q_k e_k N_k}{\sum_j q_j e_j N_j},
+\qquad
+\sum_k w_k=1.
+\]
+其中，$q_k$ 表示经验质量系数，$e_k$ 表示预计可重复 epoch 数，$N_k$ 表示源规模。真实 recipe 往往还会加入 domain floor、temperature、去重与采样上限，因此该式是思考框架，不是论文唯一实现。
+
+\begin{lstlisting}[caption={领域级质量与重复次数消融的教学版伪代码}]
+for domain in domains:
+    quality_score = evaluate_quality_classifier(domain)
+    for repeats in [1, 2, 4, 6]:
+        candidate = reallocate_budget(
+            base_blend, add=(domain, repeats), remove="low_quality_crawl"
+        )
+        model = train_small_proxy(candidate, fixed_token_budget)
+        record(domain, repeats, downstream_score(model))
+
+best_repeats = choose_before_diminishing_returns(records)
+final_blend = assemble_domain_level_weights(quality_score, best_repeats)
+\end{lstlisting}
+
+\teachervoice{00:25:17--00:26:45，讲者在问答中补充：repeat-count ablation 会把预算从 low-quality crawl 移给目标领域，通常按 domain category 做，而不是为每个独立数据源都跑一套昂贵实验。}
+
+\begin{warningbox}{Quality 不是文档的天然属性}
+同一文档对语言流畅度、数学推理、代码生成或法律检索的价值可能不同。FineWeb-Edu 一类 classifier 只是在指定 rubric 下给出 educational score；训练工程必须记录 rubric、模型版本、阈值、domain composition 与下游验证，否则“high quality”无法被复核。
+\end{warningbox}
+
+\subsection{本章小结}
+
+数据瓶颈把研究重点从“抓更多”推向“分配更好”。Blend 权重回答每类数据占多少，curriculum 回答它们何时出现；quality estimation 与 epoch estimation 则分别估计信号密度和重复上限。下一章把随时间变化的 $w_k(s)$ 具体化为 two-phase pretraining。
+
+\section{Two-Phase Pretraining：先扩大覆盖，再集中质量}
+
+Two-phase pretraining 不是简单地把训练切成两半，而是用两个目标不同的 sampling distribution。Phase 1 让模型接触广泛世界知识和多样表达；Phase 2 在仍保留一般能力的前提下，提高数学、代码、Wikipedia、任务型与其他高质量来源的采样概率。顺序本身成为可优化变量。
+
+\subsection{Piecewise curriculum 的核心机制}
+
+Phase 1 的关键词是 diversity：大量 web crawl、较低的高质量数据重复次数、较宽的 domain coverage。Phase 2 的关键词是 quality：提高高质量数据的 epoch 数，把有限的晚期更新用于更密集的能力信号。图中的红绿区域不是“坏数据/好数据”的道德划分，而是不同阶段的资源分工。
+
+\lecturefigure{slide-010.jpg}{Two-phase pretraining：多样性优先的 Phase 1 与质量聚焦的 Phase 2}{Stanford 官方录像，00:09:29--00:10:14}
+
+可把课程写成分段采样分布：
+\[
+p(D_k\mid s)=
+\begin{cases}
+w_k^{(1)}, & 0\le s<s_0,\\
+w_k^{(2)}, & s_0\le s\le 1,
+\end{cases}
+\qquad
+w_{\text{HQ}}^{(2)}>w_{\text{HQ}}^{(1)}.
+\]
+其中，$s$ 是归一化训练进度，$s_0$ 是 phase boundary，$w_k^{(1)}$ 与 $w_k^{(2)}$ 分别是两个阶段的数据权重。论文报告约后 40\% 训练使用 Phase 2 在其设置中效果最好，但 $s_0$ 仍应通过 proxy experiment 决定。
+
+\begin{lstlisting}[caption={固定 token budget 下的 two-phase sampler}]
+def sample_source(step, total_steps, phase_boundary, phase1, phase2):
+    progress = step / total_steps
+    weights = phase1 if progress < phase_boundary else phase2
+    return categorical_sample(weights)
+
+for step in range(total_steps):
+    source = sample_source(step, total_steps, 0.60, p1_weights, p2_weights)
+    batch = next_batch(source)
+    optimize_next_token_loss(batch)
+\end{lstlisting}
+
+\subsection{三种 baseline 隔离三个变量}
+
+自然分布按数据源现有 token 数抽样：大而低质的来源会因规模占据更多更新。Optimal blend + random order 已使用质量和 epoch 信息，但不改变时间顺序。Two-phase 同时控制 quality、epochs 与 order。只有这样的 baseline 设计，才能把“更好混合”与“更好课程”的收益拆开。
+
+\lecturefigure{slide-011.jpg}{Natural distribution、optimal random blend 与 two-phase baseline}{Stanford 官方录像，00:10:14--00:11:42}
+
+\begin{knowledgebox}{读图：先看三列，再看模型名}
+三列依次是 Quality、Epochs、Order。Natural distribution 三项都不控制；optimal random blend 控制前两项；two-phase 再控制顺序。Pascal 与 Volta 的名字只是帮助记忆。若某个新实验同时改了 tokenizer、模型规模或总 token 数，就不再是这张表定义的干净比较。
+\end{knowledgebox}
+
+\subsection{17\% 与 3.4\% 分别回答什么}
+
+前一节已经把三种 baseline 的控制变量拆开；本节进一步说明两个 headline number 各自对应哪一个反事实，避免把“优化 mixture 的总收益”误写成“ordering 单独带来的收益”。结果图中，Volta 相对 Pascal 的平均相对提升约为 17\%，其中混合质量与顺序都发生改变；相对已经拥有 optimal blend 但随机排序的 baseline，two-phase 仍约有 3.4\% 提升。前一个数字说明 recipe 很重要，后一个数字才更接近 curriculum order 的独立贡献。
+
+\lecturefigure{slide-012.jpg}{Two-phase strategy 相对自然分布与随机最优混合的结果}{Stanford 官方录像，00:11:42--00:12:32}
+
+若 baseline accuracy 为 $a$、新方法 accuracy 为 $b$，相对提升是
+\[
+\Delta_{\mathrm{rel}}=\frac{b-a}{a}\times 100\%,
+\]
+而绝对提升是 $\Delta_{\mathrm{abs}}=b-a$ 个 percentage points。课程中的多处“\% better”是相对提升，不能与绝对百分点混用，也不能跨不同 benchmark suite 直接相加。
+
+\teachervoice{00:27:16--00:27:58，讲者回答“先质量、后多样性是否可行”时说，交换两个 phase 的消融更差。这个结果支持当前方向，但仍是特定 corpus 与 model regime 下的经验，不是普遍学习定律。}
+
+\begin{warningbox}{两阶段不是“先垃圾、后精品”}
+Phase 1 仍需要过滤和基本质量控制；Phase 2 也不能只保留狭窄高分数据。过早收窄会损失覆盖，过晚或过长地重复高质量数据会出现 diminishing returns。工程上应同时监控 domain coverage、validation loss、memorization 与 downstream transfer。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Two-phase pretraining 把 curriculum 写进 sampling distribution：前期扩大覆盖，后期提高高质量信号密度。严谨解释必须区分 natural distribution、optimal random blend 与 ordered blend，并说明相对提升口径。接下来，课程把“何时出现”从一般数据推进到更敏感的 reasoning data。
+
+\section{Front-Loading Reasoning：推理能力是否应在预训练期打地基}
+
+传统 pipeline 常把 pretraining 描述为世界知识学习，把 SFT 描述为格式模仿，把 RL 描述为真正的推理强化。Front-loading reasoning 质疑这种分工：如果 base model 从未在预训练中接触 reasoning trace，后续是否只能在较弱表示基础上修补？这里研究的不是“要不要 post-training”，而是固定预算下应该把多少推理数据提前。
+
+\subsection{“Reasoning added too late”的弱地基问题}
+
+课程用地基隐喻描述现有流程：pretraining 获得 facts，SFT 学会像 reasoning answer 的表面格式，RL/ RLVR 才鼓励真正探索。若 reasoning 只作为 post-hoc skill 加上去，base representation 可能缺少支持长链推断的早期结构。这个观点需要后续受控实验支持，不能只凭隐喻成立。
+
+\lecturefigure{slide-014.jpg}{传统流程把 reasoning 放到后期，形成 weak foundation 的假设}{Stanford 官方录像，00:12:39--00:13:29}
+
+\begin{knowledgebox}{背景概念：SFT 与 RLVR}
+Supervised Fine-Tuning（SFT，监督微调）用给定输入--输出或 reasoning trace 做 teacher forcing，主要优化 likelihood；Reinforcement Learning with Verifiable Rewards（RLVR，可验证奖励强化学习）用可自动判定的答案、测试或规则给 rollout 奖励。二者都属于 post-training，但优化信号和数据要求不同。
+\end{knowledgebox}
+
+\subsection{实验轴：何时、多少、多广、多好}
+
+Front-loading 的实验把同一类 reasoning data 分配到 pretraining、SFT 与后续阶段，并沿 diversity、quality、quantity 三个轴构造条件。No-reason base 在预训练中不看推理数据，reason base 则提前看到一部分。读图时先确认数据预算是否匹配，再看 SFT/RL 是否相同，否则“早加入”可能只是“总共加入更多”。
+
+\lecturefigure{slide-015.jpg}{Front-loading reasoning 的阶段分配与三个数据轴}{Stanford 官方录像，00:13:29--00:14:54}
+
+设总 reasoning token budget 为 $R$，其中 $R_{\mathrm{pre}}$ 分配到预训练，$R_{\mathrm{sft}}$ 分配到 SFT，则
+\[
+R_{\mathrm{pre}}+R_{\mathrm{sft}}=R.
+\]
+Front-loading 比较的是不同分配点，例如 $(0,R)$ 与 $(\alpha R,(1-\alpha)R)$。若总预算或后续训练轮数不同，必须另标为 compute-matched 或 data-matched 实验，不能当成同一问题。
+
+\subsection{为什么 base 与 post-trained benchmark 不能混读}
+
+只完成预训练的 base model 与完成 SFT/RL 的模型，通常使用不同 prompting、decoding 与 benchmark suite。图中把 General Purpose Reasoning、Math、Science、Code 等基准按阶段列开，目的是提醒读者：后面不同页的平均数未必来自同一组题，不能把 16\%、9.3\%、19\% 直接串成一条单调曲线。
+
+\lecturefigure{slide-016.jpg}{Base model 与 post-trained model 使用的评测集合}{Stanford 官方录像，00:14:54--00:15:48}
+
+\begin{warningbox}{读图时最容易犯的错误}
+同名 benchmark 也可能因 few-shot、chain-of-thought、sampling temperature、pass@k、答案抽取器或 checkpoint 不同而不可直接比较。讲义保留课程的相对结论，但不会把跨阶段平均数解释成一个连续指标。
+\end{warningbox}
+
+\section{Front-Loading 的五条实验课}
+
+下面五张图不是重复证明同一件事，而是逐步回答五个反对意见：预训练后立即有效吗？SFT 会洗掉收益吗？高质量数据是否过拟合？更多 SFT compute 或更多后期数据能追上吗？完成 RLVR 后还剩多少？每张图都必须先确认比较对象，再读柱状高度。
+
+\subsection{Lesson 1：预训练后立即出现收益}
+
+第一条 lesson 先检查最直接的时间点：尚未进入 SFT 或 RL 时，提前加入 reasoning data 是否已经改变 base model。这个检查把后训练因素全部排除，只观察预训练阶段的数据分配是否足以形成可测差异。Reason base 与 no-reason base 在完成 pretraining 后比较，Ampere 的平均相对提升约为 16\%。这说明 reasoning data 不只是教模型输出某种格式，而可能改变 base representation 对数学、科学与通用推理任务的可用性。它仍不证明模型内部产生了忠实可解释的 reasoning process。
+
+\lecturefigure{slide-017.jpg}{Lesson 1：在预训练阶段加入 reasoning data 的即时收益}{Stanford 官方录像，00:15:48--00:16:36}
+
+\begin{knowledgebox}{读图：比较顺序}
+先确认两组模型在 architecture、token budget 与普通预训练 mixture 上一致；再看每个 benchmark 的蓝绿柱；最后看平均相对提升。若某一任务起点很低，小的绝对变化会形成较大的相对百分比，因此需要同时看 raw score 与 relative gain。
+\end{knowledgebox}
+
+\subsection{Lesson 2：SFT 没有把优势洗掉}
+
+有即时收益还不够，因为生产模型通常都会继续接受 SFT；因此第二条 lesson 把相同后训练施加到两种 foundation 上，检查优势是否只是短暂现象。两组 base model 接受相同 SFT 后，reason base 仍保持约 9.3\% 平均相对优势。这里的教学结论是“foundation matters”：后训练不是完全重置模型，而是在 base representation 上继续优化。早期收益可能缩小、保持或在特定任务上放大，必须逐任务检查。
+
+\lecturefigure{slide-018.jpg}{Lesson 2：早期 reasoning 收益在 SFT 后仍然存在}{Stanford 官方录像，00:16:36--00:17:14}
+
+\teachervoice{00:16:36--00:17:14，讲者反复使用“washed away”这个说法。她关心的不只是 base score，而是同一优势在后训练之后是否仍可观测；这是 front-loading 是否值得工程投入的关键判据。}
+
+\subsection{Lesson 3：高质量数据可能具有 latent effect}
+
+第三条 lesson 转向一个更隐蔽的问题：若高质量数据在 base evaluation 上没有立刻抬高分数，是否意味着它没有价值？课程把推理数据分为 SHQ、LDQ 与 LMQ。SHQ 小而高质量，LDQ 大而多样但质量较低，LMQ 为二者组合。预训练结束时，LMQ 与 LDQ 可能几乎相同；经过 SFT 后，LMQ 才显示约 4.25\% 的额外提升。高质量信号并非立即反映在 base benchmark 上，而可能为后续优化提供更好的可塑性。
+
+\lecturefigure{slide-019.jpg}{Lesson 3：高质量预训练数据的潜在收益在 SFT 后被激活}{Stanford 官方录像，00:17:14--00:18:48}
+
+\begin{knowledgebox}{术语表：SHQ、LDQ、LMQ}
+\begin{tabularx}{\textwidth}{L{0.16\textwidth}L{0.23\textwidth}X}
+\toprule
+缩写 & 数据属性 & 教学作用 \\
+\midrule
+SHQ & Small, High Quality & 检验少量精筛数据是否提供额外结构 \\
+LDQ & Large, Diverse, lower Quality & 检验规模与多样性基础 \\
+LMQ & SHQ + LDQ 的组合 & 检验高质量成分是否在后训练后显现 latent effect \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{Lesson 4：后期加倍 compute 或挪动数据仍追不上}
+
+左图给 no-reason base 更多 SFT epochs，右图固定 reasoning data 总预算并比较“全放 SFT”与“pretraining + SFT 分配”。两种情况下，front-loaded model 仍保持优势。这分别反驳“只是后训练不够久”和“只要把同样数据晚点用就行”两个解释。
+
+\lecturefigure{slide-020.jpg}{Lesson 4：compute-matched 与 data-matched 条件下的强地基效应}{Stanford 官方录像，00:18:48--00:20:54}
+
+\begin{importantbox}{为什么要同时做两种匹配}
+Compute matching 控制训练计算量，data matching 控制样本预算；二者解决不同混杂因素。若 early condition 既看了更多数据又花了更多 FLOPs，就不能把收益归因于时机。严谨报告至少应列 token、epochs、optimizer steps、sequence length 与 rollout/SFT 的额外成本。
+\end{importantbox}
+
+\subsection{Lesson 5：经过 RLVR 后仍有 durable advantage}
+
+完成 SFT 后仍领先，依然不能保证 RLVR 不会把两条路径重新拉平；第五条 lesson 因此检查最终可交付 pipeline，而不是停在中间 checkpoint。Ampere 相对 Volta 的平均相对优势约 19\%，AIME 等高难数学任务的相对差异更大。图支持“early reasoning 可以产生 durable and compounding advantage”，但不说明所有任务都会同幅增长，也不说明后训练不再重要；恰恰是相同后训练把不同 foundation 的差异暴露出来。
+
+\lecturefigure{slide-021.jpg}{Lesson 5：Front-loading 在完整 post-training 后仍保持优势}{Stanford 官方录像，00:20:54--00:21:48}
+
+\begin{warningbox}{大相对提升不等于接近满分}
+AIME 等任务基线较低时，几分的绝对提高可能对应很大的 relative gain。工程决策应同时报告绝对分数、平均口径、试验次数和方差；不能只截取最大的相对百分比作为通用能力提升。
+\end{warningbox}
+
+\subsection{课堂问答补全了哪些论文外的工程细节}
+
+中场问答说明，reasoning data 使用社区已有数据集与工作定义，常见样本是 question、long reasoning trace、final answer，且实验组成偏 STEM。Quality 可以由过滤强度、复杂度、长度或 difficulty label 操作化；recipe optimization 是自动估计与人工组装的混合流程。讲者还明确说，反转 phase 顺序在其消融中更差。
+
+\teachervoice{00:22:00--00:27:58，讲者没有把“reasoning”包装成跨领域统一概念。她承认所用数据偏数学、代码与 STEM，最终 blend 也并非全自动。这些限制决定了结果的外推边界。}
+
+\begin{knowledgebox}{实践经验：如何记录一个可复现 data recipe}
+至少保存数据源版本、去重键、过滤器与阈值、quality rubric、domain mapping、unique token 数、目标 epochs、每阶段权重、phase boundary、随机种子与 proxy-evaluation 配置。只发布最终百分比，无法区分质量估计、采样实现或顺序造成的差异。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+五条 lesson 建立了 front-loading 的证据链：收益立即出现、SFT 后不消失、高质量信号可能延迟显现、更多后期 compute/data 不能完全追平、完整 RLVR 后优势仍在。下一部分进一步追问：除了更早提供 reasoning data，能否让模型在预训练时主动探索自己的 thought？
+
+\section{RLP 的动机：从观察文本到通过思考学习}
+
+RLP 不再只调整数据顺序，而是在每个选定 token 前引入一个可采样的 thought action。核心思想是：模型先产生若干内部 reasoning trace，再预测真实下一 token；如果某条 thought 提高了该 token 的概率，就获得正奖励。这样，普通预训练文本同时提供 target token 与自监督 reward reference。
+
+\subsection{The Tale of Two Learners}
+
+Leo 先搭一个粗糙但可通过小车的桥，再从反馈中改进；Bolt 阅读所有桥梁资料，造出漂亮却不满足约束的模型。故事强调 learning by doing 与 learning by observing 的差别。Next-token prediction 擅长从已写文本中模仿统计模式，RLP 则试图给模型一次“先提出解释、再用真实 token 检验”的探索机会。
+
+\lecturefigure{slide-023.jpg}{两个学习者：动手试错与只观察范例的差别}{Stanford 官方录像，00:28:14--00:29:37}
+
+\begin{warningbox}{Thought 不是自动可信的解释}
+模型生成的 chain-of-thought 可能包含事后合理化、错误事实或不可解释捷径。RLP 只检查 thought 是否提高 observed next token 的预测概率，不验证它是否符合人类推理、是否因果忠实、是否能在分布外成立。
+\end{warningbox}
+
+\subsection{标准预训练的问题不是没有梯度，而是没有探索动作}
+
+标准 NTP 已经提供密集梯度，但 action space 只有对下一 token 分布的直接调整；复杂 reasoning 通常等到 SFT、RLHF 或 RLVR 才显式出现。RLP 的问题陈述是：能否把 exploration 前移，同时保持普通文档流的可扩展性？这一动机也回应数据墙——如果新 token 越来越贵，就要提高每个 token 产生的学习信号。
+
+\lecturefigure{slide-024.jpg}{标准预训练把显式 exploration 推迟到 post-training}{Stanford 官方录像，00:29:37--00:31:23}
+
+标准 NTP 目标为
+\[
+\mathcal{L}_{\mathrm{NTP}}(\theta)
+=-\sum_{t=1}^{L}\log p_\theta(x_t\mid x_{<t}).
+\]
+其中，$x_{<t}$ 表示上下文，$x_t$ 是语料中的真实下一 token，$p_\theta$ 是模型分布。该目标会学到大量结构，但没有单独变量表示“在输出前探索了哪条 thought”。
+
+\subsection{Vanilla 与 RLP 的条件概率差别}
+
+在 photosynthesis 例子里，vanilla model 直接从上下文预测 `sunlight`；RLP model 先生成“该过程依赖 solar energy”的 thought，再条件于 context 与 thought 预测同一个 token。关键不是多输出一段文字，而是把 thought 视为可优化 action，并比较它相对 context-only baseline 的增益。
+
+\lecturefigure{slide-025.jpg}{Vanilla next-token prediction 与 thought-conditioned RLP prediction}{Stanford 官方录像，00:31:23--00:32:34}
+
+\[
+p_\theta(x_t\mid x_{<t},c_t)
+\quad\text{versus}\quad
+p_\phi(x_t\mid x_{<t}),
+\]
+其中，$c_t$ 是在位置 $t$ 前采样的 thought，$\theta$ 是 thought policy / reasoned predictor 参数，$\phi$ 是 no-think baseline 参数。两者看到相同 context 和真实 target，差别只在是否加入 $c_t$。
+
+\begin{importantbox}{RLP 的自监督闭环}
+语料中的真实 token $x_t$ 同时承担两项角色：它是 NTP target，也是评估 thought 是否有 predictive utility 的参照。RLP 因此不需要人工答案 verifier，但仍依赖真实下一 token，并不是无监督地奖励任何“看起来像推理”的文本。
+\end{importantbox}
+
+\subsection{本章小结}
+
+RLP 把 thought 变成预测前的 exploratory action，用真实下一 token 检查该 action 是否提供信息。它与 NTP 的差别不是有没有训练信号，而是有没有显式探索路径和对路径质量的相对奖励。下面逐步拆解完整训练环。
+
+\section{RLP 机制：thought policy、counterfactual baseline 与 information gain}
+
+完整 RLP pipeline 包含四个互相依赖的部分：thought policy 产生 rollout，no-think baseline 给出反事实预测，information-gain reward 衡量 thought 的增益，EMA 让 baseline 稳定追随 policy。只看最终公式会漏掉 prompt、采样、停止梯度和更新时序等工程条件。
+
+\subsection{全局流程图先看两条路径}
+
+输入 context 一路进入 no-think baseline，得到 $p_\phi(x_t\mid x_{<t})$；另一路进入 thought policy，先采样 $c_t$，再得到 $p_\theta(x_t\mid x_{<t},c_t)$。两个 log probability 的差形成 reward，reward 再更新 thought tokens 的 policy，同时普通 NTP 仍训练模型预测真实 token。
+
+\lecturefigure{slide-026.jpg}{RLP 总览：两条预测路径、信息增益奖励与策略更新}{Stanford 官方录像，00:32:34--00:33:00}
+
+\begin{knowledgebox}{读图：不要把两套模型理解成永久独立网络}
+图中 $\theta$ 与 $\phi$ 表示两个参数状态：policy 是当前网络，baseline 是其 EMA-delayed copy。它们共享架构，baseline 不是额外训练的外部 verifier；延迟复制提供一个缓慢变化的 counterfactual reference。
+\end{knowledgebox}
+
+\subsection{Prompt contract 决定探索空间}
+
+课程展示的 prompt 要求模型专注于下一步 reasoning，不要直接跳到 boxed answer，也不要复述题目或输出元数据。这说明“让模型思考”不是中性的：prompt 定义 thought 的长度、风格与可探索空间。若 prompt 改变，reward distribution 与 rollout compute 也会改变。
+
+\lecturefigure{slide-027.jpg}{用于生成 thought 的 prompt contract}{Stanford 官方录像，00:33:00--00:33:19}
+
+\begin{lstlisting}[caption={RLP thought prompt 的简化教学版}]
+Prompt:
+  Reason about the useful next step for predicting the next token.
+  Do not jump to a final boxed answer.
+  Do not restate the question, context metadata, or commentary.
+  Produce a concise thought that can help the next-token prediction.
+\end{lstlisting}
+
+\begin{warningbox}{Prompt 也是算法超参数}
+Thought length、sampling temperature、number of rollouts、stop token 与 prompt wording 都会改变探索成本和可学信号。把这些细节省略，只报告“使用 chain-of-thought”，会让复现结果失去可比性。
+\end{warningbox}
+
+\subsection{Thought policy：先生成 action，再预测 token}
+
+给定 prompt 与 context，policy 采样多条 thought rollout。每条 thought 与 context 拼接后预测真实下一 token，因此一条 rollout 同时产生 action probability 与 token probability。Group-relative optimization 可以把同一位置的多条 thought 互相比较，降低必须训练单独 value model 的需求。
+
+\lecturefigure{slide-028.jpg}{Thought policy 生成 reasoning rollout 与 next-token prediction}{Stanford 官方录像，00:33:19--00:34:02}
+
+对第 $i$ 条 rollout，记 thought 为 $c_t^{(i)}$，则其 reasoned score 为
+\[
+S_{\mathrm{pred}}^{(i)}
+=\log p_\theta(x_t\mid x_{<t},c_t^{(i)}).
+\]
+其中，$i=1,\ldots,G$，$G$ 是每个位置采样的 thought 数。$S_{\mathrm{pred}}$ 高并不意味着 thought 文本本身正确，只表示它帮助模型给真实 token 更高概率。
+
+\subsection{No-think baseline：需要一个同上下文反事实}
+
+若只最大化 reasoned score，模型可能利用本来就很容易的 token 获得高分。Baseline 使用相同 context、但不看 thought，估计该 token 在“没有探索”时已有多容易。Reward 因而关注 thought 带来的增量，而不是 token 的绝对 likelihood。
+
+\lecturefigure{slide-029.jpg}{No-think baseline 提供 context-only counterfactual}{Stanford 官方录像，00:34:02--00:34:25}
+
+\begin{importantbox}{Counterfactual 的作用}
+同一个 $x_t$ 若本来就几乎确定，则 $p_\phi$ 已很高，普通常识 thought 很难获得大 reward；若某条 thought 真正消除了歧义，$p_\theta$ 相对 $p_\phi$ 的提升才会显著。Baseline 把“题目简单”与“思考有效”分离。
+\end{importantbox}
+
+\subsection{Information gain：log-likelihood ratio}
+
+RLP 的核心奖励是 reasoned predictor 与 no-think baseline 在真实 token 上的 log probability 差。正值表示 thought 提高预测，零表示没有贡献，负值表示 thought 误导模型。论文在计算 policy update 时把 reward 视作常数，不通过两个 scorer 反向传播 reward 本身，以避免目标发生不受控耦合。
+
+\lecturefigure{slide-030.jpg}{Information-gain reward 的完整计算图}{Stanford 官方录像，00:34:25--00:35:34}
+
+\[
+r_t^{(i)}
+=\log p_\theta(x_t\mid x_{<t},c_t^{(i)})
+-\log p_\phi(x_t\mid x_{<t}).
+\]
+其中，$r_t^{(i)}$ 是第 $i$ 条 thought 在位置 $t$ 的奖励；$p_\theta$ 是加入 thought 后的预测概率；$p_\phi$ 是 context-only baseline；$x_t$ 始终是语料真实 token。该量类似 pointwise log-likelihood ratio，而不是 Shannon mutual information 的完整数据集期望。
+
+\teachervoice{00:34:25--00:35:34，讲者强调：thought 只有在“meaningfully contributes”时 reward 才为正；垃圾 thought 可以得到零或负值。这个口头说明比“模型生成 CoT”更接近方法本质。}
+
+\begin{warningbox}{Information gain 不等于事实真相}
+一条错误但与训练语料统计相关的 thought 也可能提高某个 token 的概率；一条正确但冗长或措辞不匹配的 thought 可能 reward 很低。RLP 优化 predictive usefulness，不直接优化 truthfulness、faithfulness 或 safety。
+\end{warningbox}
+
+\subsection{Dense non-binary reward 与 group-relative advantage}
+
+Information gain 定义了单条 thought 的分数，但策略优化还需要把多个 rollout 转成相对 credit；本节从 reward 过渡到 advantage，说明为什么 RLP 不必为每个 token 训练额外 value model。与只在最终答案给 0/1 的 sparse reward 不同，RLP 的 reward 是实数，并可在文档的任意选定位置计算。对同一位置的 $G$ 条 rollout，可用组内均值和标准差构造 advantage，使“比同组其他 thought 更有帮助”的 rollout 获得正更新。
+
+\lecturefigure{slide-031.jpg}{RLP 使用 dense、non-binary 的 token-level reward}{Stanford 官方录像，00:35:34--00:35:45}
+
+\[
+A_t^{(i)}
+=\frac{r_t^{(i)}-\bar r_t}{\operatorname{std}(r_t)+\epsilon},
+\qquad
+\bar r_t=\frac{1}{G}\sum_{i=1}^{G}r_t^{(i)}.
+\]
+其中，$A_t^{(i)}$ 是 group-relative advantage，$G$ 是 rollout 数，$\epsilon$ 防止方差过小时除零。实际 RLP 使用 clipped surrogate 更新 thought tokens，并与标准 likelihood training 交错。
+
+\subsection{EMA baseline：既要跟得上，又不能同步追逐}
+
+Baseline 若完全冻结，会逐渐失去参考价值；若每步与 policy 完全同步，又可能让 reward target 快速漂移。Exponential Moving Average（EMA，指数移动平均）用缓慢更新折中：baseline 保持“足够新”，但故意落后，从而缓解 reward hacking 与不稳定自举。
+
+\lecturefigure{slide-032.jpg}{EMA-delayed no-think baseline 的更新位置}{Stanford 官方录像，00:35:45--00:36:31}
+
+\[
+\phi\leftarrow \tau\phi+(1-\tau)\theta,
+\qquad 0<\tau<1.
+\]
+其中，$\theta$ 是当前 thought policy 参数，$\phi$ 是 baseline 参数，$\tau$ 是 EMA decay。$\tau$ 越接近 1，baseline 越稳定但越陈旧；越小则跟随更快，但 counterfactual target 也更易抖动。
+
+\begin{lstlisting}[caption={RLP 单步训练的教学版伪代码}]
+document = sample_general_pretraining_document()
+t = random_token_position(document)
+context, target = document[:t], document[t]
+
+thoughts = policy.sample_thoughts(context, group_size=G)
+baseline_logp = no_think_ema.log_prob(target, context)
+rewards = []
+for thought in thoughts:
+    reasoned_logp = policy.log_prob(target, context, thought)
+    rewards.append(stop_gradient(reasoned_logp - baseline_logp))
+
+advantages = group_normalize(rewards)
+update_thought_policy_clipped(thoughts, advantages)
+update_standard_next_token_loss(document)
+ema_update(no_think_ema, policy, decay=tau)
+\end{lstlisting}
+
+\subsection{本章小结}
+
+RLP 的闭环是：policy 采样 thought，baseline 给出 no-think counterfactual，log-likelihood ratio 形成 dense reward，group-relative advantage 更新 thought tokens，EMA 稳定 baseline，同时 NTP 继续学习文档。任何一个组件缺失，都可能把方法退化为普通 CoT imitation 或不稳定自奖励。
+
+\section{RLP 实验：公平比较的四个维度}
+
+RLP 需要 rollout，因此每个训练 token 的计算成本高于 NTP。公平评估不能只比较 token 数，还要比较 FLOPs、起始 checkpoint、后续 SFT/RL、模型架构与 benchmark。课程依次展示 Qwen3-1.7B、compute-equivalent baseline 与 Nemotron-Nano-12B-V2，形成从小模型到混合架构的证据链。
+
+\subsection{Qwen3-1.7B：实验条件先于柱状图}
+
+第一组实验从 Qwen3-1.7B-Base final checkpoint 出发，在 general pretraining corpus 上做 RLP，不要求专门 reasoning dataset。Baseline 包括原始 base、相同 token 数的 continued pretraining（CPT），以及各自接受相同 SFT/RLVR 后的版本。只有先确认这些条件，才能解释“foundation 是否经 post-training 保留”。
+
+\lecturefigure{slide-033.jpg}{Qwen3-1.7B RLP 实验的训练数据、baseline 与 post-training 条件}{Stanford 官方录像，00:36:31--00:37:34}
+
+\begin{knowledgebox}{术语消化：CPT 与 RLP}
+Continued Pretraining（CPT，继续预训练）仍使用标准 NTP loss，只是在 base checkpoint 上继续看更多 token；RLP 则把一部分计算用于 thought rollout 与 information-gain update。Token-matched CPT 控制数据量，FLOP-matched CPT 控制近似计算量，两者都需要。
+\end{knowledgebox}
+
+\subsection{Token-matched 结果与 post-training persistence}
+
+在相同额外 token 数下，RLP 相对 base 与 CPT 都提升平均成绩；完成相同 post-training 后，优势仍存在。图左与图右的 benchmark/阶段不同，因此不能把柱高直接相减；教学重点是方向一致：RLP 建立的 reasoning foundation 没有被 alignment 洗掉。
+
+\lecturefigure{slide-034.jpg}{Qwen3-1.7B 上 token-matched RLP 与 post-training 结果}{Stanford 官方录像，00:37:34--00:38:26}
+
+\begin{knowledgebox}{读图：先分左右，再分颜色}
+左侧比较 base-stage 模型，右侧比较接受相同 SFT/RLVR 的模型。绿色表示带 RLP 的路径，蓝色表示对应 baseline。需要同时看 Math、Science、Science Post、Overall，而不是只挑最高柱。图支持 benchmark-suite 内的平均相对提升，不证明所有能力域等比例增长。
+\end{knowledgebox}
+
+\subsection{FLOP matching：rollout 不是免费的}
+
+RLP 为每个目标位置生成多条 thought，并重新计算 thought-conditioned likelihood；因此 1B RLP token 与 1B CPT token 的成本不同。课程把 170M RLP token 对应到约 6B FLOP-matched CPT token，即 CPT 看约 35 倍更多数据。即便如此，RLP 在报告设置中仍约有 14\% 平均相对优势。
+
+\lecturefigure{slide-035.jpg}{Qwen3-1.7B 上的 FLOP-matched CPT 对照}{Stanford 官方录像，00:38:26--00:40:19}
+
+可把粗略计算写成
+\[
+C_{\mathrm{RLP}}
+\approx C_{\mathrm{NTP}}+G\,C_{\mathrm{rollout}}+G\,C_{\mathrm{score}},
+\]
+其中，$G$ 是 thought rollout 数，$C_{\mathrm{rollout}}$ 是生成 thought 的成本，$C_{\mathrm{score}}$ 是对 target token 评分的成本。真实 FLOP accounting 还依赖 KV reuse、thought length、batching、sequence packing 与 kernel 实现。
+
+\begin{warningbox}{Token efficiency 与 wall-clock efficiency 不相同}
+RLP 用更少数据 token 获得更高分，不代表训练更快或更便宜。Rollout 的串行生成、较低 hardware utilization、额外 activation 与通信都可能提高时间和能耗。部署决策必须同时报告 token、FLOPs、GPU-hours 与吞吐。
+\end{warningbox}
+
+\subsection{Nemotron-Nano-12B-V2：更大模型与 hybrid architecture}
+
+第二组实验从约 19.8T token 的中间 checkpoint 出发，只增加 250M RLP token，并与训练到约 20T token 的 final base 比较。Nemotron-Nano-12B-V2 是 Mamba-Transformer hybrid，因此该实验同时测试模型规模、起始阶段与架构迁移。关键控制是 RLP 路径总共还少看约 200B token。
+
+\lecturefigure{slide-036.jpg}{Nemotron 中间 checkpoint 上的有限数据 RLP 设置}{Stanford 官方录像，00:40:19--00:41:14}
+
+\teachervoice{00:40:19--00:42:20，讲者强调 RLP 路径从 19.8T checkpoint 出发、仅使用 250M token，比较对象却是 20T final base。这个设计试图证明收益不是“多看了数据”，而是在更少总 token 下改变了学习目标。}
+
+结果页显示 base-stage 平均相对提升约 35\%，science 领域提升尤其明显；相同 post-training 后仍保持绝对优势。图支持 RLP 跨 Transformer 与 hybrid model 的可迁移性，但模型和数据只覆盖有限实例，不能据此断言所有 architecture 都有同样 scaling slope。
+
+\lecturefigure{slide-037.jpg}{RLP 在更大 Nemotron hybrid model 上的 base 与 post-training 结果}{Stanford 官方录像，00:41:14--00:42:20}
+
+\begin{knowledgebox}{读图：相对 35\% 与绝对 3\% 不能混成一个数字}
+左侧讲 base-stage average relative gain，右侧 post-trained bars 常以绝对分数比较。两种口径回答不同问题：前者看 foundation 改善比例，后者看最终可用模型仍领先多少。报告时必须保留 denominator 和 benchmark suite。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+RLP 的实验可信度来自多层 baseline：token-matched 检查数据量，FLOP-matched 检查 rollout 成本，post-training-matched 检查收益是否持久，intermediate-checkpoint comparison 检查能否在更少总 token 下追过 final base。下一章把 RLP 放回 early-reasoning 文献谱系。
+
+\section{Early Reasoning 文献：RLP 与 Quiet-STaR、RPT、RLPT 的差别}
+
+让模型“在说话前思考”并非 RLP 首创。Quiet-STaR、Reinforcement Pre-Training（RPT）与 Reinforcement Learning on Pre-Training Data（RLPT）都把 reasoning 提前。真正需要比较的是 reward 从哪里来、在什么粒度计算、是否需要外部 verifier、以及 reasoning trace 是否直接获得 credit。
+
+\subsection{从 Quiet-STaR 到 reinforcement pretraining}
+
+文献页把 Quiet-STaR、RPT、RLPT 与 RLP 放在同一时间线上。Quiet-STaR 在普通文本中生成并评估 thought；RPT 把下一 token 正确性转成可验证的 RL reward；RLPT 使用 pretraining data 构造更长片段的强化学习任务；RLP 则用 thought 对真实下一 token 的 information gain 作为 dense intrinsic signal。
+
+\lecturefigure{slide-038.jpg}{Early-reasoning 路线：Quiet-STaR、RPT、RLPT 与 RLP}{Stanford 官方录像，00:42:20--00:43:13}
+
+\begin{knowledgebox}{术语表：相邻方法解决什么}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}X X}
+\toprule
+方法 & 核心机制 & 与 RLP 的关键差别 \\
+\midrule
+NTP & 直接最大化真实下一 token likelihood & 无显式 thought action / reward \\
+Quiet-STaR & 在文本中采样 thought 并衡量其效用 & 早期 self-thought 路线，训练细节与 RLP 不同 \\
+RPT & 把 next-token reasoning 变成可验证 RL 任务 & 使用筛选与 sparse binary correctness reward \\
+RLPT & 在 pretraining data 上做 segment-level RL & reward 粒度和 verifier 设计不同 \\
+RLP & 用 thought 带来的 log-likelihood gain 奖励 rollout & dense、token-level、no-think counterfactual \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{三条比较轴：reward source、granularity、emergence}
+
+NTP 没有单独 reward；RPT/RLPT 使用外部或可验证信号，通常较 sparse；RLP 的 reward 来自内部 reasoned predictor 与 EMA baseline 的差，并在 token 位置上连续取值。课程把 RLP 标为 explicit/strong reasoning emergence，是作者对训练信号的概括，不是对内部认知过程的直接测量。
+
+\lecturefigure{slide-039.jpg}{NTP、RPT/RLPT 与 RLP 的 reward 与 reasoning 对照}{Stanford 官方录像，00:43:13--00:43:56}
+
+\begin{warningbox}{Verifier-free 的精确定义}
+RLP 不需要另一个答案判定模型或人工标注 verifier，但它仍以语料中的真实下一 token 为监督，并使用 EMA baseline。因而更准确的说法是“external-verifier-free”，而不是“没有监督或没有参照”。
+\end{warningbox}
+
+\subsection{Matched RPT comparison：机制与数字一起读}
+
+定性表只能说明设计差异，不能说明哪个方法在相近预算下更有效；因此课程接着用 matched setting 把 reward mechanism 与量化结果放在同一页。课程在 Qwen3-1.7B-Base、OmniMath、170M token 等相近设置下比较 RPT 与 RLP，报告 RLP 平均约高 4\%。机制解释是：RPT 先用外部 filter 找可用位置，再给 sparse binary reward；RLP 可在任意选定 token 上计算 dense information gain，并把 credit 连到 reasoning trace。
+
+\lecturefigure{slide-040.jpg}{RLP 与 RPT 的 matched-setting 比较}{Stanford 官方录像，00:43:56--00:45:56}
+
+\begin{knowledgebox}{读图：哪些变量仍可能影响比较}
+即使模型、数据与 token 数接近，prompt、rollout 数、thought length、optimizer、KL/clipping、sample filtering 和 compute 仍可能不同。图支持“在作者复现实验里 RLP 更好”，不等于对所有 RPT 实现的理论支配。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+RLP 属于 early-reasoning / reinforcement-pretraining 家族，其辨识度来自 no-think counterfactual 与 dense information-gain reward。比较相邻方法时必须同时看 reward source、granularity、筛选成本与 compute，而不是只比较方法名称或单个平均分。
+
+\section{工程结论、局限与课堂问答}
+
+最后一组幻灯片把论文结果压缩成工程原则：奖励中间 thought、使用 dense signal、检查 token efficiency，并把 curriculum、front-loading 与 reinforcement 组合起来。但真正可落地的结论仍需经过数据审计、cost accounting、failure analysis 与安全边界。
+
+\subsection{三项 ablation：为什么有效、信号多密、数据多省}
+
+Key Ablations 页把 RLP 的价值拆成三点：Reward to Think 检验 thought 是否获得直接 credit；Sparse vs Dense 检验只奖励最终正确与逐位置信息增益的差别；Token Efficiency 检验相对超大 NTP baseline 的数据利用率。三列共同说明收益来自 objective design，而不只是多生成几段 CoT。
+
+\lecturefigure{slide-041.jpg}{RLP 的 reward-to-think、dense reward 与 token-efficiency 结论}{Stanford 官方录像，00:45:56--00:46:27}
+
+\begin{warningbox}{Ablation 仍需完整 cost table}
+若 dense reward 使用更多 rollout、更多 scorer forward 或更长 thought，它同时改变 signal 与 compute。理想 ablation 应报告相同 FLOPs、相同 wall-clock、相同 token 或多种匹配方式，避免把额外计算误当作奖励形式本身的效果。
+\end{warningbox}
+
+\subsection{Pascal 到 Hopper：能力来自策略叠加}
+
+曲线把 four learners 重新连起来：curriculum 带来第一层改善，front-loading reasoning 再提高 foundation，RLP 加入 learning through thinking 后达到最高相对提升。曲线是跨实验的教学综合，不是一次统一训练中严格可加的 causal decomposition，因此不能把每段百分比当成独立可叠加常数。
+
+\lecturefigure{slide-042.jpg}{从 Pascal 到 Hopper：逐步加入三种学习策略}{Stanford 官方录像，00:46:27--00:47:12}
+
+\begin{importantbox}{综合判断而不是机械相加}
+Curriculum 改变模型看到的分布，front-loading 改变 base representation，RLP 又改变 thought policy 的优化地形；三者存在交互。真正组合时应做 factorial ablation，而不是把各论文 headline gain 相加预测最终收益。
+\end{importantbox}
+
+\subsection{六条结论与三个非结论}
+
+课程最终总结：two-phase 有效；front-loading 产生 durable and compounding advantage；高质量信号可能在 SFT 后显现；RLP 把 RL reasoning 前移；普通未标注文本也能提供 reasoning-like training signal；探索与奖励为 reasoning scaling 打开新轴。每条都应附带模型、数据和评测边界。
+
+\lecturefigure{slide-043.jpg}{Curriculum、reasoning 与 reinforcement 重定义预训练}{Stanford 官方录像，00:47:12--00:49:00}
+
+图中\textbf{没有证明}三件事：第一，所有 chain-of-thought 都值得保留；第二，RLP 会自动减少 hallucination 或提高 alignment；第三，language-only 结果会直接迁移到 vision-language model。讲者在 Q\&A 中明确把 multimodal 视为未测试，把 RLHF/hallucination 视为相邻但不属于本工作的议题。
+
+\subsection{最终 recipe 回到系统协作}
+
+闭幕页再次出现四组件，但此时每一列已有具体含义：Smart Data 需要可追踪的 quality/domain labels；Smart Architecture 需要支持长训练与 rollout；Smart Algorithms 包含 curriculum、front-loading 与 RLP；Smart Collaboration 负责统一 pretraining/post-training 指标和 cost budget。它提醒读者：算法论文只有进入完整 pipeline 才能转化为模型能力。
+
+\lecturefigure{slide-044.jpg}{完成机制学习后重新审视四组件 recipe}{Stanford 官方录像，00:49:00--00:49:30}
+
+\begin{knowledgebox}{一个可执行的决策顺序}
+先审计数据与评测口径，再用小规模 proxy 估计 quality / repeat / phase boundary；随后在固定预算下测试 front-loading；只有当 baseline、FLOPs 与后训练流程稳定后，再引入 RLP rollout。每一步都保留未采用方案和失败结果，避免把 recipe 调参变成不可复核的炼金术。
+\end{knowledgebox}
+
+\subsection{课堂问答：实现细节与边界}
+
+问答补充了多个关键点。RLP 的 advantage machinery 与 GRPO 相似，主要变化是 information-gain reward；实验在文档中随机选 token，而不是基于 entropy 精筛；RLP 使用一般 pretraining mixture，包括大量 web crawl，并非只在高质量 reasoning data 上运行；从约完整预训练 20\% 的更早 checkpoint 开始也观察到相对 CPT 的收益。
+
+\teachervoice{00:49:54--00:50:35，讲者说明 RLP 复用了 GRPO 式 group-relative advantage，创新重点是 reward construction。}
+
+\teachervoice{00:55:36--00:57:43，讲者纠正提问者：RLP 不是只在最高质量数据上做；实践中随机选择 token，并且在更早的约 4T-token checkpoint 上也做过有利实验。}
+
+\begin{lstlisting}[caption={评估 RLP 时建议记录的最小实验表}]
+experiment = {
+    "start_checkpoint_tokens": ...,   # e.g. 19.8T
+    "extra_data_tokens": ...,
+    "rollouts_per_position": ...,
+    "mean_thought_length": ...,
+    "estimated_training_flops": ...,
+    "gpu_hours": ...,
+    "token_selection": "uniform_random",
+    "data_mixture_version": ...,
+    "post_training_recipe": ...,
+    "benchmark_harness": ...,
+}
+\end{lstlisting}
+
+\subsection{数据质量、RLHF 与 multimodal 的边界}
+
+对于一般网页质量，讲者提到 FineWeb-Edu 式 educational classifier：用 rubric 给文档 1--5 分，并可扩展到 domain 与教育层级。对于 RLHF bias、hallucination 与 reward hacking，她明确表示这是 alignment 的持续研究，不是本讲三项工作的直接结论。对于 vision-language alignment，她的回答是尚未测试。
+
+\begin{warningbox}{不要把问答中的谨慎回答改写成确定结论}
+“RLHF 仍可能占 post-training 的一小部分”“classifier 需要持续更新”“RLAIF 可能降低部分主观性”都是课堂讨论与经验判断，不是本讲实验验证。讲义保留其边界，避免把相邻领域观点写成 RLP 的效果声明。
+\end{warningbox}
+
+\subsection{本章小结}
+
+工程上最重要的不是复述 headline gain，而是建立完整控制面：data quality 与 curriculum、reasoning allocation、rollout reward、EMA stability、token/FLOP/wall-clock matching、post-training persistence 和跨域限制。只有这些信息齐全，才能判断 RLP 或 front-loading 是否值得进入生产训练。
+
+\section{总结与延伸}
+
+\subsection{一条贯穿三项工作的主线}
+
+Two-phase pretraining 说明数据的\textbf{顺序}有价值；front-loading reasoning 说明能力相关数据的\textbf{时机}有价值；RLP 说明预测前探索的\textbf{行为与奖励}有价值。三者共同把预训练从静态 maximum-likelihood fitting 推向 curriculum-aware、stage-aware、action-aware learning。
+
+\begin{importantbox}{最终知识框架}
+\begin{enumerate}
+  \item 数据 mixture 必须同时记录 weight 与 temporal schedule。
+  \item Quality 与 epoch/repeat 是不同变量，高质量数据也有重复上限。
+  \item Reasoning data 的早期分配可以改变后训练可利用的 foundation。
+  \item RLP 用 no-think counterfactual 衡量 thought 的 predictive information gain。
+  \item Dense reward、EMA baseline 与 group-relative update 共同决定稳定性。
+  \item 所有收益都必须在 token、FLOPs、checkpoint、post-training 与 benchmark 口径下解释。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{从课程结果到研究问题}
+
+第一，能否自动学习连续 curriculum，而不是手工 two-phase？第二，quality classifier 的偏差如何反馈到 model behavior？第三，front-loading 对非 STEM reasoning、multilingual 与 multimodal 是否同样有效？第四，thought reward 能否加入 factuality、causal faithfulness 或 safety 约束而不破坏 scalability？第五，RLP 的 rollout compute 能否通过 latent thought、speculative generation 或更强 batching 降低？
+
+\begin{knowledgebox}{建议的 factorial experiment}
+可用 $2\times2\times2$ 设计分别开关 two-phase、front-loading、RLP，在固定 architecture、总 token、近似 FLOPs 与 post-training recipe 下测主效应和交互项。这样才能回答三种策略是互补、冗余还是互相干扰，而不是把三篇论文的结果机械拼接。
+\end{knowledgebox}
+
+\subsection{拓展阅读}
+
+建议按问题顺序阅读：先读 Feng 等人的 two-phase pretraining，理解 data blend 与 curriculum；再读 Akter 等人的 front-loading reasoning，检查 reason-base 条件与五条 lesson；最后读 Hatamizadeh 等人的 RLP v2，重点看 expected improvement identity、Algorithm 1、compute matching 与 ablation。随后对照 Quiet-STaR、RPT 与 RLPT，比较各自 reward source 与粒度。
+
+\begin{warningbox}{阅读论文时保留 lecture snapshot}
+本讲发生于 2026-04-30：two-phase 使用 arXiv v1，front-loading 使用 v1，RLP 使用 2026-03-01 的 v2。后续 revision、复现或产品结果可以作为新证据，但不能倒推成课堂当日已经成立的事实。
+\end{warningbox}
+
+最终，课程提出的“next-generation intelligence”不是一个单独的新模型，而是一种训练观：在有限数据与算力下，模型应更聪明地选择学习顺序、更早建立 reasoning foundation，并让探索行为得到可扩展、可比较的反馈。预训练的未来，可能不只在更大的 $N$，也在更好的 learning process。
+
+\end{document}

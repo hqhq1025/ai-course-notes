@@ -1,0 +1,872 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 07：协作式 AI Agent 如何加速科学与医学发现}
+\renewcommand{\noteauthors}{基于 Vivek Natarajan 官方讲座、英文人工字幕、录像恢复 slide 与课堂日前一手论文整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-05-14；上传 2026-05-27}
+\renewcommand{\videoduration}{1:06:32（AI co-scientist 主讲至约 59:40，其后为 Q\&A）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=jFdH7n6BAl0}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.47\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{从回答问题到参与科学发现}
+
+这堂课讨论的不是怎样让一个聊天模型写得更像论文，而是怎样把 foundation model 组织成一套\textbf{可与科学家共同工作的发现系统}。主讲人 Vivek Natarajan 把目标概括为加快科学发现的“时钟”：系统不只检索已有知识，还要生成可检验假设、比较彼此冲突的解释、提出实验路径，并把最值得占用实验资源的候选交给人类专家。
+
+\subsection{“加速时钟”究竟在加速什么}
+
+科学工作的耗时并不只来自做实验。研究者还要完成文献筛选、跨学科联想、因果机制构造、候选排序、失败解释和下一轮实验设计。若 AI 只把每一步写得更快，却不能提高\textbf{被验证的新知识}产出，时钟并没有真正加速。因此，本讲把速度与证据绑定，而不是把 token throughput 当作科研产能。
+
+\lecturefigure{slide-002.jpg}{AI co-scientist 的任务：加速科学发现的时钟}{Stanford CS25 V6 Lecture 07 官方录像 00:01:46}
+
+\begin{knowledgebox}{读图：这里的 clock speed 不是模型延迟}
+绿色强调的是 scientific discovery，而不是每秒生成多少字。真正应比较的是：从研究问题出现，到形成候选假设、完成关键实验、排除错误解释、得到可复核结论，整个闭环需要多久。LLM 可以压缩阅读和写作时间，但只有当它帮助产生更好的实验决策并缩短验证周期时，才改变科学时钟。
+\end{knowledgebox}
+
+可以用一个粗略的发现速率来约束讨论：
+$$
+R_{\text{discovery}}
+=\frac{\Delta K_{\text{validated}}}
+{T_{\text{human}}+T_{\text{compute}}+T_{\text{experiment}}}.
+$$
+其中：
+\begin{itemize}
+  \item $\Delta K_{\text{validated}}$ 表示新增且被外部证据支持的知识，而不是生成的假设数量；
+  \item $T_{\text{human}}$ 是专家阅读、判断、协调与解释时间；
+  \item $T_{\text{compute}}$ 是搜索、推理、工具调用和 agent 协作时间；
+  \item $T_{\text{experiment}}$ 是湿实验、复现实验或真实世界验证时间。
+\end{itemize}
+
+\begin{importantbox}{AI co-scientist 的工作定义}
+AI co-scientist 是一个 scientist-in-the-loop 的多智能体系统：科学家给出研究目标、约束、偏好与已有想法，系统生成、批判、比较和演化假设，并把证据、实验建议与不确定性组织成可供人类决策的研究提案。它的交付物是\textbf{待验证的研究行动候选}，不是自动成立的科学真理。
+\end{importantbox}
+
+\teachervoice{00:01:06--00:02:20，老师强调目标是给科学家“superpowers”，让 AI 成为 collaborative partner。这里的主语仍是科学家；系统价值来自增强研究者的搜索与判断能力，而不是取消人的责任。}
+
+\subsection{从 Med-PaLM 到假设生成：为什么不能只靠一个 prompt}
+
+项目的起点来自一条具体反馈。Natarajan 团队早期用 Med-PaLM 处理医学问答与总结，一位 Stanford 教授 Gary Peltz 提出：既然模型吸收了大量科学和医学文本，能否让它提出罕见病的因果基因或新的生物学假设？当时的 PaLM 仍会产生大量 hallucination，团队也不知道怎样可靠地把开放式创意变成可检验研究。
+
+\lecturefigure{slide-003.jpg}{从医学问答模型到 AI co-scientist 的能力路径}{Stanford CS25 V6 Lecture 07 官方录像 00:03:04}
+
+\begin{knowledgebox}{读图：三步路径改变了问题类型}
+左侧 Med-PaLM 主要回答定义较清楚的问题；中间阶段开始测试模型能否生成医学假设；右侧才是多智能体 AI co-scientist。关键变化不是模型名称，而是任务从“给定输入、输出答案”变成“在开放空间中提出候选、找反例、比较路线、调用工具，并允许专家持续干预”。问题越开放，单次回答越不足以承载可靠性。
+\end{knowledgebox}
+
+\teachervoice{00:02:20--00:05:05，老师回顾当时团队的第一反应是“还没准备好”。PaLM 时代的 hallucination 说明，开放式 hypothesis generation 不能只靠一次采样；需要把批判、比较、验证和人类反馈组织成显式流程。}
+
+\begin{warningbox}{创意与可靠性不是同一个轴}
+提高 temperature、一次采样更多答案，可能增加多样性，却不会自动提高可证伪性、事实正确率或实验价值。科研 Agent 必须同时管理探索宽度与证据强度：既不能只重复最安全的已知解释，也不能把陌生、流畅的文本误当成真正新颖的机制。
+\end{warningbox}
+
+\subsection{本讲的真实范围：录像没有进入 AMIE 主讲段}
+
+官方视频描述同时宣布 AI co-scientist 与 AI co-physician 项目 AMIE，但实际 1:06:32 录像在 co-scientist 案例结束后直接进入问答。讲义因此只覆盖录像中真正讲授的内容；结尾出现的“让医疗专业能力普遍可及”过渡卡只能证明原计划还有医学协作系统主题，不能被扩写成一堂不存在的 AMIE 课程。
+
+\begin{warningbox}{Source boundary}
+课程简介、视频描述和 slide 过渡页可以帮助理解原计划，却不能替代实际讲授证据。本讲不补造 AMIE 架构、评测或病例，也不把后续公开材料倒灌成 2026-05-14 课堂内容。
+\end{warningbox}
+
+\subsection{本章小结}
+
+本章把目标从“生成更多科学文本”改写成“提高单位时间内被验证的新知识”。AI co-scientist 的核心对象是研究闭环：问题、假设、批判、排序、实验和更新。项目从 Med-PaLM 的医学问答出发，但开放式发现暴露了单模型、单 prompt 的可靠性不足，因而需要多智能体流程、工具反馈和 scientist-in-the-loop 控制。
+
+\section{Task × Timescale：科学超智能不是一个分数}
+
+要理解为什么课程选择多智能体系统，先要区分两类能力：一种是在边界清楚的任务上极快、极准地完成计算；另一种是在多年尺度上穿越模糊目标、冲突证据和昂贵实验。前者可以产生“局部超人”，后者才接近讲者所说的 scientific superintelligence。
+
+\subsection{先读坐标轴，再读模型名字}
+
+图的纵轴从文献综述、实验、数据分析逐步上升到论文、博士课题、重大理论和范式突破，表示任务复杂度与影响；横轴从分钟延伸到一生，表示科学家完成任务所需时间。这个坐标不是精确测量，而是一种系统设计地图：越向右上，越需要长期记忆、资源调度、分解、验证和社会协作。
+
+\lecturefigure{slide-004.jpg}{AlphaFold 在 Task × Timescale 坐标中的位置}{Stanford CS25 V6 Lecture 07 官方录像 00:13:10}
+
+\begin{knowledgebox}{读图：AlphaFold 压缩的是一类专门任务}
+AlphaFold 把蛋白质结构预测从可能需要多年实验推进的瓶颈，压缩为更短的计算流程，因此在横轴上产生巨大位移。但它解决的是定义明确、输入输出结构明确的专门问题。图把它放在右下方，是为了强调“超人级价值”可以来自一个窄任务的时间压缩，而不等于系统已经能提出完整研究议程。
+\end{knowledgebox}
+
+\teachervoice{00:10:17--00:12:45，老师用 AlphaFold 说明：一个系统可以在某个科学任务上产生革命性影响，却仍不具备开放式假设生成、跨领域综合和长期研究管理能力。}
+
+\subsection{通用 LLM 覆盖了哪里，又缺了哪里}
+
+课程随后把 Gemini、GPT、Claude 放在分钟到小时、文献综述到初步实验分析附近。它们的覆盖面比 AlphaFold 广，但大多停留在较短、较低风险的任务。这个图并不是说 LLM 只能做简单工作，而是在追问：怎样把通用知识与语言推理，延伸到需要几天、几月甚至多年验证的科学计划？
+
+\lecturefigure{slide-005.jpg}{加入通用 LLM 后的 Task × Timescale 完整状态}{Stanford CS25 V6 Lecture 07 官方录像 00:15:54}
+
+\begin{knowledgebox}{读图：先比较“宽度”，再比较“高度”}
+AlphaFold 是窄而深：专门任务上的时间压缩非常大。通用 LLM 是宽而浅：能覆盖许多知识工作，却常缺少长期状态、稳定验证和实验闭环。AI co-scientist 的目标不是把某个气泡简单拖到右上角，而是组合模型、搜索、工具、记忆和人类实验，使系统能在更长时间、更高复杂度下保持可追踪进展。
+\end{knowledgebox}
+
+\begin{knowledgebox}{术语消化：三个常被混用的层级}
+\begin{tabular}{L{0.16\textwidth}L{0.31\textwidth}L{0.36\textwidth}}
+\toprule
+层级 & 解决的问题 & 本讲中的例子 \\
+\midrule
+Task model & 在固定输入输出上优化一个专门任务 & AlphaFold 结构预测 \\
+Foundation model & 在广泛任务中提供知识、语言与推理能力 & Gemini、GPT、Claude \\
+Scientific system & 维持长期目标，组织搜索、批判、工具与验证 & AI co-scientist 多智能体系统 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\subsection{从 AlphaGo 学到的是搜索组织，而不是把科学变成棋盘}
+
+AlphaGo 的启发在于：强策略网络之外，还可以用 self-play、搜索与比较持续改进候选。科学没有固定棋盘、完全规则和即时胜负信号，因此不能直接移植 Monte Carlo Tree Search；可移植的是\textbf{让多个候选互相施压、暴露弱点并迭代演化}的组织思想。
+
+若一次系统运行生成 $N_0$ 个原始假设，经过 $K$ 轮比较与演化，每轮保留比例为 $\rho_k$、扩展比例为 $\gamma_k$，粗略的候选规模可写成
+$$
+N_{k+1}=\rho_kN_k+\gamma_kN_k.
+$$
+其中：
+\begin{itemize}
+  \item $N_k$ 是第 $k$ 轮仍被追踪的候选数量；
+  \item $\rho_k$ 表示保留高价值候选的强度；
+  \item $\gamma_k$ 表示从已有候选组合、变异或扩展出的新候选比例；
+  \item 公式只描述搜索宽度，不代表科学质量会随 $N_k$ 单调上升。
+\end{itemize}
+
+\begin{warningbox}{科学不是有终局奖励的游戏}
+棋类可以从胜负回传清晰信号；开放科学往往多年后才知道假设是否成立，而且“新颖”“可行”“重要”可能彼此冲突。把 tournament 引入科学，只能提供内部优先级，不能把 Elo 变成自然规律。
+\end{warningbox}
+
+\subsection{Scientific superintelligence 是协作结构}
+
+前一节已经说明科学没有棋类那样明确的终局奖励，因此本节转向“谁来维持长期搜索”这一系统问题。课程用人脑与多个协作者的视觉，表达一种系统观：高水平科学不是单一模块瞬间给出答案，而是多条思路并行、彼此批判、借助工具和记忆，最终由人类把候选接入真实实验。Agent 的价值来自分工与反馈结构，而不只是复制更多相同模型实例。
+
+\lecturefigure{slide-006.jpg}{科学超智能被表达为多智能体协作系统}{Stanford CS25 V6 Lecture 07 官方录像 00:18:36}
+
+\begin{importantbox}{系统级能力的五个条件}
+要从短任务走向长期科学，系统至少需要：持续目标与状态；并行探索与去重；显式反驳和不确定性；外部工具与证据；人类对实验、伦理和资源的最终控制。缺少其中任意一项，增加 agent 数量都可能只放大重复、错误或审查负担。
+\end{importantbox}
+
+\teachervoice{00:17:30--00:19:28，老师把目标描述为一组能够长期协作的 agent，而不是一个“知道所有事情”的模型。这个表述把架构问题放在模型能力之上。}
+
+\subsection{本章小结}
+
+Task × Timescale 图把两类进步分开：专门模型可以极大压缩一个科学任务，通用模型可以覆盖更多短任务，但开放式科学需要长期系统。AlphaGo 提供的是搜索、比较与演化的组织灵感，而不是科学评价函数。Scientific superintelligence 因而应被理解为模型、Agent、工具、记忆、人类专家和实验资源共同构成的协作结构。
+
+\section{AI co-scientist 的多智能体系统设计}
+
+前两章解释了为什么需要系统；本章进入系统内部。阅读架构图时，应沿着三条流向：科学家怎样定义问题，Agent 怎样让候选假设持续改进，以及工具与记忆怎样把内部文本循环连接到外部证据。
+
+\subsection{科学家输入的不是一句万能 prompt}
+
+科学家可以描述 research goal、实验约束、偏好属性和已有想法，还可以对候选进行 add、review、discuss。系统最终返回 top-ranked hypotheses、research proposals 与 overview。这个接口承认目标本身会变化：专家看到中间结果后，可以修正约束、指出遗漏或重新定义问题。
+
+\lecturefigure{slide-007.jpg}{AI co-scientist 的完整多智能体架构}{Stanford CS25 V6 Lecture 07 官方录像 00:22:34；图源 arXiv:2502.18864v1}
+
+\begin{knowledgebox}{读图：从左到右看控制权，从中间看改进循环}
+左侧科学家定义目标并持续反馈；中部 supervisor 配置研究计划，ranking tournament 把比较结果反馈给 generation、reflection、evolution 与 proximity；右侧系统调用 search、专门模型等工具，并使用 memory 维持跨轮状态。输出不是一个孤立答案，而是一组带排序、证据和实验建议的研究对象。
+\end{knowledgebox}
+
+\teachervoice{00:22:26--00:25:54，老师强调科学家能提供 seed idea、约束与自然语言反馈。系统的“自主”是受目标和资源控制的探索自主，不是脱离专家的研究授权。}
+
+\begin{importantbox}{Scientist-in-the-loop 不等于最后签字}
+真正的 scientist-in-the-loop 要覆盖问题定义、证据选择、候选反馈、实验设计、结果解释和停止条件。若人只在系统生成百页报告后点击同意，人的角色已经从协作者退化成责任承担者，无法纠正搜索方向。
+\end{importantbox}
+
+\subsection{六类核心 Agent 的分工}
+
+架构中的 Agent 并非人格化角色，而是对不同推理操作的模块化封装。Generation 负责扩大候选空间；Reflection 用文献、模拟和反例降低明显错误；Ranking 进行相对比较；Evolution 对高价值候选做组合与改写；Proximity 判断候选间关系；Meta-review 从整个组合中提取共同问题和下一步。
+
+\begin{knowledgebox}{术语表：Agent 为什么要分工}
+\begin{tabular}{L{0.17\textwidth}L{0.33\textwidth}L{0.32\textwidth}}
+\toprule
+Agent & 核心操作 & 主要失败风险 \\
+\midrule
+Generation & 文献探索、科学辩论、提出多样假设 & 重复已知结论、无约束幻想 \\
+Reflection & 完整 review、web search、simulation review、deep verification & 证据遗漏、错误否决新颖想法 \\
+Ranking & 成对比较、tournament、总结 win/loss pattern & judge 偏好与循环评价 \\
+Evolution & 组合、简化、扩展高价值候选 & 只做文风润色，未增加可检验内容 \\
+Proximity & 判断候选相似、互补或冲突 & 语义表面相似掩盖机制差异 \\
+Meta-review & 形成研究全景和跨候选结论 & 压缩时丢失少数但关键的线索 \\
+\bottomrule
+\end{tabular}
+\end{knowledgebox}
+
+\begin{lstlisting}[language=Python,caption={Generate--debate--evolve 的概念性循环}]
+def research_cycle(goal, constraints, budget):
+    hypotheses = generation.explore(goal, constraints)
+    while budget.remaining():
+        reviews = reflection.critique(hypotheses, tools=True)
+        matches = ranking.pairwise_tournament(hypotheses, reviews)
+        ranked = ranking.update_scores(matches)
+        hypotheses = evolution.expand(ranked.top(), reviews)
+        hypotheses = proximity.merge_and_separate(hypotheses)
+        memory.store(hypotheses, reviews, matches)
+    return meta_review.synthesize(hypotheses, memory)
+\end{lstlisting}
+
+\subsection{Ranking tournament 与 Elo：相对比较为何有用}
+
+开放式假设很难直接给绝对分数，但两个候选之间可以提出更具体的问题：哪一个机制更完整？哪一个更可证伪？哪一个与已有证据冲突更少？Ranking agent 因而组织 pairwise tournament，并从 win/loss pattern 更新优先级。
+
+若候选 $i$ 与 $j$ 的当前分数为 $r_i,r_j$，Elo 风格的期望胜率可写为
+$$
+E_i=\frac{1}{1+10^{(r_j-r_i)/400}},
+$$
+更新为
+$$
+r_i' = r_i + \eta(S_i-E_i).
+$$
+其中：
+\begin{itemize}
+  \item $E_i$ 是系统根据旧分数预测候选 $i$ 胜出的概率；
+  \item $S_i\in\{0,0.5,1\}$ 是本次比较结果；
+  \item $\eta$ 是更新步长；
+  \item $r_i'$ 只表示在当前 judge、rubric 与候选池中的相对优先级。
+\end{itemize}
+
+\begin{warningbox}{Elo 不能证明 novelty、truth 或 impact}
+若 judge 偏好术语密集、结构完整或接近训练分布的假设，Elo 会稳定放大这种偏好。科学排序必须记录评价维度、比较理由、引用证据和反例；最终仍需专家与实验把内部 ranking 接到现实世界。
+\end{warningbox}
+
+\teachervoice{00:29:12--00:31:47，老师把 ranking 比作 Go 或 chess tournament：重点是让候选相互比较并总结失败模式。这个类比解释了工程机制，不意味着科学拥有棋类那样客观、即时的胜负。}
+
+\subsection{Test-time compute 与异步 Supervisor}
+
+Test-time compute 指模型参数固定后，在一次研究任务中额外投入的推理、采样、搜索、工具和验证计算。AI co-scientist 的 supervisor 把高层目标拆成任务，写入异步队列，再按候选价值与验证需要分配不同模型和预算。异步性允许 generation 不必等所有 reflection 完成，也允许昂贵验证只服务少量高优先级候选。
+
+\begin{knowledgebox}{背景概念：test-time compute}
+训练计算改变参数；test-time compute 不更新基础模型权重，而是在当前问题上增加搜索深度、候选数量、反思轮数和工具调用。它可以提高特定任务质量，却同时增加 token、延迟、外部 API 与审查成本，必须与实验预算一起管理。
+\end{knowledgebox}
+
+总预算 $B$ 可以被不同任务消耗：
+$$
+\sum_{a\in\mathcal{A}} c_a n_a
++\sum_{t\in\mathcal{T}} c_t n_t
++C_{\text{human}}
+\le B.
+$$
+其中：
+\begin{itemize}
+  \item $\mathcal{A}$ 是 Agent 类型集合，$n_a$ 是调用次数，$c_a$ 是单次成本；
+  \item $\mathcal{T}$ 是外部工具集合，$n_t$ 与 $c_t$ 分别表示调用次数和成本；
+  \item $C_{\text{human}}$ 是专家阅读、反馈和实验设计成本；
+  \item $B$ 不只可以是美元，也可以是延迟、GPU 时间或实验容量。
+\end{itemize}
+
+\begin{lstlisting}[language=Python,caption={异步 Supervisor 的资源路由示意}]
+while queue.has_work() and budget.available():
+    task = queue.pop_highest_value()
+    model = "pro" if task.requires_deep_verification else "flash"
+    result = workers.submit(task, model=model)
+    memory.link(result, task.provenance)
+    queue.add(reflection.followups(result))
+    queue.add(evolution.promising_variants(result))
+\end{lstlisting}
+
+\teachervoice{00:39:11--00:39:43，老师给出实际路由经验：review 或 verification 可使用推理更强的 Pro variant，较简单工作用 Flash 节省 token 和成本。讲义把它视为 workload-aware routing，而不是固定产品推荐。}
+
+\subsection{内部评测的循环性}
+
+课程中途的提问击中了核心问题：如果同类模型生成假设、再由同类模型评价，系统会不会只奖励“听起来像好科学”的文本？公开论文使用专家目标、自动 Elo 和多模型比较展示 test-time scaling，但这些证据主要说明内部流程能持续优化某种 rubric，并不等价于新机制在自然界成立。
+
+\begin{warningbox}{Model-as-judge 的三重循环}
+生成器与 judge 可能共享训练数据偏好；novelty judge 可能不知道未公开研究；完整叙述可能压过真正关键但表达粗糙的线索。降低循环性需要异构 judge、明确 rubric、检索证据、专家盲评、时间切分和最终实验，而不是再加一轮“请仔细检查”。
+\end{warningbox}
+
+\teachervoice{00:33:58--00:37:04，老师承认系统并非在所有目标上都胜出，听众也追问自动评价能否真正测 novelty。课堂没有把这些问题隐藏在平均分后面。}
+
+\subsection{本章小结}
+
+AI co-scientist 把科学家输入、六类 Agent、Supervisor、工具和 memory 组织成 generate--debate--rank--evolve 循环。Pairwise tournament 适合为开放候选提供相对优先级，test-time compute 允许按任务增加搜索，但 Elo 与 model-as-judge 仍只是内部信号。系统可靠性取决于能否把内部搜索接到异构证据、人类判断和真实实验。
+
+\section{从内部评分到科学证据：AMR 的受控复现}
+
+架构图说明系统如何产生假设，却没有回答“这些假设到底值不值得相信”。本章先建立证据阶梯，再分析抗菌药耐药性案例。这个案例的特殊价值在于：人类团队已经获得但尚未公开的答案，可以用来检测系统是否在没有目标答案可检索时独立重建同一机制。
+
+\subsection{不要把七种证据压成一个 success rate}
+
+科研 Agent 的证据至少分为内部 judge、文献一致性、专家评价、隐藏结果复现、前瞻实验、独立重复和临床证据。它们回答不同问题。一个机制可以文献合理却实验失败，也可以在细胞中有效却在人体中无效。课程后面的案例必须逐个标明处于哪一层。
+
+\begin{importantbox}{科学证据阶梯}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+层级 & 能支持的结论 & 仍不能支持的结论 \\
+\midrule
+内部 judge / Elo & 候选在 rubric 下相对更好 & 真实、新颖、可复现 \\
+文献与工具检查 & 与公开知识较一致、结构较可行 & 因果机制成立 \\
+领域专家评价 & 候选值得进一步检查 & 实验一定成功 \\
+隐藏结果复现 & 系统能重建未知答案 & 系统前瞻发现了新事实 \\
+前瞻实验 & 某个预注册或事先提出的节点得到支持 & 普遍机制与临床获益 \\
+独立重复 / 临床研究 & 结果跨团队或人群更稳健 & 无条件外推到所有环境 \\
+\bottomrule
+\end{tabularx}
+\end{importantbox}
+
+若实验容量有限，可以按期望信息增益分配资源：
+$$
+P(h_i)=\frac{\mathbb{E}[\Delta I_i]\,p_i}
+{C_i+\lambda R_i}.
+$$
+其中：
+\begin{itemize}
+  \item $\mathbb{E}[\Delta I_i]$ 是实验对区分机制的期望信息增益；
+  \item $p_i$ 是候选通过当前证据校准后的可信度；
+  \item $C_i$ 是金钱、时间和样本成本；
+  \item $R_i$ 是安全、伦理或不可逆风险，$\lambda$ 是风险权重。
+\end{itemize}
+
+\teachervoice{00:37:18--00:39:05，老师预判未来瓶颈可能从“没有好假设”转为“好像有太多好假设，验证不过来”。因此系统必须优化实验选择，而不是只最大化报告长度。}
+
+\subsection{cf-PICI 问题：怎样跨物种传播}
+
+Capsid-forming phage-inducible chromosomal islands（cf-PICIs）是依赖噬菌体传播的移动遗传元件。它们能形成自己的 capsid（装 DNA 的“头部”），却需要利用 helper phage 的 tail 完成感染与宿主识别。人类团队经过多年实验发现，cf-PICI 可借用多种噬菌体尾部，形成不同宿主范围的嵌合颗粒，从而解释相同 cf-PICI 为什么出现在多种细菌中。
+
+\lecturefigure{slide-008.jpg}{AI co-scientist 对 AMR 相关基因转移机制的受控复现流程}{Stanford CS25 V6 Lecture 07 官方录像 00:40:20；bioRxiv:2025.02.19.639094v1}
+
+\begin{knowledgebox}{读图：左边是多年实验，右边是数日假设搜索}
+左侧从提出 cf-PICI、观察跨物种分布、构造多种机制，到实验确认新型传播路径，跨越约十年；右侧在不知道未公开答案的前提下，由 AI co-scientist 生成、排序和审查候选，最高排名假设复现“借用多种 phage tail 扩大 host range”的核心。中间相同研究问题是两条路线可比较的锚点。
+\end{knowledgebox}
+
+\begin{knowledgebox}{First-use glossary：cf-PICI 机制}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+术语 & 含义 & 在机制中的作用 \\
+\midrule
+Capsid & 包装遗传物质的蛋白质头部 & cf-PICI 可形成自己的 capsid \\
+Phage tail & 负责识别宿主并注入遗传物质的尾部结构 & 被 cf-PICI 借用，决定可感染宿主 \\
+Host range & 一个颗粒能进入哪些细菌宿主 & 多种 tail 扩展跨物种传播范围 \\
+Recapitulation & 在不知道隐藏答案时重建已被另一团队发现的机制 & 检验假设生成能力，不是前瞻发现 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{00:40:13--00:44:13，老师明确把这个结果称为 recapitulation：合作团队先在现实中完成发现，只是答案尚未公开。系统用数日重建了多年实验得到的核心解释。}
+
+\begin{warningbox}{为什么这是强控制，却仍不是“AI 发现”}
+强点在于目标答案不在公开文献中，降低了直接检索复述的可能；弱点在于研究问题、公开背景和候选评价仍由人类提供，且实验是合作团队事先完成的。最准确表述是“隐藏结果复现”或“平行 in-silico hypothesis generation”。
+\end{warningbox}
+
+\subsection{泄漏控制与时间版本}
+
+判断隐藏结果复现是否可信，要检查模型知识截止、预印本时间、实验团队何时提交论文、提示中提供了哪些资料，以及评测者是否在看到答案后调整 rubric。本讲使用课堂日前的 bioRxiv v1 与 arXiv v1；2026-05-14 之后的 Nature 版本和后续修订不能被当成课堂已经拥有的证据。
+
+\begin{warningbox}{Temporal leakage 检查表}
+记录模型版本与运行日期；冻结输入文档；核查预印本、会议摘要、代码和社交媒体；让不知道目标答案的评审先评价候选；保留完整候选排名而不只展示命中项。若缺少这些记录，“未知答案”可能只是研究者不知道答案已进入训练或检索渠道。
+\end{warningbox}
+
+\subsection{本章小结}
+
+AMR 案例说明 AI co-scientist 不只会把文献摘要改写成假设：在答案未公开的受控问题上，最高排名候选重建了多种 phage tail 扩展 cf-PICI host range 的核心机制。但这仍是隐藏结果复现，而不是前瞻发现。其真正意义是建立一层比内部 judge 更强、比独立前瞻实验更弱的证据，并暴露时间泄漏与版本冻结的重要性。
+
+\section{案例阶梯：细胞、类器官、结构与工具反馈}
+
+课程接着展示多种合作案例。它们不应被揉成一句“AI 发现了很多药物和蛋白质”，因为每个案例的研究对象、实验系统、发表状态和可外推范围不同。本章按证据等级分别阅读 AML、肝纤维化、植物免疫组装、OCT4 设计和早期 rejuvenation 结果。
+
+\subsection{先建立案例地图}
+
+总览图把工作分成癌症药物再利用、逆转肝损伤，以及发现和工程化蛋白质。共同流程是 AI 提出或组织候选，人类实验团队选择验证；不同之处在于验证平台从细胞系、类器官到结构生物学不等，因而结论强度不能横向直接比较。
+
+\lecturefigure{slide-009.jpg}{人类--AI 协作正在推进的案例地图}{Stanford CS25 V6 Lecture 07 官方录像 00:42:00}
+
+\begin{knowledgebox}{读图：三个方向共享流程，不共享结论强度}
+左侧 AML 主要看药物对癌细胞系 viability 的影响；中间肝纤维化使用人源 hepatic organoid 观察抗纤维化与再生信号；右侧蛋白质方向把 AlphaFold 结构筛选接到纯化和显微实验。它们都可证明“候选值得继续研究”，却分别距离临床治疗、器官级疗效和生物功能确认还有不同距离。
+\end{knowledgebox}
+
+\begin{importantbox}{案例状态总表}
+\begin{tabularx}{\textwidth}{L{0.20\textwidth}X X}
+\toprule
+案例 & 课堂日前证据 & 讲义允许的结论 \\
+\midrule
+AML / KIRA6 & arXiv v1 中的体外细胞系结果 & 有选择性 cytotoxicity 候选，需进一步临床前验证 \\
+Liver fibrosis & bioRxiv v1，人源 hepatic organoid & 两类 epigenomic modifier 有抗纤维化和再生信号 \\
+Plant NRC7 & bioRxiv v1，AlphaFold 筛选、纯化、负染电镜 & SNI 找到非典型 11-mer assembly \\
+OCT4 & arXiv v1 appendix 的结构 plausibility demonstration & 结构未明显破坏，功能仍未证实 \\
+Rejuvenation & 课堂 slide，明确 unpublished & 仅记录初步课堂结果，不作定论 \\
+\bottomrule
+\end{tabularx}
+\end{importantbox}
+
+\subsection{AML：KIRA6 的信号与两个失败候选}
+
+急性髓系白血病（acute myeloid leukemia, AML）药物再利用任务要求系统从已有药物中寻找新适应证。课堂重点是 KIRA6：一种 IRE1$\alpha$ inhibitor，在若干 AML cell line 上出现剂量依赖的 viability 下降。图也保留了关键负面信息：AI 提议的另外两个“新”药没有工作。
+
+\lecturefigure{slide-011.jpg}{KIRA6 在 AML 细胞系上的剂量--反应结果}{Stanford CS25 V6 Lecture 07 官方录像 00:45:28；arXiv:2502.18864v1}
+
+\begin{knowledgebox}{读图：先看横轴浓度，再看不同细胞系的下降位置}
+横轴是对数浓度，纵轴是相对 viability。曲线越早下降，表示较低浓度即可抑制细胞活性；但不同细胞系的敏感性并不相同。真正有价值的是把 AML cell line 与非恶性对照放在同一设计中寻找 therapeutic window，而不是只展示一条下降曲线。图中的 novelty review 也承认已有相关靶点证据，novelty 在于具体药物和适应证组合。
+\end{knowledgebox}
+
+常用 Hill dose--response 形式为
+$$
+V(c)=V_{\min}+\frac{V_{\max}-V_{\min}}
+{1+(c/IC_{50})^{h}}.
+$$
+其中：
+\begin{itemize}
+  \item $c$ 是药物浓度；
+  \item $V(c)$ 是该浓度下测得的细胞活性；
+  \item $IC_{50}$ 是活性下降到中间水平所需浓度；
+  \item $h$ 是 Hill slope，描述曲线陡峭程度；
+  \item 体外 $IC_{50}$ 不能直接替代人体剂量、安全性或疗效。
+\end{itemize}
+
+\teachervoice{00:45:20--00:47:12，老师主动指出两种其他新药建议没有工作。负结果不是演讲瑕疵，而是估计系统命中率、发现 selection bias 和设计下一轮 ranking 的必要数据。}
+
+\begin{warningbox}{Cell killing 不是临床治疗}
+细胞系缺少人体中的药代动力学、免疫环境、组织分布、毒性和耐药演化。KIRA6 的结果支持继续做机制、动物与安全研究，不支持把它描述成 AML 已获证实的新疗法。
+\end{warningbox}
+
+\subsection{肝纤维化：人源类器官中的 Vorinostat}
+
+肝纤维化案例把验证平台升级为 multi-lineage human hepatic organoid。AI co-scientist 推荐 epigenomic modifier，实验团队串行评估抗纤维化活性与毒性。Vorinostat 是已获批的抗癌 HDAC inhibitor，在该模型中降低 TGF$\beta$ 诱导的染色质结构变化，并伴随抗纤维化与肝实质细胞再生信号。
+
+\lecturefigure{slide-012.jpg}{Vorinostat 在人源 hepatic organoid 中的抗纤维化结果}{Stanford CS25 V6 Lecture 07 官方录像 00:47:48；bioRxiv:2025.04.29.651320v1}
+
+\begin{knowledgebox}{读图：虚线是基准，不是治愈线}
+纵轴是 fibroblast activity 相对 untreated 的 fold change，绿色虚线约为 1。Fibrosis inducer 把活性推高；若候选药把分布拉回或低于基准，说明在该 organoid 条件下减少促纤维化活动。箱线图展示样本分布而非单个最佳点。Vorinostat 的价值在于一个已知药物获得新机制和新适应证候选，但图不包含人体结局。
+\end{knowledgebox}
+
+若用 untreated 基准归一化，抗纤维化效应可写为
+$$
+E_{\text{anti-fibrotic}}
+=1-\frac{A_{\text{drug}}-A_{\text{baseline}}}
+{A_{\text{fibrosis}}-A_{\text{baseline}}}.
+$$
+其中：
+\begin{itemize}
+  \item $A_{\text{drug}}$ 是候选药处理后的纤维化活动指标；
+  \item $A_{\text{fibrosis}}$ 是诱导纤维化但未给候选药的指标；
+  \item $A_{\text{baseline}}$ 是未诱导基准；
+  \item 该归一化有助于比较实验内效果，不能消除模型与人体之间的外推误差。
+\end{itemize}
+
+\begin{knowledgebox}{背景概念：organoid}
+类器官是由细胞在三维环境中自组织形成、复现部分组织结构和功能的实验模型。它比单层细胞系更接近组织级相互作用，却通常仍缺少完整血流、免疫、神经和全身代谢。因此 organoid 证据强于纯文本推理，仍早于动物、临床前和人体试验。
+\end{knowledgebox}
+
+\teachervoice{00:47:20--00:48:46，老师把实验平台视为对 AI 假设的 biological reality check。课程没有把 organoid 改善包装成病人治疗成功。}
+
+\subsection{植物结构：SNI 怎样把异常变成候选}
+
+AlphaFold 生成大量结构预测后，研究者面临另一个问题：哪些“不像已知结构”的结果是真正新颖，哪些只是预测错误？团队与 AI co-scientist 设计 Structural Novelty Index（SNI），对植物免疫蛋白组装进行结构筛选，并把异常候选交给纯化和负染 electron microscopy。
+
+\lecturefigure{slide-013.jpg}{Structural Novelty Index 找到 NRC7 的非典型 11-mer assembly}{Stanford CS25 V6 Lecture 07 官方录像 00:50:32；bioRxiv:2026.05.03.722499v1}
+
+\begin{knowledgebox}{读图：AI 负责缩小搜索，人类实验决定异常是否真实}
+上方热图比较科学家与 AI co-scientist 对候选的结构新颖性判断；下方流程从 SNI 筛选进入表达、纯化与 electron microscopy，最终观察到 11 个亚基组成的环状 NRC7 assembly。教学重点不是“AI 看图比人强”，而是它提出额外判据，帮助从数百个 AlphaFold 结构中优先选择值得昂贵实验检查的异常。
+\end{knowledgebox}
+
+\begin{importantbox}{Anomaly detection 的科研价值}
+当生成模型产出海量候选时，最稀缺的不是候选，而是实验注意力。SNI 一类指标把“与 canonical architecture 的偏离”转成可排序信号；随后必须用独立实验区分生物学 novelty 与模型 artifact。Agent 最有价值的角色常是缩小验证空间，而不是宣布异常已经成立。
+\end{importantbox}
+
+\subsection{OCT4：把 AlphaFold 放进反馈环}
+
+OCT4 是 Yamanaka factors 之一。AI co-scientist 提议修改其 POU domain 附近的序列，再调用 AlphaFold 检查结构 plausibility，并把结构结果反馈到下一轮设计。arXiv v1 appendix 明确称其为 illustrative demonstration：若要证明改造提高 DNA binding 或保留 SOX2 interaction，还需要 binding affinity、off-target 与湿实验验证。
+
+\lecturefigure{slide-014.jpg}{AI co-scientist 与 AlphaFold 组成 OCT4 设计反馈环}{Stanford CS25 V6 Lecture 07 官方录像 00:51:16；arXiv:2502.18864v1 Appendix A.6}
+
+\begin{knowledgebox}{读图：pLDDT、pTM、ipTM 只回答结构置信问题}
+图比较原始 OCT4 与修改序列的预测结构和置信指标。相近 pLDDT 表明局部结构置信度未明显崩溃；pTM 与 ipTM 分别提供整体折叠和界面可信度线索。它们不能直接证明转录功能增强、细胞命运改变或没有脱靶。正确结论是“结构上值得继续验证”，不是“优化蛋白已经成功”。
+\end{knowledgebox}
+
+\begin{lstlisting}[language=Python,caption={专门模型进入假设设计反馈环的概念流程}]
+sequence = co_scientist.propose_sequence(goal, constraints)
+for iteration in range(max_rounds):
+    structure = alphafold.predict(sequence)
+    checks = assess(structure, metrics=["pLDDT", "pTM", "ipTM"])
+    if checks.structurally_plausible:
+        sequence = co_scientist.refine(sequence, checks)
+    else:
+        sequence = co_scientist.repair(sequence, checks.failures)
+return send_to_binding_and_wet_lab_validation(sequence)
+\end{lstlisting}
+
+\begin{warningbox}{Tool use 不是 tool truth}
+调用 AlphaFold 能减少明显不合理序列，却不能把预测模型变成实验仪器。若 Agent 与工具共享偏差，反馈环可能稳定优化错误代理指标。必须在 loop 外加入异构模型、数据库检查、实验和停止条件。
+\end{warningbox}
+
+\subsection{Early rejuvenation：课堂结果必须保留红线}
+
+课程展示了老年供体细胞中 senescence marker 大幅下降的早期结果，并在标题中直接写明 `Unpublished and needs peer review`。这类图很容易制造“逆转衰老已实现”的印象，因此讲义必须同时记录实验对象、marker、对照以及尚未公开方法和复现的事实。
+
+\lecturefigure{slide-015.jpg}{新型 rejuvenation factor 的早期课堂结果}{Stanford CS25 V6 Lecture 07 官方录像 00:52:00；slide 明确标注 unpublished and needs peer review}
+
+\begin{knowledgebox}{读图：柱高描述 marker，不等于年龄倒流}
+纵轴是被判定为 senescent 的细胞比例，老年供体 untreated 组较高，KLOTHO 和两个 AI-discovered factor 组明显降低。图支持“在该实验条件下 marker 下降”的初步观察；它没有说明细胞所有功能恢复年轻状态，也没有给出样本量、完整统计、脱靶效应和独立重复。
+\end{knowledgebox}
+
+\begin{warningbox}{Unpublished means what}
+未发表不等于错误，也不等于已证实。它意味着读者无法完整核查方法、样本、排除标准、统计分析和复现。讲义保留这个案例，是为了学习证据分级与研究方向，不将其写成抗衰老疗法结论。
+\end{warningbox}
+
+\teachervoice{00:51:40--00:53:32，老师在 slide 上主动标出 needs peer review。教师语气是“early results”，不是正式发布；任何更强措辞都会越过课堂证据。}
+
+\subsection{本章小结}
+
+五个案例构成从候选生成到不同实验层级的阶梯。AML 提供细胞系 dose--response 并暴露失败候选；肝纤维化进入人源类器官；植物 NRC7 用结构筛选加纯化和电镜确认 11-mer；OCT4 只是结构 plausibility feedback；rejuvenation 仍是未发表课堂结果。Agent 可以提高候选发现和实验优先级，但每种实验模型都有明确外推边界。
+
+\section{Alzheimer's：从机制复现到一个前瞻节点}
+
+Alzheimer's 案例比前面的隐藏结果复现更复杂：系统先重建一个多步骤 ACE--bradykinin--B2R 机制链，再由合作团队对其中一个节点做前瞻实验。它因此同时包含公开背景、回顾性 recapitulation 和未发表 prospective validation，必须拆开叙述。
+
+\subsection{先标明合作与发表状态}
+
+课程与 MGH 研究者合作，目标是复现多年人类实验路线，并在数日内独立预测 ACE--B2R 致病轴。slide 同样写明 unpublished data, needs peer review。这里的“case study”不是临床病例，也不是已发表治疗建议，而是机制假设与实验流程展示。
+
+\lecturefigure{slide-016.jpg}{Alzheimer's 案例的目标与未发表边界}{Stanford CS25 V6 Lecture 07 官方录像 00:53:54}
+
+\begin{warningbox}{三类证据必须分栏}
+公开文献已经讨论 bradykinin、认知损伤和 Alzheimer’s 的联系；AI co-scientist 重建 ACE inhibitor 到 B2R 的机制链；合作团队对 B2R 节点做了课堂所述前瞻实验。前两者不能证明第三者，第三者在未发表前也不能被写成已确证治疗机制。
+\end{warningbox}
+
+\subsection{ACE--bradykinin--B2R 链怎样形成}
+
+ACE inhibitor 用于高血压治疗，会抑制 angiotensin-converting enzyme。ACE 除参与肾素--血管紧张素系统，也降解 bradykinin；抑制 ACE 可能提高 bradykinin 信号。课程提出：bradykinin 激活 B2R 后触发炎症级联，可能解释部分人群中 ACE inhibitor 与 Alzheimer’s 风险的观察关联。
+
+\lecturefigure{slide-017.jpg}{AI 对 ACE inhibitor、bradykinin 与 B2R 机制链的复现}{Stanford CS25 V6 Lecture 07 官方录像 00:54:48}
+
+\begin{knowledgebox}{读图：四步链条需要逐步验证}
+左侧列出临床悖论：ACE inhibitor 常用于高血压，但某些观察中与 Alzheimer’s 风险相关；右侧是 AI 构造的机制。应分别问：药物是否改变 bradykinin？bradykinin 是否通过 B2R 作用于相关细胞？B2R 是否导致病理表型？阻断 B2R 是否能逆转？只要一环失败，完整因果叙述就需要修订。
+\end{knowledgebox}
+
+可以把机制链写成结构化因果假设：
+$$
+\text{ACE inhibition}
+\rightarrow \uparrow\text{bradykinin}
+\rightarrow \text{B2R activation}
+\rightarrow \text{inflammatory phenotype}.
+$$
+其中：
+\begin{itemize}
+  \item 第一个箭头依赖 ACE 对 bradykinin 的降解作用；
+  \item 第二个箭头是配体--受体关系；
+  \item 第三个箭头才连接到神经炎症或病理表型；
+  \item 观察相关不能自动确定箭头方向，也不能排除共同病因与用药偏差。
+\end{itemize}
+
+\begin{warningbox}{Causal story 的流畅性会制造过度确信}
+LLM 很擅长把多个真实局部事实串成完整链条，但每条边的证据可能来自不同物种、组织或实验条件。科研 Agent 必须输出 edge-level provenance 和可反驳实验，而不是只给一段顺滑机制叙述。
+\end{warningbox}
+
+\subsection{Prospective validation：为什么一个节点很重要}
+
+课堂称系统识别了一个被忽视的 regulatory node，并提出使用 antagonist 干预 B2R。合作团队在实验室中测试预测，报告了新 inhibitor 成功 reverse disease-associated phenotype。若候选是在实验前冻结，这比回顾性解释更强，因为系统对结果承担了可失败的预测风险。
+
+\lecturefigure{slide-018.jpg}{B2R 节点的预测、实验与验证三阶段}{Stanford CS25 V6 Lecture 07 官方录像 00:55:26；课堂未发表数据}
+
+\begin{knowledgebox}{读图：prospective 的关键是时间顺序}
+第一列 Prediction 必须发生在看到实验结果之前；第二列 Experiment 把 B2R antagonist 变成可执行干预；第三列 Validation 报告表型逆转。若这三步有时间戳、冻结报告和预先定义指标，就能减少事后挑选。图仍未展示完整方法和独立重复，所以强于 recapitulation，弱于公开可复核证据。
+\end{knowledgebox}
+
+若以实验前证据 $D_0$ 形成假设 $h$，实验结果为 $e$，更新可以写成
+$$
+p(h\mid D_0,e)
+=\frac{p(e\mid h,D_0)p(h\mid D_0)}
+{p(e\mid D_0)}.
+$$
+其中：
+\begin{itemize}
+  \item $p(h\mid D_0)$ 是实验前可信度；
+  \item $p(e\mid h,D_0)$ 是若机制成立，出现结果 $e$ 的概率；
+  \item $p(e\mid D_0)$ 包含其他机制也产生同一结果的可能；
+  \item 单次成功提高可信度，但不能把 posterior 直接推到 1。
+\end{itemize}
+
+\teachervoice{00:53:33--00:56:04，老师把这个案例分成 multi-year human pipeline 的 recapitulation 与 B2R node 的 prospective validation。两种贡献不能混成一句“AI 发现病因”。}
+
+\subsection{与 base LLM 的比较怎样读}
+
+课程表格比较 AI co-scientist 与 Claude 4 / GPT-5 对若干机制要素的覆盖：初始 bradykinin accumulation、APOE4-specific B2R sensitization、neuronal energetic crisis、特异性激酶和最终因果复杂度。表格想说明多智能体系统能形成更完整的机制链，但它仍是对输出内容的分析，不是对治疗效果的随机对照实验。
+
+\lecturefigure{slide-019.jpg}{AI co-scientist 与 base LLM 的机制要素比较}{Stanford CS25 V6 Lecture 07 官方录像 00:56:04}
+
+\begin{knowledgebox}{读图：比较的是“机制覆盖”，不是医学能力总排名}
+每一行是研究者事后关心的机制要素，列中记录系统是否命中或遗漏。AI co-scientist 的优势可能来自更长搜索、专门 Agent、工具和 tournament，而不一定来自基础模型本身更懂医学。若评价行由看到目标答案的人制定，还要警惕 rubric leakage。最稳健用途是做 ablation：逐项去掉 agent、工具或 compute，看哪些机制随之消失。
+\end{knowledgebox}
+
+\begin{warningbox}{Benchmark table 的三个限制}
+样本量小；机制行可能经过人工选择；“命中一个词”与“给出可验证因果模型”不同。该表支持系统设计假设，不能独立支持疾病机制或临床决策。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Alzheimer's 案例展示了一个更完整的科研闭环：公开背景提供线索，多智能体系统重建 ACE--bradykinin--B2R 机制，合作团队再对 B2R 做前瞻干预。它比隐藏结果复现更接近发现，但课堂数据仍未发表。正确阅读方式是追踪每条因果边、冻结预测时间，并把 benchmark、实验和临床证据严格分层。
+
+\section{Inverse comorbidity：跨领域连接如何交给人类}
+
+最后一个主讲案例不从已知机制开始，而从一个反常统计关系开始：某些癌症与神经退行性疾病之间可能存在 inverse comorbidity，即一个疾病出现时，另一个疾病的发生率低于预期。系统尝试寻找保护癌细胞的机制是否会伤害神经元，或反过来。
+
+\subsection{什么是 inverse comorbidity}
+
+普通 comorbidity 指两种疾病共同出现超过独立预期；inverse comorbidity 则低于预期。若疾病 $A$ 与 $B$ 在独立假设下的共同概率为 $p(A)p(B)$，可定义一个简单比率：
+$$
+\operatorname{ICR}(A,B)=\frac{p(A\cap B)}{p(A)p(B)}.
+$$
+其中：
+\begin{itemize}
+  \item $p(A\cap B)$ 是两种疾病共同出现的观察概率；
+  \item $p(A)p(B)$ 是独立时的期望共同概率；
+  \item $\operatorname{ICR}<1$ 提示 inverse association；
+  \item 年龄、死亡竞争、诊断偏差和治疗差异都可能制造假关联。
+\end{itemize}
+
+\begin{knowledgebox}{背景概念：inverse comorbidity}
+逆共病是提出机制问题的入口，不是因果结论。若 SCLC 患者较少出现某类神经退行性疾病，可能是癌细胞激活了保护性程序，也可能只是生存期、年龄结构或医疗记录造成。好的 co-scientist 应同时生成生物机制与流行病学反解释。
+\end{knowledgebox}
+
+\lecturefigure{slide-020.jpg}{SCLC 与 neurodegeneration 的 inverse-comorbidity 案例}{Stanford CS25 V6 Lecture 07 官方录像 00:57:24；课堂未发表材料}
+
+\begin{warningbox}{案例状态}
+本节展示的是系统生成的研究报告和一次专家联系，不是已完成的实验论文。它的教学价值在于跨领域 hypothesis generation 与 human handoff，而不在于证明 SCLC 机制可以治疗神经退行性疾病。
+\end{warningbox}
+
+\subsection{把反常关系变成可研究问题}
+
+问题被具体化为：small cell lung cancer（SCLC）细胞如何在高突变、基因组混乱和死亡压力下存活？这些生存机制是否与神经元在 Alzheimer’s 等疾病中失败的路径形成镜像？系统需要连接癌症 genomics、RNA editing、cell death、micro-exon 和 neuronal maintenance，多数线索原本分散在不同文献社区。
+
+\lecturefigure{slide-021.jpg}{SCLC 与 neurodegeneration 的研究问题}{Stanford CS25 V6 Lecture 07 官方录像 00:58:02}
+
+\begin{knowledgebox}{读图：先区分统计观察与生物学目标}
+左侧 bullet 说明癌细胞受到基因组混乱却持续生长，神经元则在疾病中逐步死亡；inverse comorbidity 只是提示两种命运可能共享反向机制。右侧细胞图是研究对象视觉，不是因果证据。真正的研究目标是找到可测量的保护程序，并设计能区分多种解释的实验。
+\end{knowledgebox}
+
+\subsection{四类候选：从 genomic chaos 到 neural hijack}
+
+系统给出多个方向，而不是只押注一个漂亮故事。Genomic chaos 假设聚焦 ADAR1 等 RNA editing 防御；DHX9 与 SRRM4 方向连接 helicase 和 neuronal micro-exon；Evading death 研究癌细胞怎样抑制死亡；Neural hijack 则追问肿瘤是否重用神经发育程序。Portfolio 的价值在于让实验者比较互斥预测。
+
+\lecturefigure{slide-022.jpg}{连接 SCLC 与 neurogenesis 的候选假设组合}{Stanford CS25 V6 Lecture 07 官方录像 00:58:18}
+
+\begin{knowledgebox}{读图：不要把四张卡片读成四个事实}
+每张卡片是一个搜索方向：机制、关键分子、可联系专家和潜在实验都不同。系统应保留它们之间的竞争关系，例如 ADAR1/DHX9 的“暗基因组屏蔽”解释与神经 micro-exon 解释可能给出不同干预预测。好的 meta-review 不应过早压缩成唯一故事。
+\end{knowledgebox}
+
+\begin{knowledgebox}{术语消化：候选机制}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+方向 & 解决的问题 & 可验证线索 \\
+\midrule
+Genomic chaos & 癌细胞怎样承受异常 RNA 与突变压力 & 干预 ADAR1、观察 Z-RNA 与死亡信号 \\
+DHX9/SRRM4 & RNA helicase 与 neuronal micro-exon 是否形成保护差异 & 比较表达、剪接与存活表型 \\
+Evading death & 癌细胞抑制哪类 programmed cell death & 激活或阻断候选通路 \\
+Neural hijack & 肿瘤是否重用神经发育或维持程序 & 追踪神经标记、转录网络与功能 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{Cold email 能证明什么}
+
+研究者把系统提出的候选交给领域专家 Dr. Bellegia，得到“extreme outlier”式的积极反馈：相关基因在 SCLC 数据中异常突出。这个反馈提高了候选的外部 plausibility，也证明系统能找到合适联系人，但专家认可仍可能受选择、叙事和已知证据影响。
+
+\lecturefigure{slide-023.jpg}{领域专家对候选基因异常性的反馈}{Stanford CS25 V6 Lecture 07 官方录像 00:58:50}
+
+\begin{knowledgebox}{读图：排名高不等于机制已验证}
+条形图把 SCLC 中的候选基因表达放在其他癌症背景中，显示其为显著 outlier。它支持“这个方向值得进一步研究”，却没有证明该基因导致 inverse comorbidity。下一步应有预注册的细胞或动物干预、独立数据集和针对替代解释的 negative control。
+\end{knowledgebox}
+
+\begin{warningbox}{Expert email 的证据位置}
+专家反馈高于完全内部自评，因为它引入外部领域判断；但它低于盲评、正式 peer review 和实验复现。公开演讲最容易只展示回复积极的邮件，因此应记录联系了多少专家、无回复与否定意见，以及候选在联系前的冻结排名。
+\end{warningbox}
+
+\teachervoice{00:57:24--01:00:02，老师把这一段称为 decoding inverse comorbidity，并展示系统怎样给出研究联系人。课堂强调的是 unexpected connection 和协作启动，不是已完成的生物学突破。}
+
+\subsection{百页报告怎样避免淹没科学家}
+
+系统最终报告包含候选机制、图示、证据、反例和研究联系人。长报告的优点是保留低排名线索，缺点是阅读成本与“完整性幻觉”：格式越像正式论文，用户越容易忽略其本质仍是候选集合。报告必须让 provenance、uncertainty、rank history 和建议实验可单独审计。
+
+\lecturefigure{slide-024.jpg}{AI co-scientist 生成的详细候选机制报告}{Stanford CS25 V6 Lecture 07 官方录像 00:59:22}
+
+\begin{knowledgebox}{读图：图文完整度不是证据完整度}
+页面给出 ADAR1/Z-RNA 假设、机制示意和实验建议，看起来像成熟论文。读者应逐项检查：引用是否支持具体边；图是实验数据、公开图还是生成示意；哪些句子是已知事实，哪些是推断；候选为何排第一；哪些结果会推翻它。报告的最佳用途是压缩研究启动成本，而不是绕过审查。
+\end{knowledgebox}
+
+\lecturefigure{slide-025.jpg}{报告中的 unexpected connections 与建议研究联系人}{Stanford CS25 V6 Lecture 07 官方录像 00:59:38}
+
+\begin{knowledgebox}{读图：从机制组合过渡到 human handoff}
+上半部分把 ADAR1、DHX9、p53、SRRM4 等线索组合成 sequential shield collapse；下半部分列出可联系的领域专家及其知识位置。这里体现 Agent 的两个价值：发现文献社区之间的连接，并把下一步验证路由给具体人。风险是联系人和机制同样可能由不完整检索产生，需要人工核验身份、贡献与利益冲突。
+\end{knowledgebox}
+
+\begin{lstlisting}[language=Python,caption={长报告的可审计交付结构}]
+report = {
+    "hypotheses": ranked_hypotheses,
+    "edge_level_sources": provenance_graph,
+    "counterevidence": reflection.failures,
+    "proposed_experiments": falsification_tests,
+    "uncertainty": calibrated_confidence,
+    "contacts": verified_domain_experts,
+    "run_metadata": model_tools_budget_and_timestamps,
+}
+\end{lstlisting}
+
+\subsection{本章小结}
+
+Inverse comorbidity 案例展示了 AI co-scientist 的跨领域搜索价值：从统计反常出发，形成多个竞争机制，找到外部专家，再输出带研究联系人的详细报告。它仍处于假设和人类交接阶段。正确的下一步不是宣传单一故事，而是冻结候选、设计能区分机制的实验，并记录负面专家反馈和失败路线。
+
+\section{Q\&A：真正困难的是评审、注意力与安全}
+
+主讲结束后的问答没有新增教学 slide，却补齐了系统部署最重要的约束：怎样证明 novelty，Agent 如何共享知识，科学家怎样阅读百页报告，计算规模为何未公开，以及多智能体系统怎样阻止危险研究目标。这里的口头说明是工程经验，不是形式化保证。
+
+\subsection{Knowledge cutoff 评测并不自动干净}
+
+一种自然想法是只让模型读取某个历史年份之前的材料，再测试它能否预测之后的发现。但模型训练语料、后续微调、检索缓存、论文引用和公开讨论都可能泄漏未来信息；同时，真正重要的发现往往依赖当时尚不存在的实验工具。时间切分有价值，但必须冻结整个系统而不是只写一句“使用旧知识”。
+
+\begin{warningbox}{时间切分的最低要求}
+冻结基础模型、检索索引、工具版本和输入文档；记录运行时间；选择在 cutoff 后才公开且此前没有摘要泄漏的目标；让评审看不到目标答案；保留所有候选而非只展示命中结果。否则所谓 prediction after cutoff 可能只是隐性 retrieval。
+\end{warningbox}
+
+\teachervoice{01:00:02--01:01:18，老师认为 knowledge cutoff 是有吸引力的评测方向，同时提醒模型更新和公开痕迹让真正的 temporal holdout 很难。}
+
+\subsection{Agent communication 与 peer-review bandwidth}
+
+当多个 Agent 并行产生大量假设，通信问题会从“怎样发消息”升级为“怎样建立共享但不过度同质化的研究记忆”。若所有 Agent 只读同一 summary，早期错误会扩散；若完全隔离，又会重复搜索。Peer review 也会成为瓶颈：人类不可能逐页审查无限增长的自动报告。
+
+\begin{knowledgebox}{共享 memory 的三层设计}
+事实层保存带来源的观察；假设层保存可竞争的机制和反例；过程层保存谁在何时用什么模型、工具与预算得到结论。Agent 可以共享事实而保留独立假设，再由 meta-review 比较分歧，避免一份统一摘要过早消灭探索多样性。
+\end{knowledgebox}
+
+\teachervoice{01:01:18--01:02:49，老师指出未来可能需要面向 Agent 的 peer-review system 与 knowledge base，因为自动生成速度会超过人类审稿速度。}
+
+\subsection{报告排序既要指导注意力，也要保留弱信号}
+
+科学家需要系统指出最值得先读的部分，但低排名候选可能含有尚未被 judge 理解的关键线索。合理界面应同时提供 top recommendation、反对理由、低排名 novelty bucket 与停止建议。系统也应允许回答“目前没有足够好想法，请重新定义问题”。
+
+\begin{lstlisting}[language=Python,caption={兼顾优先级与弱信号的报告分层}]
+def triage(hypotheses):
+    return {
+        "act_now": select_high_evidence_high_value(hypotheses),
+        "test_cheaply": select_high_information_low_cost(hypotheses),
+        "novel_but_uncertain": preserve_outliers(hypotheses),
+        "rejected_with_reasons": keep_failure_provenance(hypotheses),
+        "reframe_goal": detect_no_viable_path(hypotheses),
+    }
+\end{lstlisting}
+
+\teachervoice{01:02:53--01:04:30，老师说报告会告诉科学家先看哪些路径，但仍保留被系统判为不可行的想法，因为其中可能有线索；数学问题有时需要人把大问题拆成恰当子问题，系统才能推进。}
+
+\begin{importantbox}{Human decomposition 仍是核心能力}
+Agent 能扩展搜索，却未必知道什么是正确子问题。专家通过改变边界条件、选择可测代理、拆分证明或限定生物系统，决定搜索空间是否可验证。人机协作的关键不是人负责“最后确认”，而是人持续塑造问题表示。
+\end{importantbox}
+
+\subsection{没有公开的 Agent 数量，不能靠猜}
+
+听众追问一次 overnight run 使用多少并行 Agent、多少 token。主讲人表示在录制结束后再谈，没有公开数字。这个空白本身很重要：没有并行度、token、工具调用和成本，就无法判断 quality gain 来自架构还是单纯增加计算，也无法复现实验经济性。
+
+\begin{warningbox}{Compute transparency}
+科研 Agent 报告至少应公开模型版本、并行 worker、总 token、墙钟时间、工具调用、失败重试和人工时。若商业或安全原因不能公开精确值，也应提供区间和归一化效率。讲义不根据“overnight”反推虚构数字。
+\end{warningbox}
+
+\teachervoice{01:04:34--01:04:54，老师明确没有在录制中披露 agent 数与 token 量。这里必须保留为 source gap。}
+
+\subsection{多层安全：从目标过滤到运行中监控}
+
+开放式科学系统可能被用于病原体、毒物或其他危险研究。课程描述三层防线：输入目标 screening；运行中持续监控生成内容；当危险想法比例超过报告中的阈值时停止计算；此外继承 base Gemini 的安全训练与测试。讲者也承认，多 Agent 和工具扩大了出错与滥用表面。
+
+\begin{lstlisting}[language=Python,caption={课堂所述多层安全监控的概念化版本}]
+def run_research(goal):
+    if goal_filter.unsafe(goal):
+        return halt("unsafe research goal")
+
+    unsafe, total = 0, 0
+    for idea in co_scientist.stream(goal):
+        total += 1
+        unsafe += int(content_monitor.unsafe(idea))
+        if total >= minimum_window and unsafe / total >= 0.10:
+            return halt("unsafe trajectory")
+        yield sandbox_and_log(idea)
+\end{lstlisting}
+
+\begin{warningbox}{10\% 阈值不是安全定律}
+课堂提到的阈值是特定实现细节。危险内容可能在比例很低时就造成严重后果，也可能通过分散、编码或工具链绕过分类器。真正的 defense in depth 还需要权限隔离、工具沙箱、敏感数据控制、人工审批、红队、审计和事后响应。
+\end{warningbox}
+
+\teachervoice{01:04:56--01:06:20，老师说明输入检查可能被改写绕过，所以还要监控运行中的 ideas；同时明确承认 multi-agent setup 扩大了可能出错和被滥用的表面。}
+
+\subsection{本章小结}
+
+Q\&A 把问题从“Agent 会不会生成好想法”推进到部署现实：时间切分可能泄漏，Agent communication 可能放大共识错误，peer review 与人类注意力会成为瓶颈，compute 信息可能不完整，安全过滤也会被绕过。可靠系统必须把 provenance、资源、负结果、报告分层和安全控制设计为一等对象。
+
+\section{总结与延伸}
+
+这堂课最重要的贡献不是宣称 AI 已经替代科学家，而是给出一套\textbf{把基础模型组织成科学协作系统}的框架。模型提供广泛知识和推理，Agent 把搜索操作分工，tournament 提供相对优先级，tools 把文本连接到专门计算，memory 保留跨轮状态，而人类负责目标、约束、实验、伦理和最终解释。
+
+\subsection{把整堂课压缩成一个闭环}
+
+前面各章分别讨论了搜索、排序、实验与安全；这里把它们重新连成一个有输入、有反馈、有停止条件的循环。读这条链时不要把箭头理解为一次线性流水线：实验失败会返回 Goal 与 Generate，专家也可以在任意阶段修改约束、暂停运行或要求补充证据。AI co-scientist 的工作流可以压缩为
+$$
+\text{Goal}
+\rightarrow \text{Generate}
+\rightarrow \text{Debate}
+\rightarrow \text{Rank}
+\rightarrow \text{Evolve}
+\rightarrow \text{Test}
+\rightarrow \text{Update}.
+$$
+其中：
+\begin{itemize}
+  \item Goal 由科学家给出，并可在中途重构；
+  \item Generate 与 Evolve 扩大候选空间；
+  \item Debate 与 Rank 暴露弱点并分配内部注意力；
+  \item Test 把候选接入工具、专家和实验；
+  \item Update 同时更新候选、证据图、失败记录和下一轮问题。
+\end{itemize}
+
+\begin{importantbox}{本讲的十条核心结论}
+\begin{enumerate}
+  \item 科学发现速度应按被验证知识衡量，而不是生成文本数量。
+  \item 开放式 hypothesis generation 需要系统流程，不能只靠一次 prompt。
+  \item AlphaFold 证明专门任务可以被巨大压缩，但不等于 general scientific intelligence。
+  \item Multi-agent 的价值来自异质分工、比较与反馈，不来自复制相同回答。
+  \item Elo 与 model-as-judge 只提供内部 prioritization，不能替代现实证据。
+  \item AMR 是隐藏结果复现，不应改写成前瞻发现。
+  \item AML、organoid、结构预测和课堂未发表结果属于不同证据层。
+  \item Prospective validation 的关键是实验前冻结预测和指标。
+  \item 长报告必须保留 provenance、反例、负结果和资源元数据。
+  \item Scientist-in-the-loop 与 layered safety 都要贯穿运行过程，而不是最后补签。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{从 hypothesis throughput 到 validation throughput}
+
+未来系统的限制很可能不是生成不出假设，而是没有足够实验、专家和审稿能力。工程优化应从“每小时多少候选”转向“每单位验证成本排除多少机制、获得多少信息”。这也意味着负结果、校准和停止建议与命中结果同样有价值。
+
+\begin{knowledgebox}{部署前决策清单}
+问题是否可证伪？输入资料是否冻结并可追溯？Agent 分工是否真的异质？judge rubric 是否公开？是否记录全部候选和负结果？实验前是否冻结预测？报告是否区分事实、推断和建议？是否公开 compute 区间？工具权限是否最小化？是否有人类能在运行中暂停、重构和拒绝目标？
+\end{knowledgebox}
+
+\subsection{仍然开放的研究问题}
+
+第一，怎样评价真正 novelty，而不奖励模型熟悉的写作风格？第二，怎样让多个 Agent 共享事实又保持假设多样性？第三，怎样学习实验价值而不把昂贵现实世界反馈简化成 proxy？第四，怎样为科学报告提供 edge-level provenance 和可执行 falsification test？第五，如何让安全系统理解长时间、跨 Agent 组合后才出现的危险意图？
+
+\begin{warningbox}{不能从本讲推出的结论}
+不能推出 AI co-scientist 已能独立完成科学；不能推出所有展示案例均已发表或可临床使用；不能推出更多 test-time compute 必然产生突破；不能推出一个 10\% 监控阈值足以保障安全；也不能根据结尾过渡卡补写未录制的 AMIE 内容。
+\end{warningbox}
+
+\subsection{拓展阅读}
+
+建议先读课堂日前的 `Towards an AI co-scientist` arXiv v1，重点检查 architecture、test-time scaling、AML、AMR 与 OCT4 appendix；再读 AMR bioRxiv v1，核查隐藏结果复现的时间线和候选比较；随后阅读 liver-fibrosis 与 plant-assembly 两篇 bioRxiv v1，比较 organoid 与结构生物学的验证层级。阅读后续 Nature 版本时，应明确它发表于课堂日期之后，不能倒推为课堂当日证据。
+
+\begin{knowledgebox}{Lecture snapshot}
+\raggedright
+本讲发生于 2026-05-14。讲义使用当时已公开的四份版本：AI co-scientist arXiv v1（2502.18864）、AMR bioRxiv v1（2025.02.19.639094）、liver-fibrosis bioRxiv v1（2025.04.29.651320）与 plant-assembly bioRxiv v1（2026.05.03.722499）。2026-06-29 的 arXiv v2、后续 Nature 版本及其他课后材料不作为课堂事实。
+\end{knowledgebox}
+
+\enlargethispage{3\baselineskip}
+最终，AI co-scientist 的价值不在于输出一篇“像论文”的答案，而在于把开放问题转成一组可比较、可反驳、可路由给合适专家和实验的候选。只要验证、责任和安全仍留在闭环中，Agent 才是在加速科学，而不是加速未经验证的确信。
+
+\end{document}

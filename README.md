@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-**353 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
+**368 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-353份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-368份-blue?style=for-the-badge)](.)
 [![Collections](https://img.shields.io/badge/内容系列-17个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
@@ -31,7 +31,7 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
-> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 353 份讲义。
+> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 368 份讲义。
 
 ## 📥 克隆指南
 
@@ -80,33 +80,37 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
-| Stanford 课程 | 154 | CS329A、CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
+| Stanford 课程 | 169 | CS329A、CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
 | MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
 | Berkeley 课程 | 35 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
 | B 站系列课程 | 47 | Modern Agent、LLM Architect、Agentic RL |
 | 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **353** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| **合计** | **368** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
 ## 📋 课程一览
 
-### 🏫 Stanford 课程 (154 份)
+### 🏫 Stanford 课程 (169 份)
 
 | 课程 | 主题 | 讲数 | 讲者 |
 |------|------|------|------|
 | [**CS329A**](cs329a/) | Self-Improving AI Agents | 9 | Aakanksha Chowdhery, Azalia Mirhoseini |
 | [**CS336**](cs336/) / [**CS336 2026**](cs336-2026/) | Language Modeling from Scratch | 17 + 18 | Percy Liang, Tatsu Hashimoto |
 | [**CS224R**](cs224r/) | Deep Reinforcement Learning | 19 | Chelsea Finn |
-| [**CS25**](cs25/) | Transformers United (V1-V5) | 40 | Hinton, Karpathy, Vaswani, Noam Brown... |
+| [**CS25**](cs25/) / [**CS25 V6**](cs25-v6/) | Transformers United (V1-V6) | 41 + 9 | Hinton, Karpathy, Vaswani, Noam Brown... |
 | [**CS153**](cs153/) | Infra @ Scale / Frontier Systems | 11 | Anjney Midha + 业界领袖 |
 | [**CS146S**](cs146s/) | The Modern Software Developer | 10 | Mihail Eric + 业界嘉宾 |
 | [**CS224N**](cs224n/) | NLP with Deep Learning | 17 | Chris Manning |
 | [**CS231N**](cs231n/) | Deep Learning for Computer Vision | 18 | — |
 
 > **CS336 Spring 2026 第二轮重写已完成（2026-08-11）**：18/18 讲共 607 页、561 张图、824 个教学盒；全部通过 strict source coverage、`⭐⭐⭐` 质量检查、双遍 XeLaTeX 与人工 PDF 视觉 QA。有 transcript 或 executable narration 的讲次均附 teacher-voice ledger。
+
+> **CS25 V1--V5 全量重写已完成（2026-08-12）**：41/41 讲共 2,021 页、2,051 张图、1,598 个教学盒，均按 source-first 工作流重建并通过 strict coverage、`⭐⭐⭐`、双遍 XeLaTeX 与人工 PDF 视觉 QA；官方 slides、录像恢复 teaching states、teacher-voice ledger、coverage matrix 与 QA 报告均随讲次保存。
+
+> **CS25 V6 全量生成已完成（2026-08-13）**：9/9 讲共 472 页、474 张教学图、393 个教学盒，全部按 source-first / teacher-voice / slide-complete 流程制作，并通过 strict coverage、`⭐⭐⭐`、稳定双遍 XeLaTeX 与人工 PDF 视觉 QA。Lecture 09 `Serving Transformers: Lessons from the Trenches of Production Inference` 为 59 页，覆盖 57 张 required 官方 deck pages + 1 张 live token-timing demo，包含 71 个教学盒、12 个公式块与 7 个代码 listing；完整审计 82:31 录像的 990 个五秒采样和 17 张 contact sheets，未把录像未讲的 CI/CL appendix 与招聘页补造成课堂内容。课程范围与官方链接记录在 [`cs25-v6/COURSE_SCOPE.md`](cs25-v6/COURSE_SCOPE.md)。
 
 ### 🏛 MIT 课程 (10 份)
 
@@ -221,7 +225,8 @@ ai-course-notes/
 ├── cs231n/                   # Stanford CS231N (18 讲)
 ├── cs224r/                   # Stanford CS224R (19 讲, 含 slides)
 ├── cs146s/                   # Stanford CS146S (10 周, 基于 slides)
-├── cs25/                     # CS25 Transformers United (40 讲)
+├── cs25/                     # CS25 Transformers United (41 讲)
+├── cs25-v6/                  # CS25 Transformers United V6 (9 讲, 完整)
 ├── 6s191/                    # MIT 6.S191 (10 讲)
 ├── kaist-cs492d/             # KAIST CS492D (15 讲)
 ├── modern-agent/             # 五道口纳什 Modern Agent (17 讲)

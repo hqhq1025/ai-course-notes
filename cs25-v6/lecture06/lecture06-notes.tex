@@ -1,0 +1,768 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 06：参数与上下文的不同泛化模式——如何弥合 Latent Generalization Gap}
+\renewcommand{\noteauthors}{基于 Andrew Lampinen 官方讲座、50 页官方 slide deck 与英文人工字幕整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-05-07；上传 2026-05-20}
+\renewcommand{\videoduration}{1:12:30（主讲至约 45:30，其后为 Q\&A）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=dJtHauhRasc}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.47\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \small
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{同一个模型，两条学习通道}
+
+这堂课从一个看似简单、实际上非常根本的问题出发：语言模型获得一条新信息时，\textbf{把它写进参数}与\textbf{把它留在上下文}，是否会产生同一种可调用知识？两条路径都能让模型在当前任务上表现得像“学会了”，但 Lampinen 及合作者的受控实验表明，二者在 reversal、syllogism、codebook、alternative goal 等需要重组关系的测试上，会表现出显著不同的泛化模式。
+
+\subsection{研究对象不只是 Transformer，也包括学习系统本身}
+
+课程首先把问题放到自然智能与人工智能的共同坐标中。这里不是要从 Transformer 的一个实验直接推断大脑机制，而是利用人工系统的可控性：研究者可以把\textbf{完全相同的新信息}分别放进 context 或 parameter，再观察后续预测如何变化。对人类而言，我们很难精确控制一段经历进入了哪类记忆系统；对模型而言，这个干预可以重复、消融并量化。
+
+\lecturefigure{slide-002.jpg}{从语言模型泛化反推学习系统的计算原则}{Stanford CS25 V6 Lecture 06 官方 slide p. 2}
+
+\teachervoice{00:01:06--00:02:18，老师强调这是一种 cognitive science 方法：模型的价值不仅是性能对象，也是一种可做受控干预的学习系统。后面的自然智能类比必须建立在这些模型实验之后，而不能先把脑区名称套到模型组件上。}
+
+\begin{importantbox}{本讲的总问题}
+给定同一批经验 $D$，如果模型通过参数更新学习 $D$，与把 $D$ 直接放进上下文，模型能否对\textbf{未被显式写出的关系}做出同样灵活的推理？若不能，差异来自容量、优化、访问方式，还是知识表示的可用性？
+\end{importantbox}
+
+\subsection{Parametric learning 与 in-context learning}
+
+参数学习（parametric learning）通过训练损失把大量样本压缩进权重；上下文学习（in-context learning, ICL）不更新权重，而是在一次前向推理中使用 prompt 里的事实、示例和文档。二者都可以改变输出，却对应不同的信息生命周期：前者持久、可摊销，但经历被高度压缩；后者短暂、占用 context window，却保留更多局部细节。
+
+\lecturefigure{slide-003.jpg}{语言模型的两种学习路径：参数优化与上下文使用}{Stanford CS25 V6 Lecture 06 官方 slide p. 3}
+
+参数学习可以写成
+$$
+\theta' = \arg\min_{\theta}\sum_{(x,y)\in D}\mathcal{L}\!\left(f_{\theta}(x),y\right),
+$$
+其中：
+\begin{itemize}
+  \item $D$ 是新训练数据；
+  \item $f_{\theta}$ 是参数为 $\theta$ 的语言模型；
+  \item $\mathcal{L}$ 是 next-token 或任务损失；
+  \item $\theta'$ 是吸收数据后长期保留的新参数。
+\end{itemize}
+
+ICL 则保持参数不变：
+$$
+p(y\mid x,D)=f_{\theta}\!\left(y\mid \operatorname{concat}(D,x)\right).
+$$
+这里 $D$ 不被压进 $\theta$，而是作为当前计算图的一部分直接参与预测。因而“模型知道了什么”必须拆成两个问题：信息是否存在，以及信息是否能在当前目标下被重新组织和调用。
+
+\begin{knowledgebox}{术语表：两种“学会”到底差在哪里}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+维度 & Parametric learning & In-context learning \\
+\midrule
+信息位置 & 权重与内部表示 & 当前 token 序列及其激活 \\
+持续时间 & 跨请求保留 & 通常只在当前上下文有效 \\
+整合范围 & 可跨海量训练样本统计整合 & 受 context window 与检索质量限制 \\
+细节保留 & 经优化压缩，可能绑定原任务格式 & 原始经历较完整，可按新目标重读 \\
+主要成本 & 训练、更新、版本管理 & 推理 token、KV cache、检索与延迟 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{受控实验：只改变信息从哪里来}
+
+课程的关键方法不是比较两个不同模型，而是尽量固定模型、数据和测试，只改变信息通道。研究者可以构造模型预训练时没见过的实体和关系，把整套新数据放进 context，或者用相同数据 fine-tune，再对正向事实、反向关系、组合推理与隐藏结构分别测试。这种设计把“信息来源”从模型规模、世界知识和训练语料中剥离出来。
+
+\lecturefigure{slide-004.jpg}{把同一份 novel information 注入 context 或 parameters 的受控实验}{Stanford CS25 V6 Lecture 06 官方 slide p. 4}
+
+\begin{lstlisting}[language=Python,caption={同数据、不同信息通道的受控比较伪代码}]
+dataset = build_novel_relations()
+tests = build_forward_and_latent_tests(dataset)
+
+icl_model = frozen_model
+icl_scores = evaluate(icl_model, context=dataset, tests=tests)
+
+ft_model = finetune(copy(frozen_model), dataset)
+ft_scores = evaluate(ft_model, context=None, tests=tests)
+
+compare(icl_scores, ft_scores, by=["forward", "reversal", "composition"])
+\end{lstlisting}
+
+\lecturefigure{slide-005.jpg}{全课路线：先测差异，再比较三种桥接方案，最后讨论自然智能}{Stanford CS25 V6 Lecture 06 官方 slide p. 5}
+
+\begin{warningbox}{不要把“会回答”直接等同于“形成了同一种知识”}
+两个系统在训练分布或显式问题上都能答对，不代表内部知识具有相同的可重组性。真正有辨识度的是：问题换方向、换目标、换语言、增加一跳关系，或要求调用训练中只隐含存在的结论时，性能是否仍然保持。
+\end{warningbox}
+
+\subsection{本章小结}
+
+本章建立了全课的因果变量：同一信息通过参数或上下文进入模型。参数学习擅长跨大量经验做长期统计整合，ICL 则让少量经历以更丰富的细节直接参与当前计算。接下来要检验的不是哪条路径“更智能”，而是哪一类测试能暴露它们在知识可用性上的差异。
+
+\section{Latent Generalization Gap：为什么反向关系最先暴露问题}
+
+最清楚的入口是 reversal curse。若模型学到“Daphne Barrington 导演了 A Journey Through Time”，人类通常会认为“谁导演了这部电影”只是同一关系的反向查询；但 fine-tuned LLM 往往只能沿训练语句的方向回答。奇怪的是，把同一句新事实写进聊天上下文，模型却能轻松反向使用。
+
+\subsection{Reversal curse 与聊天中的反例}
+
+设二元关系 $R(a,b)$ 表示“$a$ 与 $b$ 具有训练中给定的方向关系”。反向问题要求模型调用
+$$
+R(a,b)\Longrightarrow R^{-1}(b,a).
+$$
+这里：
+\begin{itemize}
+  \item $R$ 是原始关系，如“导演了”或“包含”；
+  \item $R^{-1}$ 是查询方向相反的关系；
+  \item 逻辑信息并未增加，变化的是访问方向与输出形式。
+\end{itemize}
+
+\lecturefigure{slide-007.jpg}{Fine-tuning 后出现的 reversal curse}{Stanford CS25 V6 Lecture 06 官方 slide p. 7}
+
+\teachervoice{00:03:30--00:04:21，老师说真正令人惊讶的不是 reversal curse 本身，而是“在 chat 里这明明很容易”。他之前甚至把 reversal 当作弱模型也能完成的 easy baseline，这个反差促成了参数与上下文的直接比较。}
+
+\lecturefigure{slide-008.jpg}{上下文中的模型能够直接完成同一反向关系}{Stanford CS25 V6 Lecture 06 官方 slide p. 8}
+
+\begin{importantbox}{核心矛盾不是缺少事实，而是事实的调用方向}
+Fine-tuned 模型已经在正向问题上证明它记住了事实；失败发生在目标函数没有直接训练过的反向访问上。ICL 的成功则说明同一架构在信息仍位于 context 时，具备完成这种变换的计算能力。
+\end{importantbox}
+
+\subsection{“ICL 类似梯度下降”为什么不能结束讨论}
+
+一些理论工作在特定线性回归、优化最优或构造性设定中发现，Transformer 的前向计算可以实现类似 gradient descent 的更新。因此 slide 10 故意提出一个反问：如果 ICL 在机制上近似某种优化，为什么真正更新参数后反而更不灵活？答案是，\textbf{局部算法相似}不等于\textbf{最终表示、压缩与访问接口相同}。
+
+\lecturefigure{slide-009.jpg}{研究问题：参数与上下文是否诱导不同的泛化}{Stanford CS25 V6 Lecture 06 官方 slide p. 9}
+
+\lecturefigure{slide-010.jpg}{ICL 与 gradient descent 的受限类比}{Stanford CS25 V6 Lecture 06 官方 slide p. 10}
+
+\begin{warningbox}{ICL $\simeq$ gradient descent 不是全局等价定理}
+这些结果通常依赖任务分布、模型构造和最优算法假设。即使前向激活执行了一步类似优化的计算，也不能推出：它与长期训练后得到相同参数表示、相同信息瓶颈、相同可逆性，或相同的 out-of-distribution generalization。
+\end{warningbox}
+
+\subsection{同一数据：整包放进 context，或完整 fine-tune}
+
+为了避免“ICL 只看到了被人工挑选的相关事实”这一混淆，实验把整个新数据集放进长上下文，而不是只给 few-shot 示例。另一组模型则在同一数据上 fine-tune。测试同时包含显式方向和训练中未直接出现的 latent query，从而区分记忆、检索与关系变换。
+
+\lecturefigure{slide-011.jpg}{Fine-tuning 与整数据集 ICL 的对照协议}{Stanford CS25 V6 Lecture 06 官方 slide p. 11}
+
+可定义一个简化的 latent generalization gap：
+$$
+\Delta_{\text{latent}}=
+\operatorname{Acc}_{\text{ICL}}(T_{\text{latent}})
+-\operatorname{Acc}_{\text{FT}}(T_{\text{latent}}).
+$$
+其中：
+\begin{itemize}
+  \item $T_{\text{latent}}$ 是答案没有以目标形式直接出现在训练数据里的测试；
+  \item $\operatorname{Acc}_{\text{ICL}}$ 是整数据集位于上下文时的准确率；
+  \item $\operatorname{Acc}_{\text{FT}}$ 是同数据用于 fine-tuning 后的准确率；
+  \item $\Delta_{\text{latent}}>0$ 只描述当前实验差异，不是所有任务上的普遍常数。
+\end{itemize}
+
+\lecturefigure{slide-012.jpg}{Reversal 数据集上 ICL 与 fine-tuning 的巨大差距}{Stanford CS25 V6 Lecture 06 官方 slide p. 12}
+
+读这张柱状图时先分清 forward 与 reversal。Fine-tuned 模型在 forward 方向并非完全失忆，它的问题集中在 relation reversal；ICL 即使承载整套数据仍能显著恢复反向查询。图支持“访问与重组方式不同”，但不能单独说明参数里究竟缺少了哪一个可解释变量。
+
+\begin{knowledgebox}{读图：先比较同一测试方向，再比较学习路径}
+不要把蓝色、灰色与黄色柱简单理解成三个模型强弱。第一步先看 forward 条件，确认各方法确实吸收了显式事实；第二步再看 reversal 条件的掉点；第三步才比较 ICL 与 fine-tuning 的相对差异。只有这样才能把“没有学到事实”与“没有学会反向调用”分开。
+\end{knowledgebox}
+
+\lecturefigure{slide-013.jpg}{Syllogism 测试同样显示 context 优势}{Stanford CS25 V6 Lecture 06 官方 slide p. 13}
+
+Syllogism 要求从“All zamp are snaff”与“No snaff are plusk”推出“No zamp are plusk”。这不是简单倒置一个短语，而是组合两个显式命题得到一个未写出的结论。ICL 的优势因此从 directional reversal 扩展到 relation composition。
+
+\lecturefigure{slide-014.jpg}{第一阶段结论：ICL 对若干 latent test 的泛化更强}{Stanford CS25 V6 Lecture 06 官方 slide p. 14}
+
+\teachervoice{00:08:55--00:12:15，老师特别强调：ICL 不是只拿到一条被检索好的事实，而是拿到整个数据集；不同模型和任务上的差距大小会变化，但 reversal 与 syllogism 的定性模式反复出现。}
+
+\subsection{为什么互联网文本会训练 ICL，却没有训练出同样的参数行为}
+
+互联网文本天然包含“先给背景、后问问题”“先定义实体、后进行指代与组合”的局部结构，因此语言模型在预训练中频繁练习从 context 临时建立关系。Slide 15 的难题在于：如果这种能力已经存在，为什么用新的关系 fine-tune 后，模型不把同样的变换规则迁移到参数知识上？这说明学习规则不仅决定存了什么，也决定知识以何种接口可用。
+
+\lecturefigure{slide-015.jpg}{上下文结构常见，但 fine-tuning 后仍未学会相同泛化}{Stanford CS25 V6 Lecture 06 官方 slide p. 15}
+
+\begin{knowledgebox}{一种工作解释：skill 与 content 分离}
+预训练可能在参数中形成了“如何读取 context 并组合其中关系”的 skill；新事实留在 context 时，这个 skill 可直接作用于它。Fine-tuning 把 content 写入参数后，模型需要另一个接口把参数知识重新暴露给该 skill。若表示没有形成稳定的可调用方向，已有推理能力也无从使用。
+\end{knowledgebox}
+
+\subsection{从头训练仍然失败：不是旧模型的适配偶然}
+
+一个自然反驳是：预训练模型早已形成固定表示，少量 fine-tuning 才导致 reversal failure；如果从头训练，也许网络会学会对称关系。课程用约 20M 参数的小模型、20,000 个合成关系和 held-out reversals 检验这一点。合成 token 没有英语语义，模型也不能借助世界知识猜答案。
+
+\lecturefigure{slide-016.jpg}{假设：从头预训练也许能学会 latent relation}{Stanford CS25 V6 Lecture 06 官方 slide p. 16}
+
+\lecturefigure{slide-017.jpg}{From-scratch reversal 实验：训练方向与 held-out 反向关系}{Stanford CS25 V6 Lecture 06 官方 slide p. 17}
+
+若训练集中对大多数关系同时提供正反方向，只对一小部分关系隐藏 reverse，可把测试写成
+$$
+D_{\text{train}}=D_{\text{forward}}\cup D_{\text{reverse,seen}},
+\qquad
+T=D_{\text{reverse,heldout}}.
+$$
+其中模型已经看到“关系可以双向表达”的总体规律，却仍需把这条规律迁移到具体 held-out 实体。结果表明，parametric learning 对具体实例的 latent reversal 仍然薄弱，而把对应定义放入 context 可以完成编码。
+
+\teachervoice{00:13:24--00:14:02，老师回答课堂提问时说明：from-scratch 条件里模型不知道英语，输入只是合成 token。这一控制排除了“模型根据名字、常识或预训练语义补全答案”的解释。}
+
+\subsection{Codebook：从反向查询扩展到翻译式组合}
+
+Codebook 任务先定义索引到字符的映射，再给若干编码示例。显式测试只要求使用训练中直接练过的索引；latent test 则要求把定义和编码规则组合起来，处理训练编码样本中没出现过的索引。它更接近临时语言、符号翻译和工具协议，而不只是自然语言句子的倒序。与 reversal 相比，这个任务把“关系方向”升级成“先读取定义、再执行程序”，因而能检查模型是否把定义当作可复用规则，而非只拟合见过的输入输出对。
+
+\lecturefigure{slide-018.jpg}{Codebook 的 trained indices 与 latent indices}{Stanford CS25 V6 Lecture 06 官方 slide p. 18}
+
+若 codebook 为 $c:k\mapsto v$，字符串编码可写为
+$$
+\operatorname{Encode}_{c}(s_1\cdots s_n)
+=\bigl(c^{-1}(s_1),\ldots,c^{-1}(s_n)\bigr).
+$$
+这里：
+\begin{itemize}
+  \item $c$ 是索引到符号的映射；
+  \item $c^{-1}$ 是从符号找回索引的逆映射；
+  \item latent test 要求把“定义映射”与“执行编码”组合，而不是复述训练样例。
+\end{itemize}
+
+\lecturefigure{slide-019.jpg}{即使从头训练，若干 latent structure 仍不稳定泛化}{Stanford CS25 V6 Lecture 06 官方 slide p. 19}
+
+\begin{importantbox}{从头训练实验排除了什么，没排除什么}
+它排除了“只是旧模型不适应新事实”的简单解释，也说明训练分布中存在一般结构并不保证每个实例都以可重组方式编码。它没有证明所有架构、优化器、数据规模或学习规则必然失败；相反，它把“怎样学习可调用的 latent structure”变成后续算法问题。
+\end{importantbox}
+
+\subsection{显式内容、latent information 与可用信息}
+
+课程随后给出最重要的概念压缩。一次经验的 explicit content 是表面直接陈述；latent information 是由这些陈述可推出、但没有以未来问题形式写出的关系；usable information 则还要再加一层条件：模型能否在当前目标下把 latent relation 变成正确输出。
+
+\lecturefigure{slide-020.jpg}{Reversal、multi-hop、alternative goals 与 cross-lingual 的 latent structure}{Stanford CS25 V6 Lecture 06 官方 slide p. 20}
+
+\begin{knowledgebox}{读图：四个例子共享同一个信息结构}
+读图时不要逐个记任务名，而要寻找共同模式：左侧或上方给出 explicit experience，右侧或下方测试一个未被直接写出的目标。Reversal 改变方向，multi-hop 增加组合深度，alternative goal 改变行动目标，cross-lingual 改变表达语言；它们都在测试经验能否被重新解释。
+\end{knowledgebox}
+
+\begin{knowledgebox}{First-use glossary：latent learning}
+\begin{tabularx}{\textwidth}{L{0.23\textwidth}X X}
+\toprule
+术语 & 含义 & 例子 \\
+\midrule
+Explicit content & 经验中直接出现的命题或目标 & “X is Y's parent” \\
+Latent information & 由显式内容蕴含、但未按测试形式写出的信息 & “Y 的父母是谁？”可由关系反向得到 \\
+Latent generalization & 在新方向、新组合或新目标下使用 latent information & 从两条 parent 关系推出 grandchild \\
+Usable information & 模型在当前计算路径中能够稳定访问并用于输出的信息 & 事实存在参数中，但必须能被目标条件激活 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\lecturefigure{slide-021.jpg}{参数整合更广，上下文经历细节更丰富}{Stanford CS25 V6 Lecture 06 官方 slide p. 21}
+
+这张图不能被读成“参数差、上下文好”。参数学习的优势是跨文档整合、压缩和摊销；context 的优势是把少量经历以相对完整的形式暴露给模型。真正的张力是 breadth versus flexibility：覆盖更多经验时，是否牺牲了按未来未知目标重新解释单次经历的能力。
+
+\subsection{为什么现实数据会掩盖失败：co-occurrence shortcut}
+
+在自然语料中，“eagle”“bird”“wing”经常共同出现。即使模型没有执行严格的 syllogism，也可能根据词共现答对“eagles have wings”。因此实践中的非零准确率不能自动证明 systematic reasoning；它可能来自有效但不同的统计路径。
+
+\lecturefigure{slide-022.jpg}{词共现可绕过显式 reversal 或 syllogistic inference}{Stanford CS25 V6 Lecture 06 官方 slide p. 22}
+
+可以把预测信号粗略分成
+$$
+\log p(y\mid x)=S_{\text{stat}}(x,y)+S_{\text{rel}}(x,y)+\varepsilon,
+$$
+其中：
+\begin{itemize}
+  \item $S_{\text{stat}}$ 表示词频、实体相似性与共现等统计信号；
+  \item $S_{\text{rel}}$ 表示方向变换、组合与规则应用等关系信号；
+  \item $\varepsilon$ 汇集未建模因素。该式是教学分解，不是论文声称的可辨识生成模型。
+\end{itemize}
+
+\begin{warningbox}{统计捷径不是“作弊”，但会改变证据含义}
+统计规律通常提高真实世界的期望性能，不能因为它不是形式逻辑就删除。问题在于：若评测目标是验证 reversal 或 composition，数据中的共现线索会让模型绕过待测机制。受控实验需要消除捷径；部署系统则应同时利用统计与结构推理。
+\end{warningbox}
+
+\teachervoice{00:18:39--00:21:26，老师先说 co-occurrence 会掩盖 latent failure，随后又明确纠正一种过度解读：统计结构本身非常有用，课程并不是主张模型只能靠纯逻辑。}
+
+\lecturefigure{slide-023.jpg}{没有关联线索时，怎样让模型学会 latent relation？}{Stanford CS25 V6 Lecture 06 官方 slide p. 23}
+
+\subsection{本章小结}
+
+Reversal、syllogism 与 codebook 共同表明：模型能记住 explicit content，不代表它能把同一经验转换成任意未来目标需要的形式。ICL 在这些受控任务上更灵活，但优势并非普遍定理；现实语料中的共现、语义与检索技能会改变结果。下一步不是简单选择 context，而是把 context 的灵活计算迁移到可扩展系统中。
+
+\section{Bridge 1：用 In-Context Augmentation 改造训练数据}
+
+第一条桥接路线在训练前完成：既然模型在 context 中能看到 reversal、missing link 和 multi-hop implication，就让模型先在 context 中把这些关系显式化，再用扩展后的数据 fine-tune。它把一次昂贵的推理过程离线摊销进参数，适合未来问题族相对可预见的场景。
+
+\subsection{离线与在线：先做架构级分流}
+
+Slide 25 把方案分成两族。Train-time/offline 方法在训练前生成补充结论，之后推理便宜；test-time/online 方法保留原始经历，在问题出现时检索或重新生成，覆盖更开放但每次请求更贵。这个分流比具体算法名更重要，因为它决定数据治理、延迟、缓存、评测和失败恢复方式。
+
+\lecturefigure{slide-025.jpg}{桥接 latent gap 的两大家族：离线增强与在线恢复}{Stanford CS25 V6 Lecture 06 官方 slide p. 25}
+
+\begin{importantbox}{设计选择先问“未来问题是否可枚举”}
+若未来查询类型稳定、训练可重跑且推理延迟敏感，离线 augmentation 有吸引力；若目标不断变化、单次经历细节很重要，或错误需要追溯原始证据，则在线 retrieval / regeneration 更合适。
+\end{importantbox}
+
+\subsection{算法：让模型先连接文档，再 fine-tune}
+
+In-context augmentation 把完整或分块语料放进 context，要求模型重写当前文档、连接其他文档、补出反向关系和跨文档推论。生成结果与原数据合并，再进行 fine-tuning。这里的关键不是普通 paraphrase，而是让已有 ICL skill 把 latent relation 转换成直接监督信号。
+
+\lecturefigure{slide-026.jpg}{Approach 1：in-context augmentation 的训练流水线}{Stanford CS25 V6 Lecture 06 官方 slide p. 26}
+
+\begin{lstlisting}[language=Python,caption={In-context augmentation 的最小实现框架}]
+augmented = []
+for document in corpus:
+    context = retrieve_related_documents(corpus, document)
+    prompt = build_connection_prompt(context, document)
+    implications = teacher_model.generate(prompt)
+    augmented.extend(validate_and_deduplicate(implications))
+
+finetune_dataset = corpus + augmented
+student = finetune(base_model, finetune_dataset)
+\end{lstlisting}
+
+\lecturefigure{slide-027.jpg}{把单篇文档与全局语料连接，生成可直接训练的结论}{Stanford CS25 V6 Lecture 06 官方 slide p. 27}
+
+读这个例子时要追踪三层对象：原始文档只写出局部事实；全局 context 提供另一条关系；augmentation 模型生成“Dax can zarp”一类跨文档结论。最终 student 不必在测试时重新扫描整套 corpus，因为该结论已经成为训练 target。
+
+\subsection{结果：augmented fine-tuning 可以追平甚至超过 ICL}
+
+在 reversal 与 syllogism 等已被 augmentation 覆盖的问题族上，扩展数据后的 fine-tuning 能追平 ICL，部分设置甚至更好。这并不神秘：ICL 的推理结果被转成更多直接监督，student 获得了原 fine-tuning 缺少的目标方向。
+
+\lecturefigure{slide-028.jpg}{Augmented fine-tuning 在 reversal 与 syllogism 上追平或超过 ICL}{Stanford CS25 V6 Lecture 06 官方 slide p. 28}
+
+\lecturefigure{slide-029.jpg}{结论：ICL 可作为训练数据的关系展开器}{Stanford CS25 V6 Lecture 06 官方 slide p. 29}
+
+\teachervoice{00:24:17--00:27:21，老师把两种结果称为“很好但不同”：ICL 直接在测试时灵活推理；augmentation 则用 ICL 先生成连接，再把这些连接蒸馏进参数。后者的优势只对被展开的问题族成立。}
+
+\begin{knowledgebox}{为什么 augmented fine-tuning 可能超过直接 ICL}
+直接 ICL 每次都要在长 context 中检索并组合，受位置、干扰和 context retrieval 能力影响；augmentation 可以生成多种方向、去重、过滤，再通过多轮优化强化同一结论。因此“超过 ICL”不表示参数学习天然更灵活，而表示离线管线为目标任务构造了更直接的监督分布。
+\end{knowledgebox}
+
+\subsection{没有从无到有：变化的是可访问性}
+
+Slide 30 预先回应信息论质疑：如果 augmentation 只是读原数据，怎么能“得到更多信息”？正确回答是，它没有创造新的 ground-truth；它利用模型已有先验与 context reasoning，把原数据隐含的结论改写为显式样本。理解这两页时要区分 semantic implication 与 independent evidence：前者可以通过计算被展开，后者仍必须来自真实观测或可靠来源；augmentation 只能改善表示和访问，不能替代证据采集。
+
+\lecturefigure{slide-030.jpg}{质疑：augmentation 是否从 nothing 产生 information？}{Stanford CS25 V6 Lecture 06 官方 slide p. 30}
+
+\lecturefigure{slide-031.jpg}{回答：把 latent implication 变成 explicit supervision}{Stanford CS25 V6 Lecture 06 官方 slide p. 31}
+
+若增强器 $A$ 对数据 $D$ 是确定性的，则
+$$
+H\!\left(A(D)\mid D\right)=0.
+$$
+其中：
+\begin{itemize}
+  \item $A(D)$ 是由 $D$ 推导出的重写、反向关系或组合结论；
+  \item $H(\cdot\mid\cdot)$ 是条件熵；
+  \item 该式说明给定原数据后，确定性增强没有新增独立随机信息；
+  \item 实际 LLM 生成是随机的，还会注入模型先验和错误，因此必须验证 factuality，而不能把所有新 token 当作新证据。
+\end{itemize}
+
+\begin{warningbox}{“信息已在数据里”不等于“生成一定正确”}
+Syllogism 的有效结论与 hallucinated connection 都可能被模型流畅写出。生产管线应记录来源文档、推理类型、生成模型与 prompt 版本，并用规则、verifier、交叉采样或人工抽检过滤；否则 latent expansion 会把错误也固化进参数。
+\end{warningbox}
+
+\subsection{根本限制：无法预先枚举每一种未来用途}
+
+离线方法必须猜未来会问什么。一个研究者今天读论文时，不可能提前写出这段经历将来对所有课题、目标和组合的意义；关系数量随文档与潜在目标组合增长。Slide 32 用“也许未来博士论文会用到”这一例子说明，全面 augmentation 在开放世界中不可行。更深的限制是目标本身也会改变：同一事实对检索、规划、解释、反事实和安全审计的可用形式并不相同，因此提前生成若干固定 paraphrase 仍不能覆盖未来的计算需求。
+
+\lecturefigure{slide-032.jpg}{为每个未来目标预先增强数据是不可扩展的}{Stanford CS25 V6 Lecture 06 官方 slide p. 32}
+
+假设语料有 $N$ 个经验、每次推理最多组合 $k$ 个经验，潜在组合数量粗略达到
+$$
+\sum_{i=1}^{k}\binom{N}{i},
+$$
+其中 $N$ 是经验数，$k$ 是允许的组合深度。真实问题还包含目标、语言和输出格式，使空间更大。因此离线 augmentation 需要任务先验与预算，而不是无限展开。
+
+\subsection{本章小结}
+
+In-context augmentation 的价值是把 context 中容易形成的 latent relation 转成 explicit supervision，并把测试时计算前移到训练时。它适合可预见的问题族，却承担生成、验证、数据膨胀与模型漂移成本；最重要的上限是无法预知每次经历的所有未来用途。这正是在线 episodic retrieval 的出发点。
+
+\section{Bridge 2：用 Episodic Retrieval 把经历带回 Context}
+
+第二条桥接路线不提前展开所有结论，而是保存较完整的经历。当新问题出现时，系统检索相关 episode，把它重新放回 context，让模型用已有 ICL skill 按当前目标解释。这种方法把“未来用途未知”转化为“测试时能否找到正确经历”。
+
+\subsection{Oracle episodic memory：先证明价值，再承认检索未解}
+
+课程中的检索器是 oracle episodic memory：它保证至少召回一个相关经历，但会混入若干 distractors。这个设置故意把问题拆开：先问“只要相关经历回到 context，latent generalization 会不会恢复”，而不是同时解决 embedding、index、ranking、recency 和权限控制。
+
+\lecturefigure{slide-033.jpg}{Approach 2：oracle episodic retrieval 在测试时恢复相关经历}{Stanford CS25 V6 Lecture 06 官方 slide p. 33}
+
+定义检索集合 $M_q$ 后，常见指标为
+$$
+\operatorname{Recall}@k=\frac{|M_q^{(k)}\cap R_q|}{|R_q|},
+\qquad
+\operatorname{Precision}@k=\frac{|M_q^{(k)}\cap R_q|}{k}.
+$$
+其中：
+\begin{itemize}
+  \item $R_q$ 是问题 $q$ 的相关经历集合；
+  \item $M_q^{(k)}$ 是检索器返回的前 $k$ 条经历；
+  \item oracle 设定保证高 recall，但允许 precision 不完美；
+  \item 实验因此测试模型能否在 distractors 中使用至少一条正确记忆。
+\end{itemize}
+
+\begin{lstlisting}[language=Python,caption={Oracle episodic retrieval 实验的职责分离}]
+memories = store_training_experiences(dataset)
+
+def answer(query):
+    relevant = oracle_pick_at_least_one(memories, query)
+    distractors = sample_irrelevant(memories, count=4)
+    context = shuffle(relevant + distractors)
+    return frozen_model.generate(context=context, query=query)
+\end{lstlisting}
+
+\teachervoice{00:29:09--00:29:31，老师直接称这个 retrieval system 在“cheating”：它有 perfect recall，只是 precision 不完美。这个承认不是削弱实验，而是在明确实验只证明条件命题——相关 episode 回到 context 后确实有价值。}
+
+\subsection{结果：reversal 与 codebook 都恢复}
+
+图中的比较重点不是 forward condition，因为参数学习和 episodic retrieval 都能处理显式方向；真正有区分度的是 reversal 和 latent codebook condition。带 retrieval 的系统即使同时看到干扰记忆，也能接近 ICL 式的灵活泛化。
+
+\lecturefigure{slide-034.jpg}{Episodic retrieval 在 reversal 与 codebook latent test 上的收益}{Stanford CS25 V6 Lecture 06 官方 slide p. 34}
+
+\begin{knowledgebox}{读图：显式条件用于校准，latent 条件用于辨别机制}
+两组图都应先看 explicit / trained condition，确认参数学习与 retrieval 至少能完成基础任务；再看 reversal 或 latent codebook condition。若只有后者拉开差距，证据支持的是 flexible reuse，而不是 retrieval 简单提供了更多训练数据或更强基础模型。
+\end{knowledgebox}
+
+\lecturefigure{slide-035.jpg}{结论：把学习经历带回 context，可恢复其 latent value}{Stanford CS25 V6 Lecture 06 官方 slide p. 35}
+
+\begin{importantbox}{Retrieval 改变的是计算现场}
+参数里可能保留了事实，却没有稳定暴露完成当前变换所需的方向；episodic retrieval 把原经历作为 token 重新呈现，使模型可以调用已经训练好的 context reasoning circuit。它不是把更多事实永久写入参数，而是为当前目标重建一个可计算的局部世界。
+\end{importantbox}
+
+\subsection{与 RAG 的关系：不只找答案，还要找可重新解释的经历}
+
+普通 RAG 常被描述为检索包含答案的文档；这里更关注检索包含\textbf{可推出答案的经历}。例如，文档只写“X is Y's parent”，问题却问“Y's parent was?”；retriever 不必存一条预先生成的反向答案，只需把原关系带回 context。
+
+\begin{knowledgebox}{Episodic retrieval 与常规 factual RAG 的差别}
+\begin{tabularx}{\textwidth}{L{0.24\textwidth}X X}
+\toprule
+维度 & Factual RAG 常见目标 & 本讲的 episodic retrieval \\
+\midrule
+检索对象 & 含直接答案或相近段落 & 与当前目标相关的原始经历 \\
+生成职责 & 摘录、综合、引用事实 & 重解释方向、组合关系、改变目标 \\
+关键风险 & 文档缺失、排序错误、引用不实 & 相关性之外还要保留足够关系细节 \\
+实验状态 & 可用实际 retriever 评估 & 课程使用 oracle 隔离检索价值 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\teachervoice{00:30:41--00:31:24，老师把这项工作与 retrieval-augmented generation 联系起来，但指出重点是让 context 对参数中不易调用的 latent relation 重新做推理，而不只是查一条 factual answer。}
+
+\begin{warningbox}{Oracle result 不能直接变成产品承诺}
+真实系统必须解决 query reformulation、embedding drift、长期记忆污染、权限与隐私、时间有效性、冲突经历、recall/latency 预算。只要 recall 下降，概念上正确的 episodic architecture 也会因“记忆根本没回来”而失败。
+\end{warningbox}
+
+\subsection{本章小结}
+
+Episodic retrieval 避免了离线枚举所有未来用途，只在目标出现时把相关经历放回 context。Oracle 实验证明了这种计算接口能恢复 reversal 与 codebook 的 latent value，但没有解决通用检索器。第三条路线进一步追问：如果模型不访问外部 memory，能否在 test time 自己重新生成需要的信息？
+
+\section{Bridge 3：用 RL 学会在测试时重新生成信息}
+
+RL 路线假设模型的参数里仍有完成任务所需的“碎片”，只是没有在当前问题中自动显式化。于是训练一个 reasoning policy，让模型先在 chain of thought 中回忆、改写或组合相关信息，再输出答案。它把隐式 retrieval 变成模型内部的 test-time action。
+
+\subsection{Regeneration：把参数知识重新写回自己的 context}
+
+Slide 36 的关键句是：模型已经知道 pieces，需要学会在没有外部 retrieval 时，把必要信息重新生成到 CoT 中。这里的 CoT 不应被神秘化，它只是额外 token 计算；真正问题是 RL reward 能否促使这些 token 携带有用 premise，而不是冗长自言自语。
+
+\lecturefigure{slide-036.jpg}{Approach 3：通过 RL 在 CoT 中重新生成必要信息}{Stanford CS25 V6 Lecture 06 官方 slide p. 36}
+
+可把策略目标写成
+$$
+J(\pi_{\phi})=
+\mathbb{E}_{q\sim Q,\,z\sim\pi_{\phi}(\cdot\mid q)}
+\left[r\!\left(q,z,a(z,q)\right)\right],
+$$
+其中：
+\begin{itemize}
+  \item $q$ 是问题；
+  \item $z$ 是模型生成的中间 reasoning / recall tokens；
+  \item $a(z,q)$ 是基于这些 token 得到的最终答案；
+  \item $r$ 是答案正确性或任务 reward；
+  \item $\pi_{\phi}$ 是被 RL 更新的 reasoning policy。
+\end{itemize}
+
+\begin{lstlisting}[language=Python,caption={用 RL 学习 test-time regeneration 的抽象训练循环}]
+for query, answer in rl_dataset_A:
+    reasoning = policy.sample(query)
+    prediction = policy.answer(query, reasoning)
+    reward = task_reward(prediction, answer)
+    policy.update(reasoning, reward)
+
+evaluate(policy, heldout_dataset_B)
+\end{lstlisting}
+
+\subsection{A/B transfer：学到 task answer，还是学到 general reasoning policy}
+
+实验先把两个新知识数据集 A、B 写入模型参数，再只在 A 上做 RL。若 B 的 held-out latent test 也提高，说明策略不只是记住 A 的具体答案，而是学习了可迁移的“怎样把参数信息重新表达进 context”的过程。Augmentation baseline 只扩展 A，用于区分数据覆盖与 reasoning transfer。
+
+\lecturefigure{slide-037.jpg}{只在数据集 A 上做 RL，再测试数据集 B 的 latent holdouts}{Stanford CS25 V6 Lecture 06 官方 slide p. 37}
+
+\lecturefigure{slide-038.jpg}{RL policy 对数据集 B 的 syllogism holdouts 产生迁移}{Stanford CS25 V6 Lecture 06 官方 slide p. 38}
+
+图中的重点是红色 reasoning-generalization bar：只增强 A 并不会自动提高 B，而在 A 上训练的 reasoning policy 能对 B 的部分结构迁移。这支持“学到过程”而不只是“增加样本”，但迁移范围仍取决于结构相似性与 reward 覆盖。
+
+\begin{knowledgebox}{两种 transfer 不要混淆}
+\textbf{Knowledge transfer} 是把 A 的事实带到 B；\textbf{reasoning-policy transfer} 是在 A 上学到一种操作，随后对 B 的不同事实执行。课程关心后者，因此数据集必须隔离，且 B 的 held-out target 不能在 RL 训练中泄漏。
+\end{knowledgebox}
+
+\subsection{真正的 reversal 仍然困难}
+
+RL 并没有解决全部 latent gap。对于 syllogism，模型可以学到“先把相关命题写出来，再组合”的通用程序；对于 true reversal，如果参数表示没有提供从对象到主体的有效索引，模型可能只能枚举候选关系，直到找到匹配项。枚举在小合成空间可行，在开放实体空间则不可接受。
+
+\lecturefigure{slide-039.jpg}{RL 对 true reversal 的改善依赖近乎穷举的策略}{Stanford CS25 V6 Lecture 06 官方 slide p. 39}
+
+\lecturefigure{slide-040.jpg}{RL regeneration 改善部分问题，但不是通用解法}{Stanford CS25 V6 Lecture 06 官方 slide p. 40}
+
+\teachervoice{00:34:44--00:35:10，老师明确说 reversal 从这种 in-context recall strategy 获益不大；要靠 RL 解决，往往需要先重建所有可能关系。课程把这作为方法边界，而不是把平均提升包装成全面成功。}
+
+\begin{warningbox}{更多 test-time tokens 不保证获得正确信息}
+若参数表示缺少可访问索引，long CoT 可能只是在更大空间里重复搜索。评估应记录成功所需 token、候选枚举规模、错误轨迹与停止条件，而不能只报告允许无限预算后的最终 accuracy。
+\end{warningbox}
+
+\subsection{本章小结}
+
+RL 可以训练一个 test-time regeneration policy，把部分参数知识重新显式化，并跨数据集迁移到相似 latent structure；但它受 reward、结构覆盖和搜索成本限制。特别是 reversal 暴露了一个根本问题：若知识没有按反向访问组织，推理 token 只能补偿，无法免费创造索引。
+
+\section{三种桥接方案的工程选择}
+
+课程在 slide 41--42 把三条路径重新放到同一系统视角。它们并不是互斥论文：augmentation 可以生成高频方向，retrieval 保存长尾经历，RL 则处理无法直接检索但可通过通用过程重建的结构。真正设计任务是分配训练算力、存储、推理延迟和错误恢复责任。
+
+\subsection{统一框架：把 latent information 变成当前 context}
+
+三条路径做的其实是同一件事：在答案生成前，让任务需要的关系以可用形式进入当前计算。区别只在时机和载体。Augmentation 在训练前显式化并写入参数；retrieval 在测试时从外部 memory 取回；RL 在测试时从参数中生成一个内部工作集。
+
+\lecturefigure{slide-041.jpg}{三条桥接路径都在利用 in-context reasoning}{Stanford CS25 V6 Lecture 06 官方 slide p. 41}
+
+\begin{importantbox}{统一抽象：Context Construction}
+可把系统写成 $C_q=B(D,M,\theta,q)$：bridge $B$ 根据训练数据 $D$、外部记忆 $M$、模型参数 $\theta$ 与问题 $q$ 构造工作上下文 $C_q$。三种方法分别把主要计算放在离线数据构造、在线外部检索和在线内部生成。
+\end{importantbox}
+
+\subsection{计算、覆盖与依赖关系}
+
+Slide 42 的 pros/cons 不能只读成“谁准确率高”。Train-time augmentation 增加生成与训练成本，却使部署便宜；retrieval 训练免费，但要求可靠 memory system，并增加每次请求的 I/O 与 token；RL 可能跨显式增强分布迁移，但训练和推理都需要额外 rollout compute，对 reversal 仍弱。
+
+\lecturefigure{slide-042.jpg}{Augmentation、retrieval 与 RL 的收益和成本对照}{Stanford CS25 V6 Lecture 06 官方 slide p. 42}
+
+\begin{knowledgebox}{读图：没有一列在所有维度占优}
+这页不是方法排行榜，而是 Pareto frontier。Augmentation 用训练计算换低延迟，retrieval 用外部系统换开放覆盖，RL thinking 用额外生成换过程迁移。选择时应先固定业务约束，再寻找可接受方案，而不是从某个 benchmark 的最高柱反推统一架构。
+\end{knowledgebox}
+
+\begin{table}[H]
+\centering
+\small
+\caption{三种桥接方案的工程决策表}
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}X X X}
+\toprule
+维度 & Train-time augmentation & Test-time retrieval & Test-time RL thinking \\
+\midrule
+主要成本 & 离线生成、验证、再训练 & 索引、召回、额外 context & RL rollout 与每次生成更多 token \\
+推理延迟 & 低，结论已进入参数 & 中高，依赖检索和长 context & 中高，依赖 reasoning 长度 \\
+覆盖范围 & 受预先增强的问题族限制 & 受 memory recall 与 episode 质量限制 & 受 learned procedure 与搜索空间限制 \\
+可追溯性 & 需保存增强样本 provenance & 可引用原 episode & 内部 CoT 未必忠实或可验证 \\
+典型失败 & hallucination、drift、遗漏未来目标 & relevant memory 未召回或冲突 & 冗长搜索、reward overfit、reversal 枚举 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+总成本可以粗略写为
+$$
+C_{\text{total}}=
+C_{\text{base-train}}+C_{\text{augment}}+C_{\text{RL}}
++N_{\text{query}}\left(C_{\text{retrieve}}+C_{\text{reason}}\right).
+$$
+其中 $C_{\text{augment}}$ 与 $C_{\text{RL}}$ 是一次性训练侧成本，$C_{\text{retrieve}}$ 和 $C_{\text{reason}}$ 会随查询量 $N_{\text{query}}$ 重复支付。选择方案时必须把未来调用量、延迟 SLO 与错误代价一起计算。
+
+\subsection{Q\&A：长上下文、模型规模与检索能力}
+
+在问答中，Lampinen 说明 ICL 的稳定性依赖模型和内容。单条事实通常容易；数十万 token context 中仍可能成功，但真实实体比 nonsense token 更容易被检索，因为预训练已经教会模型如何处理前者。因而 context length 与“模型熟不熟悉这类信息的检索方式”不可混为一个变量。
+
+\teachervoice{00:46:14--00:48:05，老师给出的关键 caveat 是：同样长度的数据，把真实人名替换成 nonsense words 后，context performance 会明显下降。tokenization 可能贡献一部分，但更大的因素是预训练形成的 retrieval skill。}
+
+\begin{warningbox}{不要用单一 context-window 长度预测 ICL 能力}
+窗口允许放下数据，只说明 storage capacity 足够；真正性能还受位置、实体形式、attention 干扰、query wording、训练时长上下文分布与模型检索技能影响。部署评测必须使用真实内容类型，而不是只测 needle-in-a-haystack 的单一模板。
+\end{warningbox}
+
+对于参数量和 sparsity，课堂没有给出干净结论。更大模型可能同时改善 parametric 与 contextual performance；MoE sparsity 也可能改变容量与路由，但 presented experiments 没有隔离这些变量。合理结论是需要 controlled scaling study，而不是宣称规模会自动消除 gap。
+
+\subsection{Q\&A：augmentation 的隐藏成本}
+
+老师估计 offline augmentation 可能至少比一次小数据 fine-tuning 贵一个数量级，因为先要进行多轮 inference/generation，再在更大的数据集上训练。这是经验估计而非论文 benchmark，但提示团队不能只把“推理时免费”写进方案，而忽略离线 GPU、验证和迭代成本。
+
+\teachervoice{01:08:09--01:09:43，老师列出三类代价：生成与训练使 augmentation 很贵；生成样本会 hallucinate；更大 fine-tuning 数据还可能扭曲原知识。Regularization 能缓解 drift，但具体 tradeoff 取决于训练设置。}
+
+\begin{knowledgebox}{Augmentation 上线前应记录的控制面}
+\begin{enumerate}
+  \item 生成模型、prompt、temperature 与采样次数；
+  \item 每条新结论对应的源文档与可验证推理链；
+  \item hallucination、重复与冲突过滤率；
+  \item 原任务、新 latent task 与 unrelated capability 的前后对比；
+  \item 额外生成 token、训练 token、FLOPs、wall-clock 与 GPU-hours；
+  \item 防止参数 drift 的 KL、weight decay、replay 或混合数据策略。
+\end{enumerate}
+\end{knowledgebox}
+
+\subsection{Q\&A：prompt 设计既是算法，也是泄漏风险}
+
+论文在 factual relation 任务上复用了同一组 prompt，ablation 的影响小于预期；但讲者明确说这些 prompt 绑定事实和实体关系，未必迁移到数学推理。Prompt 若直接要求生成目标测试形式，会接近“把答案告诉模型”；若太泛，又可能无法展开需要的 latent relation。
+
+\teachervoice{01:10:03--01:12:08，老师说 prompt 大致要求重写文档并连接 corpus 中其他实体，同时承认很难完全避免 task foreknowledge。跨域通用的 augmentation prompt 仍是开放问题。}
+
+\begin{warningbox}{Prompt leakage 的审计问题}
+若评测 reversal，却在 augmentation prompt 中直接写“生成所有反向关系”，模型提升证明的是定向数据构造有效，不是自动发现任意 latent structure。报告应区分 generic connection prompt、task-aware prompt 与直接 target leakage。
+\end{warningbox}
+
+\subsection{本章小结}
+
+三种桥接方案可统一为 context construction，但成本位置不同：augmentation 把计算前移，retrieval 把存储和召回外置，RL 把搜索留在模型内部。生产选择必须联合考虑 coverage、latency、provenance、retrieval recall、hallucination、drift 与 query volume，而不能只看一张准确率柱状图。
+
+\section{从模型证据到自然智能：互补的记忆系统}
+
+课程最后回到开场问题：如果一次经验包含比长期参数可用表示更多的 latent information，自然智能是否也需要把“慢速整合的知识”与“细节丰富的具体经历”分开保存？这里的价值是提出计算需求，不是声称 hippocampus 就是向量数据库、neocortex 就是 Transformer weights。
+
+\subsection{先把模型结论压缩清楚}
+
+Slide 44 重述了四类 latent structure，并加入重要脚注：参数可能并非完全没有编码这些信息，而是没有以测试时\textbf{可靠可用}的方式编码。这个措辞把“representation absent”与“access failure”区分开，避免对内部机制做超出行为实验的断言。
+
+\lecturefigure{slide-044.jpg}{参数可能没有以可靠可调用的形式编码 latent information}{Stanford CS25 V6 Lecture 06 官方 slide p. 44}
+
+\begin{importantbox}{行为证据能支持到哪一步}
+实验可以支持“给定测试接口时，模型未稳定使用 latent information”。它不能仅凭输出失败区分：信息完全未编码、编码过弱、被干扰覆盖、缺少反向索引、解码策略失败，或 reward 没有激活正确计算路径。
+\end{importantbox}
+
+\lecturefigure{slide-045.jpg}{自然智能是否也面对 consolidation 与 flexible reuse 的矛盾？}{Stanford CS25 V6 Lecture 06 官方 slide p. 45}
+
+将问题推广到人类时，关键不是比较 benchmark accuracy，而是问有限的慢速学习系统能否预先知道一段经历未来会怎样被使用。若不能，保留 episode 细节就有独立价值：新目标出现后，系统可以重新访问原经历，而不是依赖当时已经抽取好的结论。
+
+\subsection{离线 replay 与在线 retrieval 的类比}
+
+Slide 46 把 augmentation 与 memory replay 联系，把 test-time retrieval 与 episodic recall 联系。离线 replay 可以在休息或睡眠阶段重新组合经历，强化可预测的结论；在线 recall 则在具体任务出现时恢复细节。课程用“可能的证据路径”表述，而非机制同一性。
+
+\lecturefigure{slide-046.jpg}{离线 augmentation/replay 与在线 retrieval 的计算类比}{Stanford CS25 V6 Lecture 06 官方 slide p. 46}
+
+\begin{warningbox}{类比的边界}
+大脑的学习具有神经可塑性、时间连续性、感知行动闭环与多种记忆系统；LLM augmentation、vector retrieval 与 RL CoT 是工程构件。类比可用于比较计算功能——整合、保留、重放、检索——不能直接推出脑区实现了同一数据结构或训练算法。
+\end{warningbox}
+
+\subsection{Hippocampus 与 neocortex 为什么可能互补}
+
+互补学习系统（complementary learning systems）的直觉是：neocortical / parametric learning 慢速整合大量经验，减少灾难性干扰并提取统计规律；hippocampal / episodic learning 快速保存具体事件，保留当时不知道以后会有用的细节。检索把 episode 恢复到工作记忆后，当前目标可以重新解释它。
+
+\lecturefigure{slide-047.jpg}{皮层式整合与海马式 episode 保存的互补关系}{Stanford CS25 V6 Lecture 06 官方 slide p. 47}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Complementary learning systems 的计算功能对照}
+\begin{tabularx}{\textwidth}{L{0.22\textwidth}X X}
+\toprule
+功能 & 慢速整合系统 & 快速 episodic 系统 \\
+\midrule
+主要目标 & 跨经历提取稳定统计、规律与技能 & 保存单次经历的时间、关系与丰富细节 \\
+学习速度 & 慢，降低新样本覆盖旧知识的风险 & 快，重要事件可一次写入 \\
+主要优势 & 泛化、压缩、低延迟复用 & 未来目标下重新解释、稀有事件回忆 \\
+主要弱点 & 可能丢失当时未被认为重要的细节 & 容量、检索、干扰与错误记忆 \\
+工程对应 & 参数训练、离线 consolidation & memory store、retrieval、context reconstruction \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\teachervoice{00:40:37--00:43:43，老师把互补性描述为“更多经历但更 tied to original formats/tasks”与“更少经历但细节更丰富”的交换。参数学习与 episodic memory 都不可被简单删除。}
+
+课堂问答又给出一个直观例子：慢速系统需要跨大量经历学习，避免彼此干扰；但若刚刚遭遇一次险些车祸的事件，快速保存这次 episode 很有价值，不应等待多次重复才进入长期知识。这一例子说明 rare-but-important experience 为什么需要不同写入时间尺度。
+
+\subsection{泛化所需的两类计算成分}
+
+Slide 48 把自然与人工系统都压缩成两个需求。第一，episodic memory 保存 rich-detail experience，让系统访问当初不知道会重要的信息；第二，consolidated information 缓存跨经验事实、洞见以及如何在 context 中推理的 procedure。二者通过 context 接口协作。
+
+\lecturefigure{slide-048.jpg}{泛化需要 detailed episodes 与 consolidated procedures 协同}{Stanford CS25 V6 Lecture 06 官方 slide p. 48}
+
+\begin{importantbox}{面向 AI 系统的设计原则}
+不要强迫参数承担所有记忆职责，也不要把一切交给无限 context。更稳健的系统应同时拥有：可训练的通用推理 procedure、可审计的 episodic store、按目标构造 context 的 bridge，以及对失败检索和错误生成的 verifier。
+\end{importantbox}
+
+\subsection{最终总结页：一条经历，三种再利用方式}
+
+课程最后将全讲收束为一张图：训练经历包含 explicit content 与未来可能有用的 latent information；参数学习可能无法可靠调用后者；三条 bridge 分别在离线 augmentation、在线 episodic retrieval 与 RL regeneration 中让其重新进入 context；自然智能类比提示海马与新皮层也可能通过 replay 与 retrieval 分担类似的计算压力。
+
+\lecturefigure{slide-049.jpg}{全课总结：latent information、三条 bridge 与互补记忆系统}{Stanford CS25 V6 Lecture 06 官方 slide p. 49}
+
+\teachervoice{00:44:27--00:45:01，老师在正式结尾仍保留开放性：大脑可能拥有比当前模型更好的 learning rule，三条 bridge 不是完整答案。这个 caveat 防止把行为差异过早固化成唯一架构。}
+
+\subsection{本章小结}
+
+自然智能部分提出的是一个资源约束下的计算论命题：慢速整合擅长统计与压缩，快速 episodic memory 擅长保留未来用途未知的细节。模型实验为这种互补性提供了一个可控类比，但行为证据不能证明脑区与模型模块同构。对 AI 工程最直接的启发，是把参数、外部记忆和 context construction 设计成协作系统。
+
+\section{总结与延伸}
+
+\subsection{一条主线：知识存在，不等于知识可用}
+
+本讲最重要的概念不是某一个 reversal benchmark，而是把“learning”拆成四层：经验提供 explicit content；内容蕴含 latent information；训练过程形成内部表示；测试时接口决定其中多少成为 usable information。参数与上下文的差异，正发生在后两层。
+
+\begin{importantbox}{最终知识框架}
+\begin{enumerate}
+  \item Parametric learning 与 ICL 可以吸收同一事实，却形成不同的访问与泛化行为。
+  \item Reversal、syllogism 与 codebook 是测试 latent relation 的受控探针，不是所有智能的完整代理。
+  \item Co-occurrence 能提高真实性能，也能掩盖 systematic inference 的缺失。
+  \item In-context augmentation 把 latent implication 离线变成 explicit supervision。
+  \item Episodic retrieval 在目标出现时把原经历恢复到 context，但真实 recall 仍是难题。
+  \item RL regeneration 学习在 test time 重建信息，对部分结构迁移，对 true reversal 仍受搜索限制。
+  \item 三条路线应按训练成本、推理成本、覆盖、可追溯性和失败恢复组合使用。
+  \item 自然智能类比支持互补记忆系统这一计算需求，不证明神经实现同一。
+\end{enumerate}
+\end{importantbox}
+
+\subsection{从课堂结果到系统架构}
+
+一个实际系统可以采用分层策略：对高频、稳定、可验证的 latent relation 做离线 augmentation；对长尾事实和用户经历使用可追溯 retrieval；对无法直接检索、但具有通用结构的任务使用 bounded test-time reasoning；当检索置信度低或推理搜索过长时，触发澄清、工具调用或人工升级。
+
+\begin{lstlisting}[language=Python,caption={组合三种 bridge 的部署决策策略}]
+def answer(query):
+    direct = parametric_model.answer(query)
+    if verifier.confident(direct):
+        return direct
+
+    memories = retriever.search(query)
+    if retriever.has_high_recall_evidence(memories):
+        return grounded_model.answer(query, context=memories)
+
+    reasoning = reasoning_policy.solve(query, token_budget=budget(query))
+    if verifier.confident(reasoning.answer):
+        return reasoning.answer
+
+    return request_clarification_or_human_review(query)
+\end{lstlisting}
+
+\begin{knowledgebox}{建议的评测矩阵}
+不要只测 explicit QA。至少交叉测试 forward、reversal、multi-hop、alternative goal、cross-lingual、long-context distractor、retrieval miss、conflicting memory 与 compute-limited reasoning，并分别报告 accuracy、latency、token、recall、provenance completeness 与 calibration。
+\end{knowledgebox}
+
+\subsection{仍然开放的研究问题}
+
+第一，怎样训练参数表示，使其天然支持多方向索引，而不靠枚举？第二，能否让模型学会决定“该写入参数、该保留 episode、还是只需短期 context”？第三，如何训练通用 retriever，使 recall 不依赖已知任务模板？第四，RL reasoning 能否学习检索式内部操作，同时限制 token 和错误自信？第五，怎样把 augmentation 的 prompt leakage、hallucination 与 drift 变成可审计指标？
+
+\begin{warningbox}{三个不能从本讲推出的结论}
+不能推出 ICL 总是优于 fine-tuning；不能推出所有参数知识都无法做关系推理；不能推出 hippocampus 等同于 RAG。课程证明的是特定受控条件下的信息可用性差异，并提出三类可检验、可组合的桥接方法。
+\end{warningbox}
+
+\subsection{拓展阅读}
+
+建议按证据链阅读：先读 Berglund 等人的 Reversal Curse，理解 directional access failure；再读 Lampinen 等人的 controlled ICL/fine-tuning study，核对整数据集 context、syllogism 与 from-scratch controls；随后读 Latent Learning，重点看 episodic oracle 与 complementary memory；最后读 Improving Latent Generalization Using Test-time Compute，检查 RL transfer 与 reversal limitation。关于 ICL 与优化的关系，可对照 Akyürek 等人与 Dai 等人的受限理论结果。
+
+\begin{knowledgebox}{Lecture snapshot}
+本讲发生于 2026-05-07。讲义使用当时已公开的 arXiv 版本：controlled study v3、Latent Learning v3、test-time compute v1、Reversal Curse v4。后续 revision 可以作为新证据，但不应倒推成课堂当日已经展示的结果。
+\end{knowledgebox}
+
+最终，这堂课把“模型记住了多少”改写为一个更精确的系统问题：\textbf{当目标变化时，模型能否把过去经验重新构造成当前可计算的信息？}参数、context、episodic memory、augmentation 与 RL 并不是五个孤立模块，而是对同一信息生命周期的不同分工。
+
+\end{document}

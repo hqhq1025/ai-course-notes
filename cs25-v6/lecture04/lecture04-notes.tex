@@ -1,0 +1,672 @@
+\documentclass[a4paper]{article}
+\input{../cs25-preamble.tex}
+\usepackage{multicol}
+
+\renewcommand{\notetitle}{Lecture 04：Ultra-Scale——把一次训练扩展到数千张 GPU}
+\renewcommand{\noteauthors}{基于 Nouamane Tazi 官方讲座、106 页官方 deck 与人工英文字幕整理}
+\renewcommand{\notedate}{CS25 V6 · 2026 年 source-first 讲义}
+\renewcommand{\videochannel}{Stanford Online}
+\renewcommand{\videopublishdate}{课堂 2026-04-23；上传 2026-05-11}
+\renewcommand{\videoduration}{1:01:48（含课堂 Q\&A）}
+\renewcommand{\videourl}{https://www.youtube.com/watch?v=I5BKi32IEa8}
+\renewcommand{\videocoverpath}{cover.jpg}
+
+\newcommand{\lecturefigure}[3]{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.97\textwidth,height=0.47\textheight,keepaspectratio]{slides-images/#1}
+  \caption{#2}
+  \figsource{#3}
+\end{figure}
+}
+
+\let\standardtableofcontents\tableofcontents
+\renewcommand{\tableofcontents}{%
+  \begingroup
+  \footnotesize
+  \setlength{\parskip}{0pt}
+  \standardtableofcontents
+  \endgroup
+}
+
+\begin{document}
+\makecscover
+
+\section{规模化训练首先是资源流问题}
+
+“一万张 GPU”不是把单卡程序复制一万份。模型参数、梯度、优化器状态、激活、输入数据和 checkpoint 会在不同存储层与设备之间移动；任何一条流量超过链路能力，整次训练就会在等待中停住。本课的主线因此不是记住五个 parallelism 名称，而是对每一种方案反复追问：\textbf{切分什么、复制什么、用哪个 collective 恢复等价计算、通信能否被计算隐藏？}
+
+\subsection{为什么大模型仍在继续变大}
+
+开场三页把“规模”拆成模型、数据和上下文三个轴。第一页是近期模型地图，第二页把参数量与能力趋势并列，第三页给出课堂快照中的数量级：trillion-level parameters、约 $15$T training tokens 和 million-token context。它们不是统一配方，却说明单一 GPU 的容量、带宽和迭代时间会同时受到压力。
+
+\lecturefigure{slide-004.jpg}{模型发布趋势：训练规模仍在扩大}{CS25 V6 official deck, p.~4}
+
+\lecturefigure{slide-005.jpg}{模型规模与训练计算的公开趋势对照}{CS25 V6 official deck, p.~5}
+
+\lecturefigure{slide-006.jpg}{课堂数量级快照：参数、训练 token 与上下文长度}{CS25 V6 official deck, p.~6}
+
+\begin{knowledgebox}{读图：三个规模轴不能互相替代}
+参数量决定持久模型状态和每层矩阵计算的基线，训练 token 数决定总迭代预算与输入管线压力，上下文长度决定单样本 activation、attention working set 和可用 micro-batch。增加 DP 只能更快消费更多 batch，不能让单个过长 sequence 自动装下；增加 CP 能切长 sequence，却不能减少完整模型状态；ZeRO（Zero Redundancy Optimizer，零冗余优化）能把 optimizer state、gradient、parameter 按 stage 分片，却不改变总训练 token。读后续每种 parallelism 时，都应先把它放回这三个轴，判断它究竟解除哪个约束，又把成本转移到了哪里。
+\end{knowledgebox}
+
+\teachervoice{00:00:48--00:03:02，Tazi 说明本课以 Ultra-Scale Playbook 为基础，但补入更新的 MoE scaling 实践。他把压力同时归因于数据读取、每步迭代、显存和 checkpoint 写入，而不是只谈参数量。}
+
+\begin{warningbox}{规模与智能相关，不等于规模单独造成智能}
+课堂用近期模型说明“训练更大”仍是产业趋势，但相关性不能隔离数据质量、架构、后训练、工具使用和评测污染。系统讲义真正需要继承的是资源数量级与工程约束，而不是把某个参数规模写成能力定律。
+\end{warningbox}
+
+\subsection{一次训练迭代到底搬运什么}
+
+训练基础设施至少要持续读取 token 流，把模型与状态放进加速器内存，在 forward/backward 之间保留激活，执行 optimizer update，并定期把可恢复状态写回存储。下图中的 ``$\sim15$T tokens read''、``$\sim1$s iteration''、``$\sim80$GB per GPU'' 和 ``$\sim1$TB checkpoint'' 是课堂示意量级；读图时应把它们理解为四类独立瓶颈，而不是同一模型的精确配置。
+
+\lecturefigure{slide-009.jpg}{LLM 训练对数据、计算、显存与 checkpoint I/O 的联合压力}{CS25 V6 official deck, p.~9}
+
+\begin{knowledgebox}{读图：把一次 step 看成多级流水线}
+训练 step 开始前，data loader 要从存储和主机内存准备样本；GPU 随后读取参数与 activation，执行 kernel，并通过互连同步；step 末尾 optimizer 写回参数，而 checkpoint 周期还会把更大的恢复状态送到持久存储。任何一段吞吐不足都会产生不同形状的 stall：输入不足表现为 GPU 开始前空闲，collective 过慢表现为 backward/forward 间等待，checkpoint 过慢表现为周期性长暂停。定位问题时应先确定 stall 属于哪一级，而不是统一归因于“GPU 不够快”。
+\end{knowledgebox}
+
+\begin{knowledgebox}{术语消化：第一组资源对象}
+\textbf{HBM（High Bandwidth Memory，高带宽内存）}是 GPU 附近的高带宽 DRAM，常被口语化称为显存；它容量有限但供给 kernel 的带宽很高。\textbf{Optimizer state（优化器状态）}是 Adam/AdamW 等算法为每个参数维护的一阶矩 $m$、二阶矩 $v$ 等更新统计，常比参数本身占用更多字节。\textbf{Activation（激活）}是 forward 中间结果，backward 需要它来计算梯度。三者必须分开记账。
+\end{knowledgebox}
+
+\subsection{单卡 baseline 与 gradient accumulation 的隐藏假设}
+
+单卡训练的逻辑顺序很清楚：取 batch，做 forward，计算 loss，backward 得到 gradients，optimizer 读取参数与状态并写回更新后的模型。当 global batch size（GBS，全局批大小）远大于单卡可容纳的 micro-batch 时，可以多次 forward/backward 累加梯度，再执行一次更新。
+
+\lecturefigure{slide-010.jpg}{单 GPU 的 forward--backward--optimizer 基线}{CS25 V6 official deck, p.~10}
+
+\lecturefigure{slide-011.jpg}{用 gradient accumulation 构造更大的 global batch}{CS25 V6 official deck, p.~11}
+
+但 gradient accumulation 只解决“一个更新由多少样本组成”，并不自动解决模型是否装得下，也不会把串行 micro-batch 变快。下页把这两个前提明确写出：训练状态必须先能驻留在单卡；如果等待所有 micro-batch 顺序完成，设备数量再多也没有被利用。
+
+\lecturefigure{slide-012.jpg}{单卡累积的两个前提：状态能装下，而且串行等待可接受}{CS25 V6 official deck, p.~12}
+
+设一次更新包含 $M$ 个 micro-batch，每个 micro-batch 的 loss 为 $\ell_j(\theta)$，则常见的累积梯度写成
+\[
+g=\frac{1}{M}\sum_{j=1}^{M}\nabla_\theta \ell_j(\theta),
+\qquad
+\theta' = \operatorname{Opt}(\theta,g,s).
+\]
+其中，$M$ 是累积步数，$\theta$ 是参数，$g$ 是本次更新使用的平均梯度，$s$ 是 optimizer state，$\operatorname{Opt}$ 是更新规则，$\theta'$ 是新参数。这个公式没有规定 $M$ 个梯度必须在同一设备上产生；分布式训练正是重新安排这些计算与状态的所有权。
+
+\subsection{五个切分轴与统一判断框架}
+
+课程把方案分为 Data、Tensor/Sequence、Pipeline、Context 和 Expert 五类。它们分别沿 batch、hidden dimension、layer、sequence 和 expert 轴切分。开场的 agenda 与 preamble 还强调：这些机制可用于 GPU 或 TPU，也不局限于 pretraining；从两张设备开始，资源切分就可能有意义。
+
+\lecturefigure{slide-013.jpg}{课程路线：从 DP/ZeRO 到 TP、PP、CP 与 EP}{CS25 V6 official deck, p.~13}
+
+这里首次出现的 \term{ZeRO（Zero Redundancy Optimizer，零冗余优化）}不是一种新 optimizer，而是把 data-parallel ranks 上原本重复的 optimizer state、gradient 和 parameter 按 stage 逐步分片的状态管理方法。ZeRO-1/2/3 分别增加被分片的状态种类；Adam/AdamW 的一阶矩 $m$ 与二阶矩 $v$ 仍按原公式更新，只是所有权和收集时机改变。
+
+\lecturefigure{slide-014.jpg}{适用边界：多种加速器、训练阶段与设备规模}{CS25 V6 official deck, p.~14}
+
+所谓 \term{sharding（分片）}，是把一个原本在每张设备上完整复制的对象切成若干 shard，并让不同 rank 只拥有其中一部分。必须同时说明“切的是什么”和“沿哪个设备组切”：参数分片、梯度分片、batch 分片、sequence 分片并不是一回事。
+
+\lecturefigure{slide-015.jpg}{目标一：分片模型、梯度与 optimizer state}{CS25 V6 official deck, p.~15}
+
+\lecturefigure{slide-016.jpg}{目标二：分片数据并并行处理 micro-batch}{CS25 V6 official deck, p.~16}
+
+\begin{importantbox}{统一四问}
+分析任何 parallelism 时依次回答：一，哪个张量维度或训练状态被切分；二，哪些对象仍被复制；三，哪个集合通信让结果与单设备数学等价；四，该通信位于 critical path 还是能与 compute overlap。若这四问说不清，所谓“显存节省”通常只是把成本转移到了网络或调度器。
+\end{importantbox}
+
+\begin{knowledgebox}{背景概念：通信成本不只有字节数}
+一次 collective 的时间可粗略写成 $T\approx \alpha n_{\mathrm{steps}}+\beta V$：$\alpha$ 表示每轮启动与同步延迟，$n_{\mathrm{steps}}$ 取决于 ring/tree 等算法和 rank 数，$\beta$ 是每字节传输时间，$V$ 是实际流量。小消息常受 $\alpha$ 主导，大消息更受带宽和拓扑拥塞主导；跨节点消息还会经过不同 NIC、交换机与路由。于是同样的总字节，拆成很多细碎 all-gather 可能比少量大消息更慢；反过来，大消息若启动太晚又无法 overlap。并行设计需要同时优化消息大小、次数、参与组和启动时机。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+规模化训练的输入不是“GPU 数量”，而是一组资源约束：状态容量、激活容量、global batch、sequence length、模型结构、链路拓扑和存储吞吐。五类并行分别重排这些资源的所有权；后续章节将从最直观的 data parallelism 开始，逐步增加通信与调度复杂度。
+
+\section{Data Parallelism：从复制模型到 ZeRO/FSDP}
+
+Data Parallelism（DP，数据并行）保持每个 rank 的模型计算相同，让不同 rank 处理不同 data shard。它最容易实现，也最适合建立 collective、overlap 和 memory accounting 的基本直觉；ZeRO 则是在 DP 框架内继续分片 optimizer state、gradient 与 parameter。
+
+\subsection{复制模型，切分 batch}
+
+上一章已经把训练状态与数据流分开记账；本节先选择最保守的空间变换：模型计算图完全不动，只把 batch 分给多个 rank。这样可以把所有差异集中到 gradient ownership 与同步时机上，也为后续 ZeRO 的状态分片提供一条清晰基线。第一组动画先对比串行累积与并行 micro-batch：单卡依次处理多个 batch 时，模型状态只存一份但时间线变长；增加 GPU 后，每个 rank 复制模型、optimizer state 和初始参数，却各自处理不同 batch。
+
+\lecturefigure{slide-019.jpg}{串行 gradient accumulation：多个 batch 在一张 GPU 上排队}{CS25 V6 official deck, p.~19}
+
+\lecturefigure{slide-020.jpg}{DP 第一步：跨 GPU 复制模型并分片 batch}{CS25 V6 official deck, p.~20}
+
+各 rank 的 forward/backward 独立执行，因此会得到不同的 local gradient。若直接各自更新，参数会立即分叉；DP 必须先把这些梯度聚合成同一个 global gradient。
+
+\lecturefigure{slide-021.jpg}{每个 data-parallel rank 产生不同 local gradient}{CS25 V6 official deck, p.~21}
+
+\term{Collectives（集合通信）}是多个 rank 共同参与的通信原语。\textbf{All-reduce} 把每个 rank 的输入做求和/平均并把结果返回所有 rank；\textbf{reduce-scatter} 先归约再把结果 shard 分发；\textbf{all-gather} 把各 rank 的 shard 拼成完整对象；\textbf{broadcast} 从一个 rank 复制给其他 rank。
+
+\lecturefigure{slide-022.jpg}{All-reduce：既归约梯度，也把相同结果送回每个 rank}{CS25 V6 official deck, p.~22}
+
+\[
+g_r=\nabla_\theta \ell_r(\theta),
+\qquad
+\bar g=\frac{1}{P}\sum_{r=1}^{P}g_r,
+\qquad
+\theta'_r=\operatorname{Opt}(\theta_r,\bar g,s_r).
+\]
+其中，$P$ 是 DP rank 数，$g_r$ 是 rank $r$ 的 local gradient，$\bar g$ 是 all-reduce 后的平均梯度，$\theta_r$ 与 $s_r$ 是该 rank 的参数和 optimizer state。只要初始状态相同且更新确定，各 rank 会保持一致。
+
+\lecturefigure{slide-023.jpg}{完整 DP 更新：数据分片、梯度 all-reduce、相同 optimizer step}{CS25 V6 official deck, p.~23}
+
+\begin{knowledgebox}{读图：DP 正确性来自“更新前会合”}
+图中最值得比较的不是 GPU 数，而是每种颜色何时分叉、何时重新会合。data 在 step 开始就被分片，forward/backward 因而独立；local gradient 在 all-reduce 前允许不同，但 optimizer 读取 gradient 之前必须变成相同的 $\bar g$。参数和 optimizer state 在 vanilla DP 中始终复制，所以每个 rank 执行同一更新后继续保持一致。若使用 gradient accumulation，还要明确 collective 是每个 micro-batch 触发，还是用 `no\_sync` 延迟到累积末尾；前者通信更多，后者需要保存更久的 local gradients。
+\end{knowledgebox}
+
+\subsection{DDP 代码不是性能结论}
+
+PyTorch DistributedDataParallel（DDP）把模型包装后，会注册 backward hooks 并在梯度 bucket 就绪时启动 collective。代码表面很短，但性能取决于 bucket 划分、网络、模型层次和是否真正产生 overlap。
+
+\lecturefigure{slide-024.jpg}{DistributedDataParallel 的最小代码接口}{CS25 V6 official deck, p.~24}
+
+\begin{lstlisting}[language=Python,caption={DDP 的所有权与更新语义示意}]
+model = DistributedDataParallel(model, device_ids=[local_rank])
+optimizer.zero_grad(set_to_none=True)
+loss = model(batch).loss
+loss.backward()            # hooks launch gradient collectives
+optimizer.step()           # every rank applies the same reduced gradient
+\end{lstlisting}
+
+下页补上容易漏掉的一点：all-reduce 完成之前，对应 gradient 不能安全地被 optimizer 使用；若 backward 已结束但网络仍在传输，GPU 会等待。
+
+\lecturefigure{slide-025.jpg}{DP 的同步边界：optimizer 必须等待全局梯度就绪}{CS25 V6 official deck, p.~25}
+
+\subsection{Profiler、bucket 与 communication overlap}
+
+torch.profiler 时间线把算子、kernel 和 NCCL collective 放在同一轴上。读这类图时先找三种空洞：compute stream 是否空闲，communication stream 是否排队，下一次 forward 是否因上一步 collective 未完成而延迟。没有时间线证据，就不能仅凭配置宣称 overlap 成功。
+
+\lecturefigure{slide-026.jpg}{torch.profiler：把 GPU compute 与 collective 放在同一时间线上}{CS25 V6 official deck, p.~26}
+
+naive DP 会等所有 backward 完成后再统一通信；此时通信完全落在 critical path。梯度 bucket 的价值是让后层梯度先完成、先启动 all-reduce，同时前层仍在 backward。
+
+\lecturefigure{slide-028.jpg}{naive DP：backward 后集中同步造成等待}{CS25 V6 official deck, p.~28}
+
+\lecturefigure{slide-029.jpg}{bucket overlap：梯度一旦就绪就开始通信}{CS25 V6 official deck, p.~29}
+
+当 bucket 足够大，collective 能达到有效带宽；当 bucket 足够小，启动更早但 launch latency 和小消息效率变差。最终时间线目标不是“通信消失”，而是紫色通信尽可能藏在橙色 backward 下面，只留下不能被覆盖的尾部。
+
+\lecturefigure{slide-030.jpg}{DP overlap 的目标：把大部分 all-reduce 藏在 backward 下}{CS25 V6 official deck, p.~30}
+
+\begin{knowledgebox}{读图：时间线要比较尾部，而不只比较重叠面积}
+三张 timeline 的横轴都是 wall-clock time，纵向把 GPU compute 与 communication stream 分开。naive 版本的紫色通信完全位于 backward 之后；bucket 版本让靠近输出端的 layer 先通信；最终版本进一步让 optimizer 或下一阶段只等待最后未隐藏的尾部。真正影响 step time 的是 critical path 最右端，而不是紫色块有多少落在橙色块下方。若 overlap 让 compute kernel 因带宽竞争而变长，视觉上重叠更多，端到端反而可能更慢。
+\end{knowledgebox}
+
+\teachervoice{00:07:28--00:11:37，老师把 all-reduce 拆成 reduce-scatter 与 all-gather，并反复用 profiler 空洞判断 overlap。课堂提醒：DDP API 很简单，但通信是否真的被隐藏必须用时间线验证。}
+
+\lecturefigure{slide-032.jpg}{Vanilla DP 的优缺点：实现简单，但完整复制模型状态}{CS25 V6 official deck, p.~32}
+
+\begin{warningbox}{Overlap 不是免费并行}
+通信与计算共享 HBM 带宽、PCIe/NVLink 资源和 kernel 调度；过多小 bucket 会增加启动开销，过大 bucket 又启动太晚。所谓“100\% overlap”还可能把 compute kernel 本身拖慢，因此应比较端到端 step time，而不是只看时间线重叠面积。
+\end{warningbox}
+
+\subsection{ZeRO-1：先分片 optimizer state}
+
+以混合精度 Adam 为例，每个参数可能对应低精度训练参数、高精度 master weight、一阶矩 $m$、二阶矩 $v$ 与梯度。Vanilla DP 在每个 rank 复制全部状态；ZeRO-1 让每个 rank 只拥有一部分 optimizer state，并只更新归自己负责的 parameter shard，最后再把更新后的参数同步给其他 rank。
+
+\lecturefigure{slide-033.jpg}{ZeRO-1 的动机：DP 重复保存完整 optimizer state}{CS25 V6 official deck, p.~33}
+
+若参数量为 $N$，参数与梯度每元素字节数分别为 $b_p,b_g$，optimizer state 每元素字节数为 $b_o$，则粗略每卡状态内存为
+\[
+M_{\mathrm{DP}}\approx N(b_p+b_g+b_o),
+\qquad
+M_{\mathrm{Z1}}\approx N(b_p+b_g)+\frac{Nb_o}{P}.
+\]
+其中，$P$ 是 DP rank 数。公式只描述持久状态，不含 activation、temporary buffer、fragmentation 和通信 staging memory；真实峰值必须用 profiler 或 allocator 统计验证。
+
+\lecturefigure{slide-034.jpg}{ZeRO-1：每个 rank 只拥有一部分 optimizer state}{CS25 V6 official deck, p.~34}
+
+\lecturefigure{slide-035.jpg}{ZeRO-1 更新路径：只处理本 rank 负责的状态与参数 shard}{CS25 V6 official deck, p.~35}
+
+All-reduce 本来就可分解为 reduce-scatter 与 all-gather。ZeRO-1 利用这一等价，把归约后的 gradient shard 直接送给负责更新它的 rank；optimizer 完成局部更新后，再 all-gather 新参数。
+
+\lecturefigure{slide-036.jpg}{ZeRO-1 没有凭空增加通信：把 all-reduce 分解并重排}{CS25 V6 official deck, p.~36}
+
+\subsection{ZeRO-2：只保留会被本 rank 使用的 gradient}
+
+ZeRO-1 虽然只更新一部分参数，却仍可能保存完整 gradient。既然 reduce-scatter 已把归约结果按 ownership 分片，其他 gradient shard 在本 rank 上没有用途；ZeRO-2 进一步丢弃它们。
+
+\lecturefigure{slide-037.jpg}{从 ZeRO-1 到 ZeRO-2：完整 gradient 是否还有必要}{CS25 V6 official deck, p.~37}
+
+\lecturefigure{slide-038.jpg}{ZeRO-2：optimizer state 与 gradient 都按 DP ranks 分片}{CS25 V6 official deck, p.~38}
+
+粗略内存变为
+\[
+M_{\mathrm{Z2}}\approx Nb_p+\frac{N(b_g+b_o)}{P}.
+\]
+其中，参数仍在每个 rank 复制，gradient 与 optimizer state 被分片。课堂还强调 tensor-preserving ownership：某些 optimizer 需要看到完整矩阵结构，不能把所有参数 flatten 成任意连续字节后再切开；分片策略必须保留算法需要的 tensor boundary。
+
+\teachervoice{00:11:37--00:15:12，课堂用 ZeRO-1/2 的小差别解释状态所有权，并补充 Muon 等 optimizer 对完整 tensor 结构的要求。这个实现约束比背诵 stage 名称更重要。}
+
+\subsection{ZeRO-3 / FSDP：参数只在需要时短暂物化}
+
+ZeRO-1/2 仍让每个 rank 常驻完整参数，因此当模型权重本身超过单卡容量时，它们已经无能为力。本节继续沿同一 ownership 逻辑推进到参数，但参数与 optimizer state 不同：参数正在 forward/backward 的关键路径上，不能只在 step 末尾访问。ZeRO-3 的难点正是 layer forward 需要完整 weight；解决办法不是永久 all-gather 全模型，而是在某个 FSDP unit 即将计算时收集它，计算后立即释放，并预取下一 unit。
+
+\lecturefigure{slide-039.jpg}{ZeRO-3 的问题：参数被分片后，forward 如何获得完整 layer}{CS25 V6 official deck, p.~39}
+
+\lecturefigure{slide-040.jpg}{ZeRO-3 forward：逐 unit all-gather、计算、释放与预取}{CS25 V6 official deck, p.~40}
+
+backward 也需要该 layer 的参数来计算 input/weight gradient，因此以反向顺序重复物化与释放。峰值内存不再是完整模型，而近似由常驻 shard、当前 unit、prefetch unit 和通信 buffer 决定。
+
+\lecturefigure{slide-041.jpg}{ZeRO-3 backward：再次按需物化参数并 reduce-scatter gradient}{CS25 V6 official deck, p.~41}
+
+\lecturefigure{slide-042.jpg}{ZeRO-3 时间线：把分块 all-gather 与相邻 layer compute 重叠}{CS25 V6 official deck, p.~42}
+
+FSDP unit 太大，峰值内存高且 all-gather 启动晚；太小，小消息、metadata 与 launch overhead 增多。FSDP1 以 wrapper/flattened parameter 为中心，FSDP2 的 \texttt{fully\_shard} 与 DTensor 更强调原生 tensor 结构和多维 device mesh 组合。
+
+\lecturefigure{slide-043.jpg}{PyTorch FSDP1 与 FSDP2 的代码接口}{CS25 V6 official deck, p.~43}
+
+\begin{lstlisting}[language=Python,caption={FSDP2 的逐层 fully\_shard 示意}]
+mesh = init_device_mesh("cuda", (dp_size,), mesh_dim_names=("dp",))
+for block in model.blocks:
+    fully_shard(block, mesh=mesh)
+fully_shard(model, mesh=mesh)
+
+loss = model(batch).loss
+loss.backward()
+optimizer.step()
+\end{lstlisting}
+
+最终比较页的关键不在“ZeRO-3 更先进”，而在通信位置：ZeRO-2 在 optimizer 附近做较集中的参数 all-gather；ZeRO-3 把它拆到每个 unit 的 forward/backward，并尝试与 compute 重叠。
+
+\lecturefigure{slide-045.jpg}{ZeRO-2 与 ZeRO-3：相同状态目标，不同通信时间线}{CS25 V6 official deck, p.~45}
+
+\lecturefigure{slide-046.jpg}{ZeRO/FSDP 的最终取舍：用通信换内存}{CS25 V6 official deck, p.~46}
+
+\begin{knowledgebox}{读图：ZeRO-2 与 ZeRO-3 的差异是“参数何时完整”}
+比较页上方的 ZeRO-2 在 forward/backward 期间拥有完整模型，因此主要参数同步靠近 optimizer 边界；下方 ZeRO-3 只保存 parameter shards，每到一个 FSDP unit 都要 all-gather，再在使用后 reshard。两者的 optimizer/gradient 分片可以相似，决定吞吐差异的是参数 all-gather 被切成多少块、能隐藏多少、快链路组有多大。若模型已经能用 ZeRO-2 装下，ZeRO-3 的额外 unit-level collectives 不会凭空提升样本效率；它们只是购买更多容量。
+\end{knowledgebox}
+
+\teachervoice{00:20:10--00:23:42，老师给出直接实践规则：如果 ZeRO-1 已经装得下，就不要习惯性上 ZeRO-3；后者只为额外节省内存而增加通信。超大规模还可在快链路小组内 FSDP、组间 Vanilla DP，形成 hybrid sharding。}
+
+\begin{importantbox}{ZeRO stage 的最短记忆法}
+ZeRO-1 分 optimizer state；ZeRO-2 再分 gradient；ZeRO-3 再分 parameter。stage 越高，每卡常驻状态越少，但 forward/backward 需要更频繁地恢复所需对象。选择原则是使用\textbf{刚好能满足内存约束的最低 stage}，而不是追求最高编号。
+\end{importantbox}
+
+\subsection{本章小结}
+
+DP 沿 batch 轴扩展吞吐，数学等价由 gradient collective 保证。bucket overlap 解决时间线，ZeRO/FSDP 解决状态复制；二者都受网络与 global batch 上限约束。当 batch 已不能继续增大，或参数矩阵本身需要跨设备计算，就要转向 Tensor Parallelism。
+
+\section{Tensor 与 Sequence Parallelism：分解矩阵计算}
+
+Tensor Parallelism（TP，张量并行）让多个 rank 对\textbf{同一 batch}共同完成一个 layer。它不依赖增大 global batch，因此能突破 DP 的样本轴上限；代价是 collective 进入每个 Transformer block 的 critical path，通常必须放在 NVLink/NVSwitch 等快拓扑域内。
+
+\subsection{动机：同一输入，切分 hidden dimension}
+
+DP 的扩展速度最终受 global batch 上限约束：继续增加 rank 会让每卡 micro-batch 过小，或改变优化所需的 batch 统计。本节因此改用模型内部的 hidden dimension 作为新轴，在不增加样本数的前提下共同完成同一次 layer 计算。DP 让每张卡看到不同 batch；TP 则让每张卡看到相同输入，但只保存和计算部分 weight、gradient 与 optimizer state。完整激活是否复制，取决于采用纯 TP 还是 TP+Sequence Parallelism。
+
+\lecturefigure{slide-049.jpg}{TP 动机：保持 batch 不变，沿 hidden dimension 切分模型}{CS25 V6 official deck, p.~49}
+
+\subsection{从一个矩阵乘法到两个矩阵乘法}
+
+TP 的正确性不应靠“框架会处理”来理解，而应从最小 GEMM 推导。先看一个矩阵乘法能在哪里切，再看两次相邻 matmul 如何让第一次的 shard 直接成为第二次输入，从而推迟一次昂贵的聚合。对 $Y=XW$，可沿 $W$ 的输出列切分：$W=[W_1,\ldots,W_P]$，每个 rank 计算 $Y_r=XW_r$，最后把列拼接为 $Y$。这是 column parallel；若下一层的 weight 沿输入行切分，每个 rank 计算局部部分和，再 all-reduce 得到完整输出。
+
+\lecturefigure{slide-050.jpg}{一个矩阵乘法的 column-parallel 切分}{CS25 V6 official deck, p.~50}
+
+\[
+H_r=XW^{(1)}_r,
+\qquad
+Z=\sum_{r=1}^{P} H_rW^{(2)}_r.
+\]
+其中，$X$ 是在 TP ranks 上相同的输入，$W^{(1)}_r$ 是第一矩阵的列 shard，$H_r$ 是局部 hidden shard，$W^{(2)}_r$ 是第二矩阵对应的行 shard，$Z$ 是 all-reduce 后的完整输出。中间激活不必先 all-gather，通信被推迟到两次 matmul 之后。
+
+\lecturefigure{slide-052.jpg}{两次 matmul：column parallel 接 row parallel，只需一次 all-reduce}{CS25 V6 official deck, p.~52}
+
+backward 是转置矩阵乘法的同一分解。课堂特别保留“same upstream gradient”假设：如果输出 gradient 在 ranks 间不一致，局部乘法无法恢复单卡等价结果；后面的 Sequence Parallelism 会用显式 collective 消除脆弱的隐含同步。
+
+\lecturefigure{slide-053.jpg}{TP backward：转置 matmul 与 upstream-gradient 同步假设}{CS25 V6 official deck, p.~53}
+
+\subsection{MLP 与 Attention 都是矩阵分解的实例}
+
+Transformer MLP 的 up projection 可做 column parallel，激活函数在局部 hidden shard 上执行，down projection 做 row parallel，末端 all-reduce。这样每个 rank 只保存一部分中间宽维度，并承担约 $1/P$ 的主要 GEMM compute。
+
+\lecturefigure{slide-056.jpg}{MLP TP：up projection 列切分、down projection 行切分}{CS25 V6 official deck, p.~56}
+
+Attention 中，Q/K/V heads 可沿 head 或 hidden dimension 切分，局部完成 attention，再把 output projection 的部分和归约。注意力内部是否还需要额外通信取决于 head 布局、GQA/MQA、sequence/context parallel 组合和实现。
+
+\lecturefigure{slide-059.jpg}{Attention TP：切分 QKV 与 output projection}{CS25 V6 official deck, p.~59}
+
+\lecturefigure{slide-060.jpg}{TP 优缺点：节省模型与计算，但 collective 进入每层关键路径}{CS25 V6 official deck, p.~60}
+
+\begin{knowledgebox}{读图：TP 图中的横切与竖切对应不同 collective}
+Column-parallel 把输出 features 分到 ranks，中间 activation 天然保持 hidden shards；row-parallel 把输入 features 与 weight rows 配对，每个 rank 得到同一输出空间的一部分和，必须 all-reduce。MLP 图用这一对切分包住非线性，Attention 图则把 Q/K/V heads 与 output projection 映射到相同模式。读图时先找“每个 rank 拥有哪一列/哪一行”，再决定结果需要 concat、sum 还是保持分片；如果先背 all-reduce 次数，很容易在 GQA、MoE 或自定义 block 中套错。
+\end{knowledgebox}
+
+\teachervoice{00:23:42--00:30:38，老师先用两次 matmul 推出 TP，再映射到 MLP 与 attention；其重点不是记图，而是识别 column-parallel、row-parallel 与 all-reduce 的组合，以及 backward 对 upstream gradient 的要求。}
+
+\subsection{为什么还需要 Sequence Parallelism}
+
+纯 TP 常在 residual、dropout、layer norm 等区域恢复完整激活，并假设 ranks 执行相同工作。这些 replicated activation 会在长 sequence 或大 micro-batch 下占用大量 HBM。Sequence Parallelism（SP）把这部分 activation 沿 sequence 维切分，让 rank 在非 TP 区域处理不同 token positions。
+
+\lecturefigure{slide-062.jpg}{TP+SP 动机：避免 residual/layer-norm 区域复制大激活}{CS25 V6 official deck, p.~62}
+
+关键代数是
+\[
+\operatorname{AllReduce}(x)
+=\operatorname{AllGather}(\operatorname{ReduceScatter}(x)).
+\]
+其中，$x$ 是各 rank 的局部部分和；reduce-scatter 既完成求和又把 sequence shard 留在不同 rank，all-gather 在进入需要 hidden-sharded 输入的 TP 区域前恢复布局。通信总量与原 all-reduce 同阶，但中间 activation 不再完整复制。
+
+\lecturefigure{slide-065.jpg}{TP+SP：在 hidden-shard 与 sequence-shard 布局之间切换}{CS25 V6 official deck, p.~65}
+
+backward 中，all-gather 与 reduce-scatter 的角色反向出现。由此，layer norm 等区域的 gradient 同步不再依赖“所有 rank 恰好做相同工作”的隐式 identity；collective 本身承担正确性。
+
+\lecturefigure{slide-066.jpg}{TP+SP backward：all-gather 与 reduce-scatter 的配对}{CS25 V6 official deck, p.~66}
+
+\lecturefigure{slide-067.jpg}{TP+SP 的最终取舍：激活更省，通信仍在 block critical path}{CS25 V6 official deck, p.~67}
+
+\begin{warningbox}{Sequence Parallelism 与 Context Parallelism 不同}
+本节 SP 通常与 TP 配套，在 layer 内的不同区域切换 hidden/sequence 布局，目的是避免 replicated activation；后面的 CP 是为超长上下文把 attention sequence 本身跨更大设备组切分，并需要跨 rank 交换 K/V。名字都含 sequence，但作用范围与通信模式不同。
+\end{warningbox}
+
+\subsection{把并行轴写成 device mesh}
+
+前面分别讨论了 DP group 与 TP group，但真实训练中的同一 rank 同时属于多个 group。本节把“沿哪个轴通信”显式写成 device mesh，避免用 world-size 全局 collective 破坏其他分片语义。DP 与 TP 可看作二维 mesh：batch shard 沿 DP 轴变化、沿 TP 轴复制；model shard 沿 TP 轴变化、沿 DP 轴复制。collective 必须在正确 process group 上执行，错误的 group 会把本应独立的维度混在一起。
+
+\lecturefigure{slide-068.jpg}{组合 DP 与 TP：数据轴和模型轴互相正交}{CS25 V6 official deck, p.~68}
+
+\lecturefigure{slide-069.jpg}{代码接口：在 device mesh 上选择 collective 轴}{CS25 V6 official deck, p.~69}
+
+\begin{lstlisting}[language=Python,caption={二维 device mesh 上选择 DP/TP process group}]
+mesh = init_device_mesh(
+    "cuda", (dp_size, tp_size), mesh_dim_names=("dp", "tp")
+)
+dp_group = mesh.get_group("dp")
+tp_group = mesh.get_group("tp")
+
+all_reduce(gradients, group=dp_group)   # combine data shards
+all_reduce(partial_outputs, group=tp_group)  # combine model shards
+\end{lstlisting}
+
+\teachervoice{00:37:52--00:41:22，课堂建议把 TP 限制在单节点或快链路域内，并用 process group/device mesh 表达组合关系。并行布局不是纯数学问题；同一分解放到慢网络上会完全失去意义。}
+
+\subsection{本章小结}
+
+TP 把矩阵计算分解到多个 rank，SP 进一步分片非 TP 区域的 activation。它们突破 DP 的 global-batch 上限，却把通信放入每层关键路径。下一类 Pipeline Parallelism 不切矩阵，而是沿网络深度分配 layer，并把问题转化为 micro-batch schedule。
+
+\section{Pipeline Parallelism：切分 layer，调度时间}
+
+Pipeline Parallelism（PP，流水线并行）把连续或交错的 layer stage 放到不同 rank。它的通信对象只是 stage 间 activation 与 gradient，消息相对便宜；真正的难点是让所有 stage 有事可做，并管理多个 micro-batch 的 activation 生命周期。
+
+\subsection{从 layer placement 到 pipeline bubble}
+
+TP 在每个 layer 内协作，因而频繁触发 collective；PP 改为把完整 layer stage 交给不同 ranks，只在 stage 边界传 activation/gradient。通信对象变小了，但依赖链变长：后一 stage 必须等前一 stage 产出，backward 又反向依赖。若一个 batch 依次穿过所有 stage，后面的 rank 在开头等待，前面的 rank 在结束时等待。增加 micro-batch 可以填充流水线；调度器决定 forward/backward 的进入顺序。
+
+\lecturefigure{slide-071.jpg}{PP 直觉：沿 layer 维度切分模型}{CS25 V6 official deck, p.~71}
+
+All-Forward-All-Backward（AFAB）先把多个 micro-batch 的 forward 全部送入 pipeline，再按反方向做 backward。它简单，但需要保存很多 forward activation，并在 pipeline 两端留下 bubble。
+
+\lecturefigure{slide-072.jpg}{AFAB schedule：先全部 forward，再全部 backward}{CS25 V6 official deck, p.~72}
+
+\lecturefigure{slide-073.jpg}{Pipeline bubble：stage 没有可执行工作时的空闲区域}{CS25 V6 official deck, p.~73}
+
+\subsection{1F1B 与 DualPipe}
+
+AFAB 已经展示了 bubble 与 activation 生命周期的矛盾；本节比较两个更积极的 schedule，分别优化“同时存多少 activation”和“从几端注入工作”。One-Forward-One-Backward（1F1B）在 warmup 后优先交错 forward/backward，降低同时存活的 activation 数量。它改善内存，但并不自动消除由 pipeline 深度和 micro-batch 数造成的 bubble。
+
+\lecturefigure{slide-074.jpg}{1F1B：在稳态交错 forward 与 backward}{CS25 V6 official deck, p.~74}
+
+如果能从 pipeline 两端同时注入工作，理论上可进一步填充空洞。课堂以 DeepSeek DualPipe 为例：layer 采用双向/交错映射，两个方向的 forward/backward 被精细安排。
+
+\lecturefigure{slide-075.jpg}{继续压缩 bubble 的动机：让另一端也开始 forward}{CS25 V6 official deck, p.~75}
+
+\lecturefigure{slide-076.jpg}{DualPipe：双向注入与更复杂的依赖调度}{CS25 V6 official deck, p.~76}
+
+\begin{knowledgebox}{读图：三种 schedule 分别优化什么}
+AFAB 的颜色块按 forward 全部铺开后再 backward，最容易实现，但 activation 存活时间最长；1F1B 在 warmup 后让同一 stage 前后向交替，缩短 activation 生命周期，却仍要填充和排空 pipeline；DualPipe 的双向流试图用另一端的工作填补空洞，代价是 layer placement、micro-batch identity、send/recv 顺序和 deadlock avoidance 都更复杂。比较 schedule 时必须同时看 bubble、peak activations、通信冲突与实现可靠性，不能只看彩色块是否“更满”。
+\end{knowledgebox}
+
+\teachervoice{00:41:22--00:44:18，老师明确区分 1F1B 的内存收益与 bubble 问题，并把 DualPipe 描述为“有效但实现很复杂”的 schedule；需要跟踪每个 micro-batch 的正确 activation 与 gradient，不能只照着彩图拼接。}
+
+\subsection{激活内存、checkpointing 与 micro-batch 数}
+
+PP 每个 stage 只保存部分参数，但在 backward 到来前必须保留多个 micro-batch 的 activation。\term{Activation checkpointing（激活检查点/重计算）}不是模型 checkpoint：它在 forward 少存中间激活，backward 时重新执行部分 forward，以额外 FLOPs 换 HBM；CPU offload 则把激活暂存到主机内存，换取 PCIe/互连流量。
+
+\lecturefigure{slide-077.jpg}{PP 优缺点：便宜通信、有效参数分片与复杂 schedule}{CS25 V6 official deck, p.~77}
+
+设 stage 数为 $S$、micro-batch 数为 $M$，简单 AFAB 的 bubble fraction 常用近似
+\[
+\beta\approx\frac{S-1}{M+S-1}.
+\]
+其中，$\beta$ 是理想等时 stage 下的空闲比例，$S$ 越深，填充/排空成本越大；$M$ 越多，bubble 相对变小，但 activation 与调度开销增加。真实系统还受 stage imbalance、通信和 recomputation 影响。
+
+\begin{importantbox}{PP 的本质是 schedule}
+“每卡放几层”只定义空间切分；AFAB、1F1B、interleaved 1F1B、DualPipe 才定义时间切分。评估 PP 时必须同时报告 stage balance、micro-batch 数、activation policy、bubble 与端到端吞吐。
+\end{importantbox}
+
+\subsection{本章小结}
+
+PP 用便宜的点对点 activation/gradient 通信换取复杂调度和激活管理。它适合 layer 结构清晰、模型可分 stage 的场景；当主要问题不是模型深度而是超长 sequence 的 activation，Context Parallelism 才是更直接的切分轴。
+
+\section{Context Parallelism：为超长序列分片 attention}
+
+Context Parallelism（CP，上下文并行）沿 sequence length 切分同一个样本。它不是为了增加 batch，而是为了让单个超长上下文的 activation、Q/K/V 和 attention 工作跨设备分担。
+
+\subsection{为什么 DP、TP、PP 仍可能装不下长上下文}
+
+当 sequence length 增长时，activation 与 attention working set 会迅速上升。即使参数已被 ZeRO、TP 或 PP 分片，每个 rank 仍可能持有过长的 token 维；因此需要专门沿 sequence 轴切分。
+
+\lecturefigure{slide-079.jpg}{CP 动机：sequence length 增长造成 activation memory 爆炸}{CS25 V6 official deck, p.~79}
+
+DP 沿 batch 轴把样本分给不同 rank；同一 sequence 不被拆开。回顾页的意义是建立对照：CP 将单个样本的 $S$ 个 positions 分为 $S_1,\ldots,S_P$，每个 rank 只拥有一段。
+
+\lecturefigure{slide-081.jpg}{DP 回顾：切 batch，不切单个 sequence}{CS25 V6 official deck, p.~81}
+
+\lecturefigure{slide-083.jpg}{CP：同一个 sequence 按 token positions 分片}{CS25 V6 official deck, p.~83}
+
+\subsection{Ring Attention 与 online softmax}
+
+每个 query shard 仍需要看到全序列 K/V。Ring Attention 让 K/V blocks 沿设备环传递；rank 对当前 block 计算局部 score，并用 online softmax 的 running maximum 与 running normalizer 合并多个 block，而不必一次物化完整 attention matrix。
+
+\lecturefigure{slide-085.jpg}{Ring Attention：循环交换 K/V block 并在线更新 softmax}{CS25 V6 official deck, p.~85}
+
+\begin{knowledgebox}{读图：query 留在本地，K/V 绕环移动}
+每个 rank 固定保存自己的 query shard，并依次接收来自其他 ranks 的 K/V block；完成一轮后，每个 query 已与全序列所有 keys 交互。图中的环不是为了做平均，而是为了控制每次在 HBM 中出现的 K/V 块大小。online softmax 的 running max/denominator 使不同块的 score 能数值稳定地合并。因果 attention 还要结合 block 位置应用 mask；若通信与 block compute 无法重叠，ring 的每一跳都会直接拉长 layer latency。
+\end{knowledgebox}
+
+对第 $i$ 个 query，分块 softmax 可维护
+\[
+m_i^{(t)}=\max\bigl(m_i^{(t-1)},\max_j s_{ij}^{(t)}\bigr),
+\]
+\[
+\ell_i^{(t)}=e^{m_i^{(t-1)}-m_i^{(t)}}\ell_i^{(t-1)}
++\sum_j e^{s_{ij}^{(t)}-m_i^{(t)}}.
+\]
+其中，$s_{ij}^{(t)}$ 是第 $t$ 个 K/V block 的 attention score，$m_i^{(t)}$ 是截至该 block 的运行最大值，$\ell_i^{(t)}$ 是稳定 softmax 分母。输出分子也用相同重标定递推，从而在 block 流过时得到与全量 softmax 等价的结果。
+
+\lecturefigure{slide-086.jpg}{CP 的边界：长序列唯一直接切分轴，但每层都要交换 K/V}{CS25 V6 official deck, p.~86}
+
+\teachervoice{00:46:02--00:49:14，老师把 CP 限定为 long-context bottleneck 的专用工具：它在每个 attention block 内通信，对短序列帮助不大；如果问题不是 sequence memory，就不应因为“支持 CP”而启用。}
+
+\subsection{本章小结}
+
+CP 把单个长上下文的 token positions 分到多个 rank，Ring Attention 用在线 softmax 与 K/V 轮转保持全局 attention 语义。它直接解决长 sequence memory，却增加 attention critical-path communication；下一节的 EP 则只针对 Mixture-of-Experts 的稀疏专家层。
+
+\section{Expert Parallelism：MoE 的 token routing 与 all-to-all}
+
+Mixture-of-Experts（MoE）让每个 token 只激活少数 expert，从而扩大总参数而不同比例增加每 token FLOPs。Expert Parallelism（EP，专家并行）把 experts 放在不同 rank；路由结果决定每个 token 必须被发送到哪里，因此通信量与消息形状是数据依赖的。
+
+\subsection{切分 expert，而不是 attention}
+
+MoE block 仍含共享 attention、router、dispatch、expert MLP 与 combine。EP 只切 expert；若每个 EP rank 仍处理完全相同数据，共享 attention 会重复计算，因此实践中 EP group 往往也分片 data。
+
+\lecturefigure{slide-088.jpg}{EP 动机：MoE 中哪些部分可以跨设备切分}{CS25 V6 official deck, p.~88}
+
+\lecturefigure{slide-089.jpg}{第一步：把 experts 分布到不同 GPU}{CS25 V6 official deck, p.~89}
+
+\lecturefigure{slide-090.jpg}{路由问题：token 如何到达远端 expert}{CS25 V6 official deck, p.~90}
+
+\subsection{All-to-all、dispatch 与 combine}
+
+All-to-all 允许每个 rank 向每个其他 rank 发送不同消息。与 all-reduce 的“所有人得到同一个归约结果”不同，all-to-all 的目标是重排：发送前按 destination expert 打包 token，通信后每个 rank 收到属于本地 experts 的 token。
+
+\lecturefigure{slide-091.jpg}{All-to-all：每个进程向每个其他进程发送不同消息}{CS25 V6 official deck, p.~91}
+
+\lecturefigure{slide-092.jpg}{MoE dispatch：把路由到同一 expert 的 token 聚到其所在 rank}{CS25 V6 official deck, p.~92}
+
+expert 计算后必须执行反向 all-to-all，把结果送回原 token 顺序，这一步叫 combine。forward 的最小语义可写为
+\[
+y_i=\sum_{e\in\operatorname{TopK}(r(x_i))}p_{i,e}E_e(x_i).
+\]
+其中，$x_i$ 是 token 表示，$r$ 是 router，$p_{i,e}$ 是 token $i$ 分配给 expert $e$ 的权重，$E_e$ 是 expert MLP，TopK 决定实际激活的少数 experts。dispatch/combine 改变数据位置，但不能改变这个加权结果。
+
+\lecturefigure{slide-094.jpg}{完整 EP 数据流：shared attention、dispatch、expert、combine}{CS25 V6 official deck, p.~94}
+
+\subsection{真正难点：动态消息大小与 CPU--GPU 同步}
+
+每个 expert 接收多少 token 要等 router 计算后才知道。若通信库需要 CPU 先读取计数、分配 buffer、再发起 collective，GPU 会在关键路径等待。DeepEP、HybridEP 等实现利用 InfiniBand、RDMA、专用 SM 与预分配 buffer 降低这类同步。这也意味着算法性能依赖具体硬件和网络能力。
+
+\lecturefigure{slide-095.jpg}{EP difficulty：router 决定动态 buffer，CPU--GPU sync 进入关键路径}{CS25 V6 official deck, p.~95}
+
+\begin{knowledgebox}{读图：EP 的瓶颈发生在 GEMM 之前}
+绿色 router 很快给出 expert assignments，但每个 destination 的 token 数是动态的。发送方要按 expert 重排 token，接收方要知道 buffer offset，通信库还要在节点内 NVLink/NVSwitch 与节点间 InfiniBand 之间选择路径。图中 CPU 等待 GPU 计数的间隙会让后面的 expert GEMM 再快也无法补回。高性能 EP 因此同时需要 GPU-side metadata、预分配或对称内存、RDMA、拓扑感知 routing 和负载均衡；“专家计算稀疏”并不等于“系统通信稀疏”。
+\end{knowledgebox}
+
+\lecturefigure{slide-096.jpg}{EP 优缺点：MoE 的必要切分轴，也是高强度 all-to-all}{CS25 V6 official deck, p.~96}
+
+\teachervoice{00:51:42--00:53:56，老师指出很多 MoE 训练慢在 dispatch preprocess 与硬件支持，而不只是 expert GEMM。没有合适 InfiniBand/RDMA 或库支持时，公开论文中的 EP 吞吐未必可复现。}
+
+\begin{warningbox}{平均 token 数不能代表最慢 rank}
+若 router 把大量 token 发给同一 expert，该 rank 的 compute 与通信会成为 straggler，其他 ranks 即使空闲也必须等待。capacity factor、token dropping、auxiliary load-balance loss 或 auxiliary-loss-free bias 都是在质量、均衡与确定性之间取舍，不能只看平均 experts-per-token。
+\end{warningbox}
+
+\subsection{把 EP 通信藏进 PP schedule}
+
+上一节已经确认 EP 的 all-to-all 很难从单个 MoE block 内消除；下一步只能寻找与它独立的计算。本节回到 PP 的多 micro-batch 时间线，把不同 batch、不同 stage 的工作交错，从而让通信等待不再等同于设备空闲。实用方案把 EP 与 PP/1F1B 组合：当蓝色 micro-batch 做 dispatch/combine 时，GPU 可为绿色 micro-batch 执行另一个 stage 的 forward/backward。这样不是减少 all-to-all 字节，而是利用独立工作填充等待。
+
+\lecturefigure{slide-097.jpg}{EP+PP：用另一 micro-batch 的 compute 隐藏 dispatch/combine}{CS25 V6 official deck, p.~97}
+
+\begin{lstlisting}[language=Python,caption={EP 通信与另一 micro-batch 计算重叠的概念调度}]
+dispatch_blue = all_to_all_async(route(tokens_blue))
+backward_green = pipeline_stage.backward(microbatch_green)
+tokens_blue_local = dispatch_blue.wait()
+expert_blue = local_experts(tokens_blue_local)
+combine_blue = all_to_all_async(expert_blue)
+forward_green = pipeline_stage.forward(next_green)
+output_blue = combine_blue.wait()
+\end{lstlisting}
+
+\teachervoice{00:53:56--00:55:42，课堂把 practical solution 归纳为“用一个 batch 的 pipeline compute 隐藏另一个 batch 的 expert communication”。这说明 5D parallelism 的核心是跨轴联合 schedule，而不是逐项打开配置开关。}
+
+\subsection{本章小结}
+
+EP 只服务 MoE expert 层，通过 all-to-all 做 token dispatch/combine。它的难点是动态路由、负载不均、critical-path 网络和 CPU--GPU 同步；与 PP 组合可以隐藏部分通信，但无法消除硬件与最慢 rank 约束。
+
+\section{五维组合：从“支持哪些并行”到“选择哪种布局”}
+
+前五章分别沿 batch、hidden/sequence、layer、context 和 expert 轴切分。真正的 ultra-scale run 会在 device mesh 上同时使用多轴：某个轴负责容量，某个轴负责吞吐，某个轴只覆盖 attention 或 MoE，另一些轴被限制在快链路域内。
+
+\subsection{五个轴如何组合}
+
+总 world size 可写成多个并行度的乘积：
+\[
+P_{\mathrm{world}}
+=P_{\mathrm{DP}}P_{\mathrm{TP}}P_{\mathrm{PP}}P_{\mathrm{CP}}P_{\mathrm{EP}}.
+\]
+其中，各 $P$ 分别是 data、tensor、pipeline、context 与 expert parallel size。这个乘积只说明 rank 编号空间；能否高效还取决于轴到物理拓扑的映射、每轴 collective、micro-batch 和模型结构。
+
+\lecturefigure{slide-099.jpg}{5D parallelism：五个切分轴在同一训练图中组合}{CS25 V6 official deck, p.~99}
+
+\lecturefigure{slide-100.jpg}{全课回顾：DP、TP/SP、PP、CP、EP}{CS25 V6 official deck, p.~100}
+
+\begin{knowledgebox}{读图：五个轴不是平均分配 GPU}
+组合图中每种颜色覆盖的网络区域不同：DP/ZeRO 贯穿完整训练状态，TP/SP 主要在每个 dense block 内，PP 跨 layer stages，CP 只改变长序列 attention 的数据布局，EP 只进入 MoE block。因而 world size 的乘积分解不会得到唯一答案。常见原则是把最频繁、最延迟敏感的 TP collective 放在最快的节点内域，把 DP/PP 映射到更大域，再根据 sequence 与 MoE 是否存在决定 CP/EP。任何轴大小改变都会反向影响 micro-batch、activation、通信消息尺寸和负载均衡。
+\end{knowledgebox}
+
+逻辑 device mesh 还必须落到物理机器。假设每节点有八张 GPU，节点内由 NVSwitch 全连接，节点间通过较慢的 InfiniBand；那么 TP=8 往往比把 TP=16 跨两节点更自然，因为每个 Transformer block 的 collective 都留在快域。DP 可以跨更多节点，因为 gradient bucket 较大且较容易与 backward overlap；PP 的 stage 边界消息频率较低，也可能跨节点，但要避免把严重不均衡的 layers 分到不同 stage。EP 是否跨节点则取决于 all-to-all fabric、专家数与路由负载。这个映射没有绝对规则，却有一个稳定目标：把最频繁、最同步敏感、最难隐藏的通信放在最低延迟的拓扑层，把更稀疏或可流水化的通信推到更大范围。
+
+因此，扩大 world size 之前应先画两张图：一张逻辑 mesh，标出每轴切分对象与 collective；一张物理 topology，标出节点、快链路、NIC 和 oversubscription。只有两张图的高频边彼此对齐，增加 ranks 才更可能提升吞吐，而不是放大同步等待。
+
+这也是课程把 topology 放在 Q\&A 最后强调的原因：并行算法给出可行计算，物理网络决定它是否值得执行。
+
+\begin{knowledgebox}{五维并行决策表}
+\begin{tabularx}{\linewidth}{L{0.12\linewidth} L{0.16\linewidth} L{0.18\linewidth} X}
+\toprule
+轴 & 主要切分 & 关键通信/调度 & 只在什么问题出现时使用 \\
+\midrule
+DP/ZeRO & batch 与训练状态 & all-reduce、reduce-scatter、all-gather & 需要吞吐或状态分片，且 global batch 尚可扩展 \\
+TP/SP & hidden 与 activation layout & 每层 all-reduce / RS / AG & 单层矩阵或 activation 需跨快链路设备计算 \\
+PP & layer depth & P2P activation/gradient、1F1B & 模型可分 stage，且 micro-batch 足够填充 pipeline \\
+CP & sequence length & 每层 K/V ring exchange & 单个超长上下文的 sequence memory 是瓶颈 \\
+EP & experts / routed tokens & all-to-all、load balance & 模型含 MoE，expert 参数与 token routing 需跨设备 \\
+\bottomrule
+\end{tabularx}
+\end{knowledgebox}
+
+\subsection{从 cheat sheet 到可执行选择流程}
+
+上一节给出了五个轴的逻辑分工，但工程团队仍需要把它变成可执行的排障与搜索顺序。本节从最硬的容量约束开始，再逐步加入样本、拓扑与结构条件，目标是尽早排除没有必要的轴，而不是一次搜索所有并行度组合。官方 cheat sheet 的价值不是给出固定答案，而是强迫工程师按顺序缩小空间：先问模型与 optimizer state 能否装下，再问 global batch 是否允许 DP，接着把 TP 放进快链路域、用 PP 处理深度、只为长上下文启用 CP、只为 MoE 启用 EP。
+
+\lecturefigure{slide-101.jpg}{Ultra-Playbook cheat sheet：按约束选择并行策略}{CS25 V6 official deck, p.~101}
+
+\begin{importantbox}{推荐的选择顺序}
+第一，建立参数、optimizer、gradient、activation 的峰值账本。第二，选择能满足容量的最低 ZeRO stage。第三，用 DP 吃满允许的 global batch。第四，在节点内增加 TP/SP。第五，模型深度仍超限时再加 PP。第六，只有 long context 或 MoE 分别引入 CP/EP。最后，用真实 topology 与 profiler 搜索每轴大小，而不是从论文配置复制。
+\end{importantbox}
+
+训练系统还包括 data loader、checkpoint manager、orchestrator、fault tolerance、network fabric 和 storage。讲义若只画模型层 collective，会忽略实际 run 中常见的输入饥饿、保存暂停、节点故障与恢复时间。
+
+\lecturefigure{slide-102.jpg}{训练基础设施全景：计算图之外还有数据、存储与编排}{CS25 V6 official deck, p.~102}
+
+\begin{knowledgebox}{读图：GPU 利用率低不一定是模型并行的问题}
+基础设施图把训练作业放在 data ingestion、host preprocessing、distributed runtime、checkpoint/storage 和 orchestration 之间。若 data loader 供给不足，改变 TP size 不会修复输入饥饿；若 checkpoint 周期阻塞全体 ranks，增加 pipeline micro-batches 只会让暂停前积累更多状态；若单节点反复故障，最高瞬时吞吐也可能输给更稳定、恢复更快的配置。验收一次 ultra-scale run 应同时记录 tokens/s、model FLOPs utilization、network throughput、checkpoint pause、restart time、data wait 与失败率，才能区分“模型图没吃满”和“系统外围饿死模型图”。
+\end{knowledgebox}
+
+\begin{warningbox}{搜索并行布局时要固定比较口径}
+不同布局可能改变 micro-batch、gradient accumulation、activation checkpointing、kernel shape 和数值精度；若这些变量同时变化，吞吐差异无法归因。可靠实验应固定有效 global batch、sequence length、optimizer 与训练目标，先测单轴变化，再联合搜索；报告时同时给出峰值 HBM、每步时间、通信占比和收敛指标，而不是只给某个“加速倍数”。
+\end{warningbox}
+
+\subsection{Q\&A：负载均衡、数学等价与自动布局}
+
+课堂 Q\&A 补充了三条没有完整写进 deck 的规则。第一，MoE router 必须抑制极端不均衡，可用 auxiliary loss 或 auxiliary-loss-free bias；目标不是让每个 token 平均，而是避免少数 ranks 成为全局 straggler。第二，正确的 parallelism 只重排等价 forward/backward，理论上不应改变 scaling law；若 convergence 明显不同，应优先检查数值精度、collective 顺序、随机数、loss scaling 或 bug。第三，没有脱离硬件的“自动最优布局”。
+
+\teachervoice{00:57:18--00:59:34，Q\&A 说明 load-balance loss 与 router bias 都可改善 token 分布；并行策略若实现正确，应保持单卡数学语义，不能把收敛变化当作并行本身的必然效果。}
+
+\teachervoice{00:59:34--01:01:34，CPU 数据预处理可用并行 workers 提前隐藏；自动 parallelism 仍要输入 model size、GBS、sequence length、网络与 NVLink/NVSwitch 域。课堂最终答案是 topology-dependent，而不是某个固定 5D 比例。}
+
+\begin{warningbox}{“数学等价”仍不保证逐 bit 相同}
+浮点加法不满足结合律，不同 collective tree、bucket 顺序、混合精度和随机数切分会造成数值差异；异步 overlap 还可能暴露 race 或 stale buffer。工程上应要求 loss curve、gradient norm 与最终指标统计等价，而不是期待跨布局逐 bit 一致。
+\end{warningbox}
+
+\subsection{规模化训练的能源责任}
+
+前面的选择规则主要优化时间、显存与网络，但资源账本还有一个不能在结尾被省略的维度：实际消耗的 accelerator-hours 与由失败、空闲、低利用率造成的无效能耗。本节把系统效率重新解释为责任边界，而不是把能源问题留给数据中心之外。结束页把能源影响放回系统设计：提高 MFU、减少失败 run、避免不必要的高 stage、选择更合适的模型/数据规模、提升 checkpoint 与恢复效率，既是成本优化，也是减少无效能源消耗。责任不等于停止规模化，而是让每个 GPU-hour 对明确学习目标负责。
+
+\lecturefigure{slide-105.jpg}{结尾提醒：扩展到数千 GPU 时必须计入能源影响}{CS25 V6 official deck, p.~105}
+
+\subsection{本章小结}
+
+五维并行不是五种互斥架构，而是同一 device mesh 上的资源分解。正确布局从容量与数学等价出发，经 topology mapping、collective schedule 与 profiler 验证收口；错误布局则会把一个显存问题变成更昂贵的网络、bubble 或 straggler 问题。
+
+\section{总结与延伸}
+
+\subsection{一条贯穿全课的推理链}
+
+本课可以压缩为六步。第一，为参数、optimizer state、gradient、activation 与数据流分别记账。第二，沿最匹配的逻辑轴做 sharding。第三，写出恢复单设备语义所需的 collective 或 point-to-point 依赖。第四，判断通信位于 critical path 还是可 overlap。第五，把逻辑 axes 映射到真实 NVLink、NVSwitch、InfiniBand、PCIe 与 storage 拓扑。第六，用 profiler、吞吐、峰值内存、网络利用率和收敛曲线验证，而不是凭配置名称验收。
+
+\begin{importantbox}{Ultra-scale 的核心不是更多 GPU，而是更少无效等待}
+增加设备只增加潜在并行度。只有当状态被正确分片、collective 被正确分组、micro-batch 能填满 schedule、路由负载平衡、数据与 checkpoint 不饿死计算时，潜在并行度才会变成有效训练吞吐。
+\end{importantbox}
+
+\subsection{实践检查清单}
+
+\begin{enumerate}
+  \item 记录每类状态的 dtype、shape、replication factor 与生命周期。
+  \item 为每个 parallel axis 标出 process group、物理链路与关键 collective。
+  \item 分别测量 compute-only、communication-only 与 end-to-end step time。
+  \item 检查 overlap 是否降低总时间，而不是只让时间线重叠。
+  \item 记录 straggler、router imbalance、pipeline bubble 和 input/checkpoint stall。
+  \item 用最小规模复现单卡 loss，再逐轴增加并行并比较数值与吞吐。
+  \item 保存可恢复 checkpoint，并实际演练节点失败后的恢复时间。
+\end{enumerate}
+
+\subsection{拓展阅读}
+
+\begin{itemize}
+  \item Hugging Face，\href{https://huggingface.co/spaces/nanotron/ultrascale-playbook}{Ultra-Scale Playbook}：本课的主要系统图与决策框架。
+  \item Rajbhandari 等，\href{https://arxiv.org/abs/1910.02054}{ZeRO}；PyTorch，\href{https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html}{FSDP2 fully\_shard documentation}。
+  \item Liu 等，\href{https://arxiv.org/abs/2310.01889}{Ring Attention with Blockwise Transformers}。
+  \item DeepSeek-AI，\href{https://arxiv.org/abs/2412.19437}{DeepSeek-V3 Technical Report} 与 \href{https://github.com/deepseek-ai/DeepEP}{DeepEP}。
+  \item \href{https://github.com/pytorch/torchtitan}{TorchTitan}、\href{https://github.com/huggingface/nanotron}{Nanotron}、\href{https://github.com/NVIDIA/Megatron-LM}{Megatron-LM}：可执行的多维并行实现。
+  \item Hugging Face，\href{https://huggingface.co/spaces/HuggingFaceTB/smol-training-playbook}{Smol Training Playbook}；\href{https://jax-ml.github.io/scaling-book/tpus/}{JAX Scaling Book}：训练基础设施与 TPU 视角。
+\end{itemize}
+
+\end{document}

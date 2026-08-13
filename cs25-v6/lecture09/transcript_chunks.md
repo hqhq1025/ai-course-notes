@@ -1,0 +1,986 @@
+# Transcript chunks
+
+## 00:00:00--00:10:00
+
+[00:00:05--00:00:09] And so it's my pleasure today to welcome Charles from Modal.
+[00:00:09--00:00:15] So Charles builds and teaches people to build AI applications.
+[00:00:15--00:00:20] And after publishing research in psychopharmacology?
+[00:00:20--00:00:22] Psychopharmacology, yeah.
+[00:00:22--00:00:27] --and neurobiology, he got his PhD at the University of California at Berkeley.
+[00:00:27--00:00:32] Don't hold it against me-- for dissertation work on neural network optimization.
+[00:00:32--00:00:45] And he has taught thousands the entire stack of AI application development, from linear algebra, and GPU arcana to building defensible businesses-- through work at weights and biases,
+[00:00:45--00:00:48] full stack deep learning, and model.
+[00:00:48--00:00:50] So without further ado, I'll hand it off to Charles.
+[00:00:50--00:00:51] Great.
+[00:00:51--00:00:52] Thanks for the introduction, Steven.
+[00:00:52--00:00:56] [APPLAUSE] OK.
+[00:00:56--00:01:07] So what I wanted to talk about today is serving the models that you've learned about in previous talks in this course.
+[00:01:07--00:01:15] And I took a look at what some of the other speakers talked about, like the ultrascale.
+[00:01:15--00:01:24] The ultrascale talk, the state space models talk, and there's a lot of focus on capabilities and on the production of these models.
+[00:01:24--00:01:25] And that's super important.
+[00:01:25--00:01:28] That's where things start.
+[00:01:28--00:01:31] But where they end up is being used by people.
+[00:01:31--00:01:35] And so that's what I've been working on a lot in the last couple of years.
+[00:01:35--00:01:39] And so I want to share some lessons about this.
+[00:01:39--00:01:51] I think maybe if you are dead set on training, then you will maybe learn some things about the consequences of your choices in training models.
+[00:01:51--00:01:55] Maybe I can convince you that inference is interesting too.
+[00:01:55--00:01:58] So that's a bit of a spoiler for my why inference.
+[00:01:58--00:02:05] So Sean Wang recently tweeted that everyone in AI infrastructure is finally getting filthy rich.
+[00:02:05--00:02:09] And he clarified, not sexy AI research, just boring infra.
+[00:02:09--00:02:15] And this was right after our company announced our raise, along with a couple of others.
+[00:02:15--00:02:16] So I think I know what he's talking about here.
+[00:02:16--00:02:19] So also somebody who posted a thing about auto research.
+[00:02:19--00:02:24] And it was a paper about using auto research on making inference faster.
+[00:02:24--00:02:29] And he was like, you can also use auto research for boring things, like inference.
+[00:02:29--00:02:41] So I wanted to go through this because I feel like, yeah, it's inference has a bit of-- yeah, it's the younger brother of training.
+[00:02:41--00:02:42] Yeah.
+[00:02:42--00:02:54] So one just big reason to care about this-- training is cool, but from the perspective of a business, it's a cost center, not a revenue center.
+[00:02:54--00:02:56] You put money in, and a model comes out.
+[00:02:56--00:03:01] And then there's not actually a good way to turn model weights into money directly.
+[00:03:01--00:03:06] It's kind of software, where it's pretty hard to sell, like a CD with software on it.
+[00:03:06--00:03:09] But so you have to turn it into something.
+[00:03:09--00:03:11] Create a system around it.
+[00:03:11--00:03:18] And that's how you're actually able to make the revenue that allows you to keep making the models.
+[00:03:18--00:03:27] And yeah, even if you're just raising venture capital from people who just keep signing checks-- they want to see revenue along the way.
+[00:03:27--00:03:30] And so this is pretty.
+[00:03:30--00:03:31] This makes it pretty important.
+[00:03:31--00:03:40] It also means it's just like attracts a lot of resources over time, and it's useful as an engineer to have more resources to tackle the problems.
+[00:03:40--00:03:47] Training it's also-- it's pretty important, but it's done by only a few organizations right now, especially pre-training.
+[00:03:47--00:03:56] It's how there's only a few organizations that fab chips, and most people build on top of that.
+[00:03:56--00:04:04] Or even ones like NVIDIA opted for the CPUs-- they're compiling intellectual property components from other people.
+[00:04:04--00:04:06] Inference is, on the other hand, everywhere.
+[00:04:06--00:04:15] There are many people running inference and more I would say all the time.
+[00:04:15--00:04:28] Also just even to do training nowadays, you want to generate outputs from the model, have them interact with the world, and then feed that back into the weights usually
+[00:04:28--00:04:30] with reinforcement learning.
+[00:04:30--00:04:32] This is important part of the training stack now.
+[00:04:32--00:04:33] Maybe more flops than the pre-train.
+[00:04:33--00:04:36] I don't know if people that yet.
+[00:04:36--00:04:39] And this requires you to do efficient inference.
+[00:04:39--00:04:46] So even the training heads, I think, have to care a lot about these things now.
+[00:04:46--00:04:52] Reason I care about it a lot or I enjoy it a lot-- inference right now especially is like straddling the whole stack.
+[00:04:52--00:04:53] You have to think about applications.
+[00:04:53--00:04:55] What's this being used for?
+[00:04:55--00:05:02] You have to think about linear algebra or cute template algebras, layout algebras.
+[00:05:02--00:05:07] And you need to think about electrons, and heat, and cooling.
+[00:05:07--00:05:14] And so that's a pretty fun place to play as a truly full stack engineer.
+[00:05:14--00:05:24] And then finally, there's a big wave of inference demand oncoming-- both for the models put out by the proprietary providers then just all over the place.
+[00:05:24--00:05:34] And that's a big opportunity for engineers to service that demand efficiently for people.
+[00:05:34--00:05:37] And then wireless [INAUDIBLE] about this.
+[00:05:37--00:05:46] I've been working on inference at Modal for about the last two years-- previously on how to train and deploy models at full stack deep learning and then on training
+[00:05:46--00:05:47] before that.
+[00:05:47--00:05:50] So I've gone through this whole stack.
+[00:05:50--00:05:59] Been focused recently internally at modern GPU stuff, metrics, profiling, performance, where the rubber hits the road with inference.
+[00:05:59--00:06:12] And I've both been running my own [INAUDIBLE] little language servers for my own projects and then also more seriously working with a bunch of the leading teams,
+[00:06:12--00:06:17] which you'll see on this slide that are deploying and optimizing inference at the scale of hundreds or thousands of GPUs.
+[00:06:17--00:06:22] And unlike some of the other people in this field, I have no interest in hiding this knowledge from people.
+[00:06:22--00:06:26] I want them to all know about it and do it.
+[00:06:26--00:06:30] I want there to be more inference in the world.
+[00:06:30--00:06:32] So all right-- let's go through the stack.
+[00:06:32--00:06:37] What does it take to serve inference, and what are the most important things and tools to know about?
+[00:06:37--00:06:41] We only have about an hour here, so I'm not going to be able to go into detail.
+[00:06:41--00:06:46] This is like a slap bang world tour at high speed.
+[00:06:46--00:06:50] So we'll have questions afterwards, and I'll be at the event after that.
+[00:06:50--00:06:58] I'm happy to go in more detail about these things, but I just want to make sure to cover a survey of everything.
+[00:06:58--00:07:03] So the rough outline here is that we're going to cover applications.
+[00:07:03--00:07:04] What are people trying to do?
+[00:07:04--00:07:11] And quickly break that down into the things that you want to think about as the engineer servicing those applications.
+[00:07:11--00:07:19] What are the workloads, and what are the objectives of the service that services those workloads on behalf of those applications?
+[00:07:19--00:07:33] Then there's the components that go into servicing that workload-- the models that produce the inferences and the engines that orchestrate the production of inferences.
+[00:07:33--00:07:35] Those things need to run on hardware.
+[00:07:35--00:07:45] This is more important than it has been in many other eras of the development of software applications, so we'll spend some time on that.
+[00:07:45--00:07:48] That has implications for how these things are deployed.
+[00:07:48--00:07:54] For now, this is substantially like cloud and data center deployment, so we'll talk a lot about that.
+[00:07:54--00:07:57] Once you have these things deployed, you need to debug them.
+[00:07:57--00:08:06] You need to set up observability, the ability to debug and fix, resolve faults and failures from just logs.
+[00:08:08--00:08:21] With that basic stuff in place, you can do performance optimization-- ensure that you are hitting your SLOs or decreasing your costs over time.
+[00:08:21--00:08:31] And then we'll end with just a few thoughts on what I believe is next in this field because I'm mostly going to talk about what's happening right now.
+[00:08:31--00:08:32] OK.
+[00:08:32--00:08:36] Applications-- let's start with just a quick breakdown of LLM application archetypes.
+[00:08:36--00:08:44] This is a very infra-brained approach because it's mostly about trying to figure out what are the engineering constraints that I have to service these.
+[00:08:44--00:08:51] So I break it down into three kind of things like chatbot plus, background agent, and data processor.
+[00:08:51--00:08:54] Chatbot plus is the one most people are familiar with.
+[00:08:54--00:09:01] It is basically two of the killer apps that we've seen so far for language models.
+[00:09:01--00:09:04] ChatGPT and Claude code fit in this archetype.
+[00:09:04--00:09:06] There is a human on the other end.
+[00:09:06--00:09:11] They have human reaction time, human latency tolerances and interests.
+[00:09:11--00:09:14] And I say chatbot plus because it's not just yapping.
+[00:09:14--00:09:21] It's also that this thing uses its text outputs to interact with other computer systems on behalf of the user.
+[00:09:21--00:09:29] So the other application that does a lot of interacting directly with other computer systems on the behalf of users is background agents.
+[00:09:29--00:09:40] So this is something like the dev encoding agent Resolve's SRE agent, Ramps Inspect coding agent, or Open Inspect, or OpenClaw.
+[00:09:40--00:09:45] These are all systems where there is a human relatively tight.
+[00:09:45--00:09:54] They probably produce many of the tokens in the prompt, the most important tokens in the prompt themselves directly, but they aren't necessarily waiting for the result.
+[00:09:54--00:09:56] They're in a meeting.
+[00:09:56--00:10:06] Somebody asked them to implement a feature, and they've tagged Devin or Inspector or whatever to implement the feature for them and open a PR.
+
+## 00:10:00--00:20:00
+
+[00:09:56--00:10:06] Somebody asked them to implement a feature, and they've tagged Devin or Inspector or whatever to implement the feature for them and open a PR.
+[00:10:06--00:10:09] So you don't have interactive human latency constraints.
+[00:10:09--00:10:16] You just have some latency constraint on the order of many seconds, many minutes, many hours.
+[00:10:16--00:10:21] And then finally, data processors-- the prototypes here are something like the reducto processing platform.
+[00:10:21--00:10:32] They're the ones who indexed the emails of International Criminal Jeffrey Epstein for the jail project, which turned it into an email interface.
+[00:10:32--00:10:43] This is the situation where what you want to do is you want to process maybe some PDFs and documents, some unstructured data and extract structure from it-- common use case.
+[00:10:43--00:10:49] And here, the downstream consumer is probably like a storage computer system that will be queried later.
+[00:10:49--00:10:50] So it's going into file system.
+[00:10:50--00:10:52] It's going into a database-- something like that.
+[00:10:52--00:11:08] So high volume, higher latency tolerance, but often, as with many databases and storage systems, very bursty gaps between periods of sparse writes and very intense writes.
+[00:11:08--00:11:09] OK.
+[00:11:09--00:11:12] So these are the archetypes that you keep in mind as we're going.
+[00:11:12--00:11:17] I'll refer back to them as we're thinking about optimization techniques.
+[00:11:17--00:11:17] Yeah.
+[00:11:17--00:11:25] So that is maybe how the people who are developing products or your application engineers are going to be thinking about problems.
+[00:11:25--00:11:31] As somebody developing an inference system, you're going to be thinking at a lower level than them.
+[00:11:31--00:11:40] And the hand-off point is like a definition of a workload of what work is going to be submitted to a system and what constraints the application
+[00:11:40--00:11:42] places on how that workload is serviced.
+[00:11:42--00:11:57] So you'll hear service level agreements-- SLAs or service level objectives, SLOs, to describe the constraints or expectations in terms of failure rates, performance like speed,
+[00:11:57--00:12:00] and cost as well.
+[00:12:00--00:12:11] And this is the handoff point between the engineer of a system and the other stakeholders in a system.
+[00:12:11--00:12:16] So we were working with a lot of customers, who wanted to build LLM inference systems.
+[00:12:16--00:12:23] And we would ask them-- they wanted our help, our expertise, and getting information about the workload out of them was challenging.
+[00:12:23--00:12:28] So I developed this thing that's available in our LLM engineers Almanac.
+[00:12:28--00:12:33] That's a little Madlibs that asks you to define your workload.
+[00:12:33--00:12:46] So click each one of these things and select like which model you want to serve, what your constraints on performance are, and both in terms of latency in the top right,
+[00:12:46--00:12:51] and in terms of throughput on the bottom left.
+[00:12:51--00:12:54] So you can check that out.
+[00:12:54--00:12:59] The models in it are a little out of date, but stay tuned for a major update soon.
+[00:12:59--00:13:01] That should keep it much fresher.
+[00:13:01--00:13:10] So really what I just want to point out here is like this specific selection of ways to define what the workload is that you want to run.
+[00:13:10--00:13:15] Because this clarified and shortened a lot of otherwise difficult conversations.
+[00:13:15--00:13:20] So the key thing here is to define these workloads via a bunch of metrics.
+[00:13:20--00:13:24] So you have queries per second, QPS.
+[00:13:24--00:13:25] This one is under control of users.
+[00:13:25--00:13:27] It's often tricky to forecast.
+[00:13:27--00:13:34] You make something you don't whether people are going to want it or use it, and there's quite a bit of variability or seasonality.
+[00:13:34--00:13:37] People often don't think about that variability or seasonality.
+[00:13:37--00:13:41] But if you can try and figure that out early.
+[00:13:41--00:13:43] That's important because that changes how difficult it is.
+[00:13:43--00:13:50] The higher the ratio between your average traffic and your peak traffic, the more difficult it is to serve a system.
+[00:13:50--00:13:52] So that's something to get ahead of early.
+[00:13:52--00:13:59] Within those queries-- those queries usually that might be user queries, or it might be queries generated by the model via tool calls.
+[00:13:59--00:14:07] What you want to find out about those queries is how many tokens you can expect in those queries-- how many tokens in the inputs during profile phases,
+[00:14:07--00:14:10] and how many tokens in the output in DECOD phases.
+[00:14:10--00:14:13] So this one's really annoying because it's not only under control of the users.
+[00:14:13--00:14:18] It's also under control of the model because the model decides when to emit the end of text token.
+[00:14:18--00:14:23] And so your output lengths are actually not necessarily deterministic.
+[00:14:23--00:14:33] Or you can try and make them deterministic in some settings, but even then, they may be literally deterministic on the same inputs and same seed,
+[00:14:33--00:14:38] but they're very hard to reason about because they're coming out of the statistical model.
+[00:14:38--00:14:40] So that's bad news.
+[00:14:40--00:14:47] It's a little bit different-- it's maybe similar to a database in that when the data in the database changes, query performance changes.
+[00:14:47--00:14:51] And so you just have to be empirical about it in many cases.
+[00:14:51--00:14:53] So you can estimate this.
+[00:14:53--00:15:02] This is maybe a little bit easier than estimating how many queries there are going to be, because that depends on whether you're on the front page of Hacker News or tweeted out by an influencer
+[00:15:02--00:15:03] or whatever.
+[00:15:03--00:15:07] That determines your queries per second.
+[00:15:07--00:15:09] Prefix reuse-- this is another one.
+[00:15:09--00:15:14] How often when a sequence of tokens comes in from a user is it some tokens that you've seen before?
+[00:15:14--00:15:21] This is really important because you can cache your previous computations and store them.
+[00:15:21--00:15:24] People get very elaborate with these approaches.
+[00:15:24--00:15:36] This is pretty powerful, especially in situations with lower interactivity, because you can just delay, turn, what would be GPU computation into loads from storage.
+[00:15:36--00:15:47] And that's really nice for your costs at often at a cost to latency.
+[00:15:47--00:15:57] So I mostly think of it as something that I use when-- aggressive kV caching in a case where I have users with a greater latency tolerance.
+[00:15:57--00:16:08] This is mostly under control of the users, but given that users write short prompts of dozens of tokens and models observe prompts with thousands of tokens,
+[00:16:08--00:16:10] this is in fact under the control of something.
+[00:16:10--00:16:15] Maybe a harness or other software system that you may have some control over.
+[00:16:15--00:16:25] And so then you can be smart or dumb about it, and you can also ban people using unhinged lobster-themed software from your endpoints
+[00:16:25--00:16:28] if it busts your cache.
+[00:16:28--00:16:28] Yeah.
+[00:16:28--00:16:33] So then I've alluded to latency budgets a couple of times.
+[00:16:33--00:16:41] There's basically two that matter-- the time to first token and the time per output token or inter-token latency.
+[00:16:41--00:16:43] So time to first token.
+[00:16:43--00:16:47] How long does it take to get the first token or first byte back to the user?
+[00:16:47--00:16:51] And then how long does it take to produce each sequential token after that?
+[00:16:51--00:17:02] Time to last token also matters, but because it depends on the output length and very, very directly, very painfully and obviously depends on that output length,
+[00:17:02--00:17:07] it's often easier to reason about time per output token and output lengths separately.
+[00:17:07--00:17:11] And then when you need to think about time to last token, you combine them together.
+[00:17:11--00:17:14] And then once you start doing tool calls, all hell breaks loose.
+[00:17:14--00:17:19] And you have to go back to being pretty empirical with live data.
+[00:17:19--00:17:22] So latency budget is going to be defined by your application.
+[00:17:22--00:17:27] It's one of the main things that separated the three application classes we discussed on the previous slide.
+[00:17:27--00:17:35] And maybe one important thing about this is with time per output token and input token latency, you really want to be thinking per user.
+[00:17:35--00:17:40] What is the experience of an individual user or an individual request in this system?
+[00:17:40--00:17:47] In every case, except the bulk data processing because that is what-- these are defined by the application.
+[00:17:47--00:17:49] They're defined by the user experience.
+[00:17:49--00:17:53] And so that's what you need to care about, not the machine experience.
+[00:17:53--00:17:55] Yeah.
+[00:17:55--00:17:59] One last tip about this is you really want to reason about this per replica.
+[00:17:59--00:18:03] So you have a whole system-- particular QPS.
+[00:18:03--00:18:10] QPS is something people will say like, oh, I think I'm going to have a thousand concurrent users, and they'll send a query every couple of seconds,
+[00:18:10--00:18:14] and then they'll reason their way to total QPS.
+[00:18:14--00:18:15] That is very helpful to know.
+[00:18:15--00:18:25] That gives you the aggregate demand, but you're going to probably end up serving this with multiple replicas, multiple machines running an inference engine.
+[00:18:25--00:18:33] And so you need to be able to-- and that's the amount-- there's a certain number of queries you could fit in a single replica.
+[00:18:33--00:18:40] And then like hitting these latency budgets, and then you can-- and also your prefix reuse.
+[00:18:40--00:18:45] And then so that sets the number of queries you can handle per replica.
+[00:18:45--00:18:50] And then you add replicas, until you can satisfy the total load.
+[00:18:50--00:19:03] So this is different than a database, where you try to avoid having multiple replicas, until your IPO-- and because inference is independent across the engines.
+[00:19:03--00:19:10] Each of them can operate essentially independently apart from the prefix caching.
+[00:19:10--00:19:18] So for our three archetypes, the figure of merit that you care about in each workload is different.
+[00:19:18--00:19:26] So for chatbot plus, you care about interactivity, which is tokens per second per user-- mostly output tokens per second per user.
+[00:19:26--00:19:40] For a background agent, you care about time to last token because that's when you produce the result that the human is waiting on-- the PR, the design doc, the generated image.
+[00:19:40--00:19:48] With data processors, you care mostly about how quickly you can chunk through stuff, so like mega tokens per dollar.
+[00:19:51--00:19:51] Great.
+[00:19:51--00:19:58] And that comes from your throughput in tokens per second aggregate, appropriately mixed between input and output.
+[00:19:58--00:20:02] So I said you want to reason about at the level of one replica then scale up.
+
+## 00:20:00--00:30:00
+
+[00:19:58--00:20:02] So I said you want to reason about at the level of one replica then scale up.
+[00:20:02--00:20:04] So how do you benchmark one replica?
+[00:20:04--00:20:06] Quick and easy recipe.
+[00:20:06--00:20:08] First, figure out your minimum latency.
+[00:20:08--00:20:11] What's the fastest you could run this thing if every user got their own replica?
+[00:20:11--00:20:18] So run n queries one at a time, and then record one over the mean latency max throughput.
+[00:20:18--00:20:22] Dump n queries at once, and then record n over the total latency.
+[00:20:22--00:20:30] So this is if all your requests hit the replica at the same time, wait, see how quickly it can chunk through them.
+[00:20:30--00:20:35] Expose the maximum amount of parallelism to the engine and the hardware.
+[00:20:35--00:20:44] So that will give you a minimum throughput and minimum latency and maximum throughput with a generally higher latency.
+[00:20:44--00:20:49] And then you can measure the behavior of replicas in between want to sweep over in between rates.
+[00:20:49--00:20:52] So this badly needs a diagram.
+[00:20:52--00:20:53] So the idea is here I send one query.
+[00:20:53--00:20:58] Wait for it to finish, then send another query, then wait for it to finish, then send another query.
+[00:20:58--00:21:01] And that gives me the shortest latency I've ever observed.
+[00:21:01--00:21:04] And then with max throughput, hit it with everything at once.
+[00:21:04--00:21:04] Wait for it to finish.
+[00:21:04--00:21:14] So notice how this one is shorter, the max throughput, because it'll generally finish all the requests faster if you give them all at once, but any given request takes
+[00:21:14--00:21:16] longer.
+[00:21:16--00:21:23] So yeah, if you're a systems of a-- signals.
+[00:21:23--00:21:30] And W type engineer think of this as an impulse response that you're measuring in the system.
+[00:21:30--00:21:30] Cool.
+[00:21:30--00:21:37] So to develop an intuition for metrics, put out this cute little tool.
+[00:21:37--00:21:42] Because you want to see what these things look like to decide, oh, is this a good experience.
+[00:21:42--00:21:44] Let me zoom out a little bit.
+[00:21:44--00:21:46] So this one is really fast.
+[00:21:46--00:21:49] This is some optimizations that I like measured those.
+[00:21:49--00:21:51] Put them into this little simulator.
+[00:21:51--00:21:53] And this is without those optimizations.
+[00:21:53--00:22:05] And just to give you a sense for why we care about things like P95 or P99 latency, like, let's keep the P50 latency on the left the same
+[00:22:05--00:22:07] and then boost those tails.
+[00:22:07--00:22:10] So you measure something like P95 and P99.
+[00:22:10--00:22:15] You think, oh, only one out of every 20 or one out of every 100 users experiences this.
+[00:22:15--00:22:16] How big of a deal could it be?
+[00:22:16--00:22:21] But you're usually measuring these things at the scale of a single sequence.
+[00:22:21--00:22:27] You're looking at P95 completion of a sequence, P95 production of a token in this case.
+[00:22:27--00:22:35] And so you can see even though the median token comes out in a millisecond, in this case, you see all this stuttering.
+[00:22:35--00:22:41] And if you are probably familiar with this if you've used many of the inference providers, because there are frequently these long tails that
+[00:22:41--00:22:43] are hard to control.
+[00:22:43--00:22:55] So I find this tool useful for when I want to show people the improvements without having to record traces, which can be difficult. Cool.
+[00:22:55--00:22:59] So that's on the LLM engineer's Almanac as well.
+[00:22:59--00:23:00] All right.
+[00:23:00--00:23:02] So that's workloads and SLOs.
+[00:23:02--00:23:10] Again, as I said earlier just ripping through this stuff, so we have time for questions about the things people are most interested in at the end.
+[00:23:10--00:23:11] All right.
+[00:23:11--00:23:13] So models and engines.
+[00:23:13--00:23:16] So in my opinion models are also part of the workload.
+[00:23:16--00:23:27] You want to-- for inference engineering, you want the application developer to decide running like the transformers version of the model in a Jupyter Notebook
+[00:23:27--00:23:33] what model quality is necessary to service the application.
+[00:23:33--00:23:42] So it fits under the workloads, but the model that you're using is one of the most important decisions that is made.
+[00:23:42--00:23:52] What I've observed is that there are two basic families of constraints that lead to very different model options and model choices.
+[00:23:52--00:23:55] So I call them efficiency bound and capability bound.
+[00:23:55--00:24:00] Efficiency bound means that intelligence is satisfactory.
+[00:24:00--00:24:06] It's not that hard for the trainers of models to produce a model that can solve this task.
+[00:24:06--00:24:09] And once that happens, cost becomes the primary driver.
+[00:24:09--00:24:12] And in this domain, open models have generally dominated.
+[00:24:12--00:24:16] The proprietary providers are not going after these workloads.
+[00:24:16--00:24:23] What they're going after instead are these capability bound workloads, where the highest intelligence that currently exists is not enough.
+[00:24:23--00:24:26] And to some extent, it may never be enough.
+[00:24:26--00:24:32] One analogy I give here is like efficiency bound is like refresh rates on monitors.
+[00:24:32--00:24:35] Once you hit like 60 Hertz, it's pretty good.
+[00:24:35--00:24:36] You hit a hundred Hertz, it's amazing.
+[00:24:36--00:24:39] Very few people want a thousand Hertz.
+[00:24:39--00:24:48] But RAM on the other hand, we're at 64 gigabytes in people's laptops, and Cloud Code and Chrome keep asking for more.
+[00:24:48--00:24:52] And so that's a little bit more like this capability bound case.
+[00:24:52--00:25:01] And so I bring that up just to say that these are two distinct engineering constraints that emerge in different parts of computer systems.
+[00:25:01--00:25:12] And so I think it's foolish to think that one of these is going to be the only one that matters, despite what some of the proprietary lab people, I think,
+[00:25:12--00:25:13] say.
+[00:25:13--00:25:18] So the proprietary models do dominate this capability bound regime.
+[00:25:18--00:25:19] We'll talk about it.
+[00:25:19--00:25:22] Many people want to maybe join those labs and work on inference there.
+[00:25:22--00:25:33] But actually, I would say fine tunes of open source models are catching up here, where maybe the frontier capabilities are satisfactory but not as much as you'd like.
+[00:25:33--00:25:40] And then you RL something like DeepSeek V4, and all of a sudden you have better capabilities and maybe you even improve the efficiency.
+[00:25:40--00:25:49] And so this only in the last, I would say, three or six months has that started to actually really come true as open models have caught up
+[00:25:49--00:25:51] and as more tasks have--
+[00:25:54--00:25:58] as intelligence has increased in general.
+[00:25:58--00:26:02] So when capabilities are satisfactory, cost is going to be your primary driver.
+[00:26:02--00:26:06] This efficiency bound regime-- model quality is easy.
+[00:26:06--00:26:14] And so the thing that you're trying to achieve and engineer in the system is cost performance, which is high performance for low cost
+[00:26:14--00:26:18] or adequate performance for the lowest cost maybe.
+[00:26:18--00:26:24] So many like right now-- what this looks like is these are typically single GPU per replica deployments.
+[00:26:24--00:26:34] The models that are pretty good are on the order of billion parameters, 10 billion parameters, 50 billion parameters fits inside the VRAM of popular accelerators.
+[00:26:34--00:26:39] You switch over to multiple GPUs if you have a low latency budget.
+[00:26:39--00:26:50] Multiple GPUs allow you to split work across multiple memory pipes, and that allows you to remove some bottlenecks on latency.
+[00:26:50--00:27:01] But that is less commonly the case because these workloads are, at this point, often data processors, subagents of background agents, and rarely that chatbot plus kind of workload,
+[00:27:01--00:27:04] where this human interactive latency is really critical.
+[00:27:04--00:27:09] And so it's not as often that you have that super tight latency budget.
+[00:27:09--00:27:16] So maybe an exception to this is voice agents, where people yapping on the phone don't need to talk to superintelligence.
+[00:27:16--00:27:19] And they really want an answer in 100 milliseconds.
+[00:27:19--00:27:28] And so that's maybe a case where we're starting to see some of this multiple GPU for an efficiency bound case.
+[00:27:28--00:27:36] The speaking of voice models, these are often multimodal input structured output.
+[00:27:36--00:27:43] This is a case where the adding additional modes gives you access to more information to the model.
+[00:27:43--00:27:45] But it's like a hit on capabilities.
+[00:27:45--00:27:47] If you want the absolute highest intelligence.
+[00:27:47--00:27:52] Right now, people get that with language-only models.
+[00:27:52--00:27:53] At least the open source models.
+[00:27:53--00:28:02] And then the goal is often to extract some kind of structured output from this, so to turn unstructured information into structured information.
+[00:28:02--00:28:11] And this is something where you don't need a IOI medal winning intelligence to do this.
+[00:28:11--00:28:20] So good news about this one is there's many options for your models here-- Quinn, Nemo Tron, GPT OSS Gemma, Step from Stepfun, Mistral, all of these.
+[00:28:20--00:28:23] And not only is there this list of options here.
+[00:28:23--00:28:28] They are also-- each of these is a model family.
+[00:28:28--00:28:29] So they have different data mixes.
+[00:28:29--00:28:31] So maybe they're optimized for coding.
+[00:28:31--00:28:33] Maybe they're optimized for text.
+[00:28:33--00:28:34] They have different sizes.
+[00:28:34--00:28:36] They handle different modalities.
+[00:28:36--00:28:47] So this is at the point where you're spoiled for choice, it feels like, in many cases.
+[00:28:47--00:28:55] On the other side when capabilities are the bottleneck, model quality is really hard to hit.
+[00:28:55--00:28:59] The solution to that is make the model really, really big.
+[00:28:59--00:29:04] We have only scaling as our solutions to high intelligence right now.
+[00:29:04--00:29:06] And so that has a couple of consequences.
+[00:29:06--00:29:10] One is these are basically always multiple GPUs per replica.
+[00:29:10--00:29:17] Nobody can get enough HBM to run a trillion parameter MOE in a single chip.
+[00:29:17--00:29:24] And maybe I shouldn't say that so much-- I forget how much HBM there is in Cerebras, but it's a big chip.
+[00:29:27--00:29:35] And then not only multiple GPUs per replica but also multiple nodes, so multiple operating systems possibly on distinct machines talking to each other.
+[00:29:35--00:29:40] That comes up more often if you have a relatively high latency budget.
+[00:29:40--00:29:47] So like the tighter your latency budget, the more you want to keep the compute and storage all really nice and close to each other.
+[00:29:47--00:29:57] For capability bound stuff, it's often the chatbot plus-- so your ChatGPT, your Claude, or the orchestrator of a background agent.
+[00:29:57--00:30:00] I think I brushed over this a little bit.
+
+## 00:30:00--00:40:00
+
+[00:29:57--00:30:00] I think I brushed over this a little bit.
+[00:30:00--00:30:08] When I say subagent of background agent, a user types a prompt, and then a whole cavalcade of things occurs on the back end in something
+[00:30:08--00:30:14] like a PR producing or code review agent or whatever.
+[00:30:14--00:30:23] So these are often orchestrated as multi-agent systems, which have access to different skills, different permissions, boundaries, whatever.
+[00:30:23--00:30:28] At the top, there's often an orchestrator agent that's in charge of everything.
+[00:30:28--00:30:32] And that one is where you generally want the highest capabilities.
+[00:30:32--00:30:39] And then the things below can often be faster, less capable models solving similar tasks.
+[00:30:39--00:30:43] The similarity of this to human organizations I will leave as an exercise for the reader.
+[00:30:46--00:30:54] These are often very tool call heavy because what uses intelligence if it's not interacting with the world-- compare Mycroft Holmes and Sherlock.
+[00:30:54--00:30:57] And so they often interact with the world.
+[00:30:57--00:31:00] And not only do they-- and I mean interact with the world.
+[00:31:00--00:31:03] They don't just fire off, do this thing.
+[00:31:03--00:31:03] They do the thing.
+[00:31:03--00:31:07] They observe the results and interact with it.
+[00:31:07--00:31:09] So that has implications for prefix.
+[00:31:09--00:31:11] Prefix hit rates, very high.
+[00:31:11--00:31:13] Prefix hit rates, very useful.
+[00:31:13--00:31:16] It also has implications for latency.
+[00:31:16--00:31:22] It means that the latency of these tool calls is going to be an important component of the operation of your system.
+[00:31:22--00:31:28] The tool calls will range in latency from milliseconds to hours.
+[00:31:28--00:31:32] And so you need to think about that.
+[00:31:32--00:31:37] In my experience, people building these applications often start with a proprietary API.
+[00:31:37--00:31:42] They develop the application there, and then they want to take additional control over the inference.
+[00:31:42--00:31:44] There are fewer options when that time comes.
+[00:31:44--00:31:53] I would say DeepSeek, Kimmy GLM minimax, and that's basically the largest and most recent release from each of them-- or in fact, maybe,
+[00:31:53--00:31:57] whichever one has most recently released a model.
+[00:31:57--00:31:59] So that's your option.
+[00:31:59--00:32:06] I think once you start doing fine tuning, you get a little bit more constrained in being able to switch models because the training software is
+[00:32:06--00:32:12] not super portable yet, unlike the engines, which we'll get to in a second.
+[00:32:12--00:32:20] Useful tool for mapping out this space that I like artificial analysis-- this is like a vibe check or keeping up with the field
+[00:32:20--00:32:21] as it moves really quickly.
+[00:32:21--00:32:27] They give you these nice charts with things like their intelligence index, which obviously hard to define intelligence.
+[00:32:27--00:32:28] They give a number.
+[00:32:28--00:32:34] It's correlated with my vibe judgment, so I trust it as a measure of my vibe judgment.
+[00:32:34--00:32:37] And so you have that.
+[00:32:37--00:32:39] This chart is one I come back to quite a bit.
+[00:32:39--00:32:45] You have that on the y-axis and on the x-axis price to serve in dollars per mega token.
+[00:32:45--00:32:48] This number is based off of proprietary inference providers.
+[00:32:48--00:32:52] In my experience, beating this is hard but not impossible.
+[00:32:52--00:33:04] And yeah, matching it also already medium hard but far from impossible, so long as you have sufficient load to fill up your hardware.
+[00:33:04--00:33:12] So we'll talk about the performance optimization stuff and why that is easier now than it was like a year or two ago.
+[00:33:12--00:33:20] Actually, one of the key components for why this is easier is because of the existence of extremely high-quality open source inference engines.
+[00:33:20--00:33:23] So what is an inference engine really?
+[00:33:23--00:33:25] It's got a couple of components.
+[00:33:25--00:33:34] There's a server task or process that communicates with the outside world that generally controls some tokenization and detokenization work.
+[00:33:34--00:33:39] Tokenization is generally really CPU intensive.
+[00:33:39--00:33:42] And so often done in multiple processes.
+[00:33:42--00:33:44] We're in Python world here.
+[00:33:44--00:33:55] And detokenization, you are mostly tokenizing tokens you've generated, so they come a little bit less quickly.
+[00:33:55--00:34:06] And so that's why I think you can have multiple detokenizer processes, but the typical setup has one or far fewer than tokenizers.
+[00:34:06--00:34:14] In between these is the scheduler process on the CPU that orchestrates all the work on the GPU.
+[00:34:14--00:34:23] So all of the components are really important, but the bottleneck and key that you want to think about is the scheduler process that defines
+[00:34:23--00:34:25] and schedules work on the GPUs.
+[00:34:25--00:34:27] GPU is a coprocessor.
+[00:34:27--00:34:31] You are giving it work to do, and it gives you the answers back later.
+[00:34:31--00:34:34] You want to make sure that there is always work for that thing to do.
+[00:34:34--00:34:46] And that is like-- that's the DAO of PyTorch-- why PyTorch eager mode works is that while the GPU is doing a petaflop, Python is taking its sweet time
+[00:34:46--00:34:52] of a second to decide which kernel to run next.
+[00:34:52--00:34:57] And that's fine, as long as you know which kernel to run next before the GPU finishes.
+[00:34:57--00:35:00] So this is the core piece here.
+[00:35:00--00:35:14] And what has emerged is the common interchange or narrow waist in between what happens on the CPU and what happens on the GPU is PyTorch for the engines.
+[00:35:14--00:35:27] So there are a couple of major options-- what people are using, like open source options that are out there, TensorRT LLM from NVIDIA built on the TensorRT Runtime.
+[00:35:27--00:35:37] That's still your best option for small models and small batch sizes of small models but not your first choice.
+[00:35:37--00:35:41] vLLM has the widest adoption I would say.
+[00:35:41--00:35:45] They were first to market as a proper open source, open governance project.
+[00:35:45--00:35:52] They have a bit of an enterprise flavor at this point, based off of the development and the support that they've received.
+[00:35:52--00:35:58] And then a slightly newer entrant but still fairly mature is SGLang.
+[00:35:58--00:36:05] They have a strong got to go fast feel to them, and they have a little bit more of a startupy adoption and support set.
+[00:36:05--00:36:09] So this slide just talks that out a little bit in detail.
+[00:36:09--00:36:13] With TRT-LLM, it's a compiled C++ runtime.
+[00:36:13--00:36:19] So all the stuff I was showing you is basically in C++, especially once it's out and deployed.
+[00:36:19--00:36:29] So that avoids the problem of bottlenecking on the CPU without having to be a smart engineer because the code is just faster or being a different kind of smart engineer.
+[00:36:29--00:36:33] No hate to my C++ friends.
+[00:36:33--00:36:37] NVIDIA is the sole developer of this.
+[00:36:37--00:36:45] They still release some of their new exciting projects and techniques there, but there's a bit-- it feels like a slightly decreased investment in TRT-LLM
+[00:36:45--00:36:51] over time in favor of them supporting these open libraries.
+[00:36:51--00:36:54] And I think that's a general thing NVIDIA does.
+[00:36:54--00:36:58] They build the software and demonstrate to other people how to use their hardware.
+[00:36:58--00:37:05] And then somebody else comes along, and they go back to making their money off of selling those chips.
+[00:37:05--00:37:07] But again, still some benefits.
+[00:37:07--00:37:20] VLLM, the big thing here, this is like a proper open governance, like Linux Foundation umbrella project, like Postgres or PyTorch.
+[00:37:20--00:37:29] And that has implications for the manner in which you join it and what you might expect the future of it, how it might develop.
+[00:37:29--00:37:33] SGLang on the other hand, right now, it's open source but closed governance.
+[00:37:33--00:37:41] There's a specific nonprofit that owns this on behalf of the maintainers or composed of the maintainers.
+[00:37:41--00:37:51] So that's like maybe-- struggling to think of a good closed governance, open source project that doesn't have a big company behind it.
+[00:37:51--00:37:58] And they have spun out this startup to develop many-- the founding team.
+[00:37:58--00:38:00] Anyway, so we'll see how these two things develop.
+[00:38:00--00:38:08] I'll say vLLM and SGLang-- I'd say SGLang has this very more extremely performance focused engineering culture.
+[00:38:08--00:38:17] There's 50 bajillion different versions of SGLang, as Docker images, as branches or whatever, and they each have tiny little optimizations in them.
+[00:38:17--00:38:21] Whereas the LLM gets things into main a little bit more.
+[00:38:21--00:38:25] And so there's less of that absurd hackery.
+[00:38:25--00:38:28] This is my experience working with them.
+[00:38:28--00:38:34] So yeah, I haven't found a strong reason to prefer one or the other yet.
+[00:38:34--00:38:35] They both do great work.
+[00:38:35--00:38:41] And as people who mostly consume these kinds of engines, it's nice to have more suitors.
+[00:38:44--00:38:49] You're going to be serving-- you don't necessarily want to write your own engine, but you do want to get to know them.
+[00:38:49--00:38:53] There's a nice project mini and nano vLLM that have simple implementations of engines.
+[00:38:53--00:38:55] Help you learn the architecture.
+[00:38:55--00:38:57] Alexa Gaudich did a great walkthrough of vLLM.
+[00:38:57--00:38:58] And if you check out the slides.
+[00:38:58--00:39:07] I put them on a notebook on Modal so you can run them on multiple GPUs and see how disaggregated prefilled decode works in a notebook.
+[00:39:07--00:39:09] Another useful resource, I really Deep Wiki from Cognition.
+[00:39:09--00:39:14] It's a bunch of indexed software repositories that you can ask questions.
+[00:39:14--00:39:19] It's nice because you don't have to have the code downloaded in the place where an agent is running where you're typing.
+[00:39:19--00:39:23] You can just look it up on your phone and just be like, hey, wait a second.
+[00:39:23--00:39:28] How does the radix cache in SGLang support hybrid models?
+[00:39:28--00:39:32] I think it doesn't, but Deep Wiki would tell you.
+[00:39:32--00:39:33] And it's got diagrams.
+[00:39:33--00:39:34] It's organized.
+[00:39:34--00:39:35] It's queryable.
+[00:39:35--00:39:43] It's more than just having the code, but then it's always really nice to also have the code and explore it with an agent.
+[00:39:43--00:39:48] Use your own thinking tokens, not just the ones you're paying for.
+[00:39:48--00:39:49] OK.
+[00:39:49--00:39:52] So models and engines-- so you've got your model.
+[00:39:52--00:39:53] You've got your engine.
+[00:39:53--00:39:54] Where are you going to run this?
+[00:39:54--00:39:59] This has been a specter that has been haunting us, the Specter of what does this hardware look like.
+[00:39:59--00:40:04] One thing I will say is it feels like there are two workloads here from the hardware perspective.
+
+## 00:40:00--00:50:00
+
+[00:39:59--00:40:04] One thing I will say is it feels like there are two workloads here from the hardware perspective.
+[00:40:04--00:40:07] You have the prefill part and the decode part.
+[00:40:07--00:40:10] So in prefill, you have some large number of input tokens.
+[00:40:10--00:40:11] Here there's only four.
+[00:40:11--00:40:20] But usually, these days in almost all the workloads we're talking about here, it's hundreds, thousands, tens of thousands, hundreds of thousands.
+[00:40:20--00:40:21] And so that comes in.
+[00:40:21--00:40:32] And in order to process them, you're going to move many gigabytes of weights out of the memory of your accelerator into registers to calculate something.
+[00:40:32--00:40:41] And then you have to move all the weights in order to calculate that or all the active parameters.
+[00:40:41--00:40:47] And then once you then move over to-- that's the prefill or the prompt processing or the input phase.
+[00:40:47--00:40:57] During output phase, every time you create a token, you also need to take all the weights out of memory, put them into registers, and do a calculation with them.
+[00:40:57--00:41:08] And per rough rule of thumb, per batch element-- so per token, per request, you're probably going to do on the order of two
+[00:41:08--00:41:10] or three floating point operations.
+[00:41:10--00:41:14] Multiply with something and accumulate it into something else.
+[00:41:14--00:41:15] So why does this matter?
+[00:41:15--00:41:22] So that suggests that in the decode phase we're doing a few operations per byte loaded.
+[00:41:22--00:41:33] And the bad news is that the trend of hardware, like in GPUs and elsewhere, is for increasing ridge point arithmetic intensity.
+[00:41:33--00:41:42] The point at which you are using all of the arithmetic bandwidth that you have, and that's the limit on your performance.
+[00:41:42--00:41:49] And because the memory bandwidth is generally so much lower, you end up slowed.
+[00:41:49--00:41:54] You aren't able to achieve that actual full arithmetic bandwidth.
+[00:41:54--00:42:02] So some representative numbers down here for the tensor cores of a variety of different recent NVIDIA GPUs.
+[00:42:02--00:42:05] They're in the hundreds-- maybe a thousand operations per byte.
+[00:42:05--00:42:10] And during decode, you're maybe doing a couple of operations per byte.
+[00:42:10--00:42:18] And so you are going to struggle to make full use of the accelerator.
+[00:42:18--00:42:22] It's costing you the same amount during that time.
+[00:42:26--00:42:32] So you're going to end up thinking about optimizing those separately from one another.
+[00:42:32--00:42:38] That's why they already showed up in the definition of our applications and our workloads.
+[00:42:38--00:42:50] In order to do this well, I think the only option these days, in my experience, is recent data center and Tensor Core SXM NVIDIA GPUs.
+[00:42:50--00:42:53] So these are marketing terms, so let me break that down for you.
+[00:42:53--00:43:00] Data centers-- what NVIDIA uses to talk about the interconnect housing, et cetera of the GPUs.
+[00:43:00--00:43:06] So we see in the top right-- I believe that's a H100 SXM machine.
+[00:43:06--00:43:09] Yeah, but it might be a B20.
+[00:43:09--00:43:15] But the point is a couple of things you can notice here-- it's a little hard to see on the slide, so let me go back here.
+[00:43:15--00:43:18] The little blue blocks there, that's the high bandwidth memory.
+[00:43:18--00:43:24] This is on substrate but off chip memory.
+[00:43:24--00:43:25] It's like soldered in place.
+[00:43:25--00:43:28] It's not like the RAM you have at home that you can plug-in and out.
+[00:43:28--00:43:37] And that ultra low latency and ultra high bandwidth are really critical for the decode phase, especially.
+[00:43:37--00:43:39] So you really want that.
+[00:43:39--00:43:46] And that's one reason why-- and not like GDDR memory-based NVIDIA GPUs.
+[00:43:46--00:43:51] This also is going to give you higher capacity in memory in general.
+[00:43:51--00:43:54] I think that's just an artifact of how these things have been deployed.
+[00:43:54--00:43:57] I don't think it's impossible to build a chip with a giant GER RAM stack.
+[00:43:57--00:44:00] I just don't think that NVIDIA offers that.
+[00:44:00--00:44:03] But let me know if I'm wrong.
+[00:44:03--00:44:05] SXM is the mounting form factor.
+[00:44:05--00:44:13] This is replacing PCIe, the little finger like toothbrush thing at the bottom of a GPU, the GPUs you've probably seen.
+[00:44:13--00:44:16] You can see the connector there at the arrow.
+[00:44:16--00:44:20] So this allows for better power delivery.
+[00:44:20--00:44:25] And so this is where you'll get the full wattage of GPUs.
+[00:44:25--00:44:29] Where do these limitations on memory bandwidth and arithmetic bandwidth come from?
+[00:44:29--00:44:35] Fundamentally, they come from the power that's delivered to the chip and the ability to egress the heat that it produces.
+[00:44:35--00:44:48] And SXM, this mounting factor, gives better power delivery and better installation in data centers, and so the fastest chips will have this somewhere in their SKU
+[00:44:48--00:44:49] name.
+[00:44:49--00:44:55] And then finally, yeah, NVLink and InfiniBand for connecting GPUs and connecting nodes to each other.
+[00:44:55--00:44:59] I'm not going to talk too much about that today.
+[00:44:59--00:45:03] Then Tensor Core-- this will show up in the names of GPUs as well.
+[00:45:03--00:45:11] Tensor Cores are essentially a matmul ASIC inside of the GPU that NVIDIA stapled on after Google made the TPU.
+[00:45:11--00:45:13] That's going to start a bunch of fights.
+[00:45:13--00:45:22] But let's say this is essentially a distinct hardware unit programmed distinctly from the rest of the GPU.
+[00:45:22--00:45:27] And it is where 99% of the FLOPs are in your contemporary hardware.
+[00:45:27--00:45:34] And it is only able to do matrix-matrix multiplication.
+[00:45:34--00:45:43] So hot tip-- if you're thinking about weird model architectures, make sure that they can take advantage of matrix matrix multiplication.
+[00:45:43--00:45:50] Don't make the transformers mistake of having your inference look like matrix-vector multiplication.
+[00:45:50--00:45:57] Quick, shameless plug here for if you want an intro to a lot of the terms that I just used.
+[00:45:57--00:45:59] Wrote this GPU glossary.
+[00:45:59--00:46:04] Collects everything from warp schedulers up to compiler flags in one place.
+[00:46:04--00:46:09] Also a bunch of stuff on performance optimization, like that ridge point diagram.
+[00:46:09--00:46:11] So that's book knowledge.
+[00:46:11--00:46:21] If you want a little bit more street knowledge, tensara.org that a friend of mine made, it's a leak cheat code for GPU programming.
+[00:46:21--00:46:26] And yeah, I guess it's a shameless plug because it runs on Moodle.
+[00:46:26--00:46:27] OK.
+[00:46:27--00:46:31] So I jumped right into talking about GPUs without talking about what your other options are.
+[00:46:31--00:46:37] I think right now CPUs generally can't achieve acceptable latency for the models that people want to run.
+[00:46:37--00:46:46] You really need HBM, so that makes it hard to use most CPUs because they're deployed with RAM and processor distinct.
+[00:46:46--00:46:48] These things do exist.
+[00:46:48--00:46:56] There were some troubles with Intel's HBM being able to feed-- the HBM and the CPU being able to keep pace with each other.
+[00:46:56--00:47:04] One big problem here is that GPUs give the programmer control of the L1 cache SM shared memory, and that's really important for being
+[00:47:04--00:47:09] able to make use of very high arithmetic bandwidth.
+[00:47:09--00:47:15] And yeah, so people are doing a lot of really excellent work on this, so I'd expect this to change over time.
+[00:47:15--00:47:17] And models will get smaller.
+[00:47:17--00:47:18] Models get smaller.
+[00:47:18--00:47:19] CPUs get bigger.
+[00:47:19--00:47:24] This will cross over, and there will be a lot of really awesome CPU inference happening but not today.
+[00:47:24--00:47:26] AMD GPUs-- I don't use-- I haven't used them very much.
+[00:47:26--00:47:35] I've heard the programming on them is somewhat challenging, and achieving the full-rated performance is challenging, but they've also been doing a lot of excellent work,
+[00:47:35--00:47:37] so watch that space.
+[00:47:37--00:47:42] TPUs-- I personally am a little spooked by the idea of having only one supplier end to end.
+[00:47:42--00:47:47] You can buy corals-- little tiny like TPUs.
+[00:47:47--00:47:50] But I have a 2070 that I put under my pillow at night.
+[00:47:50--00:47:53] And I feel like I know that machine.
+[00:47:53--00:47:55] And like a TPU, I don't.
+[00:47:55--00:48:06] And then there's the more seriously economic concerns of purchasing from such a tightly integrated monopoly as opposed to a loosely integrated monopoly with NVIDIA.
+[00:48:06--00:48:09] There are other inference chips on the horizon.
+[00:48:09--00:48:13] They're generally harder-- they have the same single supplier program in general.
+[00:48:13--00:48:15] Many of them have walked back.
+[00:48:15--00:48:19] They're like, oh, buy a chip and install it in your own racks thing.
+[00:48:19--00:48:23] And they generally don't deploy via the hyperscalers.
+[00:48:23--00:48:28] And the cloud experience of programming them is like with TPUs.
+[00:48:28--00:48:29] They built it.
+[00:48:29--00:48:31] Then you use it via their cloud.
+[00:48:31--00:48:35] That's allowing them to move faster, so no shade on that.
+[00:48:35--00:48:40] But this also makes them harder to program lower installed base.
+[00:48:40--00:48:50] There are not like 13-year-old basement dweller hackers reverse engineering the instruction set, like there is with NVIDIA GPUs.
+[00:48:50--00:48:52] So you don't have that breadth.
+[00:48:52--00:48:58] So that makes me a little bit concerned about them, but it's also very clear that there's a lot going on there.
+[00:48:58--00:48:59] All right.
+[00:48:59--00:49:00] So that's hardware.
+[00:49:00--00:49:02] So we don't just need hardware.
+[00:49:02--00:49:08] We need to plug it in to things like power and networking and get things running on it.
+[00:49:08--00:49:11] Your deployment options are basically constrained by the hardware.
+[00:49:11--00:49:13] So GPUs and HBM are scarce.
+[00:49:13--00:49:15] They're likely to remain scarce.
+[00:49:15--00:49:18] And so because of that, inference is mostly served right now, not local.
+[00:49:18--00:49:24] Most inference applications you're going to build right now are going to run in a data center on behalf of clients.
+[00:49:24--00:49:30] I do expect that to change-- another watch this space compared to databases.
+[00:49:30--00:49:36] How many SQLite databases do you think there are versus Postgres databases?
+[00:49:36--00:49:41] There's trillions of SQLite databases.
+[00:49:41--00:49:42] Somebody calculated it.
+[00:49:42--00:49:47] So eventually, things will go out to the edge substantially.
+[00:49:47--00:49:54] But for now, cloud deployment-- ultra low latency budgets are generally eaten into by network.
+[00:49:54--00:50:03] So you're losing on the order of tens of milliseconds if you have regional deployments or hundreds of milliseconds if you have global deployments.
+
+## 00:50:00--01:00:00
+
+[00:49:54--00:50:03] So you're losing on the order of tens of milliseconds if you have regional deployments or hundreds of milliseconds if you have global deployments.
+[00:50:03--00:50:12] So that increases the pressure on latency and pushes you to these more complex regional or edge in the data center sense deployments.
+[00:50:12--00:50:17] And then because these things are scarce and in demand, they're expensive.
+[00:50:17--00:50:22] And so you're going to be focusing a lot on maximizing what you're getting out of the hardware.
+[00:50:22--00:50:29] This has maybe been-- this is like the implicit driver behind how much we've been concerned about performance in this entire discussion--
+[00:50:32--00:50:37] the cost of an employee to have an 8x B200 machine running.
+[00:50:37--00:50:41] So people care about performance.
+[00:50:41--00:50:44] Another problem-- GPUs fail a lot.
+[00:50:44--00:50:52] So mean time to failure, NVIDIA H100s measured in weeks or days, not years.
+[00:50:52--00:50:58] So if you read war stories from older engineers about working with spinning disks, it's more like that.
+[00:50:58--00:51:07] You have to build in an assumption of failure and therefore like redundancy, so that faults in hardware don't become failures in your system.
+[00:51:07--00:51:11] The good news is if you're building an inference system your life is a little bit easier.
+[00:51:11--00:51:21] Training requires basically all GPUs to be up at all times, or else the whole world stops because all the replicas are independent.
+[00:51:21--00:51:24] You just route to a different replica and keep going.
+[00:51:24--00:51:30] But it is a concern about robustness, reliability, and cost performance.
+[00:51:30--00:51:32] So we wrote a little bit about what we've observed.
+[00:51:32--00:51:36] I'm not going to go in great detail, but check out this blog if you want to learn a little bit about what this looks
+[00:51:36--00:51:40] like when you're looking at thousands or low tens of thousands of GPUs.
+[00:51:40--00:51:46] You could see different cloud providers have very different failure rates-- for instance, different deployments.
+[00:51:46--00:51:48] Some are better than others.
+[00:51:48--00:51:52] And there are things you can do to work on this.
+[00:51:52--00:51:56] But the bigger challenge with inference serving is variability in traffic.
+[00:51:56--00:51:58] So this is simulated.
+[00:51:58--00:52:05] But what we typically see with inference applications on our platform is that over a period of time the request per minute is variable.
+[00:52:05--00:52:10] There's seasonal variability, but there's also very big swings in demand.
+[00:52:10--00:52:16] I think this is partly due the fastest growing companies in history are being created right now.
+[00:52:16--00:52:20] We have social media to distribute products really quickly.
+[00:52:20--00:52:23] And so there's a number of dynamics that lead to this.
+[00:52:23--00:52:27] And with inference as opposed to training, you don't like engineer and plan around these things.
+[00:52:27--00:52:29] They just happen to you.
+[00:52:29--00:52:41] So key thing that we work on at Modal is trying to allow you to provision only the GPUs that you want or that you need at any given time.
+[00:52:41--00:52:44] The default thing would be to just buy them.
+[00:52:44--00:52:45] Maybe rack them ahead of time.
+[00:52:45--00:52:51] And then you have to guess how big your peak is going to be, and then anytime off peak, you're still paying for the hardware,
+[00:52:51--00:52:57] whether that's directly in the form of cloud rental or indirectly as amortized costs.
+[00:52:57--00:53:00] So this is madly inefficient.
+[00:53:00--00:53:06] If you look online or in this blog post, people report like 30%, 40% utilization here.
+[00:53:06--00:53:14] So these are made up numbers, but they are tended to be true to life.
+[00:53:14--00:53:15] So solution-- OK.
+[00:53:15--00:53:17] Well, let me just get GPUs as I need them.
+[00:53:17--00:53:23] The problem is that it's really hard to make the startup of new replicas of inference servers really fast.
+[00:53:23--00:53:31] And so if you don't engineer this part of your system carefully, you can have poor utilization and poor quality of service.
+[00:53:31--00:53:39] You both have GPUs you're not using that have stuck around after you spin them up, and you will miss peaks.
+[00:53:39--00:53:45] So the goal is to achieve fast and automatic allocation so that you can have maximal utilization and good quality of service.
+[00:53:45--00:53:49] So for interest of time, I won't go through this in detail.
+[00:53:49--00:53:59] There's an extremely detailed blog post about this, about some of the approaches that we took-- talking about the actual internals and hopes that other folks can learn
+[00:53:59--00:54:00] from them.
+[00:54:00--00:54:06] So the basic idea is, number one, don't spin up a machine from scratch just because a user request came in.
+[00:54:06--00:54:12] Operate a buffer of idle machines ready to go to handle new traffic as things change.
+[00:54:12--00:54:15] So have a couple spare.
+[00:54:15--00:54:20] This is particularly important if you have multiple applications scaling up on the same pool.
+[00:54:20--00:54:28] So if you're running multiple different deployments, you might not know which one is going to need to scale up next.
+[00:54:28--00:54:33] So this one-- we're massively a multi-tenant system, so this is one we think about a lot.
+[00:54:33--00:54:44] Check out the blog post for details on the way we solve this with classic operations, research, linear solver approach, managing the size of that buffer
+[00:54:44--00:54:48] and taking into account price.
+[00:54:48--00:54:58] So that one is really important for multi-tenant systems, especially-- But for all systems, if you're creating and destroying replicas, you're probably using something like a container, VM.
+[00:54:58--00:55:07] You need to get the files that are necessary for that thing to run onto the system from somewhere-- somewhere in cloud storage.
+[00:55:07--00:55:12] Our solution is, one, get the loading of the whole file system out of the way of container start.
+[00:55:12--00:55:23] So lazily load the file system, but then also eagerly load the first things that are going to be needed-- PyTorch, Python Core operating system libraries.
+[00:55:23--00:55:32] Fetch those things concurrently with the container replica starting, and then store those in a multi-tier cloud cache.
+[00:55:32--00:55:42] Everything from the Linux page cache on a replica, all the way up to blob storage with all kinds of things in between that can deliver that faster.
+[00:55:42--00:55:54] Again, the full version here is important for a wide variety of inference workloads or a multi-tenant environment, but these same basic technologies are what you're likely to use even
+[00:55:54--00:55:59] in a single tenant deployment or even a single workload.
+[00:55:59--00:56:03] Then you want to start the application.
+[00:56:03--00:56:06] And this takes minutes for things like SGLang and VLM.
+[00:56:06--00:56:08] They do just in time compilation.
+[00:56:08--00:56:09] They do CUDA graph capture.
+[00:56:09--00:56:11] They do Torch compilation.
+[00:56:11--00:56:17] All of these things take time, and it seems like this is something that you just have to wait for.
+[00:56:17--00:56:21] But every process is actually just a data structure in the end.
+[00:56:21--00:56:28] So this is a representation of a Linux process, representation of some part of what might be on the GPU at the bottom.
+[00:56:28--00:56:29] This is, in the end, just data.
+[00:56:29--00:56:35] There's some exceptions with things like TCP sockets that require some surgery, but fundamentally, this is data.
+[00:56:35--00:56:35] You create it.
+[00:56:35--00:56:41] If you how to create it, store it, and then you can restore it from storage faster than you can recreate it.
+[00:56:41--00:56:46] So you have checkpoint restore technologies, like CRIU and CUDA checkpoint to use here.
+[00:56:46--00:57:00] NVIDIA also released a blog post yesterday about their system for this GPU memory service and others as part of upcoming Dynamo releases, So, check out this blog post and that one for details.
+[00:57:00--00:57:05] So this allows you to operate a much more efficient inference deployment.
+[00:57:05--00:57:05] All right.
+[00:57:05--00:57:08] So we've got the thing deployed.
+[00:57:08--00:57:12] And now, how do we know if it's broken, and how do we fix it when it is?
+[00:57:12--00:57:23] So classes of bugs that you're going to see-- you've got application level bugs, model quality bugs, and performance bugs, or failures to hit, SLO.
+[00:57:23--00:57:29] So application-level bugs, these are a shared responsibility between you and the application developers and stakeholders.
+[00:57:29--00:57:31] So these are very tricky.
+[00:57:31--00:57:35] And as somebody who's mostly working on the infra side, I get to avoid thinking about them.
+[00:57:35--00:57:41] For my own applications, The, things that I run myself, they are-- yeah-- some of the trickier ones.
+[00:57:41--00:57:47] They cross machine learning and correctness stuff, user experience things.
+[00:57:47--00:57:48] Yeah.
+[00:57:48--00:57:55] So the things that you have a little bit more control over or responsibility for as an inference engineer-- model quality bugs.
+[00:57:55--00:58:01] The model looks good at the point that you deploy it, and then it starts behaving badly in production.
+[00:58:01--00:58:04] That could just be because the things are different in production.
+[00:58:04--00:58:13] So what academics would call train test skew or train serve skew, but maybe the most common one in my experience is tokenizer bugs.
+[00:58:13--00:58:17] Tokens, as I think Albert pointed out in his talk-- tokens are cursed.
+[00:58:17--00:58:18] Tokens are bad.
+[00:58:18--00:58:22] We wish we didn't have them, but we have them at least for now.
+[00:58:22--00:58:27] And tokenizers have, if anything, gotten-- tokenizers and chat templates.
+[00:58:27--00:58:31] I'm merging these two together, but you take a string.
+[00:58:31--00:58:37] You augment the user input string or the harnesses input string with special strings or special tokens.
+[00:58:37--00:58:40] Those things have only increased in complexity over time.
+[00:58:40--00:58:46] When open source models are first released, these are almost assuredly buggy.
+[00:58:46--00:58:49] And then these are slowly beaten down over time.
+[00:58:49--00:59:00] So that's actually-- if you're looking for open source like contributions, if you can run the models and discover these tokenizer bugs, this is something you can both report and ideally fix
+[00:59:00--00:59:02] in the engines or in the model definitions.
+[00:59:02--00:59:05] It's valuable open source contribution work with many eyes.
+[00:59:05--00:59:08] All bugs are shallow, even tokenizer bugs.
+[00:59:08--00:59:09] Yeah.
+[00:59:09--00:59:10] So performance bugs, you'll see.
+[00:59:10--00:59:19] Yeah, regressions over time, and then surprising cross replica differences, especially in a heterogeneous computing environment.
+[00:59:19--00:59:24] I use the term observability in describing this-- the way to think about debugging.
+[00:59:24--00:59:29] Observability fundamentally means can you debug just from the logs.
+[00:59:29--00:59:38] Charity majors describes this as saying that observability is dual to steerability or controllability, and this comes from linear systems analysis for the EE
+[00:59:38--00:59:40] people in the room.
+[00:59:40--00:59:49] So the idea is, can you just look at what you've logged about the application, figure out what was wrong with it, fix the code and ship?
+[00:59:49--00:59:52] Obviously you would also run tests and stuff, but this is a vision.
+[00:59:52--00:59:56] It's a dream-- without having to come up with a minimal repro or whatever.
+[00:59:56--01:00:02] Some other way to take a complex-- likely distributed system and debug it.
+
+## 01:00:00--01:10:00
+
+[00:59:56--01:00:02] Some other way to take a complex-- likely distributed system and debug it.
+[01:00:02--01:00:07] So at the application level, this generally has to be bespoke.
+[01:00:07--01:00:11] You can roll your own with OpenTelemetry based tooling in Datadog or whatever.
+[01:00:11--01:00:17] The same things you use in general often work pretty well here, but at the application level, things are a little weirder.
+[01:00:17--01:00:18] They're fuzzier.
+[01:00:18--01:00:23] They're more machine-learning like, and there are specialized tools for this, like Lang, Smith and Braintrust.
+[01:00:23--01:00:30] I don't have a ton of experience at this level, but I've heard good things about using those and about rolling their own, so dealer's choice.
+[01:00:30--01:00:37] For model quality, obviously, you want to make sure you've measured model quality ahead of time, so you have a baseline to compare to.
+[01:00:37--01:00:44] So running evaluations before deployment, but then yeah, just aggressive logging of traces and user feedback.
+[01:00:44--01:00:50] For tokenizers, I am begging you log token IDs as part of your logging.
+[01:00:50--01:00:52] Don't just log the strings.
+[01:00:52--01:00:56] You will have trouble recreating those token IDs later.
+[01:00:56--01:01:03] And this is bugs that are very subtle expressed in Unicode are very obvious-- expressed in token IDs.
+[01:01:03--01:01:06] Where did that number come from?
+[01:01:06--01:01:07] So log that.
+[01:01:07--01:01:10] Performance-- again, log more metrics than you need.
+[01:01:10--01:01:19] The more stuff you put, the more likely it is that you have logged the one smoking gun that points to the actual problem.
+[01:01:19--01:01:27] So I think of it as log the initial object in all things you might want to log, and then you'll filter down from there.
+[01:01:27--01:01:27] Yeah.
+[01:01:27--01:01:32] On evals-- just a side note here, more at the application level.
+[01:01:32--01:01:36] This is how you build observability for all maps at the high-level.
+[01:01:36--01:01:41] Evals in many ways they are like tests in that they're thankless.
+[01:01:41--01:01:42] They're annoying to write.
+[01:01:42--01:01:44] They cramp your style.
+[01:01:44--01:01:46] They're difficult and time consuming to produce.
+[01:01:46--01:01:51] It's low status labor, but they're critical to developing a successful application.
+[01:01:51--01:01:58] And so you can start with something as simple as a Jupyter Notebook or an Excel spreadsheet with some prompts or whatever in it.
+[01:01:58--01:02:02] And that will already deliver some value before you build the whole system.
+[01:02:02--01:02:11] And it is useful for debugging deployments and knowing what kind of performance you should expect, but it's also something you-- if you make the model agnostic,
+[01:02:11--01:02:17] you can use them to derive those more application and product level decisions.
+[01:02:17--01:02:18] Which model should we use?
+[01:02:18--01:02:22] Or what should we run it on?
+[01:02:22--01:02:25] How much can we quantize this model?
+[01:02:25--01:02:29] Fundamentally, models and deployments have turned out to be pretty temporary.
+[01:02:29--01:02:30] They're swapped in and out.
+[01:02:30--01:02:32] Evals are forever.
+[01:02:32--01:02:38] In some sense, they always last longer than models because they have to at least last long enough to compare one model to another.
+[01:02:38--01:02:44] So yeah, use them for-- and then you can also use them for QA with all the other things you're going to be doing to improve your inference deployment,
+[01:02:44--01:02:53] whether that's fine tuning, distillation, benchmarking, like unhinged lossy optimizations, or speculative models.
+[01:02:53--01:02:55] More on that in a second.
+[01:02:55--01:02:58] Quick set of metrics to log-- rough and ready.
+[01:02:58--01:03:06] The things we already mentioned-- time to first token, time per output token, or inter token latency, time to last token, request per second, or queries per second.
+[01:03:06--01:03:10] So requests per second is more at the user level.
+[01:03:10--01:03:12] Queries per second is more at the language model level.
+[01:03:12--01:03:20] Anyway, you definitely define those two terms separately and think at the level of the user or outside of the system and then within the system when you have things
+[01:03:20--01:03:23] like tool calls returning.
+[01:03:23--01:03:34] Queuing-- in general, many of these systems from the GPU and its SMs, all the way up to your Kubernetes, like your ingress or whatever.
+[01:03:34--01:03:38] There will be queues, and they will be a major contributor to your tail latencies.
+[01:03:38--01:03:42] So when you want to debug while your time to first token or time to last token is going way up.
+[01:03:42--01:03:45] It's probably there's a queue somewhere.
+[01:03:45--01:03:49] Then you want to these split in the workload prefill and decode.
+[01:03:49--01:03:52] You want to when those things are running and what volume-- cached, prefill.
+[01:03:52--01:03:58] How often are we actually seeing a prefix that we'd seen before?
+[01:03:58--01:04:08] If you really want to get more advanced, log all your prefixes forever, and then offline run-- what would be the optimal prefix hit rate if I had an infinitely sized cache
+[01:04:08--01:04:13] and perfect detection to compare those numbers to.
+[01:04:13--01:04:15] It's nice to have a goal you can never reach.
+[01:04:15--01:04:18] It gives you something to do for the rest of your life.
+[01:04:18--01:04:25] Then you want these metrics at a per replica level, and then you want them at an aggregate level because they're generally sensible at--
+[01:04:25--01:04:32] aggregates give you a sense for the overall distribution, and they allow you to compare replicas to the current state of things, not just things
+[01:04:32--01:04:34] you've measured offline.
+[01:04:34--01:04:38] And then you want to measure these in median and in tail and as averages.
+[01:04:38--01:04:43] Averages help you compute things like throughputs and right sizing.
+[01:04:43--01:04:47] And the meat and the quantiles give you a sense for user experience.
+[01:04:47--01:04:58] And as I showed with the little demo of the token timing simulator, those tail latencies, despite them looking like small numbers, like 5%,
+[01:04:58--01:05:00] they're really most of the time.
+[01:05:00--01:05:05] And then lastly on the hardware level-- temperature, power-- these things matter.
+[01:05:05--01:05:07] Not every deployment gets these right.
+[01:05:07--01:05:08] There are problems.
+[01:05:08--01:05:10] There's bad cooling.
+[01:05:10--01:05:11] You want to watch this.
+[01:05:11--01:05:18] And then utilization of things, like the memory capacity and the kernels.
+[01:05:18--01:05:21] Sorry-- the utilization of CUDA streams, kernel utilization.
+[01:05:21--01:05:24] How often is work running on the GPU?
+[01:05:24--01:05:29] These are the things that you can measure really easily, asynchronously with low or no overhead.
+[01:05:29--01:05:34] The other things you might want to measure generally have additional overhead, at least for now.
+[01:05:34--01:05:38] And so you can't get the lowest level performance counters without taking a performance hit.
+[01:05:38--01:05:42] That's generally unacceptable.
+[01:05:42--01:05:48] So this is a little dashboard for this on an internal alpha that we've built at modal for tracking these things.
+[01:05:48--01:05:53] This is a recent fun deployment I had of a multi-modal model.
+[01:05:53--01:06:00] You can see there's lots of spikes in the P95 and P99, even though the P50s look very fine.
+[01:06:00--01:06:04] And then you can see a couple of things that jump out from this.
+[01:06:04--01:06:14] It's the inter token latencies are correlated in time with queuing, so that suggests that the latencies that are very long are actually a request it was generating
+[01:06:14--01:06:19] tokens, and then it got kicked out so something else could generate tokens, and it got cycled back in.
+[01:06:19--01:06:26] This is a behavior inference engines will do to try to achieve fair distribution of token throughput to requests.
+[01:06:26--01:06:27] And that's bad.
+[01:06:27--01:06:34] That maybe means I have too many requests going to the individual replicas here, and I need to lower that.
+[01:06:34--01:06:37] Or it could be that there's something slowing down in the replicas.
+[01:06:37--01:06:44] I didn't fully debug this because the performance was acceptable for the domain, which was an art show.
+[01:06:44--01:06:46] Yeah.
+[01:06:46--01:06:48] All right.
+[01:06:48--01:06:51] So speaking of optimizing performance, how do you do this?
+[01:06:51--01:06:57] Not just like looking at those charts there, but then how do you fix the problems that you observe?
+[01:06:57--01:07:04] So with performance optimization, I think, yeah, the same lessons that are elsewhere really apply.
+[01:07:04--01:07:10] There are big things that you can work on, and the biggest things are speculative decoding and quantization.
+[01:07:10--01:07:15] These are generally-- their low hanging fruit, but they often are application specific.
+[01:07:15--01:07:20] And that means that you can't just stand on the shoulders of giants like you can elsewhere.
+[01:07:20--01:07:29] Then there's the grind of medium benefit tasks that involve engineering on the host rather than the GPU, and then only after that should you
+[01:07:29--01:07:37] start thinking about doing GPU side work and doing things like kernel optimization, where you'll get a few percentage points speedups, which really matters
+[01:07:37--01:07:42] at very large scale but only once you've gotten the big things out of the way.
+[01:07:42--01:07:45] So let's talk about these in a little bit more detail.
+[01:07:45--01:07:49] So apologies-- this was a light mode diagram that I copy pasted.
+[01:07:49--01:07:57] So speculative decoding-- tries to solve this problem where decode has too few operations per byte.
+[01:07:57--01:08:08] And the solution-- and if you're more of an algorithms person, it's that you have one or a small number of query vectors in your attention.
+[01:08:08--01:08:14] And yeah, and one token in your MLPs or MOE.
+[01:08:14--01:08:22] And so the solution then is, all right-- so we aren't using all the flops, but we are using all the memory bandwidth.
+[01:08:22--01:08:30] What if we gave those extra flops something to do, even if it wasn't always useful work?
+[01:08:30--01:08:36] So what if we guessed what the next things to come after Modal is a serverless computing company?
+[01:08:36--01:08:37] We guess that.
+[01:08:37--01:08:41] We put it in, and we run on those speculated or drafted tokens.
+[01:08:41--01:08:46] And we run the full model, the model we want to get tokens from on that.
+[01:08:46--01:08:57] And then we run a Metropolis-Hastings style rejection sampling algorithm that guarantees the tokens that we get out have the exact same probability distribution
+[01:08:57--01:08:58] as the tokens that went in.
+[01:08:58--01:09:03] For greedy decoding, that just means take all the tokens that agree in a prefix.
+[01:09:03--01:09:09] So if you have temperature equals 0, it's just take serverless computing.
+[01:09:09--01:09:15] And then the first token that's different, use one from the target model.
+[01:09:15--01:09:27] So when you are at-- when you are memory bound, which is generally going to start to show up when you have very tight latency budgets and smaller models on big GPUs,
+[01:09:27--01:09:33] this becomes like an absolute no brainer to implement.
+[01:09:33--01:09:43] And the reason why I say speculation is all you need is because it gives you these very large, integral measured speed up factors.
+[01:09:43--01:09:47] People talk about speedups of 2x, 4x, 8x.
+[01:09:47--01:10:02] And it is also, as my colleague David Wang put it, crazy bitter lesson pilled, which is to say to create those draft tokens, you need another model.
+
+## 01:10:00--01:20:00
+
+[01:09:47--01:10:02] And it is also, as my colleague David Wang put it, crazy bitter lesson pilled, which is to say to create those draft tokens, you need another model.
+[01:10:02--01:10:12] And that model needs to be trained, and it will get better with more data and more compute, just like the base models do.
+[01:10:12--01:10:23] And so using application specific data, you can increase your speed up from speculative decoding from a factor of 2 to a factor of 6, which
+[01:10:23--01:10:25] is a factor of 3 speed up.
+[01:10:25--01:10:26] That's very big.
+[01:10:26--01:10:31] It's the difference between does this application work or not.
+[01:10:31--01:10:33] And so we're very big believers.
+[01:10:33--01:10:43] This math here, this is the simplest mathematical model of speculative decoding that gives you this exponential speed up from increased acceptance lengths.
+[01:10:43--01:10:45] We do observe things like this in production.
+[01:10:45--01:10:58] Detailed mathematical models have things diminishing returns or whatever, but you do observe very substantial speed ups from custom speculators.
+[01:10:58--01:11:09] And this in addition to the release of things like SGLang and BLM and their excellent engineering work on those, the creation of really good speculative models
+[01:11:09--01:11:15] is one of the other reasons why people can run their own inference now in a way that they couldn't a year or two ago.
+[01:11:15--01:11:17] So there are many approaches to speculation.
+[01:11:17--01:11:25] Simple one is n-gram, a language model you might learn about in a math class or a stats class.
+[01:11:25--01:11:28] Just repeat sequences of tokens that appeared in the prompt.
+[01:11:28--01:11:32] If you see n minus 1 tokens, guess the next token is the n-th.
+[01:11:32--01:11:43] That works OK, but nowadays, many models are released with multi-token prediction built in, so the last heads of the model don't just produce a single token.
+[01:11:43--01:11:44] They produce several.
+[01:11:44--01:11:49] This has benefits at train time and at inference time, which is really nice.
+[01:11:49--01:11:53] Usually these are two groups of engineers who hate each other.
+[01:11:53--01:11:55] But yeah, so this is becoming almost standard.
+[01:11:55--01:11:58] It's generally released with things.
+[01:11:58--01:12:03] Though it's a little tricky sometimes to train multi-token prediction.
+[01:12:03--01:12:07] And you can do a little bit better at inference time.
+[01:12:07--01:12:17] What people have found is that if you train your draft model based off of the hidden states of the model, even the earlier hidden states.
+[01:12:17--01:12:23] Interesting phenomenon in these models is like with depth, they become more specialized to just predicting the next token.
+[01:12:23--01:12:28] Over time, they're doing interesting combinations of reasoning across tokens.
+[01:12:28--01:12:31] They maybe don't know what the next token is going to be.
+[01:12:31--01:12:36] The know the next idea or the next couple of ideas, and that sharpens over time as you go deeper.
+[01:12:36--01:12:42] Look at some of the model surgery papers for stuff about that-- layer skipping.
+[01:12:42--01:12:44] So you actually want the earlier layers in there.
+[01:12:44--01:12:48] And that's tricky to do with MTP, but it's easy to do offline.
+[01:12:48--01:12:50] Eagle is one of the first things that did this.
+[01:12:50--01:12:54] So you train this thing alongside the model.
+[01:12:54--01:12:59] And then D flash is the one that we've gotten excited about at Modal.
+[01:12:59--01:13:03] It's like Eagle, but it's like a denoising diffusion language model.
+[01:13:03--01:13:12] And diffusion language models have generally struggled to reach the highest capabilities, but diffusion is generally a better fit for hardware.
+[01:13:12--01:13:16] It has a higher arithmetic intensity-- naturally maps better.
+[01:13:16--01:13:19] You don't have that prefilled decode split.
+[01:13:19--01:13:22] So I'm really excited about that.
+[01:13:22--01:13:34] And so we're big in on that and have been working on things like improvements with the authors and on getting it well integrated into SGLang.
+[01:13:34--01:13:35] So that's speculation.
+[01:13:35--01:13:39] Quantization-- that is your other biggest lever to pull.
+[01:13:39--01:13:45] If you can go from FP8 to FP4, that's like a 2x speed up.
+[01:13:45--01:13:50] And that's a 2x speed up both for memory bound things and for compute bound things.
+[01:13:50--01:13:55] So for memory bound things, you're cutting the memory bandwidth demand in half because there's fewer bytes.
+[01:13:55--01:14:08] And Tensor Cores and other floating point math, they are quoted in an ops per second, and that ops per second scales linearly with the bytes.
+[01:14:08--01:14:13] So really, there's bytes of operations per second that they actually have as bandwidth.
+[01:14:13--01:14:16] So the same thing basically applies.
+[01:14:16--01:14:20] So this unfortunately requires full stack coordination for a couple of reasons.
+[01:14:20--01:14:29] One is that if you want to operate with FP4 with hardware acceleration, you need Blackwell GPUs in the NVIDIA stack.
+[01:14:29--01:14:35] So like this-- and on the other hand, quantization changes model behavior.
+[01:14:35--01:14:39] So you have to think about this at the application layer, right?
+[01:14:39--01:14:54] And so you can't just-- the evals, or vibe checks, or testing in prod-- that is the handoff between the application layer and the hardware layer.
+[01:14:54--01:14:59] You need to make sure that that's good enough that you can confidently ship this change.
+[01:14:59--01:15:04] A couple things about the model behavior changes.
+[01:15:04--01:15:06] Generally, it's worse on longer sequences.
+[01:15:06--01:15:08] You have lower precision.
+[01:15:08--01:15:10] With longer sequences, you have more accumulation.
+[01:15:10--01:15:12] So there's more accumulated error.
+[01:15:12--01:15:17] And so whether it's in or out sequences, you're going to struggle more here.
+[01:15:17--01:15:21] But that means with shorter sequences, you can do this with more confidence.
+[01:15:21--01:15:23] FP8 is pretty standard.
+[01:15:23--01:15:24] It's supported on hopper and above.
+[01:15:24--01:15:26] FP4 is relatively cutting edge.
+[01:15:26--01:15:32] This is generally done in only the MLP or MOE layers, and not in the attention layers.
+[01:15:32--01:15:37] Attention involves a lot more accumulation, and so it's a little bit trickier.
+[01:15:37--01:15:43] And so yeah, but matmuls are generally the bottleneck or more frequently the bottleneck.
+[01:15:43--01:15:47] And so you still see the roughly linear speed up.
+[01:15:47--01:15:51] You might want to do things like quantize or compress the KV cache.
+[01:15:51--01:15:54] This is pretty hard.
+[01:15:54--01:16:00] It should generally be done, I think, at train time as the DeepSeek V4 model does.
+[01:16:00--01:16:06] Just like-- yeah, it is trickier to get right than weight quantization.
+[01:16:06--01:16:11] And for all these things, this is very much the current state of affairs.
+[01:16:11--01:16:15] And to my knowledge, I might have missed recent papers.
+[01:16:15--01:16:16] OK.
+[01:16:16--01:16:27] So closing out here, yeah, the next tier is getting the CPU out of the way of the GPU.
+[01:16:27--01:16:28] Don't block it.
+[01:16:28--01:16:32] So you're basically submitting a bunch of work to the GPU.
+[01:16:32--01:16:35] Make sure that there's always something for it to do.
+[01:16:35--01:16:40] Key technique for this CUDA graph capture turns many CUDA kernel launches into one.
+[01:16:40--01:16:44] This is from a profiler showing many CUDA graphs launched at once.
+[01:16:44--01:16:47] So make sure to turn that one on in your inference engine.
+[01:16:47--01:16:58] Key tool for looking for host overhead is GPU power draw or temperature not being as high of a level.
+[01:16:58--01:17:02] So these are two replicas, one of which was running slower than the other.
+[01:17:02--01:17:09] And the second replica was only drawing 2 kilowatts instead of the full three kilowatts plus it should have been able to draw.
+[01:17:09--01:17:17] And taking a look at that with a tool like the Torch Profiler that I think you saw in previous lectures, or the Nsight systems
+[01:17:17--01:17:32] profiler, both of which are built on the same CUDA profiling tools interface from NVIDIA-- able to determine that one of the causes was that one of the workers that was participating
+[01:17:32--01:17:36] in a collective was struggling behind the others.
+[01:17:36--01:17:38] I haven't fully actually debug this one.
+[01:17:38--01:17:44] This is a bit of a live this week problem, but suspect NUMA Affinity problems.
+[01:17:44--01:17:52] And so NUMA Affinity is a very hard thing to know about, especially if you have heterogeneous hardware.
+[01:17:52--01:17:57] But temperature or power draw is very easy and free.
+[01:17:57--01:18:00] So watch this guy and then dive in.
+[01:18:00--01:18:01] But you don't have to go get that fancy.
+[01:18:01--01:18:07] You can literally just use something like py-spy to watch what's going on the host and look for bottlenecks that you can optimize.
+[01:18:07--01:18:22] We have a blog post about how we came up with a very simple, like, Python-only solution to speed up multimodal inference in SGLanf by over 10% by just like caching a pointer basically
+[01:18:22--01:18:30] in a Python dict, instead of recreating it on every request-- every tensor on every request.
+[01:18:30--01:18:38] And that, yeah, no CUDA mode, no Nsight profiler, just py-spy.
+[01:18:38--01:18:42] So only then is it time to consider GPU optimization kernels out there.
+[01:18:42--01:18:43] They're pretty good.
+[01:18:43--01:18:45] They're often very close to the speed of light.
+[01:18:45--01:18:50] You have lots of people trying to work on these, and they're very reusable in general.
+[01:18:50--01:18:52] So there's lots of good libraries for these.
+[01:18:52--01:18:56] And that means there are only percentage points to gain in most cases.
+[01:18:56--01:19:01] So only get to it when percentage points are the thing that you care about.
+[01:19:03--01:19:13] The tool for that-- the primary tool for that being Nsight compute, which can help you measure the lowest level hardware utilization-- actually measure things how much of the arithmetic bandwidth and memory
+[01:19:13--01:19:23] bandwidth am I using and map things about your performance directly onto, say, the assembler to look for pipeline stalls or scoreboard stalls.
+[01:19:23--01:19:25] Yeah.
+[01:19:25--01:19:35] And just to point again at before you go this-- before you pull the fancy tools out, the way [INAUDIBLE] writes fast kernels is with a whiteboard.
+[01:19:35--01:19:38] So think about what are the bottlenecks.
+[01:19:38--01:19:40] What are the most important things to optimize?
+[01:19:40--01:19:46] What speed are they able to achieve and reason from there before pulling out the empirical techniques.
+[01:19:46--01:19:49] So check out their blog on that for details.
+[01:19:49--01:19:50] OK.
+[01:19:50--01:19:52] So I don't have much time.
+[01:19:52--01:19:54] And we were-- yeah.
+[01:19:54--01:19:56] I will stick around for extra questions.
+[01:19:56--01:20:02] So I'll just say what's next-- lossy weird optimizations.
+
+## 01:20:00--01:30:00
+
+[01:19:56--01:20:02] So I'll just say what's next-- lossy weird optimizations.
+[01:20:02--01:20:16] Skip layers, quantize things, prune, lossy speculative decoding, mega kernels for speculative coding, and draft models are ready for specific layers in the future for whole models.
+[01:20:16--01:20:21] I said NVIDIA GPUs are your only option, but that's very much only true right now.
+[01:20:21--01:20:29] NVIDIA is already going to be releasing a hybrid rack in the next generation that includes LPUs from Grok.
+[01:20:29--01:20:38] That actually to assert-- it doesn't actually map onto the prefilled decode split just yet, but I think that is basically an artifact of history.
+[01:20:38--01:20:44] And in the future, prefill and decode will be done by distinct accelerators if demand continues.
+[01:20:44--01:20:45] Great.
+[01:20:45--01:20:49] I promise this one to people on Twitter, so I will have to go through this one.
+[01:20:49--01:20:50] What's next?
+[01:20:50--01:20:55] I talked about a lot of this mostly as though you'd be writing the code yourself.
+[01:20:55--01:21:05] So for the future of a lot of software engineering is going to include agents-- LLM inference as part of the actual software engineering.
+[01:21:05--01:21:09] In order to make this work, you don't just get to just prompt and turn away.
+[01:21:09--01:21:13] Your job is now to build the system that measures the correctness of agents.
+[01:21:13--01:21:17] They will then do things like benchmarking, configuration, monitoring.
+[01:21:17--01:21:22] You need to what tools and MCPs to connect them to, what metrics they need.
+[01:21:22--01:21:31] It'll be a while before people trust models with your AWS root account to set up monitoring or whatever.
+[01:21:31--01:21:34] So it's your job to understand that and build it.
+[01:21:34--01:21:40] And I think we talked about BLM, SGLang.
+[01:21:40--01:21:47] They're great software, but they are built on the assumption that making that software is really expensive.
+[01:21:47--01:21:55] And if you can write a bespoke engine per deployment very cheaply, then maybe that's a better strategy.
+[01:21:55--01:22:01] So check VibeServe, a recent paper from the home lab for some gestures in that direction.
+[01:22:01--01:22:03] So we're very excited about this.
+[01:22:03--01:22:06] At Modal, we really like engineering systems.
+[01:22:06--01:22:14] And we don't typing things by hand and building white glove specific deployments for people.
+[01:22:14--01:22:15] We want this to be scalable.
+[01:22:15--01:22:18] And agents, I think, are going to be part of that story.
+[01:22:18--01:22:19] All right.
+[01:22:19--01:22:20] Thank you.
+[01:22:20--01:22:23] [APPLAUSE]
