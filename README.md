@@ -84,10 +84,10 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
 | Berkeley 课程 | 35 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
-| B 站系列课程 | 47 | Modern Agent、LLM Architect、Agentic RL |
+| B 站系列课程 | 48 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026 |
 | 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **368** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| **合计** | **369** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -132,13 +132,14 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | [**CS294 SP25**](talks/berkeley-llm-agents/sp25/) | Advanced LLM Agents | 12 | Jason Weston, AlphaProof, Salakhutdinov |
 | [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 11 | Noam Brown, Oriol Vinyals, James Zou |
 
-### 🇨🇳 B 站系列课程 (47 份)
+### 🇨🇳 B 站系列课程 (48 份)
 
 | 系列 | 主题 | 讲数 | UP 主 |
 |------|------|------|------|
 | [**Modern Agent**](modern-agent/) | LLM Agent 实战 (ReAct, RAG, Codex) | 17 | 五道口纳什 |
 | [**LLM Architect**](llm-architect/) | 模型架构 (MoE, RoPE, VLM, K2.5) | 10 | 五道口纳什 |
 | [**Agentic RL**](agentic-rl/) | RL for LLM (PPO→GRPO→DPO, veRL) | 20 | 五道口纳什 |
+| [**Self-Evolving Agents 2026**](self-evolving-agents-2026/) | 因果世界模型、Agentic RL、经验智能、能力外部化与 Agent 理论 | 1 册 / 9 单元 | NICE 学术 |
 
 ### 🎤 演讲与访谈 (29 份)
 

@@ -1,6 +1,6 @@
 # Note Generation Todo
 
-> Maintained by Codex. Last updated: 2026-08-13.
+> Maintained by Codex. Last updated: 2026-08-17.
 
 ## Status Legend
 - `todo`: not started
@@ -36,6 +36,7 @@
 | done | CS25 V6 | Full 9-lecture Spring 2026 series | official playlist + live course schedule | `cs25-v6/lecture01-09/` | 9/9 complete. The batch totals 472 pages, 474 teaching figures, and 393 teaching boxes. Lecture 09 is a 59-page production-inference lecture using 57 required pages from Charles Frye's official 73-page deck plus one live token-timing demo, with 71 teaching boxes, 12 formula blocks, and 7 captioned listings across workload/SLO design, replica benchmarking, engine choice, roofline analysis, GPU deployment, observability/evals, speculation, quantization, host/kernel profiling, and agentic serving. A 990-frame, 17-contact-sheet full-recording audit confirms no unrepresented whiteboard/live-coding visual and records deck pages 070, 072, and 073 as intentional optional material. All nine pass strict coverage, `⭐⭐⭐`, stabilized double XeLaTeX, and signed visual QA. |
 | blocked | CS153 Spring 2026 | 5 public videos | `PL2aDf5-VARtBwz1kz5FsuSZXOig2U6aJI` | `cs153-spring2026/lectureXX/` | YouTube currently requires cookies/sign-in for yt-dlp subtitle and media access. |
 | done | Modern Agent | 17 Codex Plan Mode and update_plan | `BV1NdDtBjEg7` | `modern-agent/lecture17/` | Downloaded via public playurl API, transcribed with faster-whisper large-v3 on A100, TeX/PDF compiled. |
+| done | Self-Evolving Agents 2026 | NICE 学术 11P 专题研讨会 | `BV1P4LX68EcS` | `self-evolving-agents-2026/` | 整理为 9 个教学单元与 1 册 71 页课程 PDF；九讲均完成公开媒体获取、Whisper 转写、manifest、teacher-voice ledger、双遍 XeLaTeX 和人工视觉 QA。课程级展开审计为 `⭐⭐`，保留高图密度并明确记录 prose/figure 启发式未达 `⭐⭐⭐`。 |
 | blocked | Agentic RL | 16 Docker sandbox and Jupyter Kernel CI env | `BV15JdEBmEh9` | `agentic-rl/lecture16/` | Public playurl API only returns a ~5 minute preview. Needs valid Bilibili cookies/full access before transcription and PDF generation. |
 
 ## Environment Notes

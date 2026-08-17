@@ -80,6 +80,13 @@
 - **已收录**：`cs329a/lecture01-09/`，9 讲中文 LaTeX 讲义；本地最终 PDF 共 215 页，质量审计全部通过
 - **发布方式**：仓库提交 LaTeX、字幕、封面和教学图片，生成 PDF 按仓库策略仅本地保留
 
+### NICE 学术 - Self-Evolving Agents 2026
+- **状态**：2026-06-17 发布的 11P 专题研讨会已完整整理
+- **Bilibili**：https://www.bilibili.com/video/BV1P4LX68EcS
+- **已收录**：`self-evolving-agents-2026/`，七场主题报告与两场 Panel 合并为 1 册 71 页中文课程讲义
+- **素材状态**：九个教学单元均有公开视频、Whisper 转写、manifest 与 teacher-voice ledger
+- **验收**：双遍 XeLaTeX、71 页 PDF 视觉 QA 与 whitespace 检查通过；展开审计为 `⭐⭐`
+
 ### Berkeley CS294 - LLM Agents (f25 已结束)
 - **状态**：Fall 2025 (Agentic AI) 已于 2025-12-08 结课
 - **历史规律**：每学期一版（f24 → sp25 → f25）

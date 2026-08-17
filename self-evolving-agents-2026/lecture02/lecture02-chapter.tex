@@ -1,0 +1,111 @@
+\section{递归自学习与可扩展 Agent Experience}
+
+张少坤的报告把 self-evolving Agent 拆成两个必须同时满足的条件：一是系统能递归地改进自己的可学习组件，二是训练数据来自当前 Agent 与环境的 on-policy 交互，而不是无差别地复制别的模型轨迹。前半段用 AgentOptimizer 说明 harness 也可以成为优化对象；后半段用 ProRL Agent Server 讨论如何把大规模 rollout 变成可复用基础设施。
+
+\sourcefigure{0.93}{lecture02/slides-images/slide-003-00090s.jpg}{Self-evolving Agent 的两个条件：递归改进与自身经验}{00:01:30--00:03:45}
+
+\begin{importantbox}{为什么必须强调 own experience}
+同一批离线轨迹对不同 Agent 的学习价值并不相同：有些样本已经过于简单，有些又远超当前能力。On-policy experience 会自然暴露当前策略的薄弱点，并形成随能力变化的 curriculum；这也是 Agentic RL 相比静态 imitation data 的核心吸引力。
+\end{importantbox}
+
+\subsection{Agent 不只有 model，还有 harness}
+
+报告把现代 Agent 写成 $\text{Agent}=\text{Model}+\text{Harness}$。Model 提供语言、推理和决策能力；harness 则包含 system prompt、tool schema、memory、workflow、观察压缩、错误恢复和调用模型的控制逻辑。即使底座模型相同，不同 harness 也会产生完全不同的轨迹分布。
+
+\sourcefigure{0.90}{lecture02/slides-images/slide-004-00225s.jpg}{Model 与 harness 共同决定 Agent 行为}{00:03:45--00:05:15}
+
+\begin{knowledgebox}{Harness Engineering 的第一原则}
+Harness 不是“包一层 API”的胶水代码，而是 Agent 的行动空间与信息边界。不给编程 Agent shell、编辑器和测试工具，它就无法完成真实软件任务；给出含糊或冲突的工具描述，则会把模型能力消耗在协议猜测上。
+\end{knowledgebox}
+
+\subsection{AgentOptimizer：让优化器改写 Agent 组件}
+
+AgentOptimizer 把一个候选 Agent 看作可迭代编辑的对象。优化器读取当前 prompt、tool 配置或 workflow，观察执行轨迹与评价，再提出新的组件版本。这个过程形成“优化器 Agent 改写任务 Agent，任务 Agent 的新表现又反过来训练优化器判断”的递归结构。
+
+\sourcefigure{0.90}{lecture02/slides-images/slide-005-00315s.jpg}{AgentOptimizer 中 optimizer 与被优化 Agent 的嵌套关系}{00:05:15--00:06:45}
+
+\sourcefigure{0.92}{lecture02/slides-images/slide-007-00465s.jpg}{AgentOptimizer 的生成、执行、评价和修订闭环}{00:07:45--00:09:15}
+
+如果把 harness 参数记为 $h$，评价函数记为 $R$，优化过程可以抽象为
+
+$$
+h_{k+1}=\mathcal{O}\!\left(h_k,\tau_k,R(\tau_k)\right),
+$$
+
+其中 $\tau_k$ 是第 $k$ 轮使用 $h_k$ 产生的轨迹，$\mathcal{O}$ 是语言模型驱动的 optimizer。这里没有要求 $h$ 可微；它可以是自然语言 prompt、工具说明或控制流程。因此优化器能够处理传统梯度下降难以直接更新的离散系统组件。
+
+\sourcefigure{0.92}{lecture02/slides-images/slide-008-00555s.jpg}{递归优化过程中训练与测试性能随迭代变化}{00:09:15--00:10:00}
+
+\begin{warningbox}{递归改进不保证单调提升}
+轨迹评价有噪声，optimizer 还可能过拟合少量任务。图中的波动提醒我们：每轮修改都应保留版本、独立验证集和回滚路径；不能因为一次分数上升就覆盖已验证的 harness。
+\end{warningbox}
+
+报告总结，AgentOptimizer 能在较早期模型上观察到多轮改进，说明递归修改并不完全依赖最强底座模型；但它同时暴露了样本效率和稳定性问题。要把这种机制扩展到复杂 Agentic RL，必须有更高吞吐、更少侵入的 rollout 基础设施。
+
+\sourcefigure{0.91}{lecture02/slides-images/slide-010-00690s.jpg}{AgentOptimizer 的主要实验结论与限制}{00:11:30--00:13:15}
+
+\subsection{为什么 Agentic RL 的瓶颈在 rollout}
+
+传统语言模型 RL 的一次采样主要是 token generation；Agent rollout 却包含多轮模型调用、工具执行、环境等待、错误重试和动态上下文。不同任务的轨迹长度差异巨大，单个环境阻塞就可能拖慢整个同步 batch。
+
+\sourcefigure{0.92}{lecture02/slides-images/slide-011-00795s.jpg}{Agentic RL 从 trainer、rollout 到环境的基本数据流}{00:13:15--00:14:30}
+
+\begin{knowledgebox}{Rollout 的含义}
+Rollout 是从当前 policy 采样完整交互轨迹的过程。训练器最终需要保留每次 LLM call 的 input token、response token、log probability、reward 与轨迹归属；工具本身不需要可微，但它对后续 prompt 和 reward 的影响必须被记录。
+\end{knowledgebox}
+
+ProRL Agent Server 的关键设计是把 agent harness 与 trainer 解耦。它拦截 harness 对模型服务的标准 API 调用，记录训练所需 token 与元数据，再把请求路由到 inference engine。这样现有 Agent 代码不必改写成某个 RL 框架的专用环境。
+
+\sourcefigure{0.94}{lecture02/slides-images/slide-012-00870s.jpg}{ProRL Agent Server 作为 harness 与训练栈之间的中间层}{00:14:30--00:17:45}
+
+\subsection{可扩展架构：异步环境、集中推理与轨迹归并}
+
+大规模系统需要同时解决三类不均衡：环境执行时间不均衡、模型生成长度不均衡、同一 episode 内多次 LLM call 的归属不均衡。报告采用 service architecture，把 rollout worker、inference engine、environment 与 trainer 通过稳定接口连接，使慢环境不会迫使所有样本同步等待。
+
+\sourcefigure{0.94}{lecture02/slides-images/slide-014-01185s.jpg}{多环境、多 harness 与共享推理服务的扩展方式}{00:19:45--00:21:30}
+
+\sourcefigure{0.94}{lecture02/slides-images/slide-015-01290s.jpg}{Agent 调用链中的 token 捕获与轨迹组织}{00:21:30--00:23:00}
+
+\begin{importantbox}{梯度到底如何穿过工具}
+问答环节明确说明：梯度不需要穿过 shell、浏览器或 Python 工具。Policy gradient 只对模型生成 token 的 log probability 求导，工具执行结果作为后续 observation 进入下一次模型调用。真正困难的是正确保存每个 call 与 episode reward 的对应关系，而不是让工具可微。
+\end{importantbox}
+
+若一条轨迹由多次模型调用组成，可把目标写为
+
+$$
+\nabla_\theta J(\theta)
+=\mathbb{E}_{\tau\sim\pi_\theta}
+\left[\sum_{t\in\mathcal{M}(\tau)} A_t\nabla_\theta\log\pi_\theta(y_t\mid x_t)\right],
+$$
+
+其中 $\mathcal{M}(\tau)$ 只包含模型生成步骤，$x_t$ 是包含工具 observation 的上下文，$y_t$ 是 response token，$A_t$ 是由最终或过程 reward 估计的 advantage。工具调用改变轨迹，却不直接出现在可微参数中。
+
+\sourcefigure{0.93}{lecture02/slides-images/slide-016-01380s.jpg}{并行 rollout、推理调度与训练样本回传}{00:23:00--00:24:30}
+
+\subsection{实验结果应该如何解读}
+
+报告在 software engineering task 和不同 Agent harness 上验证训练后的模型。这里的 gain 不是“服务器架构本身提高了 benchmark 分数”，而是基础设施让 on-policy 训练可稳定运行，训练后的 model 更适配复杂 harness，最终在同一 harness 下超过 base model。
+
+\sourcefigure{0.92}{lecture02/slides-images/slide-017-01470s.jpg}{Rollout 基础设施的吞吐和训练稳定性结果}{00:24:30--00:25:45}
+
+\sourcefigure{0.92}{lecture02/slides-images/slide-019-01590s.jpg}{跨 Agent harness 的训练效果比较}{00:26:30--00:27:30}
+
+\begin{warningbox}{Infra result 与 algorithm result 要分开}
+吞吐提高只说明能更快收集经验；benchmark 提升还依赖 reward、采样策略、训练算法和任务分布。评估系统时应分别报告系统效率、数据效率、最终能力与成本，避免把某一层的改进全部归功于“Agentic RL”。
+\end{warningbox}
+
+\sourcefigure{0.93}{lecture02/slides-images/slide-020-01650s.jpg}{ProRL 的部署流程与可复用接口}{00:27:30--00:28:45}
+
+\subsection{本章小结}
+
+本章从“自我修改什么”与“如何规模化获得自身经验”两端构成闭环。AgentOptimizer 说明 prompt、tool 与 workflow 可以通过非可微 optimizer 递归更新；ProRL 则把异构 harness 的 LLM 调用统一为可训练 rollout。两者结合后，系统才有可能持续采集当前策略真正需要的经验，并把经验转化为下一版模型或 harness。
+
+\subsection{工程实践要点}
+
+\begin{enumerate}
+    \item 为 model、harness、reward 与环境分别做版本控制，避免无法归因；
+    \item rollout 日志必须保留 episode、LLM call、tool result 和 token span 的映射；
+    \item 用异步队列隔离慢环境，不让长尾 episode 阻塞全部 GPU；
+    \item 将吞吐、单位有效样本成本、训练稳定性和最终任务成功率分开监控；
+    \item 任何自动 harness 修改都要经过独立验证和可回滚发布。
+\end{enumerate}

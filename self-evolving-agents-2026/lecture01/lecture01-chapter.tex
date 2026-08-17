@@ -1,0 +1,146 @@
+\section{因果世界理解：开放世界中的 Self-Improving Agent}
+
+杨梦月的报告从一个比“如何训练更强策略”更基础的问题出发：Agent 如果连环境为什么变化都不理解，所谓自我改进很可能只是在重复奖励较高的轨迹。开放世界中的状态、任务和规律会不断扩展，单靠记忆过去的成功动作无法保证迁移；系统需要形成一个可以被干预、被反驳并持续修正的 causal world model。
+
+\begin{importantbox}{本章中心命题}
+稳定的自我改进不只需要预测未来，还需要回答“如果采取另一个动作会怎样”“观察到的相关性是否由隐藏条件造成”“当前规律在什么 context 下会失效”。这正是因果表示相对于纯关联预测的增量价值。
+\end{importantbox}
+
+\subsection{从 Agent decision making 到 world model}
+
+先把 Agent 抽象为一个闭环：环境产生 observation，Agent 从 observation 推断 state，根据目标选择 action，环境执行动作并返回新的 observation 与反馈。这里的 \textbf{state} 不是画面本身，而是对位置、对象、属性和关系等潜在变量的压缩描述；\textbf{policy} 则把当前信息映射为动作分布。
+
+\sourcefigure{0.93}{lecture01/slides-images/slide-003-00075s.jpg}{Agent decision making 的 sensing--acting--planning 闭环}{00:01:15--00:04:00}
+
+\begin{knowledgebox}{Model-free 与 model-based 的差别}
+Model-free 方法直接从轨迹回报更新 policy，不显式预测环境转移；model-based 方法学习一个近似的状态转移模型 $\hat P(s_{t+1}\mid s_t,a_t)$，再用它进行规划、想象 rollout 或风险估计。两者不是互斥标签：现代 Agent 常用模型生成候选计划，再用真实执行反馈校正策略。
+\end{knowledgebox}
+
+为什么开放世界更依赖 world model？在固定迷宫里，状态空间有限，反复试错最终可能覆盖关键路径；但现实环境无法穷举，任务会变化，动作还可能产生不可逆后果。老师强调，语言模型做数学推理也有类似问题：如果基础模型在当前问题分布上几乎采不到正确轨迹，仅仅扩大 rollout 次数并不能保证找到解，系统需要利用结构知识缩小搜索空间。
+
+\sourcefigure{0.93}{lecture01/slides-images/slide-004-00240s.jpg}{开放世界无法依赖有限轨迹穷举，world model 用于预测与规划}{00:04:00--00:07:15}
+
+\subsection{预测不等于理解：Pearl 因果层级}
+
+一个能够预测下一帧的模型，未必理解动作造成了什么。报告借用 Pearl's causal hierarchy 区分三层能力：association 回答“观察到什么”，intervention 回答“主动做某事会发生什么”，counterfactual 回答“已经发生的结果如果换一个动作会怎样”。三层分别对应条件分布、干预分布和个体层面的反事实推断。
+
+$$
+\begin{aligned}
+\text{Association: }& P(Y\mid X=x),\\
+\text{Intervention: }& P(Y\mid do(X=x)),\\
+\text{Counterfactual: }& P(Y_{x'}\mid X=x,Y=y).
+\end{aligned}
+$$
+
+其中 $do(X=x)$ 表示外部把变量 $X$ 设置为 $x$，切断原有父节点对 $X$ 的影响；$Y_{x'}$ 表示在同一个体上假设执行另一个干预 $x'$ 时的潜在结果。因果问题难就难在后两类分布通常不能只靠被动观测直接识别。
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-006-00495s.jpg}{Pearl 因果层级：seeing、doing 与 imagining}{00:08:15--00:10:15}
+
+\begin{warningbox}{高预测精度不能自动推出因果正确}
+模型可能利用背景纹理、数据采集流程或共同原因做出准确预测，但一旦 Agent 主动改变环境，这些相关性就会失效。部署到可交互环境时，必须单独检查 intervention 与 counterfactual 能力，不能把离线 prediction accuracy 当作充分证据。
+\end{warningbox}
+
+报告中的 causal diagram 用有向图表达变量间的生成关系。若 $Z$ 同时影响 $X$ 与 $Y$，则仅观察 $X$ 和 $Y$ 会产生混杂；若 Agent 能干预 $X$ 并保持其他条件可控，就能更直接地判断 $X\rightarrow Y$。这种结构使 world model 不只是黑箱模拟器，还能解释哪些机制应在环境变化后保持稳定。
+
+\sourcefigure{0.91}{lecture01/slides-images/slide-007-00615s.jpg}{因果图、干预与反事实是理解环境机制的三个互补工具}{00:10:15--00:13:30}
+
+\subsection{Causal world model 如何进入 Agent 闭环}
+
+普通 world model 重点拟合 observation 或 state 的转移；causal world model 进一步显式表示 action、环境变量和结果之间的结构。规划器可以先在模型中比较多个 intervention，再选择真实执行成本最低、信息增益最高或最可能完成目标的动作。
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-008-00810s.jpg}{从关联预测器转向支持 intervention 的 causal world model}{00:13:30--00:14:00}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-009-00840s.jpg}{Causal world model 在感知、规划与行动之间提供结构化中介}{00:14:00--00:14:45}
+
+如果把环境动力学写成结构因果模型，可以表示为
+
+$$
+s_{t+1}^{(i)}=f_i\!\left(\mathrm{pa}_i(s_t),a_t,u_t^{(i)}\right),
+$$
+
+其中 $s_{t+1}^{(i)}$ 是下一时刻第 $i$ 个状态变量，$\mathrm{pa}_i(s_t)$ 是因果图中它的父变量，$a_t$ 是 Agent 动作，$u_t^{(i)}$ 是未观测噪声。相比直接学习一个大函数 $s_{t+1}=F(s_t,a_t)$，结构化分解允许系统在局部机制变化时只更新受影响的部分。
+
+\begin{knowledgebox}{课堂提示：因果模型的价值是约束搜索}
+老师并没有宣称所有 Agent 都必须恢复“真实世界唯一因果图”。工程上更现实的目标是得到足以支持当前干预和迁移的局部结构：它能排除明显无效动作、指出需要收集什么数据，并在预测失败时提供可诊断的机制单元。
+\end{knowledgebox}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-012-00930s.jpg}{将观测、动作、因果知识和环境反馈连接成可更新闭环}{00:15:30--00:16:15}
+
+\subsection{开放世界的真正难点：规律会随 context 显现为“漂移”}
+
+传统 causal discovery 常假设数据来自固定机制，但开放世界会不断暴露新的对象、尺度和条件。报告用经典力学与微观现象作类比：在有限 observation window 内，Agent 可能误以为一套规律普遍成立；当窗口扩展后，旧规律并非完全错误，而是只在特定 context 中有效。
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-014-01035s.jpg}{Open-ended world 中的 causal drift：新条件暴露旧模型的适用边界}{00:17:15--00:19:30}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-015-01170s.jpg}{同一表面现象可能在不同条件下由不同机制主导}{00:19:30--00:21:15}
+
+这意味着 self-improving Agent 不能只在误差变大时重新拟合全部模型，而要先判断：是噪声增加、观测变量缺失、机制参数变化，还是出现了一个决定机制切换的 meta-state。若把 context 记为 $c$，更合适的形式是
+
+$$
+P(s_{t+1}\mid s_t,a_t,c),
+$$
+
+并让 Agent 主动寻找能解释机制切换的 $c$。这类变量可能是“门是否上锁”“对象材料”“用户当前目标”或“工具权限”。
+
+\begin{warningbox}{不要把所有分布变化都叫 causal drift}
+输入频率变化不一定意味着结构因果机制改变；传感器噪声、采样偏差和策略自身改变也会造成分布漂移。更新因果图前，应先区分 observation shift、policy-induced shift 与 mechanism shift，否则 Agent 会把自己的探索行为误判为世界规律变化。
+\end{warningbox}
+
+\sourcefigure{0.93}{lecture01/slides-images/slide-016-01275s.jpg}{开放世界学习需要突破既有 observation window}{00:21:15--00:21:30}
+
+\subsection{Curious Causality-Seeking Agent：主动寻找反例}
+
+报告介绍的 Curious Causality-Seeking Agent 不满足于在已有数据上拟合图，而是选择能最大化因果信息的 intervention。核心直觉是：如果当前模型对多个因果假设都能解释被动数据，就应主动执行能让这些假设产生不同预测的动作。
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-017-01290s.jpg}{Curious Causality-Seeking Agents 的研究动机与团队}{00:21:30--00:22:45}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-018-01365s.jpg}{Meta-causal graph：用 meta-state 解释不同 context 下的因果结构}{00:22:45--00:24:00}
+
+可以把候选干预 $a$ 的选择抽象为最大化期望信息增益：
+
+$$
+a^{\star}=\arg\max_a\;\mathbb{E}_{o\sim P(o\mid a)}
+\left[H\!\left(p(G\mid D)\right)-H\!\left(p(G\mid D,o,a)\right)\right],
+$$
+
+其中 $G$ 是候选因果图，$D$ 是已有数据，$H$ 是熵。动作的价值不是立即获得任务奖励，而是减少对机制结构的不确定性。这个思想把 exploration 从“随机尝试更多状态”升级为“有目的地区分模型”。
+
+\begin{importantbox}{自我改进中的双层目标}
+Agent 同时优化任务回报与模型可信度。只追求短期 reward 会反复利用当前已知策略；只追求信息增益又可能沉迷无关探索。实用系统需要在 exploitation、epistemic exploration 和安全成本之间做动态权衡。
+\end{importantbox}
+
+\sourcefigure{0.94}{lecture01/slides-images/slide-019-01440s.jpg}{方法由被动结构学习与主动 intervention 两部分组成}{00:24:00--00:24:15}
+
+\subsection{从 causal learning 回到 LLM Agent}
+
+后半段把上述框架映射到 LLM Agent：语言模型提出问题、计划或工具调用，环境返回可验证结果，系统再从成功与失败轨迹中更新。这里的“更新”既可以是参数训练，也可以是修订 prompt、memory、tool schema、奖励函数或任务生成器。
+
+\sourcefigure{0.94}{lecture01/slides-images/slide-020-01455s.jpg}{LLM Agent 的通用 learning loop：任务、轨迹、反馈与更新}{00:24:15--00:28:15}
+
+报告把闭环拆成三类能力。\textbf{Evaluation ability} 判断结果是否正确、失败发生在哪里；\textbf{forward design} 生成有价值的新任务、新环境或新组合；\textbf{backward update} 把 reward 与轨迹转化为可迁移的策略变化。缺少任一环节都会让 self-improvement 停留在口号：没有评估就不知道进步，没有新任务就会过拟合已有 benchmark，没有稳定更新则经验无法沉淀。
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-021-01695s.jpg}{Evaluation ability：自我修正、规则奖励与因果验证}{00:28:15--00:28:45}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-022-01725s.jpg}{Forward design：自动产生具有学习价值的数据、任务与机制组合}{00:28:45--00:29:15}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-023-01755s.jpg}{Backward update：从反馈轨迹中更新推理过程或策略}{00:29:15--00:29:45}
+
+\sourcefigure{0.92}{lecture01/slides-images/slide-024-01785s.jpg}{Natural-language reinforcement learning 等方向尝试把文本反馈变成更新信号}{00:29:45--00:30:00}
+
+\begin{knowledgebox}{老师强调：好数据不是“自动生成”就够了}
+自动任务生成只有在任务可验证、难度覆盖合理、能暴露当前策略弱点时才有价值。否则模型可能批量生成自己擅长的问题，再用自己的评估器确认自己进步，形成封闭的自我强化幻觉。
+\end{knowledgebox}
+
+\subsection{本章小结}
+
+本章把 self-improving Agent 的基础从“更多 rollout”推进到“更好的世界理解”。因果模型提供 intervention 与 counterfactual 语义，meta-causal graph 处理 context 相关机制，主动探索寻找能区分假设的反例；这些能力最终服务于 LLM Agent 的 evaluation、forward design 与 backward update 闭环。
+
+\subsection{实践检查表}
+
+\begin{enumerate}
+    \item 明确系统当前学习的是 correlation、intervention effect 还是 counterfactual explanation；
+    \item 把环境变化拆成观测漂移、策略诱导漂移和机制漂移；
+    \item 记录每次模型更新适用的 context 与证据，不把局部规律写成全局规则；
+    \item 为探索动作设置真实成本、安全边界和停止条件；
+    \item 使用外部可验证信号评估自我生成任务，避免模型同时垄断出题、答题与判分。
+\end{enumerate}

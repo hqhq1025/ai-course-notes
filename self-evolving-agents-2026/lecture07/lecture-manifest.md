@@ -1,0 +1,37 @@
+# Lecture Source Manifest
+
+## Local Sources
+
+- `video.mp4`: merged public Bilibili video stream.
+- `audio.wav`: 16 kHz mono transcription input.
+- `subs.srt` / `subs.txt` / `subs.json`: local Whisper transcript.
+- `frame-candidates/`: 15-second visual sampling.
+- `slides-images/`: cropped, perceptually deduplicated slide candidates.
+
+## Coverage Matrix
+
+| # | Time | Slide | Spoken explanation | Planned treatment | Status |
+|---:|---|---|---|---|---|
+| 1 | 00:00:00 | `slides-images/slide-001-00000s.jpg` | 我们下一场的分享是由上海高中大学副教授刘伟文老师来给我们带来他们团队在Honies在Agent的外部化包括在Self-Evolved Agents这个方向上的一些工作包括他本人对于这个方向上的一些见解 | Identify claim, visual reading, limits, and connection | pending |
+| 2 | 00:00:15 | `slides-images/slide-002-00015s.jpg` | 包括他本人对于这个方向上的一些见解OK,那接下来我们把时间交给刘伟文老师魏文,你可以共享屏幕让我开始分享谢谢,谢谢魏文现在能看到我的slides是正常的吗可以的,正常的好的,那我直接开始谢谢红柱的介绍那么今天也是很荣幸在周末周日的时候和大家也是正好高考大家一起一起学习吧那么今天想和大家讨论的是一个更新一点的一个想法就是关于这个外部化以及Self-Evolvi | Identify claim, visual reading, limits, and connection | pending |
+| 3 | 00:01:00 | `slides-images/slide-003-00060s.jpg` | 那这里其实就先把我们当前的观点跟大家一起做讨论就是我们认为智能体的进化呢它可能是需要有一个更新的就是偶合的Coupled View就是一个偶合的一个视角那么我们这里呢其实定义了一个稍微有点新的词叫Sternalization我们来看这个图就是当前呢现在有一个Internal Model就是有一些Base Model它是猜术里面是有一些世界知识和推理能力的那么 | Identify claim, visual reading, limits, and connection | pending |
+| 4 | 00:04:00 | `slides-images/slide-004-00240s.jpg` | 这就是一个内部和外部的这个消支的一个过程这里呢是我们最近的一个Survey的Paper我们就是在专门讲的就是我们的这个外部化应该怎么做其实呢就是这里可能这些这里写的啊就是我们其实和人类的这个进化方式是非常一致的就是人类在进化的过程中我们的思想的外部化就成为了我们的交往交流的语言那么进一步语言的外部化在记忆的外部化呢可能就变成了文字书再进一步呢可能就是我们的这 | Identify claim, visual reading, limits, and connection | pending |
+| 5 | 00:06:30 | `slides-images/slide-005-00390s.jpg` | 互相左脚踩右脚就是迭代上升的这样的一个过程那么这里呢就是后面的报告的一个road map一个大概的路线图我会把它做成大概三个方向吧就是包括第一个呢就是modal self-involving就是我们先从模型它怎么去自进化那这里呢可能会有一些相关的后训练强化学习的一些技术那第二个方向呢就是做harness involving刚刚提到了其实我们的这个harnes | Identify claim, visual reading, limits, and connection | pending |
+| 6 | 00:09:00 | `slides-images/slide-006-00540s.jpg` | 那么在后面的这个时间呢我会从这三个方向意思介绍一些相关的最新的工作首先呢是在这个modal self-involving就是在第一个方向上就是还是在一些后训练的方法方法论上的一些讨论吧那么第一个想跟大家分享的是我们最近期的甚至archive可能还没有挂出来的这样的一个工作叫Bioto它其实想要解决的呢就是我们在模型其实本身模型要自信化那它其实就是在强化学习的 | Identify claim, visual reading, limits, and connection | pending |
+| 7 | 00:12:00 | `slides-images/slide-007-00720s.jpg` | 就是他的力度应该匹配到当前是事实性的还是有幻觉的所以我们提出了Belto这样的一个强化学习方法它其实是基于GRPO进行优化的那所以呢就是我们引入了一个LM evaluator来判断当前的这个hallucination他首先呢先在整个答案里面先找出来有事实性的claims然后再对这个claim去判断它是属于是真实的还是有幻觉的那么这个其实是一个打标的过程然后第 | Identify claim, visual reading, limits, and connection | pending |
+| 8 | 00:13:30 | `slides-images/slide-008-00810s.jpg` | GRPO的这个优化的这个策略上加了一个这个A balance的这样的一个advantage向那我们也做了一些相关的理论证明就是它会这样的Bioto这样的一个强化学习方法它会有更小的variance就是更平稳的去收敛到我们的最终的一个结果第二个性质呢它就是相比于GRPO它有时候是全正全负的feedback反而是去训练起来不太稳定而这种token level的这 | Identify claim, visual reading, limits, and connection | pending |
+| 9 | 00:14:00 | `slides-images/slide-009-00840s.jpg` | 使我们的这个学习曲线会更加稳定的那么这里呢也是展示出来了我们的这个实验结果其实可以看到红线的就是Bioto那么这个GRPO是这个巨黄色线可能不太清楚但它就是不管是从学习的稳定性还是最终收敛性渐进收敛性的它都是相比于传统的GRPO是会更好的同时呢也是会大大的降低了出现幻觉的这个概率这是刚刚说的是强化学习的算法algorithm层面那么在训练整个范式层面呢 | Identify claim, visual reading, limits, and connection | pending |
+| 10 | 00:14:30 | `slides-images/slide-010-00870s.jpg` | 那么在训练整个范式层面呢我们也做了一些探索还是在这个modal self-involving情况下就是现在呢大部分的整个训练范式呢不管是有监督学习SFT还是强化学习RL基本上都是one shot data construction就是我收集到了一批数据我用强化学习或者是SFT的方式去训练我的模型那么所以呢就是同时呢我们的这个数据生成和数据训练它的这个过程呢是 | Identify claim, visual reading, limits, and connection | pending |
+| 11 | 00:16:15 | `slides-images/slide-011-00975s.jpg` | 这个就是我们整个loop2啊它的一个想法那么整个想法呢就是说我希望当前的这个模型能够自己给自己合成数据训练自己评估自己当前哪些能力还是有缺失的然后呢在下一轮呢再补充对应的能力的数据就是整个是一个自闭环的这样的一个状态就是自己来进行数据合成训练然后evaluation然后再进行下一轮的迭代那么我们会发现如果是这样的一个闭环的话就是以一个8B size的模型它其 | Identify claim, visual reading, limits, and connection | pending |
+| 12 | 00:18:30 | `slides-images/slide-012-01110s.jpg` | 所以呢它最关键的这个实验结果呢就是这样的一条类似于这个强化学习的曲线吧就是我们迭代了四轮从零开始开始迭代了四轮我们会发现就是随着它每一轮呢都是给自己又合成了一些新的数据再到了训练数据里面然后再做新的这个GRPU的训练强化学习的训练那可以看到其实它整个就是到四轮的时候其实还是一个上升的趋势这就表明了我们当前的这种方案它其实是有潜力的能够让模型自己教验自己训练自 | Identify claim, visual reading, limits, and connection | pending |
+| 13 | 00:19:30 | `slides-images/slide-013-01170s.jpg` | model involving它们大概要怎么做了包括刚刚提到的有一些更精细化的feedback的提供和一些更精细化的就是自我演进的数据合成和教验的过程那么下面呢就是一个更新的观点了就是我们认为我们的harness它也是要做演进的就是当前的这个harness的设计它应该是和模型能力做匹配的所以最近呢我们也是课题组有一些有一个新的工作叫SkillMath这个就是 | Identify claim, visual reading, limits, and connection | pending |
+| 14 | 00:22:45 | `slides-images/slide-014-01365s.jpg` | 其实整个Framework呢它也是有三个三个比较重要的部分首先我们这个整个架构呢是Utility Oriented的就是我们还是去评估就是基于当前成功和失败的经验会有一个Utility的评估就是它有点类似于蒙特卡洛这个Update那么其实就是它会看当前的这个Skills当前某一个Agent对某一个Skills的使用情况如果成功了那它Utility应该是上涨如 | Identify claim, visual reading, limits, and connection | pending |
+| 15 | 00:25:15 | `slides-images/slide-015-01515s.jpg` | 新的组织和新的Skills去它供它使用那么在这样的一个进化过程中我们也是选择了一些智能体的相关的数据数据集包括像AlphaWorldLifeLong Agent Bench和Tall Bench这样的我们会发现呢就是我们SkillMath相比于现在的一些已有的能够动态演进或者是多智能体系统演进的这种方法呢就是有明显的一个提升同时呢我们就是比Seed Roun | Identify claim, visual reading, limits, and connection | pending |
+| 16 | 00:26:00 | `slides-images/slide-016-01560s.jpg` | 就是当前的这些Skills大家可以看到基本上都是Markdown的文本或者是一些Python的这个脚本了那么其实我们会提出那些文本的Skills在一些场景下它可能会不如我们提供一些这种多模态的Skills所以我们是和小红书合作的这样的一个工作啊就是我们认为可能更有效的这种Skill方式呢是一种多模态的方式这个举个例子其实我们人去比如说我去申请一个这个Visa | Identify claim, visual reading, limits, and connection | pending |
+| 17 | 00:28:30 | `slides-images/slide-017-01710s.jpg` | 那么到进到第三个部分就是我们要认为是从反应式到主动式的这个交互那么这个也是非常新的这个工作刚开源了就是叫Proact就是我们提出来当前的当前智能体呢他们还是一种反应式的就是还是需要人去给一些Request智能体去做Response这些反应和响应那么所以呢在这些时间呢会有一些Idle Window就是当前任务说了一个任务那智能体完成了然后下一个用户又说了一个任 | Identify claim, visual reading, limits, and connection | pending |
+| 18 | 00:30:45 | `slides-images/slide-018-01845s.jpg` | 如果当前直接prompt大模型呢它对未来的这个future state的预估能力其实相对来说比较弱的所以我们我们也不想再去去模型了所以就引入了一个基于graph的这样的一个结构就是当前它已经完成了什么event然后有哪些偏好然后呢其实就是可以在这个图上面就是这个state graph上面它去预测未来的一些可能潜在的这个需求然后所以呢它在第一步呢是要去把未来可 | Identify claim, visual reading, limits, and connection | pending |
+| 19 | 00:32:15 | `slides-images/slide-019-01935s.jpg` | 那就是等着用户未来去做检索的时候我直接提供给它就是这样的一个action space那么这里是我们当前的一些实验结果相比于现在已有的这个reactive的这些智能体的范式呢那么我们reactive这种范式呢它其实是一方面会在真正交互的时候因为有一些东西它都提前准备在前面了所以在任务完成的时候呢它对真正需要用户说指令然后再去完成它的这个效率呢是更高的花费的时间 | Identify claim, visual reading, limits, and connection | pending |
+| 20 | 00:33:15 | `slides-images/slide-020-01995s.jpg` | 画到这个图里面那modal parameter就是modal involving呢我们又介绍了这个loop tool和battle然后在interaction这个机制层面我们介绍了proact这样的一个主动式交互的机制那么到skill evolution呢我们介绍了skill介绍了skill mass怎么去做harness的involving那就是更下一步是 | Identify claim, visual reading, limits, and connection | pending |
+| 21 | 00:34:00 | `slides-images/slide-021-02040s.jpg` | 重新蒸馏回我们模型的内部的这个能力上去好那最后一页就是filter direction那么我们认为就是pending是fully autonomous就是人和智能体交互的这个人说的话越少越好最好就是人一个词都不说智能体就知道我们未来要做什么事情提前把事情全部做完现在呢其实不管大家用codex和cloud code也好其实我们还是要反复的去校正去提供反馈最终才 | Identify claim, visual reading, limits, and connection | pending |
+| 22 | 00:35:15 | `slides-images/slide-022-02115s.jpg` | 哪里不足自己去进化和迭代好那么今天的报告差不多时间到这里就是跟大家介绍了一些目前最新的甚至可能不太成熟的工作也是和大家一起讨论吧然后呢b站和小红书大家可以直接搜我的名字就可以找到我然后有些什么问题或者最新的报告和进展都会在上面去跟大家发布讨论谢谢大家好的非常感谢卫文带来的精彩的分享无论是从模型的自进化还是安利的自进化或者是Proactive AI等方向吧然后 | Identify claim, visual reading, limits, and connection | pending |
+| 23 | 00:45:30 | `slides-images/slide-023-02730s.jpg` | 这是下一代的这种智能体交互方式好的非常感谢卫文今天带来的精彩的分享我看到还有很多很多非常有意思的问题但今天由于时间的关系我们就无法一一的让卫文进行解答然后刚卫文其实也给了他的联系方式如果大家有更多的想要跟卫文讨论的内容或者是有更多的研究问题欢迎大家去关注卫文老师的小红书啊或者是给卫文老师发邮件啊或者其他的联系方式对那我们今天再次感谢卫文老师大家精彩的分享 | Identify claim, visual reading, limits, and connection | pending |

@@ -25,6 +25,8 @@ def main() -> None:
     parser.add_argument("--device-index", type=int, default=0)
     parser.add_argument("--compute-type", default="float16")
     parser.add_argument("--beam-size", type=int, default=5)
+    parser.add_argument("--cpu-threads", type=int, default=0)
+    parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--vad-filter", action="store_true", default=True)
     parser.add_argument("--no-vad-filter", dest="vad_filter", action="store_false")
     args = parser.parse_args()
@@ -41,6 +43,8 @@ def main() -> None:
         device=args.device,
         device_index=args.device_index,
         compute_type=args.compute_type,
+        cpu_threads=args.cpu_threads,
+        num_workers=args.num_workers,
     )
     segments_iter, info = model.transcribe(
         args.input,
@@ -62,6 +66,8 @@ def main() -> None:
                 elapsed = time.time() - started
                 print(f"segments={i} elapsed={elapsed:.1f}s", flush=True)
 
+    srt_path.write_text(srt_path.read_text().rstrip() + "\n")
+
     json_path.write_text(json.dumps({
         "language": info.language,
         "language_probability": info.language_probability,
@@ -69,6 +75,8 @@ def main() -> None:
         "model": args.model,
         "device": args.device,
         "compute_type": args.compute_type,
+        "cpu_threads": args.cpu_threads,
+        "num_workers": args.num_workers,
         "segments": segments,
         "elapsed_seconds": time.time() - started,
     }, ensure_ascii=False, indent=2))

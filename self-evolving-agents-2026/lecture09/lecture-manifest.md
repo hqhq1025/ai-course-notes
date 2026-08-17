@@ -1,0 +1,226 @@
+# Source Manifest: `/home/v-haoqiwang/ai-course-notes/self-evolving-agents-2026/lecture09`
+
+## Files
+
+- `audio.wav`
+- `slide-selection.json`
+- `subs.srt`
+- `subs.txt`
+- `video.mp4`
+
+## Supplementary Source Materials
+
+- none found
+
+## Local Visual Assets
+
+- `slides-images/slide-001-00000s.jpg`
+- `slides-images/slide-002-00015s.jpg`
+- `slides-images/slide-003-00030s.jpg`
+- `slides-images/slide-004-00045s.jpg`
+- `slides-images/slide-005-00060s.jpg`
+- `slides-images/slide-006-00075s.jpg`
+- `slides-images/slide-007-00090s.jpg`
+- `slides-images/slide-008-00105s.jpg`
+- `slides-images/slide-009-00120s.jpg`
+- `slides-images/slide-010-00135s.jpg`
+- `slides-images/slide-011-00150s.jpg`
+- `slides-images/slide-012-00165s.jpg`
+- `slides-images/slide-013-00180s.jpg`
+- `slides-images/slide-014-00195s.jpg`
+- `slides-images/slide-015-00210s.jpg`
+- `slides-images/slide-016-00225s.jpg`
+- `slides-images/slide-017-00240s.jpg`
+- `slides-images/slide-018-00255s.jpg`
+- `slides-images/slide-019-00270s.jpg`
+- `slides-images/slide-020-00285s.jpg`
+- `slides-images/slide-021-00300s.jpg`
+- `slides-images/slide-022-00315s.jpg`
+- `slides-images/slide-023-00330s.jpg`
+- `slides-images/slide-024-00345s.jpg`
+- `slides-images/slide-025-00360s.jpg`
+- `slides-images/slide-026-00375s.jpg`
+- `slides-images/slide-027-00390s.jpg`
+- `slides-images/slide-028-00405s.jpg`
+- `slides-images/slide-029-00420s.jpg`
+- `slides-images/slide-030-00435s.jpg`
+- `slides-images/slide-031-00450s.jpg`
+- `slides-images/slide-032-00465s.jpg`
+- `slides-images/slide-033-00480s.jpg`
+- `slides-images/slide-034-00495s.jpg`
+- `slides-images/slide-035-00510s.jpg`
+- `slides-images/slide-036-00525s.jpg`
+- `slides-images/slide-037-00540s.jpg`
+- `slides-images/slide-038-00555s.jpg`
+- `slides-images/slide-039-00570s.jpg`
+- `slides-images/slide-040-00585s.jpg`
+- `slides-images/slide-041-00600s.jpg`
+- `slides-images/slide-042-00615s.jpg`
+- `slides-images/slide-043-00630s.jpg`
+- `slides-images/slide-044-00645s.jpg`
+- `slides-images/slide-045-00660s.jpg`
+- `slides-images/slide-046-00675s.jpg`
+- `slides-images/slide-047-00690s.jpg`
+- `slides-images/slide-048-00705s.jpg`
+- `slides-images/slide-049-00720s.jpg`
+- `slides-images/slide-050-00735s.jpg`
+- `slides-images/slide-051-00750s.jpg`
+- `slides-images/slide-052-00765s.jpg`
+- `slides-images/slide-053-00780s.jpg`
+- `slides-images/slide-054-00795s.jpg`
+- `slides-images/slide-055-00810s.jpg`
+- `slides-images/slide-056-00825s.jpg`
+- `slides-images/slide-057-00840s.jpg`
+- `slides-images/slide-058-00855s.jpg`
+- `slides-images/slide-059-00870s.jpg`
+- `slides-images/slide-060-00885s.jpg`
+- `slides-images/slide-061-00900s.jpg`
+- `slides-images/slide-062-00915s.jpg`
+- `slides-images/slide-063-00930s.jpg`
+- `slides-images/slide-064-00945s.jpg`
+- `slides-images/slide-065-00960s.jpg`
+- `slides-images/slide-066-00975s.jpg`
+- `slides-images/slide-067-00990s.jpg`
+- `slides-images/slide-068-01005s.jpg`
+- `slides-images/slide-069-01020s.jpg`
+- `slides-images/slide-070-01035s.jpg`
+- `slides-images/slide-071-01050s.jpg`
+- `slides-images/slide-072-01065s.jpg`
+- `slides-images/slide-073-01080s.jpg`
+- `slides-images/slide-074-01095s.jpg`
+- `slides-images/slide-075-01110s.jpg`
+- `slides-images/slide-076-01125s.jpg`
+- `slides-images/slide-077-01140s.jpg`
+- `slides-images/slide-078-01155s.jpg`
+- `slides-images/slide-079-01170s.jpg`
+- `slides-images/slide-080-01185s.jpg`
+- `slides-images/slide-081-01200s.jpg`
+- `slides-images/slide-082-01215s.jpg`
+- `slides-images/slide-083-01230s.jpg`
+- `slides-images/slide-084-01245s.jpg`
+- `slides-images/slide-085-01260s.jpg`
+- `slides-images/slide-086-01275s.jpg`
+- `slides-images/slide-087-01290s.jpg`
+- `slides-images/slide-088-01305s.jpg`
+- `slides-images/slide-089-01320s.jpg`
+- `slides-images/slide-090-01335s.jpg`
+- `slides-images/slide-091-01350s.jpg`
+- `slides-images/slide-092-01365s.jpg`
+- `slides-images/slide-093-01380s.jpg`
+- `slides-images/slide-094-01395s.jpg`
+- `slides-images/slide-095-01410s.jpg`
+- `slides-images/slide-096-01425s.jpg`
+- `slides-images/slide-097-01440s.jpg`
+- `slides-images/slide-098-01455s.jpg`
+- `slides-images/slide-099-01470s.jpg`
+- `slides-images/slide-100-01485s.jpg`
+- `slides-images/slide-101-01500s.jpg`
+- `slides-images/slide-102-01515s.jpg`
+- `slides-images/slide-103-01530s.jpg`
+- `slides-images/slide-104-01545s.jpg`
+- `slides-images/slide-105-01560s.jpg`
+- `slides-images/slide-106-01575s.jpg`
+- `slides-images/slide-107-01590s.jpg`
+- `slides-images/slide-108-01605s.jpg`
+- `slides-images/slide-109-01620s.jpg`
+- `slides-images/slide-110-01635s.jpg`
+- `slides-images/slide-111-01650s.jpg`
+- `slides-images/slide-112-01665s.jpg`
+- `slides-images/slide-113-01680s.jpg`
+- `slides-images/slide-114-01695s.jpg`
+- `slides-images/slide-115-01710s.jpg`
+- `slides-images/slide-116-01725s.jpg`
+- `slides-images/slide-117-01740s.jpg`
+- `slides-images/slide-118-01755s.jpg`
+- `slides-images/slide-119-01770s.jpg`
+- `slides-images/slide-120-01785s.jpg`
+- `slides-images/slide-121-01800s.jpg`
+- `slides-images/slide-122-01815s.jpg`
+- `slides-images/slide-123-01830s.jpg`
+- `slides-images/slide-124-01845s.jpg`
+- `slides-images/slide-125-01860s.jpg`
+- `slides-images/slide-126-01875s.jpg`
+- `slides-images/slide-127-01890s.jpg`
+- `slides-images/slide-128-01905s.jpg`
+- `slides-images/slide-129-01920s.jpg`
+- `slides-images/slide-130-01935s.jpg`
+- `slides-images/slide-131-01950s.jpg`
+- `slides-images/slide-132-01965s.jpg`
+- `slides-images/slide-133-01980s.jpg`
+- `slides-images/slide-134-01995s.jpg`
+- `slides-images/slide-135-02010s.jpg`
+- `slides-images/slide-136-02025s.jpg`
+- `slides-images/slide-137-02040s.jpg`
+- `slides-images/slide-138-02055s.jpg`
+- `slides-images/slide-139-02070s.jpg`
+- `slides-images/slide-140-02085s.jpg`
+- `slides-images/slide-141-02100s.jpg`
+- `slides-images/slide-142-02115s.jpg`
+- `slides-images/slide-143-02130s.jpg`
+- `slides-images/slide-144-02145s.jpg`
+- `slides-images/slide-145-02160s.jpg`
+- `slides-images/slide-146-02175s.jpg`
+- `slides-images/slide-147-02190s.jpg`
+- `slides-images/slide-148-02205s.jpg`
+- `slides-images/slide-149-02220s.jpg`
+- `slides-images/slide-150-02235s.jpg`
+- `slides-images/slide-151-02250s.jpg`
+- `slides-images/slide-152-02265s.jpg`
+- `slides-images/slide-153-02280s.jpg`
+- `slides-images/slide-154-02295s.jpg`
+- `slides-images/slide-155-02310s.jpg`
+- `slides-images/slide-156-02325s.jpg`
+- `slides-images/slide-157-02340s.jpg`
+- `slides-images/slide-158-02355s.jpg`
+- `slides-images/slide-159-02370s.jpg`
+- `slides-images/slide-160-02385s.jpg`
+- `slides-images/slide-161-02400s.jpg`
+- `slides-images/slide-162-02415s.jpg`
+- `slides-images/slide-163-02430s.jpg`
+- `slides-images/slide-164-02445s.jpg`
+- `slides-images/slide-165-02460s.jpg`
+- `slides-images/slide-166-02475s.jpg`
+- `slides-images/slide-167-02490s.jpg`
+- `slides-images/slide-168-02505s.jpg`
+- `slides-images/slide-169-02520s.jpg`
+- `slides-images/slide-170-02535s.jpg`
+- `slides-images/slide-171-02550s.jpg`
+- `slides-images/slide-172-02565s.jpg`
+- `slides-images/slide-173-02580s.jpg`
+- `slides-images/slide-174-02595s.jpg`
+- `slides-images/slide-175-02610s.jpg`
+- `slides-images/slide-176-02625s.jpg`
+- `slides-images/slide-177-02640s.jpg`
+- `slides-images/slide-178-02655s.jpg`
+- `slides-images/slide-179-02670s.jpg`
+- `slides-images/slide-180-02685s.jpg`
+- `slides-images/slide-181-02700s.jpg`
+- `slides-images/slide-182-02715s.jpg`
+- `slides-images/slide-183-02730s.jpg`
+- `slides-images/slide-184-02745s.jpg`
+- `slides-images/slide-185-02760s.jpg`
+- `slides-images/slide-186-02775s.jpg`
+- `slides-images/slide-187-02790s.jpg`
+- `slides-images/slide-188-02805s.jpg`
+- `slides-images/slide-189-02820s.jpg`
+- `slides-images/slide-190-02835s.jpg`
+
+## Coverage Nodes
+
+| ID | Type | Required | Source | Title / Snippet |
+|---|---|---|---|---|
+
+## Existing Note
+
+- none
+
+## Generation Contract
+
+- Review every slide and figure node; teaching-bearing nodes are required by default.
+- Every required slide/figure/section node must be placed in the note or explicitly marked optional with a concrete omission reason in the coverage matrix.
+- Administrative, blank, duplicated, or genuinely redundant build-up slides may be marked optional only after review.
+- For progressive reveals, include the final complete state at minimum and retain intermediate states when they teach a distinct step.
+- Every important figure needs a nearby `读图` explanation.
+- Dense terminology clusters need a table or concept box.
+- Foundational concepts need diagram/table/formula scaffolding.
+- Final PDF must pass visual QA via rendered pages/contact sheet.
