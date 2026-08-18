@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-**368 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
+**370 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-368份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-370份-blue?style=for-the-badge)](.)
 [![Collections](https://img.shields.io/badge/内容系列-17个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
@@ -31,7 +31,7 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
-> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 368 份讲义。
+> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 370 份讲义。
 
 ## 📥 克隆指南
 
@@ -83,11 +83,11 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | Stanford 课程 | 169 | CS329A、CS336、CS224R、CS25、CS153、CS146S、CS224N、CS231N |
 | MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
-| Berkeley 课程 | 35 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
+| Berkeley 课程 | 36 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
 | B 站系列课程 | 48 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026 |
 | 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **369** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| **合计** | **370** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -124,13 +124,15 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 |------|------|------|------|
 | [**CS492D**](kaist-cs492d/) | Diffusion Models and Flow Models | 15 | Minhyuk Sung |
 
-### 🐻 Berkeley 课程 (35 份)
+### 🐻 Berkeley 课程 (36 份)
 
 | 课程 | 主题 | 讲数 | 亮点嘉宾 |
 |------|------|------|----------|
 | [**CS294 F24**](talks/berkeley-llm-agents/f24/) | LLM Agents | 12 | Denny Zhou, 姚顺雨, Jim Fan, Percy Liang |
 | [**CS294 SP25**](talks/berkeley-llm-agents/sp25/) | Advanced LLM Agents | 12 | Jason Weston, AlphaProof, Salakhutdinov |
-| [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 11 | Noam Brown, Oriol Vinyals, James Zou |
+| [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 12 | Yann Dubois, Noam Brown, Oriol Vinyals, Dawn Song |
+
+> **Agentic AI MOOC Fall 2025 全量重写已完成（2026-08-18）**：12/12 讲共 497 页、472 个教学视觉、589 个教学盒；全部按官方时间顺序重建 source manifest、coverage matrix、teacher-voice ledger 和来源说明，并通过 strict coverage、`⭐⭐⭐`、双遍 XeLaTeX 与签署后的 PDF 视觉 QA。
 
 ### 🇨🇳 B 站系列课程 (48 份)
 

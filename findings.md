@@ -1,5 +1,20 @@
 # Findings
 
+## Agentic AI MOOC Fall 2025 source audit
+
+- 核验日期为 2026-08-18。`https://agenticai-learning.org/` 返回到 `/f25` 的 canonical redirect；官方当前页标题为 `Agentic AI MOOC, Fall 2025`，页面的 past-course 菜单只列 Fall 2024 与 Spring 2025。
+- 官方 GitHub 仓库为 `rdi-berkeley/agentic-ai-mooc`，`main` 当前 HEAD 为 `75042c6c5bf59925abb91c83edbccc8475f93b2e`；GitHub 显示最近 push 为 2026-01-23，页面仓库最近更新时间为 2026-06-24。仓库中仍只有 `f24.md`、`sp25.md`、`f25.md`，没有 2026 课程页。
+- Fall 2025 共有 12 场教学讲座：Sep 15, Sep 22, Sep 29, Oct 6, Oct 13, Oct 20, Oct 27, Nov 3, Nov 10, Nov 17, Dec 1, Dec 8。Nov 24 是 Thanksgiving 停课。
+- 官方提供 slides 的讲座：Sep 15、Sep 22、Sep 29、Oct 6、Oct 13、Oct 20、Oct 27、Nov 10，共 8 讲。Nov 3、Nov 17、Dec 1、Dec 8 页面只列 recording，其中 Dec 8 的官方仓库另有 `slides/dawn-agentic-ai.pdf`，需核验是否与课堂录像一致后再决定是否纳入 required deck。
+- 本地 `talks/berkeley-llm-agents/f25/lecture01--11` 是倒序映射：L01=Dec 8，L02=Dec 1，L03=Nov 17，L04=Nov 10，L05=Nov 3，L06=Oct 27，L07=Oct 20，L08=Oct 13，L09=Sep 29，L10=Sep 22，L11=Sep 15。
+- 本地缺失 Oct 6 `Agent Evaluation & Project Overview`，官方录像 ID 为 `VfOA2a0dj4w`，官方 deck 为 `slides/LLM Agent Evaluations & Project Overview.pdf`。
+- 11 份旧 TeX 每份约 31--44 KB，拥有 29--46 个 teaching box 和 5--11 张抽帧图，但没有生成 PDF，也没有 manifest、coverage、blueprint、teacher-voice ledger 或 canonical QA。它们可作为正文与字幕素材，不能按当前标准视为完成。
+- 现有 11 份字幕体量充足，每讲约 1,739--5,743 cues；teacher voice 恢复具备良好基础。
+- 已将本地目录迁移为官方课堂日期正序 `lecture01--12`；旧素材整体保留，未删除无关工作树内容。
+- 9 份确认课堂 deck 已下载并渲染：L01 86 页、L02 37 页、L03 44 页、L04 104 页、L05 37 页、L06 51 页、L07 42 页、L09 40 页、L12 99 页。
+- L12 的 `dawn-agentic-ai.pdf` 虽未在 F25 页面直接链接，但官方仓库中的标题、章节顺序、`LLM Safety vs. LLM Agent Safety` 页面和 Web Agent 注入案例均与课堂录像抽帧一致，故接受为 required classroom deck。
+- deck SHA-256：L01 `f5dcc916c8391b14408ee67b60a65f8ebc8eceee7e2dca9622442899a1c84ad8`；L02 `69bee6c823d246fb97ffbd5b2dbc664bd170631a3349b94e7e7ecbe91d8c6a09`；L03 `a78034457c37c1b91cc65b87cb63a90962c33323b3a1409c534477cbb8713ff6`；L04 `c83ee248428929dde1f2d399cb6a2e3b4d85786d486b881fe901b3ea440802c9`；L05 `e1e7546cbd090b22791d35d7ca79740a402fe2544f6611d2143c144fd2751768`；L06 `0e61cde167cfdc4760a5e4b182f196ccd5b45da878d37fa149e84e53e9c3ddce`；L07 `470b7b0232f796bc2b5ba8c3bc2a28dcc58c1f05e7f11741321de971c1fc981c`；L09 `cf6149087c33529a85abacbcecbf285a86248516c6bd0ffbee6d9f4b5beb0c5c`；L12 `395a0add9ee6328bc4206a042b90dbc70063fc6a8aa0420ad4483ffe0d2cab6b`。
+
 ## CS25 Lecture 23 source audit
 
 - Official classroom evidence is Stanford Online `ckNMsUuLryM` and its 1,210 timed English caption cues. No standalone final classroom deck was found; the 39 accepted visuals are deduplicated, cropped classroom frames with timestamp provenance.
@@ -1018,3 +1033,9 @@
 - Built sanitized metadata, source manifest, selection table, 38-row teacher-voice ledger, blueprint, coverage matrix, and a 59-page production-inference lecture covering workload/SLO design, replica benchmarking, model/engine choice, roofline and GPU hierarchy, serverless allocation, observability/evals, speculative decoding, quantization, host/kernel profiling, and agentic serving.
 - Final acceptance: 58 required visual assets exactly once, 71 teaching boxes, 12 formula blocks, 7 captioned listings, and 23,900 prose characters under the repository checker. Strict coverage is zero-warning, quality is `⭐⭐⭐`, stable double XeLaTeX has no layout/reference warnings, and signed visual QA reviewed all 59 pages.
 - CS25 V6 is complete at 9/9: 472 pages, 474 teaching figures, and 393 teaching boxes. README/tracking totals now reflect 368 source notes and 169 Stanford notes.
+# Agentic AI MOOC Fall 2025 completion note
+
+- As of 2026-08-18, the public course root and official repository expose Fall 2025 as the latest course edition; no public 2026 edition was found.
+- The canonical scope is 12 teaching lectures; Thanksgiving week is not a lecture.
+- The local legacy tree was reverse-ordered and missing the 2025-10-06 evaluation lecture. It is now organized as `lecture01` through `lecture12`.
+- Final accepted batch: 497 pages, 472 teaching visuals, 589 teaching boxes; all 12 pass strict coverage, `⭐⭐⭐`, double XeLaTeX, signed visual QA, and artifact checks.

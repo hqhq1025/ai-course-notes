@@ -1,5 +1,49 @@
 # Progress Log
 
+## 2026-08-18 Agentic AI MOOC Fall 2025 全套笔记
+
+- 用户创建长期目标：查找 Agentic AI Learning 最新课程；若没有更新版本，则采用 Fall 2025，并按仓库最高标准整理全套笔记。
+- Lecture 06 已按官方 51 页 deck 完成 source-first 重写：48 个 required 教学页全部入文，成稿 45 页、48 图、41 个教学盒、每图 265 字；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与 45 页视觉 QA 均通过并签署。
+- Lecture 07 已按官方 42 页 deck 完成 source-first 重写：42/42 页全部入文，成稿 42 页、42 图、45 个教学盒、每图 289 字；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与视觉 QA 均通过并签署。
+- Lecture 08 已按 video-first 标准完成：官网无 deck，8 个独立录像教学状态全部写入 manifest 并入文，成稿 21 页、36 个教学盒、7 处读图说明；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与视觉 QA 均通过并签署。
+- Lecture 09 已按官方 40 页 deck 完成 source-first 重写：40/40 页全部入文，成稿 41 页、40 图、45 个教学盒、每图 316 字；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与视觉 QA 均通过并签署。
+- Lecture 10 已按 video-first 标准完成：5 张录像教学帧与 3 张明确标注的讲义机制图形成 8 节点视觉主线，成稿 23 页、48 个教学盒、7 处读图说明；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX 与视觉 QA 通过。QA 首轮发现 16-bit RGBA 图在 PDF 中空白，转为 8-bit RGB 后复验通过。
+- Lecture 11 已按 video-first 标准完成：4 张录像教学帧与 4 张明确标注的讲义机制图形成 8 节点视觉主线，成稿 23 页、48 个教学盒、8 处读图说明、3 个 teacher-voice 标记；strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与视觉 QA 均通过并签署。
+- Lecture 12 已按官方 99 页 deck 完成 source-first 重写：28 个目录/严格渐进/行政页有据标记 optional，71 个独立教学状态全部入文；成稿 63 页、71 图、62 个教学盒、每图 260 字，strict coverage 零警告，质量 `⭐⭐⭐`，双遍 XeLaTeX、日志检查与 63 页视觉 QA 均通过并签署。
+- Agentic AI MOOC Fall 2025 全套 12/12 已完成逐讲验收：合计 497 页、472 个教学视觉、589 个教学盒。README、TRACKING、NOTE_GENERATION_TODO 与课程 README 已按实际 370 份 TeX 讲义口径更新。
+- 最终批量验收完成：12/12 `check_note_coverage.py --strict` 零 warning，课程级 `check_quality.sh` 全部 `⭐⭐⭐`，12 份 PDF/QA/artifact 与日志均通过；`uv run --with pytest pytest -q tests/test_generate_site.py` 为 16 passed，`git diff --check` 通过。
+- 已确认当前 thread 存在 active goal，未重复创建。
+- 已读取课程笔记 source-first delivery skill、仓库 `AGENTS.md`、`QUALITY.md` 与现有持久计划。
+- 已检查工作树：存在 `.Codex/`、若干 talk/interview 素材等无关未跟踪文件；本任务将保留它们。
+- 已通过官方根域、Fall 2025 页面、官方 GitHub 和公开搜索核验：截至 2026-08-18 未发现该项目公开的 2026 新课程，根域仍 canonical redirect 到 `/f25`。
+- 已解析官方完整课表：12 场教学讲座，另有一周 Thanksgiving 停课。
+- 已审计本地 `talks/berkeley-llm-agents/f25`：已有 11 个倒序 lecture 目录与完整字幕，缺少 Oct 6 的 Agent Evaluation 讲座；旧稿无 PDF、无 source-first artifacts、无 visual QA。
+- 已将课程目录迁移为官方正序 `lecture01--12`，并新增课程 README 与 course manifest。
+- 已补齐 L04 的 94 分钟录像字幕、封面和 104 页官方 deck。
+- 已下载、校验并渲染 9 份正式课堂 deck，共 540 页；L12 仓库 deck 已通过录像抽帧身份核验。
+- 已为 12 讲生成初始 `lecture-manifest.md`。
+- 最新版本核验、本地映射审计和课程级工作台账阶段完成；开始 Lecture 01 source-first 重写。
+- Lecture 01 已完成 source-first 重写：86 页 deck 中 69 个教学节点纳入正文，17 个行政/过渡/重复 build-up 节点有明确省略理由。
+- Lecture 01 最终为 60 页、69 张官方 slide、64 个教学盒、19,124 个正文字符；strict coverage 零 warning，质量 `⭐⭐⭐`，双遍 XeLaTeX 通过。
+- Lecture 01 canonical PDF QA 渲染 60/60 页且无 near-blank page；已检查完整 contact sheet 及第 14、33、42、54、60 页原图并签署报告。
+- 下一步进入 Lecture 02：Yangqing Jia 的 37 页 `Evolution of System Designs from an AI Engineer Perspective`。
+- Lecture 02 已完成 source-first 重写：37 页 deck 中 29 个独立教学节点纳入正文，8 个章节过渡/重复 build 节点有明确省略理由。
+- Lecture 02 最终为 34 页、29 张官方 slide、47 个教学盒、12,386 个正文字符；strict coverage 零 warning，质量 `⭐⭐⭐`，双遍 XeLaTeX 日志无硬错误或版式溢出。
+- Lecture 02 canonical PDF QA 渲染 34/34 页且无 near-blank page；已检查完整 contact sheet 及第 11、20、22、34 页原图并签署报告。
+- 下一步进入 Lecture 03：Jiantao Jiao 的 44 页 `Post-Training Verifiable Agents`。
+- Lecture 03 已完成 source-first 重写：44 页 deck 中 40 个独立教学节点纳入正文，4 个步骤过渡页有明确省略理由。
+- Lecture 03 最终为 42 页、40 张官方 slide、41 个教学盒、11,758 个正文字符；strict coverage 零 warning，质量 `⭐⭐⭐`，双遍 XeLaTeX 日志无硬错误或版式溢出。
+- Lecture 03 canonical PDF QA 渲染 42/42 页且无 near-blank page；已检查完整 contact sheet 及第 16、22、42 页原图并签署报告。
+- 下一步进入 Lecture 04：补齐此前缺失的 104 页 `Agent Evaluation & Project Overview`。
+- Lecture 04 已从零完成：104 页 deck 中 78 个独立教学节点纳入正文，26 个封面/过渡/重复 build/纯链接页有明确省略理由。
+- Lecture 04 最终为 64 页、78 张官方 slide、55 个教学盒、20,709 个正文字符；strict coverage 零 warning，质量 `⭐⭐⭐`，双遍 XeLaTeX 日志无硬错误或版式溢出。
+- Lecture 04 canonical PDF QA 渲染 64/64 页且无 near-blank page；已检查完整 contact sheet 及第 42、54、58、64 页原图并签署报告。
+- 下一步进入 Lecture 05：Weizhu Chen 的 37 页 `Challenges and Lessons from Training Agentic Models`。
+- Lecture 05 已完成 source-first 重写：37 页 deck 中 31 个独立教学节点纳入正文，6 个封面/章节/Q&A 页有明确省略理由。
+- Lecture 05 最终为 39 页、31 张官方 slide、57 个教学盒、13,843 个正文字符；strict coverage 零 warning，质量 `⭐⭐⭐`，双遍 XeLaTeX 日志无硬错误或版式溢出。
+- Lecture 05 canonical PDF QA 渲染 39/39 页且无 near-blank page；已检查完整 contact sheet 及第 15、18、39 页原图并签署报告。
+- 下一步进入 Lecture 06：Noam Brown 的 51 页 `Multi-Agent AI`。
+
 ## 2026-08-11 CS25 + CS153 rewrite
 
 - 用户要求继 CS336 2026 后，对 CS25 与 Frontier Systems 全部讲义做同标准重写。

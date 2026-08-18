@@ -88,10 +88,11 @@
 - **验收**：双遍 XeLaTeX、71 页 PDF 视觉 QA 与 whitespace 检查通过；展开审计为 `⭐⭐`
 
 ### Berkeley CS294 - LLM Agents (f25 已结束)
-- **状态**：Fall 2025 (Agentic AI) 已于 2025-12-08 结课
+- **状态**：Fall 2025 (Agentic AI) 已于 2025-12-08 结课；12/12 讲本地高标准讲义已完成
 - **历史规律**：每学期一版（f24 → sp25 → f25）
-- **预计**：Fall 2026 新版，尚未公布
-- **已收录**：f24(12) + sp25(12) + f25(11)
+- **最新版本核验**：截至 2026-08-18，根域仍指向 Fall 2025；官方 GitHub 未发现 2026 新学期入口
+- **已收录**：f24(12) + sp25(12) + f25(12)
+- **F25 验收**：497 页、472 个教学视觉、589 个教学盒；12/12 strict coverage 零警告、`⭐⭐⭐`、双遍 XeLaTeX 与签署后的人工 PDF 视觉 QA
 
 ---
 
@@ -103,4 +104,4 @@
 | CS25 V6 | 每周（周五）| 课程网站 schedule |
 | 五道口纳什 | 每周 | B站主页 |
 | CS336 Spring 2026 | 每周 | 课程网站 + GitHub lectures |
-| Berkeley CS294 新学期 | 每月 | rdi.berkeley.edu |
+| Berkeley CS294 新学期 | 每月 | agenticai-learning.org + 官方 GitHub |

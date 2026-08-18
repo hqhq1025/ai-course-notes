@@ -1,3 +1,66 @@
+# Agentic AI MOOC Fall 2025 全套高标准重写计划（当前）
+
+更新时间：2026-08-18
+
+## 当前目标
+
+核验 `https://agenticai-learning.org/f25` 是否仍为 Agentic AI Learning 项目最新公开课程；在确认无 2026 新学期公开版本后，以 Fall 2025 为正式范围，完成全套 12 讲中文 LaTeX/PDF 教学讲义。
+
+## 官方范围结论
+
+- 截至 2026-08-18，课程根域仍直接重定向到 `/f25`。
+- 官方当前页为 `Agentic AI MOOC, Fall 2025`；过去课程仅列出 Fall 2024 与 Spring 2025。
+- Fall 2025 课表有 12 场教学讲座；2025-11-24 为 Thanksgiving 停课，不计为 lecture。
+- 本地 `talks/berkeley-llm-agents/f25/lecture01--11` 按官网时间倒序保存，缺少 2025-10-06 的 `Agent Evaluation & Project Overview`。
+- 为避免破坏现有已跟踪文件，本批次先以视频 ID 和课堂日期建立 canonical mapping，再决定是否重编号；任何迁移都必须保留 Git 可审计性。
+
+## 阶段
+
+| 阶段 | 状态 | 验收点 |
+|---|---|---|
+| 1. 最新版本与官方范围核验 | 已完成 | 根域、官方 GitHub、12 讲课表、slides、录像与 supplemental readings 均有可复核记录。 |
+| 2. 本地基线与映射审计 | 已完成 | 11 个旧目录已映射并迁移到官方正序；缺失 L04 已补齐字幕、封面与 deck。 |
+| 3. 课程级工作台账 | 已完成 | 已建立 README、course manifest、canonical lecture mapping、source policy 与 12 份初始 manifest。 |
+| 4. 逐讲 source-first 重写 | 已完成 | 12/12 均建立完整 artifacts，并按官方顺序重写。 |
+| 5. 逐讲正式验收 | 已完成 | 12/12 strict coverage、双遍 XeLaTeX、`⭐⭐⭐`、canonical PDF QA 与人工 contact-sheet 检查通过。 |
+| 6. 全课程统一验收与追踪更新 | 已完成 | 12/12 批量 strict 与 `⭐⭐⭐` 通过；PDF/QA/artifact、网站测试、README/TRACKING/TODO 与 Git 污染审计完成。 |
+
+## 逐讲进度
+
+| Lecture | Status | Acceptance |
+|---|---|---|
+| 01 | 已完成 | 60p, 69 figures, 64 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 02 | 已完成 | 34p, 29 figures, 47 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 03 | 已完成 | 42p, 40 figures, 41 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 04 | 已完成 | 64p, 78 figures, 55 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 05 | 已完成 | 39p, 31 figures, 57 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 06 | 已完成 | 45p, 48 figures, 41 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 07 | 已完成 | 42p, 42 figures, 45 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 08 | 已完成 | 21p, 8 teaching frames, 36 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 09 | 已完成 | 41p, 40 figures, 45 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 10 | 已完成 | 23p, 8 teaching visuals, 48 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 11 | 已完成 | 23p, 8 teaching visuals, 48 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+| 12 | 已完成 | 63p, 71 required figures, 62 boxes, strict coverage, `⭐⭐⭐`, signed visual QA |
+
+## 本批次最高标准
+
+- 以官方 slides 和官方录像为主来源，supplemental readings 作为定义、实验与背景核验。
+- 有 deck 的讲座覆盖全部教学 slide；无 deck 的讲座从录像提取独立教学状态，不用重复人物帧凑数。
+- 字幕必须进入 teacher-voice ledger，保留讲者的动机、限制、经验判断、反例与过渡。
+- 正文主导教学流；每个非总结小节先写桥接段，每张重要图有问题设置、读图说明、证据边界与工程连接。
+- 每讲完成后立即做 strict coverage、双遍 XeLaTeX、质量检查、日志检查和视觉 QA，不积压到批次末尾。
+
+## 已知风险
+
+| 风险 | 应对 |
+|---|---|
+| 旧目录按倒序编号，直接重命名会产生大规模删除/新增 | 先冻结 canonical mapping；迁移时使用可审计的 Git move 或保留历史编号并增加课程索引。 |
+| 12 讲中部分无官方 slides | 使用高召回录像帧审计、字幕时间轴和 supplemental readings，明确区分课堂证据与课外补充。 |
+| 现有讲义没有 PDF，旧帧仅 4--10 张 | 旧稿只作为素材，不视为已验收；重新建立 source-complete visual spine。 |
+| 工作树已有无关未跟踪文件 | 仅编辑本课程与明确的 tracking 文件，不清理、不暂存无关内容。 |
+
+---
+
 # CS25 + CS153 全量重写计划（当前）
 
 更新时间：2026-08-13
