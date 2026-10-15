@@ -107,6 +107,7 @@ class BuildContext:
     jpeg_quality: int
     image_cache_dir: Path | None = None
     pdf_cache_dir: Path | None = None
+    used_cache_files: set[Path] = field(default_factory=set)
     warnings: list[WarningEvent] = field(default_factory=list)
     tikz_preambles: dict[Path, str] = field(default_factory=dict)
     tikz_collector: list[Path] | None = None
@@ -769,9 +770,11 @@ def copy_image_asset(ctx: BuildContext, src: Path, dest: Path) -> Path:
         shutil.copy2(src, dest)
         return dest
     cached_image = image_cache_path(ctx, src)
-    if cached_image is not None and cached_image.exists():
-        shutil.copy2(cached_image, dest)
-        return dest
+    if cached_image is not None:
+        ctx.used_cache_files.add(cached_image)
+        if cached_image.exists():
+            shutil.copy2(cached_image, dest)
+            return dest
     try:
         with Image.open(src) as image:
             image = ImageOps.exif_transpose(image)
@@ -864,6 +867,7 @@ def render_pdf_figure(ctx: BuildContext, src: Path, page: int) -> Path | None:
             [PDF_FIGURE_RENDERER_VERSION, file_sha256(src), str(page), str(ctx.image_max_width), str(ctx.jpeg_quality)]
         ).encode("utf-8")
     ).hexdigest()[:24]
+    ctx.used_cache_files.update(cache_dir / f"pdf-{key}{suffix}" for suffix in (".svg", ".webp"))
     for suffix in (".svg", ".webp"):
         cached = cache_dir / f"pdf-{key}{suffix}"
         if cached.exists():
@@ -952,14 +956,15 @@ def last_command_arg(text: str, command: str) -> str:
 def figure_source_text(body: str) -> str:
     """Text left in a figure besides images and caption, e.g. a \\figsource line."""
     text = INCLUDEGRAPHICS_PATTERN.sub(" ", body)
-    for command in ("caption", "label", "vspace", "hspace", "color", "subcaption"):
+    for command in ("caption*", "caption", "captionsetup", "subcaption*", "subcaption", "label", "vspace*", "vspace", "hspace*", "hspace", "color"):
         text = remove_latex_command_with_arg(text, command)
-    text = re.sub(r"\\(?:begin|end)\{(?:minipage|subfigure)\}(?:\[[^\]]*\])?(?:\{[^{}]*\})?", " ", text)
-    text = re.sub(r"\\(?:centering|hfill|par|protect|footnotemark|noindent)\b", " ", text)
-    return clean_latex_text(text)
+    text = re.sub(r"\\(?:begin|end)\{(?:minipage|subfigure|center)\}(?:\[[^\]]*\])?(?:\{[^{}]*\})?", " ", text)
+    text = re.sub(r"\\(?:centering|hfill|par|protect|footnotemark|noindent)\b|\\\\(?:\[[^\]]*\])?", " ", text)
+    return text.strip() if clean_latex_text(text) else ""
 
 
-PDF_UNSUPPORTED_GRAPHICS_OPTIONS = {"trim", "clip", "viewport", "angle", "pagebox", "bb"}
+# Options whose effect the full-page render cannot reproduce (clip alone and pagebox=cropbox are fine).
+PDF_UNSUPPORTED_GRAPHICS_OPTIONS = {"trim", "viewport", "angle", "bb", "natwidth", "natheight"}
 
 
 def image_size_attrs(path: Path) -> str:
@@ -987,6 +992,8 @@ def figure_image_entry(ctx: BuildContext, note: Note, options: str, image_ref: s
     parsed = parse_options(options)
     if is_pdf_asset(src) and src.is_file():
         unsupported = sorted(PDF_UNSUPPORTED_GRAPHICS_OPTIONS & parsed.keys())
+        if parsed.get("pagebox", "cropbox") != "cropbox":
+            unsupported.append("pagebox")
         if unsupported:
             # Rendering the full page would show what the PDF output crops away.
             ctx.warn("pdf_figure_unsupported", f"{note.rel_tex_path}: {src.name} uses {', '.join(unsupported)}; linking instead")
@@ -1050,7 +1057,7 @@ def markdown_figure_html(entries: list[dict[str, str]], caption: str, alt: str, 
             f'<a class="ai-notes-figure__original" href="{html.escape(entry["original"], quote=True)}" '
             f'target="_blank" rel="noopener noreferrer">{label}</a>'
         )
-    source_html = f'<br><span class="ai-notes-figure__source">{html.escape(source)}</span>' if source else ""
+    source_html = f'<br><span class="ai-notes-figure__source">{caption_html(source)}</span>' if source else ""
     lines.append(f"  <figcaption>{caption} {' '.join(links)}{source_html}</figcaption>")
     lines.append("</figure>\n\n")
     return "\n".join(lines)
@@ -1078,7 +1085,8 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
             content = (content + "\n\n" if content else "") + f"*{caption}*"
         return f"\n{content}\n\n" if content else ""
     raw_caption = last_command_arg(block.body, "caption")
-    alt = clean_latex_text(raw_caption) or Path(includes[0].group(2).strip()).name
+    # No "$" in alt: arithmatex would rewrite it if Markdown ever treats the figure as inline text.
+    alt = clean_latex_text(raw_caption).replace("$", "") or Path(includes[0].group(2).strip()).name
     entries: list[dict[str, str]] = []
     fallbacks: list[str] = []
     for include in includes:
@@ -1304,8 +1312,7 @@ def render_tikz_to_svg(ctx: BuildContext, block: EnvBlock) -> str:
             except (subprocess.SubprocessError, FileNotFoundError, ValueError) as exc:
                 ctx.warn("tikz_failed", f"TikZ render failed for {note.rel_tex_path}: {format_subprocess_error(exc)}")
                 return fallback_tikz_environment(block)
-            ctx.cache_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(tmp_path / "tikz.svg", cached_svg)
+            write_atomically(cached_svg, lambda target: shutil.copy2(tmp_path / "tikz.svg", target))
     shutil.copy2(cached_svg, ctx.current_out_dir / filename)
     return f"\n![TikZ diagram]({filename})\n\n"
 
@@ -1385,48 +1392,117 @@ def replace_unknown_environments(text: str) -> str:
 
 
 MACRO_DEFINITION_PATTERN = re.compile(
-    r"\\(?:newcommand|providecommand)\*?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?\s*"
+    r"\\(newcommand|renewcommand|providecommand)\*?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?\s*"
 )
-VERBATIM_BLOCK_PATTERN = re.compile(r"\\begin\{(lstlisting|verbatim|minted)\}.*?\\end\{\1\}", re.S)
+# Content TeX does not reinterpret: code listings, and TikZ, which is compiled with the note's own preamble.
+VERBATIM_ENVIRONMENTS = ("lstlisting", "verbatim", "Verbatim", "minted", "tikzpicture")
+VERBATIM_BLOCK_PATTERN = re.compile(r"\\begin\{(" + "|".join(VERBATIM_ENVIRONMENTS) + r")\}.*?\\end\{\1\}", re.S)
+INLINE_VERBATIM_PATTERN = re.compile(r"\\verb\*?([^A-Za-z\s*])(?:(?!\1).)*\1|\\lstinline(?:\[[^\]]*\])?(?:\{[^{}]*\}|([^A-Za-z\s{\[])(?:(?!\2).)*\2)")
+INPUT_COMMAND_PATTERN = re.compile(r"\\(IfFileExists|input)\b\s*")
 
 
-INPUT_PATTERN = re.compile(
-    r"\\IfFileExists\s*\{([^{}]+)\}\s*\{\s*\\input\s*\{([^{}]+)\}\s*\}\s*\{[^{}]*\}|\\input\s*\{([^{}]+)\}"
-)
+def strip_comment_lines(tex: str) -> str:
+    """Drop full-line % comments, except inside code listings and TikZ (where lines are kept verbatim)."""
+    lines: list[str] = []
+    inside: str | None = None
+    for line in tex.splitlines():
+        if inside is not None:
+            lines.append(line)
+            if re.search(rf"\\end\{{{inside}\}}", line):
+                inside = None
+            continue
+        if line.lstrip().startswith("%"):
+            continue
+        lines.append(line)
+        opened = re.search(r"\\begin\{(" + "|".join(VERBATIM_ENVIRONMENTS) + r")\}", line)
+        if opened and not re.search(rf"\\end\{{{opened.group(1)}\}}", line[opened.end() :]):
+            inside = opened.group(1)
+    return "\n".join(lines)
 
 
-def inline_inputs(tex: str, base_dir: Path, seen: frozenset[Path] = frozenset()) -> str:
-    """Inline \\input files (shared preambles, book chapters); paths resolve from the main file's directory."""
+def protect_verbatim(text: str) -> tuple[str, Callable[[str], str]]:
+    """Replace code listings, TikZ and \\verb/\\lstinline spans with placeholders; return a restore function."""
+    protected: list[str] = []
 
-    def repl(match: re.Match[str]) -> str:
-        ref = (match.group(2) or match.group(3)).strip()
-        path = (base_dir / ref).resolve()
-        if not path.is_file() and path.suffix != ".tex":
-            path = path.with_name(path.name + ".tex")
-        if not path.is_file() or path in seen:
-            return ""
-        return inline_inputs(read_text(path), base_dir, seen | {path})
+    def protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"@@AI_NOTES_VERBATIM_{len(protected) - 1}@@"
 
-    return INPUT_PATTERN.sub(repl, tex)
+    text = INLINE_VERBATIM_PATTERN.sub(protect, VERBATIM_BLOCK_PATTERN.sub(protect, text))
+
+    def restore(value: str) -> str:
+        return re.sub(r"@@AI_NOTES_VERBATIM_(\d+)@@", lambda m: protected[int(m.group(1))], value)
+
+    return text, restore
 
 
-def read_note_source(tex_path: Path) -> str:
-    return inline_inputs(read_text(tex_path), tex_path.parent, frozenset({tex_path.resolve()}))
+def resolve_input_path(ref: str, base_dir: Path, root: Path) -> Path | None:
+    path = (base_dir / ref.strip()).resolve()
+    if not path.is_file() and path.suffix != ".tex":
+        path = path.with_name(path.name + ".tex")
+    # Only inline files from the repository itself.
+    if not path.is_file() or not path.is_relative_to(root):
+        return None
+    return path
+
+
+def inline_inputs(tex: str, base_dir: Path, root: Path, seen: frozenset[Path]) -> str:
+    """Inline \\input and \\IfFileExists{f}{yes}{no} like TeX; paths resolve from the main file's directory."""
+    tex, restore = protect_verbatim(strip_comment_lines(tex))
+    pieces: list[str] = []
+    pos = 0
+    while True:
+        match = INPUT_COMMAND_PATTERN.search(tex, pos)
+        if not match:
+            pieces.append(tex[pos:])
+            break
+        args: list[str] = []
+        index = match.end()
+        for _ in range(3 if match.group(1) == "IfFileExists" else 1):
+            while index < len(tex) and tex[index].isspace():
+                index += 1
+            if index >= len(tex) or tex[index] != "{":
+                break
+            try:
+                value, index = read_braced(tex, index)
+            except ValueError:
+                break
+            args.append(value)
+        pieces.append(tex[pos : match.start()])
+        pos = index
+        if match.group(1) == "IfFileExists" and len(args) == 3:
+            branch = args[1] if resolve_input_path(args[0], base_dir, root) else args[2]
+            pieces.append(inline_inputs(restore(branch), base_dir, root, seen))
+        elif match.group(1) == "input" and len(args) == 1:
+            path = resolve_input_path(args[0], base_dir, root)
+            if path is not None and path not in seen:
+                pieces.append(inline_inputs(read_text(path), base_dir, root, seen | {path}))
+        else:
+            pieces.append(tex[match.start() : index])
+    return restore("".join(pieces))
+
+
+def read_note_source(tex_path: Path, root: Path) -> str:
+    return inline_inputs(read_text(tex_path), tex_path.parent, root.resolve(), frozenset({tex_path.resolve()}))
 
 
 def collect_macro_definitions(preamble: str) -> dict[str, tuple[int, str]]:
-    """Read \\newcommand definitions with only mandatory arguments."""
+    """User macros with only mandatory arguments, in definition order (TeX semantics for re/provide)."""
     macros: dict[str, tuple[int, str]] = {}
     for match in MACRO_DEFINITION_PATTERN.finditer(preamble):
         index = match.end()
-        # Optional-argument macros (e.g. \\videofigure) are handled by dedicated converters.
+        # Optional-argument macros (e.g. \videofigure) are handled by dedicated converters.
         if index >= len(preamble) or preamble[index] != "{":
             continue
         try:
             body, _ = read_braced(preamble, index)
         except ValueError:
             continue
-        macros[match.group(1) or match.group(2)] = (int(match.group(3) or 0), body)
+        kind, name = match.group(1), match.group(2) or match.group(3)
+        # \renewcommand of LaTeX internals (\arraystretch, \tableofcontents) must not become text macros.
+        if (kind == "renewcommand" and name not in macros) or (kind == "providecommand" and name in macros):
+            continue
+        macros[name] = (int(match.group(4) or 0), body)
     return macros
 
 
@@ -1436,19 +1512,18 @@ def expand_note_macros(tex: str) -> str:
     if not begin:
         return tex
     macros = collect_macro_definitions(tex[: begin.start()])
-    protected: list[str] = []
-
-    def protect(match: re.Match[str]) -> str:
-        protected.append(match.group(0))
-        return f"@@AI_NOTES_VERBATIM_{len(protected) - 1}@@"
-
-    # Code listings keep their own lines (a "%" line there is code, not a LaTeX comment).
-    body = VERBATIM_BLOCK_PATTERN.sub(protect, tex[begin.start() :])
-    # A commented-out multi-line macro would otherwise leak its later lines as live content.
-    body = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("%"))
+    if not macros:
+        return tex
+    body, restore = protect_verbatim(tex[begin.start() :])
 
     def substitute(template: str, args: list[str]) -> str:
-        return re.sub(r"#([1-9])", lambda m: args[int(m.group(1)) - 1] if int(m.group(1)) <= len(args) else m.group(0), template)
+        def param(match: re.Match[str]) -> str:
+            if match.group(0) == "##":
+                return "#"
+            number = int(match.group(1))
+            return args[number - 1] if number <= len(args) else match.group(0)
+
+        return re.sub(r"##|#([1-9])", param, template)
 
     for _ in range(6):
         changed = 0
@@ -1456,17 +1531,15 @@ def expand_note_macros(tex: str) -> str:
             if arg_count:
                 body, count = replace_braced_command(body, name, arg_count, lambda args, t=template: substitute(t, args))
             else:
-                body, count = re.subn(rf"\\{re.escape(name)}(?![A-Za-z@])", lambda _m, t=template: t, body)
+                body, count = re.subn(rf"\\{re.escape(name)}(?![A-Za-z@])", lambda _m, t=template: substitute(t, []), body)
             changed += count
         if not changed:
             break
-    for index, value in enumerate(protected):
-        body = body.replace(f"@@AI_NOTES_VERBATIM_{index}@@", value)
-    return tex[: begin.start()] + body
+    return tex[: begin.start()] + restore(body)
 
 
 def note_body_source(note: Note) -> str:
-    return strip_document_shell(expand_note_macros(read_note_source(note.tex_path)))
+    return strip_document_shell(expand_note_macros(read_note_source(note.tex_path, note.root)))
 
 
 def strip_document_shell(tex: str) -> str:
@@ -1561,12 +1634,13 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = unwrap_latex_layout_commands(text)
     text = expand_videofigure_commands(text)
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
+    # Figures first, so wrappers inside them (center, minipage) don't consume their images.
+    text = replace_environment(text, "figure", lambda block: markdown_figure_from_block(ctx, block))
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "quote", lambda block: markdown_quote_from_block(ctx, block))
     text = replace_environment(text, "sloppypar", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "tikzpicture", lambda block: render_tikz_to_svg(ctx, block))
-    text = replace_environment(text, "figure", lambda block: markdown_figure_from_block(ctx, block))
     # After figures, so a figure sees its own minipages (side-by-side images) intact.
     # minipage often wraps an lstlisting; falling back to a fenced block would nest code fences.
     text = replace_environment(text, "minipage", lambda block: markdown_passthrough_from_block(ctx, block))
@@ -1589,7 +1663,7 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
 
 
 def parse_note(root: Path, tex_path: Path) -> Note:
-    tex = read_note_source(tex_path)
+    tex = read_note_source(tex_path, root)
     route_dir = tex_path.parent.relative_to(root)
     parent_name = route_dir.name
     if re.match(r"^(lecture|week|verl)\d+$", parent_name):
@@ -1621,7 +1695,7 @@ def extract_titlepage_title(tex: str) -> str:
     if not match:
         return ""
     line = re.split(r"\\par\b|\n\s*\n", page.group(1)[match.end() :], maxsplit=1)[0]
-    return clean_latex_text(line)
+    return clean_latex_text(re.sub(r"\\\\(?:\[[^\]]*\])?", " ", line))
 
 
 def humanize_path(path: Path) -> str:
@@ -2418,7 +2492,7 @@ def print_warning_report(warnings: list[WarningEvent], *, verbose: bool) -> None
         "tikz_skipped": "TikZ diagrams skipped",
         "pdf_figure_failed": "PDF figures kept as links (render failed)",
         "pdf_figure_skipped": "PDF figures kept as links (pdftocairo unavailable)",
-        "pdf_figure_unsupported": "PDF figures kept as links (trim/clip/viewport options)",
+        "pdf_figure_unsupported": "PDF figures kept as links (trim/viewport/angle options)",
     }
     counts = Counter(warning.kind for warning in warnings)
     print("\nWarning summary:")
@@ -2448,6 +2522,23 @@ def prepare_output(output: Path, cache_root: Path | None = None) -> tuple[Path, 
     if mkdocs_yml.exists():
         mkdocs_yml.unlink()
     return docs_dir, cache_dir, image_cache_dir
+
+
+def prune_unused_cache(ctx: BuildContext) -> None:
+    """Drop image/PDF cache entries this full build did not use (old versions, removed sources).
+
+    CI restores the cache from older keys, so without pruning stale entries accumulate forever.
+    """
+    directories = []
+    if ctx.compress_images and ctx.image_cache_dir is not None:
+        directories.append(ctx.image_cache_dir)
+    if ctx.pdf_cache_dir is not None and shutil.which("pdftocairo"):
+        directories.append(ctx.pdf_cache_dir)
+    for directory in directories:
+        if directory.is_dir():
+            for entry in directory.iterdir():
+                if entry.is_file() and entry not in ctx.used_cache_files:
+                    entry.unlink()
 
 
 def build_site(
@@ -2503,6 +2594,7 @@ def build_site(
     write_text(docs_dir / "assets" / "javascripts" / "ai-notes.js", sidebar_script())
     write_text(docs_dir / "assets" / "javascripts" / "mathjax.js", mathjax_config())
     write_text(output / "mkdocs.yml", generate_mkdocs_yml(courses, entries_by_path))
+    prune_unused_cache(ctx)
     print(f"Generated {len(notes)} note pages across {len(courses)} course pages in {output}")
     print_warning_report(ctx.warnings, verbose=verbose_warnings)
     if strict and not notes:

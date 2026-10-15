@@ -385,9 +385,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "未转换的 LaTeX 环境：pmatrix" not in page
     assert '<figure class="ai-notes-figure">' in page
     # Web copies are re-encoded as WebP; the source extension stays in the name.
-    assert 'src="diagram.jpg.webp" alt="示意图：网页阅读器结构，缩放 $√layers$" width="1600" height="800"' in page
+    assert 'src="diagram.jpg.webp" alt="示意图：网页阅读器结构，缩放 √layers" width="1600" height="800"' in page
     assert 'class="ai-notes-figure__preview" href="diagram.jpg.webp"' in page
-    assert 'alt="示意图：网页阅读器结构，缩放 $√layers$"' in page
+    assert 'alt="示意图：网页阅读器结构，缩放 √layers"' in page
     assert 'loading="lazy"' in page
     assert 'decoding="async"' in page
     assert (

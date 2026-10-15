@@ -280,4 +280,63 @@ def test_pdf_pages_respect_cropbox_brace_page_and_unsupported_options(tmp_path: 
 
     strict = run_generator(tmp_path, "--strict", "--fail-on-pdf-figure-warnings")
     assert strict.returncode == 1
-    assert "trim/clip/viewport" in strict.stdout
+    assert "trim/viewport/angle" in strict.stdout
+
+
+def test_source_preparation_follows_tex_semantics(tmp_path: Path) -> None:
+    write(tmp_path / "course" / "shared.tex", r"\newcommand{\shared}{共享宏}")
+    write(tmp_path / "course" / "lecture01" / "chapter.tex", "被注释的 input 不应出现")
+    write(
+        tmp_path / "course" / "lecture01" / "lecture01-notes.tex",
+        r"""
+\documentclass{article}
+\input{../shared.tex}
+\newcommand{\term}[1]{\textbf{#1}}
+\renewcommand{\term}[1]{\emph{#1}}
+\renewcommand{\arraystretch}{1.3}
+\newcommand{\definer}[1]{\newcommand{\inner}[1]{##1-#1}}
+\begin{document}
+\shared；\term{改写后的宏}；\verb|\term{原样}|
+% \input{chapter.tex}
+\input{/etc/hosts}
+\IfFileExists{missing.tex}{\input{missing.tex}}{{缺失分支}}
+\begin{figure}
+\begin{center}
+\includegraphics[width=0.5\textwidth]{plot.png}
+\end{center}
+\caption{居中的图}
+{\footnotesize 来源：$\pi_{0.7}$ 论文}
+\end{figure}
+\end{document}
+""",
+    )
+    Image.new("RGB", (200, 100), (0, 0, 0)).save(tmp_path / "course" / "lecture01" / "plot.png")
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = page_of(tmp_path, "course/lecture01")
+    assert "共享宏；*改写后的宏*；" in page
+    assert r"\term{原样}" in page
+    assert "被注释的 input 不应出现" not in page
+    assert "localhost" not in page
+    assert "缺失分支" in page and r"\IfFileExists" not in page
+    figure = re.search(r'<figure class="ai-notes-figure">.*?</figure>', page, re.S)
+    assert figure and 'src="plot.png.webp"' in figure.group(0)
+    assert "<figcaption>居中的图" in figure.group(0)
+    assert '<span class="ai-notes-figure__source">来源：<span class="arithmatex">\\(\\pi_{0.7}\\)</span> 论文</span>' in figure.group(0)
+
+
+def test_full_build_prunes_unused_cache_entries(tmp_path: Path) -> None:
+    lecture = tmp_path / "course" / "lecture01"
+    lecture.mkdir(parents=True)
+    Image.new("RGB", (200, 100), (0, 0, 0)).save(lecture / "plot.png")
+    write(lecture / "lecture01-notes.tex", r"\documentclass{article}\begin{document}\begin{figure}\includegraphics{plot.png}\caption{图}\end{figure}\end{document}")
+    image_cache = tmp_path / ".web-build" / ".cache" / "images"
+    image_cache.mkdir(parents=True)
+    (image_cache / "image-stale.jpg").write_bytes(b"old")
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    assert [path.suffix for path in image_cache.iterdir()] == [".webp"]
