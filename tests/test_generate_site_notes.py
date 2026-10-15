@@ -125,6 +125,28 @@ def test_expands_macros_from_input_preamble_without_reviving_comments(tmp_path: 
         assert raw not in page
 
 
+def test_code_listings_keep_percent_lines_and_unexpanded_macros(tmp_path: Path) -> None:
+    write(
+        tmp_path / "course" / "lecture01" / "lecture01-notes.tex",
+        r"""
+\documentclass{article}
+\newcommand{\term}[1]{\textbf{#1}}
+\begin{document}
+\begin{lstlisting}[language=TeX]
+% a LaTeX comment inside a code sample
+\term{kept}
+\end{lstlisting}
+\end{document}
+""",
+    )
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = page_of(tmp_path, "course/lecture01")
+    assert "```tex\n% a LaTeX comment inside a code sample\n\\term{kept}\n```" in page
+
+
 def test_titles_use_last_definition_or_title_page(tmp_path: Path) -> None:
     write(
         tmp_path / "course" / "lecture01" / "lecture01-notes.tex",

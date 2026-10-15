@@ -1436,18 +1436,16 @@ def expand_note_macros(tex: str) -> str:
     if not begin:
         return tex
     macros = collect_macro_definitions(tex[: begin.start()])
-    body = tex[begin.start() :]
-    # A commented-out multi-line macro would otherwise leak its later lines as live content.
-    body = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("%"))
-    if not macros:
-        return tex[: begin.start()] + body
     protected: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
         protected.append(match.group(0))
         return f"@@AI_NOTES_VERBATIM_{len(protected) - 1}@@"
 
-    body = VERBATIM_BLOCK_PATTERN.sub(protect, body)
+    # Code listings keep their own lines (a "%" line there is code, not a LaTeX comment).
+    body = VERBATIM_BLOCK_PATTERN.sub(protect, tex[begin.start() :])
+    # A commented-out multi-line macro would otherwise leak its later lines as live content.
+    body = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("%"))
 
     def substitute(template: str, args: list[str]) -> str:
         return re.sub(r"#([1-9])", lambda m: args[int(m.group(1)) - 1] if int(m.group(1)) <= len(args) else m.group(0), template)
