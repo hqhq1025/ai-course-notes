@@ -32,7 +32,10 @@ BLOB_BASE_URL = f"{REPO_URL}/blob/main"
 # Source: https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz
 # (integrity sha512-Bt+SSVU8eBG27zChVewOicYs7Xsdt40qm4+UpHyX7k0/O9NliPc+x77k1/FEsPsjKPZGJvtRZM1vO+geW0OhGw==).
 # Subset: es5/tex-chtml.js, es5/input/tex/extensions/ (autoloaded by \boldsymbol, \cancel, ...),
-# es5/output/chtml/fonts/woff-v2/, and LICENSE. 3.2.2 is the final MathJax 3 release.
+# es5/output/chtml/fonts/woff-v2/, LICENSE, and what the right-click menu loads on demand:
+# output/svg(.js), input/mml(.js), a11y/*.js and sre/mathmaps/{base,en,nemeth}.json. Without them a
+# reader who picks "SVG" or "Explorer" saves that choice in localStorage and math stops rendering on
+# every later visit. 3.2.2 is the final MathJax 3 release.
 MATHJAX_VENDOR_DIR = Path(__file__).resolve().parent / "vendor" / "mathjax"
 MATHJAX_SITE_DIR = Path("assets") / "vendor" / "mathjax"
 # Course folders that README.md does not list: (navigation title, README course they sit next to).
@@ -752,7 +755,8 @@ LATEX_DECLARATIONS = (
 DECLARATION_PATTERN = re.compile(rf"\\(?:{LATEX_DECLARATIONS})(?![A-Za-z@])[ \t]*(?:\{{\}})?")
 DECLARATION_GROUP_PATTERN = re.compile(rf"\{{[ \t]*(?=\\(?:{LATEX_DECLARATIONS})(?![A-Za-z@]))")
 PROSE_SYMBOLS = {
-    "textbackslash": "&#92;", "textasciitilde": "~", "textasciicircum": "^", "textbar": "|",
+    # "~" as an entity: a later conversion pass would read a bare "~" as a TeX non-breaking space.
+    "textbackslash": "&#92;", "textasciitilde": "&#126;", "textasciicircum": "^", "textbar": "|",
     "textless": "&lt;", "textgreater": "&gt;", "textunderscore": "_", "textdollar": "\\$",
     "textendash": "–", "textemdash": "—", "textbullet": "•", "textperiodcentered": "·", "textdegree": "°",
     "textregistered": "®", "texttrademark": "™", "textcopyright": "©", "copyright": "©", "textellipsis": "…",
@@ -935,7 +939,8 @@ def convert_inline_latex(text: str) -> str:
     text = convert_line_breaks(text)
     text = convert_latex_accents(text)
     # \$ stays escaped: arithmatex prints it as "$", while a bare "$" could pair with a later formula.
-    for old, new in {r"\&": "&", r"\%": "%", r"\#": "#", r"\_": "_"}.items():
+    # "#" as an entity: a literal one at the start of a line would become a Markdown heading.
+    for old, new in {r"\&": "&", r"\%": "%", r"\#": "&#35;", r"\_": "_"}.items():
         text = text.replace(old, new)
     # Entities, so these braces are not taken for TeX grouping below.
     text = text.replace(r"\{", "&#123;").replace(r"\}", "&#125;")
@@ -1490,12 +1495,21 @@ def caption_html(raw: str) -> str:
     pieces: list[str] = []
     pos = 0
     for match in INLINE_MATH_PATTERN.finditer(raw):
-        pieces.append(html.escape(clean_inline_fragment(raw[pos : match.start()])))
+        pieces.append(caption_text_html(raw[pos : match.start()]))
         math = match.group(1) if match.group(1) is not None else match.group(2)
         pieces.append(f'<span class="arithmatex">\\({html.escape(math.strip())}\\)</span>')
         pos = match.end()
-    pieces.append(html.escape(clean_inline_fragment(raw[pos:])))
+    pieces.append(caption_text_html(raw[pos:]))
     return "".join(pieces).strip()
+
+
+def caption_text_html(text: str) -> str:
+    """Caption text outside math; `backtick` spans become <code> as they do in Markdown prose."""
+    parts = re.split(r"`([^`\n]+)`", text)
+    return "".join(
+        f"<code>{html.escape(part)}</code>" if index % 2 else html.escape(clean_inline_fragment(part))
+        for index, part in enumerate(parts)
+    )
 
 
 def clean_inline_fragment(text: str) -> str:
@@ -3205,7 +3219,8 @@ def css_content() -> str:
 }
 
 .md-typeset .ai-notes-figure__source {
-  color: var(--md-default-fg-color--lighter);
+  /* --lighter measured 2.2:1 against the page; --light (as in captions) meets WCAG AA 4.5:1. */
+  color: var(--md-default-fg-color--light);
   font-size: 0.68rem;
 }
 

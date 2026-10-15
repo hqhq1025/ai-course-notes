@@ -340,3 +340,55 @@ def test_full_build_prunes_unused_cache_entries(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert [path.suffix for path in image_cache.iterdir()] == [".webp"]
+
+
+def test_vendored_mathjax_has_components_the_menu_loads_on_demand() -> None:
+    # Picking "SVG" or "Explorer" in MathJax's right-click menu is saved in localStorage; if these
+    # components are missing, math stops rendering on every later visit.
+    vendor = REPO_ROOT / "tools" / "web" / "vendor" / "mathjax"
+    required = [
+        "tex-chtml.js",
+        "output/svg.js",
+        "output/svg/fonts/tex.js",
+        "input/mml.js",
+        "a11y/explorer.js",
+        "a11y/semantic-enrich.js",
+        "a11y/sre.js",
+        "a11y/complexity.js",
+        "a11y/assistive-mml.js",
+        "sre/mathmaps/base.json",
+        "sre/mathmaps/en.json",
+        "sre/mathmaps/nemeth.json",
+    ]
+    assert [name for name in required if not (vendor / name).is_file()] == []
+
+
+def test_captions_render_code_spans_and_prose_keeps_tilde_and_hash(tmp_path: Path) -> None:
+    lecture = tmp_path / "course" / "lecture01"
+    lecture.mkdir(parents=True)
+    Image.new("RGB", (200, 100), (0, 0, 0)).save(lecture / "plot.png")
+    write(
+        lecture / "lecture01-notes.tex",
+        r"""
+\documentclass{article}
+\begin{document}
+\begin{figure}
+\includegraphics{plot.png}
+\caption{图注里的 `images/plot.png`}
+\end{figure}
+\begin{itemize}
+\item 约 \textasciitilde 50\% 的样本
+\end{itemize}
+
+\#1 不是标题
+\end{document}
+""",
+    )
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = page_of(tmp_path, "course/lecture01")
+    assert "<figcaption>图注里的 <code>images/plot.png</code>" in page
+    assert "- 约 &#126;50% 的样本" in page
+    assert "\n&#35;1 不是标题" in page
