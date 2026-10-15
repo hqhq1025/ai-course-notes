@@ -457,6 +457,69 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.tex").is_file()
 
 
+def test_converts_youtube_render_pdf_template_constructs(tmp_path: Path) -> None:
+    note_dir = tmp_path / "sample-course" / "lecture02"
+    note_dir.mkdir(parents=True)
+    (note_dir / "lecture02-notes.tex").write_text(
+        r"""
+\documentclass[a4paper]{article}
+\newcommand{\notetitle}{Template Lecture}
+\begin{document}
+\special{pdf:minorversion 7}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+Title page only
+\end{titlepage}
+\pagenumbering{arabic}
+\hypersetup{pageanchor=true}
+\section{列表与代码}
+\begin{itemize}\setlength{\itemsep}{2pt}\setlength{\parsep}{0pt}
+\item 第一项
+\item 第二项
+\end{itemize}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[language={},caption={目录示例}]
+skill/
+  SKILL.md
+\end{lstlisting}
+\end{minipage}
+
+代码块之后的\textbf{粗体}仍要转换。
+
+\paragraph{段落标题。}图\ref{fig:loop}展示循环。\footnote{原始来源：\href{https://example.com/paper}{Paper Title}。}
+\label{sec:loop}
+
+\paragraph{}
+详见（图 \ref{fig:loop}）。
+
+\begin{dialoguebox}{课堂问答}
+问：为什么？答：因为\allowbreak 可以。
+\end{dialoguebox}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    page = (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture02" / "index.md").read_text(encoding="utf-8")
+
+    for leaked in [r"\special", r"\hypersetup", r"\pagenumbering", r"\setlength", r"\ref{", r"\label{", r"\footnote", r"\paragraph", r"\allowbreak", r"\textbf"]:
+        assert leaked not in page
+    assert "Title page only" not in page
+    assert "- 第一项\n- 第二项" in page
+    assert "sep}" not in page
+    assert '``` title="目录示例"\nskill/\n  SKILL.md\n```' in page
+    assert "代码块之后的**粗体**仍要转换。" in page
+    assert "**段落标题。** 图展示循环。（原始来源：[Paper Title](https://example.com/paper)）" in page
+    assert "详见（图）。" in page
+    assert "****" not in page
+    assert '!!! quote "课堂问答"' in page
+    assert "未转换的 LaTeX 环境" not in page
+
+
 def test_compresses_image_copies_without_touching_sources(tmp_path: Path) -> None:
     write_sample_repo(tmp_path)
     source = tmp_path / "sample-course" / "lecture01" / "diagram.jpg"

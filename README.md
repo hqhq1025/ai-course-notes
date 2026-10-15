@@ -2,13 +2,13 @@
 
 # 📚 AI Course Notes
 
-**370 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
+**376 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-370份-blue?style=for-the-badge)](.)
-[![Collections](https://img.shields.io/badge/内容系列-17个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-376份-blue?style=for-the-badge)](.)
+[![Collections](https://img.shields.io/badge/内容系列-18个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
 [🌐 在线阅读](https://hqhq1025.github.io/ai-course-notes/) · [📄 浏览目录](#-课程一览) · [🤝 参与贡献](CONTRIBUTING.md)
@@ -31,7 +31,7 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
-> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 370 份讲义。
+> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 376 份讲义。
 
 ## 📥 克隆指南
 
@@ -84,10 +84,11 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | MIT 课程 | 10 | MIT 6.S191 Introduction to Deep Learning |
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
 | Berkeley 课程 | 36 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
+| CMU 课程 | 6 | CMU 11-768 AI Agents |
 | B 站系列课程 | 48 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026 |
 | 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **370** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| **合计** | **376** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -133,6 +134,12 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | [**CS294 F25**](talks/berkeley-llm-agents/f25/) | Agentic AI | 12 | Yann Dubois, Noam Brown, Oriol Vinyals, Dawn Song |
 
 > **Agentic AI MOOC Fall 2025 全量重写已完成（2026-08-18）**：12/12 讲共 497 页、472 个教学视觉、589 个教学盒；全部按官方时间顺序重建 source manifest、coverage matrix、teacher-voice ledger 和来源说明，并通过 strict coverage、`⭐⭐⭐`、双遍 XeLaTeX 与签署后的 PDF 视觉 QA。
+
+### 🐾 CMU 课程 (6 份)
+
+| 课程 | 主题 | 讲数 | 讲者 |
+|------|------|------|------|
+| [**CMU 11-768**](cmu-11-768/) | AI Agents (Fall 2026) | 6 | Graham Neubig, Daniel Fried |
 
 ### 🇨🇳 B 站系列课程 (48 份)
 
@@ -232,6 +239,7 @@ ai-course-notes/
 ├── cs25-v6/                  # CS25 Transformers United V6 (9 讲, 完整)
 ├── 6s191/                    # MIT 6.S191 (10 讲)
 ├── kaist-cs492d/             # KAIST CS492D (15 讲)
+├── cmu-11-768/               # CMU 11-768 AI Agents (6 讲, Fall 2026)
 ├── modern-agent/             # 五道口纳什 Modern Agent (17 讲)
 ├── llm-architect/            # 五道口纳什 LLM Architect (10 讲)
 ├── agentic-rl/               # 五道口纳什 Agentic RL + veRL (20 讲)
@@ -298,6 +306,7 @@ mkdocs build -f .web-build/mkdocs.yml --strict
 | CS224N | [官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rNiJRchCzutFw5ItR_Z27CM) | [官网](https://web.stanford.edu/class/archive/cs/cs224n/cs224n.1246/slides/) |
 | CS231N | [cs231n.stanford.edu](https://cs231n.stanford.edu/) | [播放列表](https://www.youtube.com/playlist?list=PLoROMvodv4rOABXSygHTsbvUz4G_YQhOb) | [官网](https://cs231n.stanford.edu/slides/2025) |
 | KAIST CS492D | [course page](https://mhsung.github.io/kaist-cs492d-fall-2024/) | [播放列表](https://www.youtube.com/playlist?list=PLQ28Nx3M4JrhkqBVIXg-i5_CVVoS1UzAv) | — |
+| CMU 11-768 | [cmu-agents.com](https://www.cmu-agents.com/) | [Lecture 1](https://www.youtube.com/watch?v=UwfjzyLnvMg) | [官网](https://www.cmu-agents.com/) |
 | Berkeley LLM Agents | [rdi.berkeley.edu](https://rdi.berkeley.edu/llm-agents/f24) | [F24](https://www.youtube.com/playlist?list=PLS01nW3RtgopsNLeM936V4TNSsvvVglLc) · [SP25](https://www.youtube.com/playlist?list=PLS01nW3RtgorL3AW8REU9nGkzhvtn6Egn) · [F25](https://www.youtube.com/playlist?list=PLS01nW3RtgoqGkm4UeqNeZLccW-OGc1fJ) | [rdi.berkeley.edu](https://rdi.berkeley.edu/llm-agents/assets/) |
 
 ---

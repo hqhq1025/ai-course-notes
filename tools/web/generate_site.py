@@ -446,6 +446,12 @@ def convert_inline_latex(text: str) -> str:
     text = replace_latex_quotes(text)
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
+    # Web pages have no footnote area, so keep the note inline; the argument may contain \href.
+    text, _ = replace_braced_command(text, "footnote", 1, lambda args: f"（{args[0].strip().rstrip('。')}）")
+    # Cross-reference numbers exist only in the PDF; "（图 \ref{fig:x}）" reads as "（图）" on the web.
+    text = re.sub(r"[ \t~]*\\ref\{[^{}]*\}", "", text)
+    text = remove_latex_command_with_arg(text, "label")
+    text, _ = replace_braced_command(text, "paragraph", 1, lambda args: f"**{args[0].strip()}** " if args[0].strip() else "")
 
     def href_repl(args: list[str]) -> str:
         url = clean_latex_text(args[0])
@@ -493,7 +499,8 @@ def convert_inline_latex(text: str) -> str:
     text = text.replace(r"\{", "{")
     text = text.replace(r"\}", "}")
     text = text.replace("~", " ")
-    text = re.sub(r"\\(small|normalsize|centering|noindent|bfseries|itshape)\b", "", text)
+    text = re.sub(r"\\setlength\s*\{\\[A-Za-z@]+\}\s*\{[^{}]*\}", "", text)
+    text = re.sub(r"\\(small|normalsize|centering|noindent|bfseries|itshape|allowbreak)\b", "", text)
     text = re.sub(r"\\par\b", "\n\n", text)
     return text
 
@@ -648,7 +655,8 @@ def markdown_table_from_tabular(body: str) -> str:
 
 
 def split_latex_items(body: str) -> list[tuple[str, str]]:
-    token_pattern = re.compile(r"\\(?:begin|end)\{[A-Za-z*]+\}|\\item(?:\[[^\]]*\])?")
+    # \b keeps list spacing commands such as \setlength{\itemsep}{...} from starting a bogus item.
+    token_pattern = re.compile(r"\\(?:begin|end)\{[A-Za-z*]+\}|\\item\b(?:\[[^\]]*\])?")
     items: list[tuple[str, str]] = []
     current_start: int | None = None
     current_label = ""
@@ -1137,6 +1145,8 @@ def strip_document_shell(tex: str) -> str:
         tex = tex[: end.start()]
     tex = re.sub(r"\\begin\{titlepage\}.*?\\end\{titlepage\}", "", tex, flags=re.S)
     tex = re.sub(r"\\(?:makelecturetitle|maketitle)\b", "", tex)
+    for command in ("special", "hypersetup", "pagenumbering"):
+        tex = remove_latex_command_with_arg(tex, command)
     tex = re.sub(r"\\tableofcontents\b", "", tex)
     tex = re.sub(r"\\(newpage|clearpage)\b", "", tex)
     return tex
@@ -1220,6 +1230,8 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
+    # minipage often wraps an lstlisting; falling back to a fenced block would nest code fences.
+    text = replace_environment(text, "minipage", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "quote", lambda block: markdown_quote_from_block(ctx, block))
     text = replace_environment(text, "sloppypar", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "tikzpicture", lambda block: render_tikz_to_svg(ctx, block))
@@ -1227,6 +1239,7 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = replace_environment(text, "importantbox", lambda block: markdown_box_from_block(ctx, block, "important"))
     text = replace_environment(text, "knowledgebox", lambda block: markdown_box_from_block(ctx, block, "info"))
     text = replace_environment(text, "warningbox", lambda block: markdown_box_from_block(ctx, block, "warning"))
+    text = replace_environment(text, "dialoguebox", lambda block: markdown_box_from_block(ctx, block, "quote"))
     text = replace_environment(text, "longtable", lambda block: markdown_table_from_tabular(block.body))
     text = replace_environment(text, "tabularx", lambda block: markdown_table_from_tabular(block.body))
     text = replace_environment(text, "tabular", lambda block: markdown_table_from_tabular(block.body))
