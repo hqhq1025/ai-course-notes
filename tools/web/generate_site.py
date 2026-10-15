@@ -75,6 +75,7 @@ class Note:
     channel: str = ""
     video_url: str = ""
     cover_path: str = ""
+    graphics_paths: tuple[str, ...] = ()
 
     @property
     def pdf_path(self) -> Path:
@@ -181,9 +182,11 @@ def read_bracketed(text: str, start: int) -> tuple[str, int]:
 
 
 def extract_newcommand(tex: str, name: str) -> str:
-    match = re.search(rf"\\newcommand\s*\{{\s*\\{re.escape(name)}\s*\}}", tex)
-    if not match:
+    # The last definition wins, as in LaTeX (e.g. a placeholder \newcommand later \renewcommand-ed).
+    matches = list(re.finditer(rf"\\(?:re)?newcommand\s*\{{\s*\\{re.escape(name)}\s*\}}", tex))
+    if not matches:
         return ""
+    match = matches[-1]
     index = match.end()
     while index < len(tex) and tex[index].isspace():
         index += 1
@@ -790,20 +793,30 @@ def copy_asset(ctx: BuildContext, src: Path, relative_name: str) -> str | None:
     return safe_rel.as_posix()
 
 
+GRAPHICS_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg")
+
+
+def extract_graphics_paths(tex: str) -> tuple[str, ...]:
+    match = re.search(r"\\graphicspath\s*\{((?:\s*\{[^{}]*\})+)\s*\}", tex)
+    return tuple(re.findall(r"\{([^{}]*)\}", match.group(1))) if match else ()
+
+
 def resolve_asset(note: Note, asset_ref: str) -> tuple[Path, str]:
     raw = Path(asset_ref)
     if raw.is_absolute():
         return raw, raw.name
     base = note.tex_path.parent
-    direct = base / raw
-    if direct.is_file():
-        return direct, raw.as_posix()
+    folders = ["", *note.graphics_paths]
     if len(raw.parts) == 1:
-        for folder in ["images", "slides-images", "frames"]:
-            candidate = base / folder / raw.name
-            if candidate.is_file():
-                return candidate, f"{folder}/{raw.name}"
-    return direct, raw.as_posix()
+        folders += ["images", "slides-images", "frames"]
+    for folder in folders:
+        candidate = base / folder / raw
+        # Like LaTeX, an extensionless \includegraphics tries the usual graphics extensions.
+        options = [candidate] if raw.suffix else [candidate.with_name(candidate.name + ext) for ext in GRAPHICS_EXTENSIONS]
+        for option in options:
+            if option.is_file():
+                return option, (Path(folder) / raw.parent / option.name).as_posix()
+    return base / raw, raw.as_posix()
 
 
 def markdown_pdf_figure(ctx: BuildContext, src: Path, caption: str) -> str:
@@ -813,25 +826,6 @@ def markdown_pdf_figure(ctx: BuildContext, src: Path, caption: str) -> str:
         '\n??? info "PDF 图示资源"\n'
         + caption_line
         + f"    [打开 PDF 图示]({link})\n\n"
-    )
-
-
-def markdown_image_figure(ctx: BuildContext, src: Path, preview_path: str, caption: str) -> str:
-    original_url = external_asset_url(ctx, src)
-    escaped_preview = html.escape(preview_path, quote=True)
-    escaped_original = html.escape(original_url, quote=True)
-    escaped_caption = html.escape(caption)
-    escaped_alt = html.escape(caption, quote=True)
-    return (
-        '\n<figure class="ai-notes-figure">\n'
-        f'  <a class="ai-notes-figure__preview" href="{escaped_original}" '
-        'target="_blank" rel="noopener noreferrer" aria-label="查看原图">\n'
-        f'    <img src="{escaped_preview}" alt="{escaped_alt}" loading="lazy" decoding="async">\n'
-        '  </a>\n'
-        f'  <figcaption>{escaped_caption} '
-        f'<a class="ai-notes-figure__original" href="{escaped_original}" '
-        'target="_blank" rel="noopener noreferrer">查看原图</a></figcaption>\n'
-        '</figure>\n\n'
     )
 
 
@@ -886,30 +880,6 @@ def render_pdf_figure(ctx: BuildContext, src: Path, page: int) -> Path | None:
         return None
 
 
-def markdown_rendered_pdf_figure(ctx: BuildContext, src: Path, rendered: Path, caption: str, width_percent: int | None) -> str:
-    out_dir = ctx.current_out_dir
-    if out_dir is None:
-        return markdown_pdf_figure(ctx, src, caption)
-    preview = f"figures-web/{rendered.name}"
-    (out_dir / "figures-web").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(rendered, out_dir / preview)
-    escaped_preview = html.escape(preview, quote=True)
-    escaped_pdf = html.escape(external_asset_url(ctx, src), quote=True)
-    escaped_caption = html.escape(caption)
-    style = f' style="width: {width_percent}%"' if width_percent else ""
-    return (
-        '\n<figure class="ai-notes-figure ai-notes-figure--pdf">\n'
-        f'  <a class="ai-notes-figure__preview" href="{escaped_preview}"{style} '
-        'target="_blank" rel="noopener noreferrer" aria-label="查看大图">\n'
-        f'    <img src="{escaped_preview}" alt="{html.escape(caption, quote=True)}" loading="lazy" decoding="async">\n'
-        '  </a>\n'
-        f'  <figcaption>{escaped_caption} '
-        f'<a class="ai-notes-figure__original" href="{escaped_pdf}" '
-        'target="_blank" rel="noopener noreferrer">下载 PDF 原图</a></figcaption>\n'
-        '</figure>\n\n'
-    )
-
-
 def includegraphics_width_percent(options: str) -> int | None:
     match = re.search(r"width\s*=\s*([0-9]*\.?[0-9]*)\s*\\(?:textwidth|linewidth|columnwidth)", options)
     if not match:
@@ -918,46 +888,149 @@ def includegraphics_width_percent(options: str) -> int | None:
     return max(10, min(100, round(factor * 100)))
 
 
+INCLUDEGRAPHICS_PATTERN = re.compile(r"\\includegraphics\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}")
+INLINE_MATH_PATTERN = re.compile(r"(?<!\\)\$(?!\$)((?:\\.|[^$])+?)(?<!\\)\$|\\\((.+?)\\\)", re.S)
+
+
+def caption_html(raw: str) -> str:
+    """Escape a LaTeX caption for raw HTML while keeping inline math renderable by MathJax."""
+    pieces: list[str] = []
+    pos = 0
+    for match in INLINE_MATH_PATTERN.finditer(raw):
+        pieces.append(html.escape(clean_inline_fragment(raw[pos : match.start()])))
+        math = match.group(1) if match.group(1) is not None else match.group(2)
+        pieces.append(f'<span class="arithmatex">\\({html.escape(math.strip())}\\)</span>')
+        pos = match.end()
+    pieces.append(html.escape(clean_inline_fragment(raw[pos:])))
+    return "".join(pieces).strip()
+
+
+def clean_inline_fragment(text: str) -> str:
+    """clean_latex_text for a fragment between math spans, keeping its edge spaces."""
+    cleaned = clean_latex_text(text)
+    if not cleaned:
+        return " " if text[:1].isspace() or text[-1:].isspace() else ""
+    return (" " if text[:1].isspace() else "") + cleaned + (" " if text[-1:].isspace() else "")
+
+
+def last_command_arg(text: str, command: str) -> str:
+    """The figure's own caption follows any subfigure captions, so take the last one."""
+    value = ""
+    for match in re.finditer(rf"\\{re.escape(command)}\*?(?:\[[^\]]*\])?\s*\{{", text):
+        try:
+            value, _ = read_braced(text, match.end() - 1)
+        except ValueError:
+            continue
+    return value
+
+
+def figure_source_text(body: str) -> str:
+    """Text left in a figure besides images and caption, e.g. a \\figsource line."""
+    text = INCLUDEGRAPHICS_PATTERN.sub(" ", body)
+    for command in ("caption", "label", "vspace", "hspace", "color", "subcaption"):
+        text = remove_latex_command_with_arg(text, command)
+    text = re.sub(r"\\(?:begin|end)\{(?:minipage|subfigure)\}(?:\[[^\]]*\])?(?:\{[^{}]*\})?", " ", text)
+    text = re.sub(r"\\(?:centering|hfill|par|protect|footnotemark|noindent)\b", " ", text)
+    return clean_latex_text(text)
+
+
+def figure_image_entry(ctx: BuildContext, note: Note, options: str, image_ref: str, label: str) -> dict[str, str] | str | None:
+    """Preview data for one \\includegraphics; fallback Markdown (str) or None when it cannot be shown."""
+    if image_ref == r"\videocoverpath":
+        image_ref = note.cover_path
+    src, relative_name = resolve_asset(note, image_ref)
+    if is_pdf_asset(src) and src.is_file():
+        page_match = re.search(r"page\s*=\s*(\d+)", options)
+        rendered = render_pdf_figure(ctx, src, int(page_match.group(1)) if page_match else 1)
+        if rendered is None or ctx.current_out_dir is None:
+            return markdown_pdf_figure(ctx, src, label)
+        preview = f"figures-web/{rendered.name}"
+        (ctx.current_out_dir / "figures-web").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rendered, ctx.current_out_dir / preview)
+        width = includegraphics_width_percent(options)
+        return {
+            "preview": preview,
+            "href": preview,
+            "original": external_asset_url(ctx, src),
+            "original_label": "下载 PDF 原图",
+            "aria": "查看大图",
+            "style": f' style="width: {width}%"' if width else "",
+            "pdf": "1",
+        }
+    rel = None if is_pdf_asset(src) else copy_asset(ctx, src, relative_name)
+    if rel is None:
+        return None
+    original = external_asset_url(ctx, src)
+    return {"preview": rel, "href": original, "original": original, "original_label": "查看原图", "aria": "查看原图", "style": "", "pdf": ""}
+
+
+def markdown_figure_html(entries: list[dict[str, str]], caption: str, alt: str, source: str) -> str:
+    classes = "ai-notes-figure"
+    if all(entry["pdf"] for entry in entries):
+        classes += " ai-notes-figure--pdf"
+    if len(entries) > 1:
+        classes += " ai-notes-figure--group"
+    lines = [f'\n<figure class="{classes}">']
+    for entry in entries:
+        lines.append(
+            f'  <a class="ai-notes-figure__preview" href="{html.escape(entry["href"], quote=True)}"{entry["style"]} '
+            f'target="_blank" rel="noopener noreferrer" aria-label="{entry["aria"]}">'
+        )
+        lines.append(
+            f'    <img src="{html.escape(entry["preview"], quote=True)}" alt="{html.escape(alt, quote=True)}" '
+            'loading="lazy" decoding="async">'
+        )
+        lines.append("  </a>")
+    links = []
+    for index, entry in enumerate(entries, start=1):
+        label = entry["original_label"] if len(entries) == 1 else f'{entry["original_label"]} {index}'
+        links.append(
+            f'<a class="ai-notes-figure__original" href="{html.escape(entry["original"], quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">{label}</a>'
+        )
+    source_html = f'<br><span class="ai-notes-figure__source">{html.escape(source)}</span>' if source else ""
+    lines.append(f"  <figcaption>{caption} {' '.join(links)}{source_html}</figcaption>")
+    lines.append("</figure>\n\n")
+    return "\n".join(lines)
+
+
+def missing_figure_markdown(block: EnvBlock) -> str:
+    return (
+        '\n??? warning "图片资源缺失"\n'
+        "    ```latex\n"
+        + "\n".join(f"    {line}" for line in block.source.strip().splitlines())
+        + "\n    ```\n\n"
+    )
+
+
 def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
     note = ctx.current_note
     if note is None:
         return ""
-    include = re.search(r"\\includegraphics(?:\[([^\]]*)\])?\{([^{}]+)\}", block.body)
-    if not include:
+    includes = list(INCLUDEGRAPHICS_PATTERN.finditer(block.body))
+    if not includes:
         caption = clean_latex_text(extract_command_arg(block.body, "caption"))
         body = remove_latex_command_with_arg(block.body, "caption")
         content = convert_latex_fragment(body, ctx).strip()
         if caption:
             content = (content + "\n\n" if content else "") + f"*{caption}*"
         return f"\n{content}\n\n" if content else ""
-    options = include.group(1) or ""
-    image_ref = include.group(2).strip()
-    if image_ref == r"\videocoverpath":
-        image_ref = note.cover_path
-    caption = clean_latex_text(extract_command_arg(block.body, "caption")) or Path(image_ref).name
-    src, relative_name = resolve_asset(note, image_ref)
-    if is_pdf_asset(src):
-        if src.is_file():
-            page_match = re.search(r"page\s*=\s*(\d+)", options)
-            rendered = render_pdf_figure(ctx, src, int(page_match.group(1)) if page_match else 1)
-            if rendered is None:
-                return markdown_pdf_figure(ctx, src, caption)
-            return markdown_rendered_pdf_figure(ctx, src, rendered, caption, includegraphics_width_percent(options))
-        return (
-            '\n??? warning "图片资源缺失"\n'
-            "    ```latex\n"
-            + "\n".join(f"    {line}" for line in block.source.strip().splitlines())
-            + "\n    ```\n\n"
-        )
-    rel = copy_asset(ctx, src, relative_name)
-    if rel is None:
-        return (
-            '\n??? warning "图片资源缺失"\n'
-            "    ```latex\n"
-            + "\n".join(f"    {line}" for line in block.source.strip().splitlines())
-            + "\n    ```\n\n"
-        )
-    return markdown_image_figure(ctx, src, rel, caption)
+    raw_caption = last_command_arg(block.body, "caption")
+    alt = clean_latex_text(raw_caption) or Path(includes[0].group(2).strip()).name
+    entries: list[dict[str, str]] = []
+    fallbacks: list[str] = []
+    for include in includes:
+        entry = figure_image_entry(ctx, note, include.group(1) or "", include.group(2).strip(), alt)
+        if entry is None:
+            fallbacks.append(missing_figure_markdown(block))
+        elif isinstance(entry, str):
+            fallbacks.append(entry)
+        else:
+            entries.append(entry)
+    if not entries:
+        return "".join(dict.fromkeys(fallbacks))
+    caption = caption_html(raw_caption) if raw_caption else html.escape(alt)
+    return markdown_figure_html(entries, caption, alt, figure_source_text(block.body)) + "".join(dict.fromkeys(fallbacks))
 
 
 def markdown_passthrough_from_block(ctx: BuildContext, block: EnvBlock) -> str:
@@ -1075,7 +1148,7 @@ def tikz_cache_entries(ctx: BuildContext, notes: list[Note]) -> list[Path]:
     try:
         for note in notes:
             ctx.current_note = note
-            convert_latex_fragment(strip_document_shell(read_text(note.tex_path)), ctx)
+            convert_latex_fragment(note_body_source(note), ctx)
     finally:
         ctx.current_note = previous_note
         ctx.current_out_dir = previous_out_dir
@@ -1229,6 +1302,93 @@ def replace_unknown_environments(text: str) -> str:
     return output
 
 
+MACRO_DEFINITION_PATTERN = re.compile(
+    r"\\(?:newcommand|providecommand)\*?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?\s*"
+)
+VERBATIM_BLOCK_PATTERN = re.compile(r"\\begin\{(lstlisting|verbatim|minted)\}.*?\\end\{\1\}", re.S)
+
+
+INPUT_PATTERN = re.compile(
+    r"\\IfFileExists\s*\{([^{}]+)\}\s*\{\s*\\input\s*\{([^{}]+)\}\s*\}\s*\{[^{}]*\}|\\input\s*\{([^{}]+)\}"
+)
+
+
+def inline_inputs(tex: str, base_dir: Path, seen: frozenset[Path] = frozenset()) -> str:
+    """Inline \\input files (shared preambles, book chapters); paths resolve from the main file's directory."""
+
+    def repl(match: re.Match[str]) -> str:
+        ref = (match.group(2) or match.group(3)).strip()
+        path = (base_dir / ref).resolve()
+        if not path.is_file() and path.suffix != ".tex":
+            path = path.with_name(path.name + ".tex")
+        if not path.is_file() or path in seen:
+            return ""
+        return inline_inputs(read_text(path), base_dir, seen | {path})
+
+    return INPUT_PATTERN.sub(repl, tex)
+
+
+def read_note_source(tex_path: Path) -> str:
+    return inline_inputs(read_text(tex_path), tex_path.parent, frozenset({tex_path.resolve()}))
+
+
+def collect_macro_definitions(preamble: str) -> dict[str, tuple[int, str]]:
+    """Read \\newcommand definitions with only mandatory arguments."""
+    macros: dict[str, tuple[int, str]] = {}
+    for match in MACRO_DEFINITION_PATTERN.finditer(preamble):
+        index = match.end()
+        # Optional-argument macros (e.g. \\videofigure) are handled by dedicated converters.
+        if index >= len(preamble) or preamble[index] != "{":
+            continue
+        try:
+            body, _ = read_braced(preamble, index)
+        except ValueError:
+            continue
+        macros[match.group(1) or match.group(2)] = (int(match.group(3) or 0), body)
+    return macros
+
+
+def expand_note_macros(tex: str) -> str:
+    """Expand the note's own simple macros (e.g. \\lecturefigure, \\teachervoice) before conversion."""
+    begin = re.search(r"\\begin\{document\}", tex)
+    if not begin:
+        return tex
+    macros = collect_macro_definitions(tex[: begin.start()])
+    body = tex[begin.start() :]
+    # A commented-out multi-line macro would otherwise leak its later lines as live content.
+    body = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("%"))
+    if not macros:
+        return tex[: begin.start()] + body
+    protected: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"@@AI_NOTES_VERBATIM_{len(protected) - 1}@@"
+
+    body = VERBATIM_BLOCK_PATTERN.sub(protect, body)
+
+    def substitute(template: str, args: list[str]) -> str:
+        return re.sub(r"#([1-9])", lambda m: args[int(m.group(1)) - 1] if int(m.group(1)) <= len(args) else m.group(0), template)
+
+    for _ in range(6):
+        changed = 0
+        for name, (arg_count, template) in macros.items():
+            if arg_count:
+                body, count = replace_braced_command(body, name, arg_count, lambda args, t=template: substitute(t, args))
+            else:
+                body, count = re.subn(rf"\\{re.escape(name)}(?![A-Za-z@])", lambda _m, t=template: t, body)
+            changed += count
+        if not changed:
+            break
+    for index, value in enumerate(protected):
+        body = body.replace(f"@@AI_NOTES_VERBATIM_{index}@@", value)
+    return tex[: begin.start()] + body
+
+
+def note_body_source(note: Note) -> str:
+    return strip_document_shell(expand_note_macros(read_note_source(note.tex_path)))
+
+
 def strip_document_shell(tex: str) -> str:
     begin = re.search(r"\\begin\{document\}", tex)
     if begin:
@@ -1347,14 +1507,14 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
 
 
 def parse_note(root: Path, tex_path: Path) -> Note:
-    tex = read_text(tex_path)
+    tex = read_note_source(tex_path)
     route_dir = tex_path.parent.relative_to(root)
     parent_name = route_dir.name
     if re.match(r"^(lecture|week|verl)\d+$", parent_name):
         course_dir = route_dir.parent
     else:
         course_dir = route_dir.parent if route_dir.parent != Path(".") else route_dir
-    title = extract_newcommand(tex, "notetitle") or humanize_path(route_dir)
+    title = extract_newcommand(tex, "notetitle") or extract_titlepage_title(tex) or humanize_path(route_dir)
     return Note(
         root=root,
         tex_path=tex_path,
@@ -1366,7 +1526,20 @@ def parse_note(root: Path, tex_path: Path) -> Note:
         channel=extract_newcommand(tex, "videochannel"),
         video_url=extract_newcommand(tex, "videourl"),
         cover_path=extract_newcommand(tex, "videocoverpath"),
+        graphics_paths=extract_graphics_paths(tex),
     )
+
+
+def extract_titlepage_title(tex: str) -> str:
+    """Fallback for notes whose title only appears as the large bold line of the title page."""
+    page = re.search(r"\\begin\{titlepage\}(.*?)\\end\{titlepage\}", tex, re.S)
+    if not page:
+        return ""
+    match = re.search(r"\\(?:Huge|huge|LARGE)\s*\\bfseries\s*", page.group(1))
+    if not match:
+        return ""
+    line = re.split(r"\\par\b|\n\s*\n", page.group(1)[match.end() :], maxsplit=1)[0]
+    return clean_latex_text(line)
 
 
 def humanize_path(path: Path) -> str:
@@ -1529,7 +1702,7 @@ def note_page_markdown(ctx: BuildContext, note: Note) -> str:
     out_dir = ctx.docs_dir / note.route_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf_link, tex_link, cover_link = copy_note_static_files(ctx, note, out_dir)
-    body = convert_latex_fragment(strip_document_shell(read_text(note.tex_path)), ctx)
+    body = convert_latex_fragment(note_body_source(note), ctx)
     actions = []
     actions.append(f"[LaTeX 源码]({tex_link})")
     if pdf_link:
@@ -1552,6 +1725,11 @@ def note_page_markdown(ctx: BuildContext, note: Note) -> str:
         lines.extend([f"![{note.title}]({cover_link})", ""])
     lines.append(body)
     return "\n".join(lines)
+
+
+def is_single_page_course(course_dir: Path, notes: list[Note]) -> bool:
+    """A top-level note such as a book shares its route with the course; its page is the course page."""
+    return len(notes) == 1 and notes[0].route_dir == course_dir
 
 
 def course_page_markdown(course_dir: Path, notes: list[Note], title: str, topic: str) -> str:
@@ -2138,6 +2316,9 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
     ]
     for course_dir, notes in courses.items():
         title = course_title(course_dir, entries_by_path)
+        if is_single_page_course(course_dir, notes):
+            lines.append(f"      - {yaml_quote(title)}: {yaml_quote(course_dir.as_posix() + '/index.md')}")
+            continue
         lines.append(f"      - {yaml_quote(title)}:")
         lines.append(f"          - 概览: {yaml_quote(course_dir.as_posix() + '/index.md')}")
         for note in sorted(notes, key=lambda item: natural_key(item.route_dir)):
@@ -2227,6 +2408,10 @@ def build_site(
         page = note_page_markdown(ctx, note)
         write_text(docs_dir / note.route_dir / "index.md", page)
     for course_dir, course_notes in courses.items():
+        if is_single_page_course(course_dir, course_notes):
+            continue
+        if any(note.route_dir == course_dir for note in course_notes):
+            ctx.warn("route_conflict", f"Course page {course_dir}/index.md would overwrite a note page")
         title = course_title(course_dir, entries_by_path)
         topic = topic_for_course(course_dir, entries_by_path)
         write_text(docs_dir / course_dir / "index.md", course_page_markdown(course_dir, course_notes, title, topic))
