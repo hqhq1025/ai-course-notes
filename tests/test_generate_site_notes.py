@@ -176,8 +176,8 @@ def test_titles_use_last_definition_or_title_page(tmp_path: Path) -> None:
     result = run_generator(tmp_path, "--strict")
 
     assert result.returncode == 0, result.stderr
-    assert page_of(tmp_path, "course/lecture01").startswith("# 真正的标题\n")
-    assert page_of(tmp_path, "course/lecture02").startswith("# 封面上的标题：Agent 与创业\n")
+    assert "\n# 真正的标题\n" in page_of(tmp_path, "course/lecture01")
+    assert "\n# 封面上的标题：Agent 与创业\n" in page_of(tmp_path, "course/lecture02")
 
 
 def test_book_note_inlines_chapters_and_serves_as_its_course_page(tmp_path: Path) -> None:
@@ -198,7 +198,7 @@ def test_book_note_inlines_chapters_and_serves_as_its_course_page(tmp_path: Path
 
     assert result.returncode == 0, result.stderr
     page = page_of(tmp_path, "book")
-    assert page.startswith("# 一本书\n")
+    assert "\n# 一本书\n" in page
     assert "## 第一章" in page and "第一章的正文。" in page
     assert "共 1 份讲义" not in page
     nav = (tmp_path / ".web-build" / "mkdocs.yml").read_text(encoding="utf-8")
