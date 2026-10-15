@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import os
 import re
 import shutil
 import subprocess
@@ -26,8 +27,10 @@ RAW_BASE_URL = f"{REPO_URL}/raw/main"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
 TIKZ_RENDERER_VERSION = "pdf-v2"
-IMAGE_CACHE_VERSION = "image-v1"
-PDF_FIGURE_RENDERER_VERSION = "pdf-figure-v1"
+IMAGE_CACHE_VERSION = "image-v2-webp"
+# PNG sources are mostly slide/UI screenshots; a higher WebP quality keeps their text crisp.
+PNG_WEBP_QUALITY = 90
+PDF_FIGURE_RENDERER_VERSION = "pdf-figure-v2"
 # Keep a PDF figure as SVG only when it is mostly vector. Many "PDF figures" are bitmaps
 # wrapped in PDF; as SVG they become base64 blobs about 6x larger than a 1600px JPEG.
 PDF_FIGURE_MAX_BITMAP_SHARE = 0.2
@@ -729,7 +732,24 @@ def image_cache_path(ctx: BuildContext, src: Path) -> Path | None:
             ]
         ).encode("utf-8")
     ).hexdigest()[:24]
-    return ctx.image_cache_dir / f"image-{cache_digest}{src.suffix.lower()}"
+    return ctx.image_cache_dir / f"image-{cache_digest}.webp"
+
+
+def write_atomically(target: Path, write: Callable[[Path], None]) -> None:
+    """Write through a temp file so an interrupted build never leaves a truncated cache entry."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.tmp")
+    try:
+        write(tmp)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def save_webp(image: Image.Image, dest: Path, quality: int) -> None:
+    if image.mode not in {"RGB", "RGBA"}:
+        image = image.convert("RGBA" if "A" in image.mode or image.mode == "P" else "RGB")
+    image.save(dest, format="WEBP", quality=quality, method=4)
 
 
 def external_asset_url(ctx: BuildContext, src: Path) -> str:
@@ -739,40 +759,46 @@ def external_asset_url(ctx: BuildContext, src: Path) -> str:
         return src.as_posix()
 
 
-def copy_image_asset(ctx: BuildContext, src: Path, dest: Path) -> None:
+def copy_image_asset(ctx: BuildContext, src: Path, dest: Path) -> Path:
+    """Copy a JPG/PNG for the web: resized to image_max_width and re-encoded as WebP.
+
+    Returns the path actually written; if re-encoding fails the original file is copied next to it.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not ctx.compress_images or not should_compress_image(src):
         shutil.copy2(src, dest)
-        return
+        return dest
     cached_image = image_cache_path(ctx, src)
     if cached_image is not None and cached_image.exists():
         shutil.copy2(cached_image, dest)
-        return
+        return dest
     try:
         with Image.open(src) as image:
             image = ImageOps.exif_transpose(image)
             if image.width > ctx.image_max_width:
                 height = max(1, round(image.height * ctx.image_max_width / image.width))
                 image = image.resize((ctx.image_max_width, height), Image.Resampling.LANCZOS)
-            suffix = src.suffix.lower()
-            if suffix in {".jpg", ".jpeg"}:
-                if image.mode not in {"RGB", "L"}:
-                    image = image.convert("RGB")
-                image.save(dest, format="JPEG", quality=ctx.jpeg_quality, optimize=True, progressive=True)
-            elif suffix == ".png":
-                image.save(dest, format="PNG", optimize=True)
-            else:
-                shutil.copy2(src, dest)
+            quality = PNG_WEBP_QUALITY if src.suffix.lower() == ".png" else ctx.jpeg_quality
+            write_atomically(dest, lambda tmp: save_webp(image, tmp, quality))
         if cached_image is not None:
-            cached_image.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(dest, cached_image)
+            write_atomically(cached_image, lambda tmp: shutil.copy2(dest, tmp))
+        return dest
     except Exception as exc:
-        shutil.copy2(src, dest)
+        fallback = dest.with_name(src.name)
+        shutil.copy2(src, fallback)
         if ctx.current_note is not None:
             ctx.warn(
                 "image_compression_failed",
                 f"Image compression failed for {ctx.current_note.rel_tex_path}: {src} ({exc})",
             )
+        return fallback
+
+
+def web_image_name(ctx: BuildContext, src: Path, rel: Path) -> Path:
+    # Keep the source extension in the name so a.png and a.jpg in one folder stay distinct.
+    if ctx.compress_images and should_compress_image(src):
+        return rel.with_name(rel.name + ".webp")
+    return rel
 
 
 def copy_asset(ctx: BuildContext, src: Path, relative_name: str) -> str | None:
@@ -783,14 +809,12 @@ def copy_asset(ctx: BuildContext, src: Path, relative_name: str) -> str | None:
     safe_rel = Path(relative_name)
     if safe_rel.is_absolute() or ".." in safe_rel.parts:
         safe_rel = Path(src.name)
-    dest = ctx.current_out_dir / safe_rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if src.is_file():
-        copy_image_asset(ctx, src, dest)
-    else:
+    if not src.is_file():
         ctx.warn("missing_asset", f"Missing asset referenced by {ctx.current_note.rel_tex_path}: {src}")
         return None
-    return safe_rel.as_posix()
+    dest = ctx.current_out_dir / web_image_name(ctx, src, safe_rel)
+    written = copy_image_asset(ctx, src, dest)
+    return written.relative_to(ctx.current_out_dir).as_posix()
 
 
 GRAPHICS_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg")
@@ -840,7 +864,7 @@ def render_pdf_figure(ctx: BuildContext, src: Path, page: int) -> Path | None:
             [PDF_FIGURE_RENDERER_VERSION, file_sha256(src), str(page), str(ctx.image_max_width), str(ctx.jpeg_quality)]
         ).encode("utf-8")
     ).hexdigest()[:24]
-    for suffix in (".svg", ".jpg"):
+    for suffix in (".svg", ".webp"):
         cached = cache_dir / f"pdf-{key}{suffix}"
         if cached.exists():
             return cached
@@ -861,18 +885,19 @@ def render_pdf_figure(ctx: BuildContext, src: Path, page: int) -> Path | None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             if bitmap_bytes < PDF_FIGURE_MAX_BITMAP_SHARE * len(svg):
                 target = cache_dir / f"pdf-{key}.svg"
-                shutil.copy2(svg_path, target)
+                write_atomically(target, lambda tmp: shutil.copy2(svg_path, tmp))
                 return target
+            # -cropbox matches graphicx and the SVG output; pdftocairo -png defaults to the MediaBox.
             subprocess.run(
                 [
-                    "pdftocairo", "-png", "-singlefile", "-scale-to-x", str(ctx.image_max_width), "-scale-to-y", "-1",
-                    *page_args, str(src), str(tmp_path / "figure"),
+                    "pdftocairo", "-png", "-singlefile", "-cropbox", "-scale-to-x", str(ctx.image_max_width),
+                    "-scale-to-y", "-1", *page_args, str(src), str(tmp_path / "figure"),
                 ],
                 check=True, capture_output=True, timeout=180,
             )
-            target = cache_dir / f"pdf-{key}.jpg"
+            target = cache_dir / f"pdf-{key}.webp"
             with Image.open(tmp_path / "figure.png") as image:
-                image.convert("RGB").save(target, format="JPEG", quality=ctx.jpeg_quality, optimize=True, progressive=True)
+                write_atomically(target, lambda tmp: save_webp(image.convert("RGB"), tmp, ctx.jpeg_quality))
             return target
     except (subprocess.SubprocessError, OSError, ValueError) as exc:
         detail = exc.stderr.decode("utf-8", "replace").strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else exc
@@ -934,14 +959,40 @@ def figure_source_text(body: str) -> str:
     return clean_latex_text(text)
 
 
+PDF_UNSUPPORTED_GRAPHICS_OPTIONS = {"trim", "clip", "viewport", "angle", "pagebox", "bb"}
+
+
+def image_size_attrs(path: Path) -> str:
+    """width/height attributes let the browser reserve space for lazy images (no layout shift)."""
+    try:
+        if path.suffix.lower() == ".svg":
+            head = path.read_text(encoding="utf-8", errors="ignore")[:600]
+            match = re.search(r'width="([\d.]+)pt" height="([\d.]+)pt"', head)
+            if not match:
+                return ""
+            width, height = (round(float(value) * 4 / 3) for value in match.groups())
+        else:
+            with Image.open(path) as image:
+                width, height = image.size
+    except (OSError, ValueError):
+        return ""
+    return f' width="{width}" height="{height}"'
+
+
 def figure_image_entry(ctx: BuildContext, note: Note, options: str, image_ref: str, label: str) -> dict[str, str] | str | None:
     """Preview data for one \\includegraphics; fallback Markdown (str) or None when it cannot be shown."""
     if image_ref == r"\videocoverpath":
         image_ref = note.cover_path
     src, relative_name = resolve_asset(note, image_ref)
+    parsed = parse_options(options)
     if is_pdf_asset(src) and src.is_file():
-        page_match = re.search(r"page\s*=\s*(\d+)", options)
-        rendered = render_pdf_figure(ctx, src, int(page_match.group(1)) if page_match else 1)
+        unsupported = sorted(PDF_UNSUPPORTED_GRAPHICS_OPTIONS & parsed.keys())
+        if unsupported:
+            # Rendering the full page would show what the PDF output crops away.
+            ctx.warn("pdf_figure_unsupported", f"{note.rel_tex_path}: {src.name} uses {', '.join(unsupported)}; linking instead")
+            return markdown_pdf_figure(ctx, src, label)
+        page = int(parsed["page"]) if parsed.get("page", "").isdigit() else 1
+        rendered = render_pdf_figure(ctx, src, page)
         if rendered is None or ctx.current_out_dir is None:
             return markdown_pdf_figure(ctx, src, label)
         preview = f"figures-web/{rendered.name}"
@@ -955,13 +1006,24 @@ def figure_image_entry(ctx: BuildContext, note: Note, options: str, image_ref: s
             "original_label": "下载 PDF 原图",
             "aria": "查看大图",
             "style": f' style="width: {width}%"' if width else "",
+            "size": image_size_attrs(rendered),
             "pdf": "1",
         }
     rel = None if is_pdf_asset(src) else copy_asset(ctx, src, relative_name)
     if rel is None:
         return None
-    original = external_asset_url(ctx, src)
-    return {"preview": rel, "href": original, "original": original, "original_label": "查看原图", "aria": "查看原图", "style": "", "pdf": ""}
+    size = image_size_attrs(ctx.current_out_dir / rel) if ctx.current_out_dir is not None else ""
+    # The preview opens the site-hosted copy: raw.githubusercontent.com is often unreachable from mainland China.
+    return {
+        "preview": rel,
+        "href": rel,
+        "original": external_asset_url(ctx, src),
+        "original_label": "查看原图",
+        "aria": "查看大图",
+        "style": "",
+        "size": size,
+        "pdf": "",
+    }
 
 
 def markdown_figure_html(entries: list[dict[str, str]], caption: str, alt: str, source: str) -> str:
@@ -977,7 +1039,7 @@ def markdown_figure_html(entries: list[dict[str, str]], caption: str, alt: str, 
             f'target="_blank" rel="noopener noreferrer" aria-label="{entry["aria"]}">'
         )
         lines.append(
-            f'    <img src="{html.escape(entry["preview"], quote=True)}" alt="{html.escape(alt, quote=True)}" '
+            f'    <img src="{html.escape(entry["preview"], quote=True)}" alt="{html.escape(alt, quote=True)}"{entry["size"]} '
             'loading="lazy" decoding="async">'
         )
         lines.append("  </a>")
@@ -1031,6 +1093,26 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
         return "".join(dict.fromkeys(fallbacks))
     caption = caption_html(raw_caption) if raw_caption else html.escape(alt)
     return markdown_figure_html(entries, caption, alt, figure_source_text(block.body)) + "".join(dict.fromkeys(fallbacks))
+
+
+def replace_bare_includegraphics(ctx: BuildContext, text: str) -> str:
+    """Images outside figure environments (e.g. slides inside center) still need to be shown."""
+    note = ctx.current_note
+    if note is None:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        alt = Path(match.group(2).strip()).stem
+        entry = figure_image_entry(ctx, note, match.group(1) or "", match.group(2).strip(), alt)
+        if entry is None:
+            return f"\n> 图片资源缺失：`{html.escape(match.group(2).strip())}`\n\n"
+        if isinstance(entry, str):
+            return entry
+        return markdown_figure_html([entry], "", alt, "")
+
+    # Fallback blocks quote the LaTeX source inside code fences; leave those untouched.
+    pieces = re.split(f"({FENCED_CODE_BLOCK_PATTERN.pattern})", text, flags=FENCED_CODE_BLOCK_PATTERN.flags)
+    return "".join(piece if index % 2 else INCLUDEGRAPHICS_PATTERN.sub(repl, piece) for index, piece in enumerate(pieces))
 
 
 def markdown_passthrough_from_block(ctx: BuildContext, block: EnvBlock) -> str:
@@ -1483,12 +1565,14 @@ def convert_latex_fragment(fragment: str, ctx: BuildContext) -> str:
     text = replace_environment(text, "lstlisting", markdown_code_from_listing)
     text = replace_environment(text, "table", lambda block: markdown_table_wrapper_from_block(ctx, block))
     text = replace_environment(text, "center", lambda block: markdown_passthrough_from_block(ctx, block))
-    # minipage often wraps an lstlisting; falling back to a fenced block would nest code fences.
-    text = replace_environment(text, "minipage", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "quote", lambda block: markdown_quote_from_block(ctx, block))
     text = replace_environment(text, "sloppypar", lambda block: markdown_passthrough_from_block(ctx, block))
     text = replace_environment(text, "tikzpicture", lambda block: render_tikz_to_svg(ctx, block))
     text = replace_environment(text, "figure", lambda block: markdown_figure_from_block(ctx, block))
+    # After figures, so a figure sees its own minipages (side-by-side images) intact.
+    # minipage often wraps an lstlisting; falling back to a fenced block would nest code fences.
+    text = replace_environment(text, "minipage", lambda block: markdown_passthrough_from_block(ctx, block))
+    text = replace_bare_includegraphics(ctx, text)
     text = replace_environment(text, "importantbox", lambda block: markdown_box_from_block(ctx, block, "important"))
     text = replace_environment(text, "knowledgebox", lambda block: markdown_box_from_block(ctx, block, "info"))
     text = replace_environment(text, "warningbox", lambda block: markdown_box_from_block(ctx, block, "warning"))
@@ -2336,6 +2420,7 @@ def print_warning_report(warnings: list[WarningEvent], *, verbose: bool) -> None
         "tikz_skipped": "TikZ diagrams skipped",
         "pdf_figure_failed": "PDF figures kept as links (render failed)",
         "pdf_figure_skipped": "PDF figures kept as links (pdftocairo unavailable)",
+        "pdf_figure_unsupported": "PDF figures kept as links (trim/clip/viewport options)",
     }
     counts = Counter(warning.kind for warning in warnings)
     print("\nWarning summary:")

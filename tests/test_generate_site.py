@@ -384,7 +384,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "未转换的 LaTeX 环境：bmatrix" not in page
     assert "未转换的 LaTeX 环境：pmatrix" not in page
     assert '<figure class="ai-notes-figure">' in page
-    assert 'src="diagram.jpg"' in page
+    # Web copies are re-encoded as WebP; the source extension stays in the name.
+    assert 'src="diagram.jpg.webp" alt="示意图：网页阅读器结构，缩放 $√layers$" width="1600" height="800"' in page
+    assert 'class="ai-notes-figure__preview" href="diagram.jpg.webp"' in page
     assert 'alt="示意图：网页阅读器结构，缩放 $√layers$"' in page
     assert 'loading="lazy"' in page
     assert 'decoding="async"' in page
@@ -394,7 +396,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     ) in page
     assert "查看原图" in page
     assert "测试来源。" in page
-    assert 'src="video-frame.jpg"' in page
+    assert 'src="video-frame.jpg.webp"' in page
     assert 'alt="视频关键帧宏"' in page
     assert "视频讲解区间：00:01:00–00:02:00。" in page
     assert r"\videofigure" not in page
@@ -402,7 +404,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert r"数学 caption 后的 \textbf" not in page
     assert "图片资源缺失" in page
     assert "未转换的 LaTeX 环境：figure" not in page
-    assert 'src="images/fallback.png"' in page
+    assert 'src="images/fallback.png.webp"' in page
     assert 'alt="子目录图片"' in page
     assert "PDF 图示资源" in page
     assert "[打开 PDF 图示](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/slides.pdf)" in page
@@ -451,9 +453,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert 'print("hello")' in page
     assert "??? quote \"未转换的 LaTeX 环境：mystery\"" in page
 
-    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg").is_file()
-    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "video-frame.jpg").is_file()
-    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "images" / "fallback.png").is_file()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg.webp").is_file()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "video-frame.jpg.webp").is_file()
+    assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "images" / "fallback.png.webp").is_file()
     assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.pdf").exists()
     assert not (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "slides.pdf").exists()
     assert (tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "lecture01-notes.tex").is_file()
@@ -578,7 +580,7 @@ def test_renders_pdf_figures_as_svg_or_jpeg(tmp_path: Path) -> None:
     out_dir = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture03"
     page = (out_dir / "index.md").read_text(encoding="utf-8")
     previews = re.findall(r'<img src="(figures-web/[^"]+)" alt="([^"]+)"', page)
-    assert [(Path(src).suffix, alt) for src, alt in previews] == [(".svg", "矢量图"), (".jpg", "位图课件第二页")]
+    assert [(Path(src).suffix, alt) for src, alt in previews] == [(".svg", "矢量图"), (".webp", "位图课件第二页")]
     assert 'style="width: 92%"' in page
     assert "<path" in (out_dir / previews[0][0]).read_text(encoding="utf-8")
     with Image.open(out_dir / previews[1][0]) as rendered:
@@ -600,10 +602,11 @@ def test_compresses_image_copies_without_touching_sources(tmp_path: Path) -> Non
     result = run_generator(tmp_path, "--strict", "--image-max-width", "640", "--jpeg-quality", "70")
 
     assert result.returncode == 0, result.stderr
-    generated = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg"
+    generated = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture01" / "diagram.jpg.webp"
     with Image.open(source) as image:
         assert image.size == (2000, 1000)
     with Image.open(generated) as image:
+        assert image.format == "WEBP"
         assert image.width == 640
     assert source.stat().st_size == before_size
 
@@ -623,12 +626,12 @@ def test_reuses_compressed_image_cache_without_recompressing(tmp_path: Path, mon
         jpeg_quality=70,
         image_cache_dir=tmp_path / ".web-build" / ".cache" / "images",
     )
-    first_dest = tmp_path / "first" / "source.jpg"
-    second_dest = tmp_path / "second" / "source.jpg"
+    first_dest = tmp_path / "first" / "source.jpg.webp"
+    second_dest = tmp_path / "second" / "source.jpg.webp"
 
     generator.copy_image_asset(ctx, source, first_dest)
 
-    cache_files = list(ctx.image_cache_dir.glob("image-*.jpg"))
+    cache_files = list(ctx.image_cache_dir.glob("image-*.webp"))
     assert len(cache_files) == 1
 
     def fail_open(*_args, **_kwargs):
