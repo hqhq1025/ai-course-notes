@@ -342,7 +342,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "**粗体**" in page
     assert "$a+b=c$" in page
     assert '!!! important "核心概念"' in page
-    assert '!!! warning "GQA 压缩比 $≠$ 推理加速比"' in page
+    assert '!!! warning "GQA 压缩比 $\\neq$ 推理加速比"' in page
     assert "标题里的单符号数学不能吞掉后面的正文转换。" in page
     assert '!!! important "盒子里的公式"' in page
     assert "    公式后的解释仍然应该留在盒子正文里。" in page
@@ -423,9 +423,9 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "| --- | --- |" in page
     assert "| 包装 | 结果 |" in page
     assert "| table | Markdown 表格 |" in page
-    assert "| math | $≈ 4×$ |" in page
-    assert f"| visible | a{visible_space} b |" in page
-    assert "| 合计行 |" in page
+    assert r"| math | $\sim 4\times$ |" in page
+    assert f"| visible | `a{visible_space} b` |" in page
+    assert "| **合计行** |  |" in page
     assert "2l合计行" not in page
     assert '<figcaption class="ai-notes-table-caption">包装表格</figcaption>' in page
     assert "*包装表格*" not in page
