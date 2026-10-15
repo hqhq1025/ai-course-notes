@@ -289,9 +289,6 @@ def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     css = (build / "docs" / "assets" / "stylesheets" / "ai-notes.css").read_text(encoding="utf-8")
     assert ".md-grid" in css
     assert "max-width: min(96rem, calc(100vw - 2 * var(--ai-notes-page-gutter)))" in css
-    assert ".ai-notes-sidebar-toggle--primary" in css
-    assert "body.ai-notes-nav-collapsed .md-sidebar--primary" in css
-    assert "body.ai-notes-toc-collapsed .md-sidebar--secondary" in css
     assert ".md-typeset h2" in css
     assert ".md-typeset .arithmatex" in css
     assert ".md-typeset .admonition" in css
@@ -300,9 +297,6 @@ def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     assert "cursor: zoom-in" in css
 
     sidebar_js = (build / "docs" / "assets" / "javascripts" / "ai-notes.js").read_text(encoding="utf-8")
-    assert "ai-notes-sidebar-nav-collapsed" in sidebar_js
-    assert "ai-notes-sidebar-toc-collapsed" in sidebar_js
-    assert "localStorage" in sidebar_js
     assert "ai-notes-scroll:" in sidebar_js
     assert "history.scrollRestoration" in sidebar_js
     assert "sessionStorage" in sidebar_js
@@ -343,7 +337,7 @@ def test_converts_latex_constructs_into_readable_markdown(tmp_path: Path) -> Non
     assert "基于 Test Teacher 授课内容整理" in page
     assert "[观看视频](https://example.com/watch)" in page
     assert "[备用 PDF](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture01/lecture01-notes.pdf)" in page
-    assert "[LaTeX 源码](lecture01-notes.tex)" in page
+    assert "[LaTeX 源码](https://github.com/hqhq1025/ai-course-notes/blob/main/sample-course/lecture01/lecture01-notes.tex)" in page
     assert "## 第一节：为什么需要网页阅读" in page
     assert "**粗体**" in page
     assert "$a+b=c$" in page

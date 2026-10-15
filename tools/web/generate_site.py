@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from collections import Counter
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -23,6 +24,57 @@ from PIL import Image, ImageOps
 SITE_URL = "https://hqhq1025.github.io/ai-course-notes/"
 REPO_URL = "https://github.com/hqhq1025/ai-course-notes"
 RAW_BASE_URL = f"{REPO_URL}/raw/main"
+BLOB_BASE_URL = f"{REPO_URL}/blob/main"
+# MathJax is vendored instead of loaded from a CDN: unpkg/jsDelivr are unreliable from mainland
+# China, and a synchronous CDN script there delays DOMContentLoaded by more than a minute.
+# Source: https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz
+# (integrity sha512-Bt+SSVU8eBG27zChVewOicYs7Xsdt40qm4+UpHyX7k0/O9NliPc+x77k1/FEsPsjKPZGJvtRZM1vO+geW0OhGw==).
+# Subset: es5/tex-chtml.js, es5/input/tex/extensions/ (autoloaded by \boldsymbol, \cancel, ...),
+# es5/output/chtml/fonts/woff-v2/, and LICENSE. 3.2.2 is the final MathJax 3 release.
+MATHJAX_VENDOR_DIR = Path(__file__).resolve().parent / "vendor" / "mathjax"
+MATHJAX_SITE_DIR = Path("assets") / "vendor" / "mathjax"
+# Course folders that README.md does not list: (navigation title, README course they sit next to).
+# Without this, the 37 Zhang Xiaojun episode notes fall into "其他" under the folder name.
+UNLISTED_COURSES = {
+    "youtube/zhangxiaojun": ("张小珺商业访谈录 · 节目笔记", "interviews/zhang-xiaojun"),
+    "youtube": ("YouTube 单集笔记", ""),
+}
+# Home page reading routes; each step links to a course or note route relative to the site root.
+READING_ROUTES = (
+    (
+        "入门 LLM",
+        (
+            ("CS336", "cs336"),
+            ("CS224R L09 RLHF", "cs224r/lecture09"),
+            ("CS25 V2 Karpathy：Transformer 入门", "cs25/lecture11"),
+        ),
+    ),
+    (
+        "深入 Agent",
+        (
+            ("Berkeley F24 姚顺雨：Agent 概述", "talks/berkeley-llm-agents/f24/lecture11"),
+            ("CS329A", "cs329a"),
+            ("Modern Agent", "modern-agent"),
+            ("Agentic RL", "agentic-rl"),
+        ),
+    ),
+    (
+        "模型架构",
+        (
+            ("LLM Architect", "llm-architect"),
+            ("CS25 V4 Mixtral", "cs25/lecture29"),
+            ("CS336 L04 MoE", "cs336/lecture04"),
+        ),
+    ),
+    (
+        "前沿洞察",
+        (
+            ("Ilya Sutskever", "talks/dwarkesh-patel/ilya-age-of-research"),
+            ("Dario Amodei", "talks/lex-fridman/dario-amodei-claude"),
+            ("State of AI 2026", "talks/lex-fridman/state-of-ai-2026"),
+        ),
+    ),
+)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
 TIKZ_RENDERER_VERSION = "pdf-v2"
@@ -1640,6 +1692,8 @@ def course_title(course_dir: Path, catalog: dict[str, CatalogEntry]) -> str:
         return "CS336 2026"
     if key in catalog:
         return catalog[key].title
+    if key in UNLISTED_COURSES:
+        return UNLISTED_COURSES[key][0]
     return humanize_path(course_dir)
 
 
@@ -1664,6 +1718,108 @@ def topic_for_course(course_dir: Path, entries_by_path: dict[str, CatalogEntry])
     return entry.topic if entry else ""
 
 
+def category_label(category: str) -> str:
+    """README category headings end with a hand-written count such as "(169 份)" that goes stale."""
+    return re.sub(r"\s*[(（][^()（）]*\d[^()（）]*[)）]\s*$", "", category).strip()
+
+
+def nav_category_label(category: str) -> str:
+    """Sidebar section label: the category without its count or leading emoji."""
+    label = category_label(category)
+    return re.sub(r"^[^\w\s]+\s*", "", label) or label
+
+
+def group_courses(courses: OrderedDict[Path, list[Note]], catalog_entries: list[CatalogEntry]) -> OrderedDict[str, list[Path]]:
+    """Group course folders by README category, in README order.
+
+    The home page and the sidebar share this grouping so both show the same structure.
+    Folders that README.md does not list are placed after the course they belong with.
+    """
+    entry_rank: dict[str, int] = {}
+    category_rank: dict[str, int] = {}
+    for index, entry in enumerate(catalog_entries):
+        entry_rank.setdefault(entry.path.as_posix(), index)
+        category_rank.setdefault(entry.category, index)
+    last = len(catalog_entries)
+
+    def anchor_of(course_dir: Path) -> Path:
+        key = course_dir.as_posix()
+        if key not in entry_rank and UNLISTED_COURSES.get(key, ("", ""))[1]:
+            return Path(UNLISTED_COURSES[key][1])
+        return course_dir
+
+    def course_rank(course_dir: Path) -> tuple[int, int, list[object]]:
+        anchor = anchor_of(course_dir).as_posix()
+        listed = course_dir.as_posix() in entry_rank
+        return (entry_rank.get(anchor, last), 0 if listed else 1, natural_key(course_dir))
+
+    groups: dict[str, list[Path]] = {}
+    for course_dir in courses:
+        groups.setdefault(infer_category(anchor_of(course_dir), catalog_entries), []).append(course_dir)
+    ordered: OrderedDict[str, list[Path]] = OrderedDict()
+    for category in sorted(groups, key=lambda name: category_rank.get(name, last + (name == "其他"))):
+        ordered[category] = sorted(groups[category], key=course_rank)
+    return ordered
+
+
+NAV_SEQUENCE_PATTERNS = (
+    (re.compile(r"^lecture(\d+)$"), "L{:02d}"),
+    (re.compile(r"^week(\d+)$"), "W{:02d}"),
+    (re.compile(r"^ep(\d+)-"), "#{}"),
+)
+NAV_COURSE_PREFIX = re.compile(
+    r"^(?:(?:MIT|Stanford|KAIST|CMU|Berkeley)\s+)?(?:CS\s?\d+[A-Z]?|6\.S\d+)(?:\s+\d{4}|\s+V\d+)?"
+    r"(?:\s+(?:Guest\s+)?(?:Lecture|Week)\s*\d+)?\s*[:：]\s*"
+)
+NAV_KIND_PREFIX = re.compile(r"^(?:文章笔记|访谈笔记|读书笔记|课程笔记)\s*[:：]\s*")
+NAV_SUBTITLE_SEPARATOR = re.compile(r"\s*——\s*|\s+—\s+")
+NAV_LABEL_MAX_WIDTH = 44  # about 1.5 sidebar lines
+NAV_LABEL_HARD_MAX_WIDTH = 62  # beyond this a label wraps to three or more lines
+
+
+def display_width(text: str) -> int:
+    """Approximate rendered width: CJK and full-width characters count twice."""
+    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+
+
+def nav_label(note: Note) -> str:
+    """Short sidebar label for a note; the page H1 and <title> keep the full title.
+
+    The lecture number moves into a compact prefix ("L03"), the repeated course prefix
+    ("CS336 2026 Lecture 3：") is dropped, and a long "——" subtitle is cut.
+    """
+    label = re.sub(r"^\[[^\]]*\]\s*", "", note.title.strip())
+    label = NAV_KIND_PREFIX.sub("", label)
+    sequence = ""
+    for pattern, template in NAV_SEQUENCE_PATTERNS:
+        match = pattern.match(note.route_dir.name)
+        if match:
+            number = int(match.group(1))
+            sequence = template.format(number)
+            # Strip "<course> Lecture 3：" only when the number before the colon is this lecture's number.
+            label = re.sub(rf"^.{{0,40}}?(?<![\d.])0*{number}\s*[:：]\s*", "", label, count=1)
+            break
+    label = NAV_COURSE_PREFIX.sub("", label)
+    if display_width(label) > NAV_LABEL_MAX_WIDTH:
+        head = NAV_SUBTITLE_SEPARATOR.split(label, maxsplit=1)[0]
+        if head != label and display_width(head) >= 8:
+            label = head
+    if display_width(label) > NAV_LABEL_HARD_MAX_WIDTH:
+        # "<topic>：<long list of details>" keeps the topic when it is descriptive on its own.
+        head = re.split(r"\s*[:：]\s*", label, maxsplit=1)[0]
+        if head != label and display_width(head) >= 12:
+            label = head
+    label = label.strip() or note.title
+    return f"{sequence} {label}" if sequence else label
+
+
+def nav_labels(notes: list[Note]) -> dict[Path, str]:
+    """Labels for one course; fall back to the full title where shortening makes two labels equal."""
+    labels = {note.route_dir: nav_label(note) for note in notes}
+    counts = Counter(labels.values())
+    return {route: (label if counts[label] == 1 else next(n.title for n in notes if n.route_dir == route)) for route, label in labels.items()}
+
+
 def relative_dir_target(from_dir: Path, to_dir: Path) -> str:
     if from_dir == to_dir:
         return ""
@@ -1680,6 +1836,15 @@ def markdown_page_target(from_dir: Path, to_dir: Path) -> str:
 
 def raw_github_url(path: Path) -> str:
     return f"{RAW_BASE_URL}/{quote(path.as_posix(), safe='/')}"
+
+
+def github_blob_url(path: Path) -> str:
+    """GitHub's file view; Pages serves .tex as application/x-tex, which downloads instead of showing."""
+    return f"{BLOB_BASE_URL}/{quote(path.as_posix(), safe='/')}"
+
+
+def note_unit(course_dir: Path) -> str:
+    return "篇" if course_dir.parts[:1] == ("articles",) else "份讲义"
 
 
 def copy_note_static_files(ctx: BuildContext, note: Note, out_dir: Path) -> tuple[str, str, str]:
@@ -1701,30 +1866,38 @@ def copy_note_static_files(ctx: BuildContext, note: Note, out_dir: Path) -> tupl
 def note_page_markdown(ctx: BuildContext, note: Note) -> str:
     out_dir = ctx.docs_dir / note.route_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_link, tex_link, cover_link = copy_note_static_files(ctx, note, out_dir)
+    pdf_link, _tex_link, cover_link = copy_note_static_files(ctx, note, out_dir)
     body = convert_latex_fragment(note_body_source(note), ctx)
-    actions = []
-    actions.append(f"[LaTeX 源码]({tex_link})")
-    if pdf_link:
-        actions.append(f"[备用 PDF]({pdf_link})")
-    if note.video_url:
-        actions.append(f"[观看视频]({note.video_url})")
-    metadata_rows = [
-        ("作者/整理", note.authors),
-        ("来源", note.channel),
-        ("日期", note.date),
-    ]
-    lines = [f"# {note.title}", "", " · ".join(actions), ""]
-    if any(value for _, value in metadata_rows):
-        lines.extend(["| 字段 | 内容 |", "| --- | --- |"])
-        for key, value in metadata_rows:
-            if value:
-                lines.append(f"| {key} | {value} |")
-        lines.append("")
-    if cover_link:
-        lines.extend([f"![{note.title}]({cover_link})", ""])
+    lines = note_header_markdown(note, pdf_link, cover_link)
     lines.append(body)
     return "\n".join(lines)
+
+
+def note_header_markdown(note: Note, pdf_link: str, cover_link: str) -> list[str]:
+    """Title plus a compact header: one metadata line, one link line and a small cover.
+
+    The sidebar shows a shortened label (see nav_label); front matter keeps the full
+    title for <title>, the header bar and search.
+    """
+    actions = []
+    if note.video_url:
+        actions.append(f"[观看视频]({note.video_url})")
+    if pdf_link:
+        actions.append(f"[备用 PDF]({pdf_link})")
+    actions.append(f"[LaTeX 源码]({github_blob_url(note.rel_tex_path)})")
+    metadata = [value for value in (note.authors, note.channel, note.date) if value]
+    lines = ["---", f"title: {yaml_quote(note.title)}", "---", "", f"# {note.title}", ""]
+    lines.extend(['<div class="ai-notes-note-header" markdown>', '<div class="ai-notes-note-header__text" markdown>', ""])
+    if metadata:
+        lines.extend([" · ".join(metadata), "{: .ai-notes-note-header__meta }", ""])
+    lines.extend([" · ".join(actions), "{: .ai-notes-note-header__actions }", "", "</div>"])
+    if cover_link:
+        cover = f"![视频封面]({cover_link})"
+        if note.video_url:
+            cover = f"[{cover}]({note.video_url})"
+        lines.extend(["", cover, "{: .ai-notes-note-header__cover }"])
+    lines.extend(["", "</div>", ""])
+    return lines
 
 
 def is_single_page_course(course_dir: Path, notes: list[Note]) -> bool:
@@ -1736,27 +1909,43 @@ def course_page_markdown(course_dir: Path, notes: list[Note], title: str, topic:
     lines = [f"# {title}", ""]
     if topic:
         lines.extend([topic, ""])
-    lines.extend([f"共 {len(notes)} 份讲义。", "", "| 讲义 | 日期 | 来源 | 资源 |", "| --- | --- | --- | --- |"])
+    # A source column that repeats one value on every row only adds noise; state it once instead.
+    channels = {note.channel for note in notes}
+    shared_channel = next(iter(channels)) if len(channels) == 1 else None
+    summary = f"共 {len(notes)} {note_unit(course_dir)}"
+    if shared_channel:
+        summary += f"，来源：{shared_channel}"
+    header = ["讲义", "日期"] + ([] if shared_channel is not None else ["来源"]) + ["资源"]
+    lines.extend(
+        [
+            f"{summary}。",
+            "",
+            '<div class="ai-notes-course-table" markdown>',
+            "",
+            "| " + " | ".join(header) + " |",
+            "|" + " --- |" * len(header),
+        ]
+    )
     for note in sorted(notes, key=lambda item: natural_key(item.route_dir)):
         page_rel = markdown_page_target(course_dir, note.route_dir)
-        dir_rel = relative_dir_target(course_dir, note.route_dir)
-        resources = [f"[阅读]({page_rel})"]
-        resources.append(f"[LaTeX]({dir_rel}{note.tex_path.name})")
+        resources = [f"[LaTeX]({github_blob_url(note.rel_tex_path)})"]
         if note.pdf_path.is_file():
             resources.append(f"[备用 PDF]({raw_github_url(note.pdf_path.relative_to(note.root))})")
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    f"[{note.title}]({page_rel})",
-                    note.date or "—",
-                    note.channel or "—",
-                    " · ".join(resources),
-                ]
-            )
-            + " |"
-        )
+        cells = [f"[{note.title}]({page_rel})", note.date or "—"]
+        if shared_channel is None:
+            cells.append(note.channel or "—")
+        cells.append(" · ".join(resources))
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.extend(["", "</div>"])
     return "\n".join(lines)
+
+
+def reading_route_markdown(known_routes: set[str]) -> list[str]:
+    lines = ["## 推荐阅读路线", ""]
+    for name, steps in READING_ROUTES:
+        parts = [f"[{label}]({route}/index.md)" if route in known_routes else label for label, route in steps]
+        lines.append(f"- {name}：" + " → ".join(parts))
+    return lines
 
 
 def home_markdown(
@@ -1765,47 +1954,48 @@ def home_markdown(
     catalog_entries: list[CatalogEntry],
     entries_by_path: dict[str, CatalogEntry],
 ) -> str:
-    groups: OrderedDict[str, list[Path]] = OrderedDict()
-    for course_dir in courses:
-        category = infer_category(course_dir, catalog_entries)
-        groups.setdefault(category, []).append(course_dir)
     lines = [
         "# AI Course Notes",
         "",
         f"这里是从 `{len(notes)}` 份 LaTeX 讲义自动生成的网页阅读站。正文直接由 `.tex` 渲染成网页，适合浏览、搜索和连续阅读。",
         "",
-        "## 课程地图",
-        "",
     ]
-    for category, course_dirs in groups.items():
-        lines.extend([f"### {category}", "", '<div class="course-grid" markdown>', ""])
-        for course_dir in sorted(course_dirs, key=natural_key):
+    known_routes = {course_dir.as_posix() for course_dir in courses} | {note.route_dir.as_posix() for note in notes}
+    lines.extend(reading_route_markdown(known_routes))
+    lines.extend(["", "## 课程地图", ""])
+    for category, course_dirs in group_courses(courses, catalog_entries).items():
+        lines.extend([f"### {category_label(category)}", "", '<div class="course-grid" markdown>', ""])
+        for course_dir in course_dirs:
             title = course_title(course_dir, entries_by_path)
             topic = topic_for_course(course_dir, entries_by_path)
             count = len(courses[course_dir])
             detail = f"<br><span>{html.escape(topic)}</span>" if topic else ""
-            lines.append(f"-   [**{title}**]({course_dir.as_posix()}/index.md){detail}<br><small>{count} 份讲义</small>")
+            lines.append(f"-   [**{title}**]({course_dir.as_posix()}/index.md){detail}<br><small>{count} {note_unit(course_dir)}</small>")
         lines.extend(["", "</div>", ""])
-    lines.extend(
-        [
-            "## 推荐阅读路线",
-            "",
-            "- 入门 LLM：CS336 → CS224R L09 → CS25 Karpathy Transformer 入门",
-            "- 深入 Agent：Berkeley LLM Agents → Modern Agent → Agentic RL",
-            "- 模型架构：LLM Architect → CS25 Mixtral → CS336 MoE",
-            "- 前沿洞察：Ilya → Dario → State of AI 2026",
-        ]
-    )
     return "\n".join(lines)
 
 
 def css_content() -> str:
     return """
 :root {
+  /* theme.font is false: system fonts only. Latin faces come first so Latin text keeps them;
+     CJK text falls through to the first CJK face installed on the platform. */
+  --md-text-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC",
+    "WenQuanYi Micro Hei", sans-serif;
+  --md-code-font: SFMono-Regular, Menlo, Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei",
+    monospace;
   --ai-notes-card-border: rgba(28, 86, 87, 0.18);
   --ai-notes-page-gutter: clamp(0.8rem, 2vw, 2rem);
   --ai-notes-rule-color: color-mix(in srgb, var(--md-default-fg-color), transparent 86%);
-  --ai-notes-sidebar-toggle-size: 1.55rem;
+  /* 46em of the 0.8rem body text: about 46 CJK characters per line. */
+  --ai-notes-measure: 36.8rem;
+  --ai-notes-important-color: #7c4dff;
+  --md-admonition-icon--important: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.62L12 2 9.19 8.62 2 9.24l5.45 4.73L5.82 21z"/></svg>');
+}
+
+[data-md-color-scheme="slate"] {
+  --ai-notes-card-border: color-mix(in srgb, var(--md-default-fg-color), transparent 78%);
 }
 
 @media screen and (min-width: 76.25em) {
@@ -1817,100 +2007,43 @@ def css_content() -> str:
     width: 100%;
   }
 
-  .ai-notes-sidebar-toggle {
-    align-items: center;
-    background: color-mix(in srgb, var(--md-default-bg-color), var(--md-primary-fg-color) 6%);
-    border: 1px solid var(--md-default-fg-color--lightest);
-    border-radius: 999px;
-    color: var(--md-default-fg-color--light);
-    cursor: pointer;
-    display: flex;
-    height: var(--ai-notes-sidebar-toggle-size);
-    justify-content: center;
-    position: sticky;
-    top: 3.4rem;
-    transition: background-color 140ms ease, color 140ms ease, transform 140ms ease;
-    width: var(--ai-notes-sidebar-toggle-size);
-    z-index: 3;
+  /* Keep prose at a readable measure, centred in the content column. --ai-notes-gap is the
+     space left beside the measure; figures may use up to 8rem of it on each side. Browsers
+     without container query units ignore these rules and keep the full-width column. */
+  .md-content {
+    container-type: inline-size;
+    --ai-notes-gap: max(0px, calc((100cqi - 2.4rem - var(--ai-notes-measure)) / 2));
+    --ai-notes-bleed: min(var(--ai-notes-gap), 8rem);
   }
 
-  .ai-notes-sidebar-toggle:hover {
-    background: var(--md-accent-fg-color--transparent);
-    color: var(--md-accent-fg-color);
+  .md-content > .md-content__inner,
+  .md-content > .md-path {
+    padding-left: var(--ai-notes-gap);
+    padding-right: var(--ai-notes-gap);
   }
 
-  .ai-notes-sidebar-toggle svg {
-    height: 0.95rem;
-    width: 0.95rem;
+  /* Material sizes figures to fit-content within 100%; let top-level figures span the bleed. */
+  .md-content__inner.md-typeset > figure {
+    margin-left: calc(-1 * var(--ai-notes-bleed));
+    margin-right: calc(-1 * var(--ai-notes-bleed));
+    max-width: none;
+    width: auto;
   }
 
-  .ai-notes-sidebar-toggle--primary {
-    float: right;
-    margin: 0.15rem 0.2rem 0.45rem 0;
-  }
-
-  .ai-notes-sidebar-toggle--secondary {
-    float: left;
-    margin: 0.15rem 0 0.45rem 0.2rem;
-  }
-
-  body.ai-notes-nav-collapsed .md-sidebar--primary {
-    display: none;
-  }
-
-  body.ai-notes-toc-collapsed .md-sidebar--secondary {
-    display: none;
-  }
-
-  .ai-notes-sidebar-restore {
-    background: var(--md-default-bg-color);
-    border: 1px solid var(--md-default-fg-color--lightest);
-    border-radius: 999px;
-    box-shadow: var(--md-shadow-z1);
-    color: var(--md-default-fg-color--light);
-    cursor: pointer;
-    display: none;
-    height: 1.8rem;
-    justify-content: center;
-    position: fixed;
-    top: 4.4rem;
-    width: 1.8rem;
-    z-index: 5;
-  }
-
-  .ai-notes-sidebar-restore:hover {
-    color: var(--md-accent-fg-color);
-  }
-
-  .ai-notes-sidebar-restore svg {
-    height: 1rem;
-    width: 1rem;
-  }
-
-  .ai-notes-sidebar-restore--primary {
-    left: max(0.55rem, var(--ai-notes-page-gutter));
-  }
-
-  .ai-notes-sidebar-restore--secondary {
-    right: max(0.55rem, var(--ai-notes-page-gutter));
-  }
-
-  body.ai-notes-nav-collapsed .ai-notes-sidebar-restore--primary,
-  body.ai-notes-toc-collapsed .ai-notes-sidebar-restore--secondary {
-    display: flex;
+  /* PDF figures carry LaTeX widths (a share of \\textwidth), so they stay on the text measure. */
+  .md-content__inner.md-typeset > figure.ai-notes-figure--pdf {
+    margin-left: auto;
+    margin-right: auto;
   }
 }
 
-@media screen and (max-width: 76.234em) {
-  .ai-notes-sidebar-toggle,
-  .ai-notes-sidebar-restore {
-    display: none;
-  }
+.md-typeset .ai-notes-course-table td:last-child {
+  white-space: nowrap;
 }
 
 .md-typeset .course-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
   gap: 0.75rem;
   margin: 0.75rem 0 1.5rem;
 }
@@ -1919,17 +2052,67 @@ def css_content() -> str:
   display: contents;
 }
 
-.md-typeset .course-grid li {
+[dir] .md-typeset .course-grid li {
   list-style: none;
   border: 1px solid var(--ai-notes-card-border);
   border-radius: 0.35rem;
   padding: 0.8rem 0.9rem;
   margin: 0;
   background: color-mix(in srgb, var(--md-default-bg-color), var(--md-primary-fg-color) 4%);
+  position: relative;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+/* The title link covers the whole card, so any click on the card opens the course. */
+.md-typeset .course-grid li > a:first-child::after {
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.md-typeset .course-grid li:hover,
+.md-typeset .course-grid li:focus-within {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: var(--md-shadow-z1);
 }
 
 .md-typeset .course-grid small {
   color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .ai-notes-note-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1.2rem;
+  justify-content: space-between;
+  margin: -0.35rem 0 1.6rem;
+}
+
+.md-typeset .ai-notes-note-header p {
+  margin: 0;
+}
+
+.md-typeset .ai-notes-note-header__meta {
+  color: var(--md-default-fg-color--light);
+  font-size: 0.72rem;
+}
+
+.md-typeset .ai-notes-note-header__actions {
+  font-size: 0.72rem;
+  margin-top: 0.3rem !important;
+}
+
+.md-typeset .ai-notes-note-header__cover {
+  flex: 0 0 auto;
+}
+
+.md-typeset .ai-notes-note-header__cover img {
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.3rem;
+  display: block;
+  object-fit: cover;
+  width: 8.4rem;
 }
 
 .md-typeset h1 {
@@ -2004,10 +2187,30 @@ def css_content() -> str:
   padding: 0.7rem 0.9rem;
 }
 
-.md-typeset .admonition {
+.md-typeset .admonition,
+.md-typeset details {
   border-radius: 0.45rem;
   box-shadow: none;
+  /* Material uses 0.64rem (12.8px); boxes hold about a third of the text on many pages. */
+  font-size: 0.76rem;
   margin: 1rem 0 1.3rem;
+}
+
+.md-typeset .admonition.important,
+.md-typeset details.important {
+  border-color: var(--ai-notes-important-color);
+}
+
+.md-typeset .important > .admonition-title,
+.md-typeset .important > summary {
+  background-color: color-mix(in srgb, var(--ai-notes-important-color), transparent 90%);
+}
+
+.md-typeset .important > .admonition-title::before,
+.md-typeset .important > summary::before {
+  background-color: var(--ai-notes-important-color);
+  -webkit-mask-image: var(--md-admonition-icon--important);
+  mask-image: var(--md-admonition-icon--important);
 }
 
 .md-typeset .admonition-title {
@@ -2019,7 +2222,8 @@ def css_content() -> str:
   border: 1px solid var(--md-default-fg-color--lightest);
   border-radius: 0.38rem;
   display: table;
-  font-size: 0.88rem;
+  /* em, not rem: tables inside boxes follow the box text size. */
+  font-size: 0.94em;
   line-height: 1.55;
   margin: 1rem 0 1.1rem;
   overflow: hidden;
@@ -2069,8 +2273,14 @@ def css_content() -> str:
   background: #fff;
 }
 
+.md-typeset figcaption {
+  /* Material italicizes captions; CJK fonts have no italic, so browsers slant the glyphs. */
+  font-style: normal;
+}
+
 .md-typeset .ai-notes-figure figcaption {
   color: var(--md-default-fg-color--light);
+  max-width: var(--ai-notes-measure);
   font-size: 0.78rem;
   line-height: 1.55;
   margin-top: 0.45rem;
@@ -2080,6 +2290,33 @@ def css_content() -> str:
   font-size: 0.72rem;
   margin-left: 0.35rem;
   white-space: nowrap;
+}
+
+.md-typeset .ai-notes-figure__source {
+  color: var(--md-default-fg-color--lighter);
+  font-size: 0.68rem;
+}
+
+/* Slide pairs and subfigures: equal-width images side by side, wrapping when the column is narrow. */
+.md-typeset .ai-notes-figure--group {
+  align-items: flex-start;
+  display: flex;
+  flex-flow: row wrap;
+  gap: 0.6rem;
+  justify-content: center;
+}
+
+.md-typeset .ai-notes-figure--group > .ai-notes-figure__preview {
+  flex: 1 1 0;
+  min-width: min(14rem, 100%);
+}
+
+.md-typeset .ai-notes-figure--group > .ai-notes-figure__preview img {
+  width: 100%;
+}
+
+.md-typeset .ai-notes-figure--group > figcaption {
+  flex-basis: 100%;
 }
 
 .md-typeset .ai-notes-table-caption {
@@ -2093,93 +2330,9 @@ def css_content() -> str:
 
 
 def sidebar_script() -> str:
+    """Reader script: remember the scroll position of each page across reloads in this tab."""
     return """
 (function () {
-  var sidebarConfigs = [
-    {
-      selector: ".md-sidebar--primary",
-      collapsedClass: "ai-notes-nav-collapsed",
-      storageKey: "ai-notes-sidebar-nav-collapsed",
-      buttonClass: "ai-notes-sidebar-toggle--primary",
-      restoreClass: "ai-notes-sidebar-restore--primary",
-      collapseLabel: "折叠左侧导航",
-      restoreLabel: "展开左侧导航",
-      collapseIcon: "M15 6 9 12l6 6",
-      restoreIcon: "M9 6l6 6-6 6"
-    },
-    {
-      selector: ".md-sidebar--secondary",
-      collapsedClass: "ai-notes-toc-collapsed",
-      storageKey: "ai-notes-sidebar-toc-collapsed",
-      buttonClass: "ai-notes-sidebar-toggle--secondary",
-      restoreClass: "ai-notes-sidebar-restore--secondary",
-      collapseLabel: "折叠右侧目录",
-      restoreLabel: "展开右侧目录",
-      collapseIcon: "M9 6l6 6-6 6",
-      restoreIcon: "M15 6 9 12l6 6"
-    }
-  ];
-
-  function icon(path) {
-    return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="' + path + '"></path></svg>';
-  }
-
-  function setCollapsed(config, collapsed) {
-    document.body.classList.toggle(config.collapsedClass, collapsed);
-    try {
-      localStorage.setItem(config.storageKey, collapsed ? "1" : "0");
-    } catch (_error) {
-      return;
-    }
-  }
-
-  function storedCollapsed(config) {
-    try {
-      return localStorage.getItem(config.storageKey) === "1";
-    } catch (_error) {
-      return false;
-    }
-  }
-
-  function createButton(className, label, path) {
-    var button = document.createElement("button");
-    button.type = "button";
-    button.className = className;
-    button.setAttribute("aria-label", label);
-    button.title = label;
-    button.innerHTML = icon(path);
-    return button;
-  }
-
-  function installToggle(config) {
-    var sidebar = document.querySelector(config.selector);
-    if (!sidebar) {
-      return;
-    }
-    var scrollwrap = sidebar.querySelector(".md-sidebar__scrollwrap") || sidebar;
-    var collapseButton = createButton(
-      "ai-notes-sidebar-toggle " + config.buttonClass,
-      config.collapseLabel,
-      config.collapseIcon
-    );
-    var restoreButton = createButton(
-      "ai-notes-sidebar-restore " + config.restoreClass,
-      config.restoreLabel,
-      config.restoreIcon
-    );
-
-    collapseButton.addEventListener("click", function () {
-      setCollapsed(config, true);
-    });
-    restoreButton.addEventListener("click", function () {
-      setCollapsed(config, false);
-    });
-
-    scrollwrap.prepend(collapseButton);
-    document.body.appendChild(restoreButton);
-    setCollapsed(config, storedCollapsed(config));
-  }
-
   function scrollKey() {
     return "ai-notes-scroll:" + location.origin + location.pathname + location.search;
   }
@@ -2233,15 +2386,14 @@ def sidebar_script() -> str:
     restoreScrollPosition();
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    sidebarConfigs.forEach(installToggle);
-    installScrollMemory();
-  });
+  document.addEventListener("DOMContentLoaded", installScrollMemory);
 })();
 """.strip()
 
 
 def mathjax_config() -> str:
+    """MathJax settings plus a loader that fetches the vendored copy only on pages with math."""
+    script = "../" + MATHJAX_SITE_DIR.relative_to("assets").as_posix() + "/tex-chtml.js"
     return """
 window.MathJax = {
   tex: {
@@ -2254,7 +2406,113 @@ window.MathJax = {
     processHtmlClass: "arithmatex"
   }
 };
-""".strip()
+
+// About a quarter of the pages have no math; they skip MathJax entirely. On the others the
+// script loads asynchronously, so the text renders first and the formulas follow.
+(function () {
+  if (!document.querySelector(".arithmatex")) {
+    return;
+  }
+  var script = document.createElement("script");
+  script.src = new URL("__MATHJAX_SCRIPT__", document.currentScript.src).href;
+  script.async = true;
+  document.head.appendChild(script);
+})();
+""".strip().replace("__MATHJAX_SCRIPT__", script)
+
+
+def search_index_hook() -> str:
+    """MkDocs hook that stores the search index as UTF-8 instead of \\uXXXX escapes."""
+    return """
+# Generated by tools/web/generate_site.py.
+# MkDocs writes search/search_index.json with every CJK character escaped as \\uXXXX.
+# Rewriting it as UTF-8 cuts the index from 21.0 MB to 12.9 MB on this site.
+
+import json
+from pathlib import Path
+
+
+def on_post_build(config, **kwargs):
+    path = Path(config["site_dir"]) / "search" / "search_index.json"
+    if not path.is_file():
+        return
+    data = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+""".lstrip()
+
+
+def theme_main_override() -> str:
+    """Material template override that delays the search index download until search is used."""
+    return """
+{% extends "base.html" %}
+
+{% block scripts %}
+<script>
+/* Material downloads search/search_index.json (about 4.6 MB gzip) with XMLHttpRequest on
+   every page load. Hold that one request until the reader focuses or clicks the search box.
+   If Material changes how it loads the index (another URL, fetch()), nothing is intercepted
+   and search keeps its default behavior. */
+(function () {
+  var proto = window.XMLHttpRequest && XMLHttpRequest.prototype;
+  if (!proto || !window.URLSearchParams) {
+    return;
+  }
+  var params = new URLSearchParams(location.search);
+  /* ?q= opens search on load and ?h= highlights a search hit: both need the index now. */
+  if (params.has("q") || params.has("h")) {
+    return;
+  }
+  var indexUrl = /\\/search\\/search_index\\.json(?:[?#]|$)/;
+  var open = proto.open;
+  var send = proto.send;
+  var held = [];
+  var released = false;
+
+  function release() {
+    if (released) {
+      return;
+    }
+    released = true;
+    proto.open = open;
+    proto.send = send;
+    document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("pointerdown", onPointerDown, true);
+    held.splice(0).forEach(function (request) {
+      send.apply(request.xhr, request.args);
+    });
+  }
+
+  function onFocus(event) {
+    var target = event.target;
+    if (target && target.matches && target.matches("[data-md-component=search-query]")) {
+      release();
+    }
+  }
+
+  function onPointerDown(event) {
+    var target = event.target;
+    if (target && target.closest && target.closest("label[for=__search], .md-search")) {
+      release();
+    }
+  }
+
+  proto.open = function (method, url) {
+    this.__aiNotesHoldIndex = indexUrl.test(String(url));
+    return open.apply(this, arguments);
+  };
+  proto.send = function () {
+    if (released || !this.__aiNotesHoldIndex) {
+      return send.apply(this, arguments);
+    }
+    held.push({ xhr: this, args: arguments });
+  };
+  document.addEventListener("focusin", onFocus, true);
+  document.addEventListener("pointerdown", onPointerDown, true);
+})();
+</script>
+{{ super() }}
+{% endblock %}
+""".lstrip()
 
 
 def yaml_quote(value: str) -> str:
@@ -2262,7 +2520,23 @@ def yaml_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path: dict[str, CatalogEntry]) -> str:
+def nav_course_lines(course_dir: Path, notes: list[Note], title: str, indent: str) -> list[str]:
+    """One course in the sidebar; with navigation.indexes the section title opens the course page."""
+    index_page = yaml_quote(course_dir.as_posix() + "/index.md")
+    if is_single_page_course(course_dir, notes):
+        return [f"{indent}- {yaml_quote(title)}: {index_page}"]
+    labels = nav_labels(notes)
+    lines = [f"{indent}- {yaml_quote(title)}:", f"{indent}    - {index_page}"]
+    for note in sorted(notes, key=lambda item: natural_key(item.route_dir)):
+        lines.append(f"{indent}    - {yaml_quote(labels[note.route_dir])}: {yaml_quote(note.route_dir.as_posix() + '/index.md')}")
+    return lines
+
+
+def generate_mkdocs_yml(
+    courses: OrderedDict[Path, list[Note]],
+    entries_by_path: dict[str, CatalogEntry],
+    catalog_entries: list[CatalogEntry],
+) -> str:
     lines = [
         "site_name: AI Course Notes",
         f"site_url: {SITE_URL}",
@@ -2272,6 +2546,10 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
         "site_dir: site",
         "theme:",
         "  name: material",
+        "  custom_dir: overrides",
+        # Material loads Roboto from Google Fonts by default; the stylesheet blocks first paint for
+        # minutes where fonts.googleapis.com is unreachable, and Roboto has no CJK glyphs anyway.
+        "  font: false",
         "  language: zh",
         "  palette:",
         "    - scheme: default",
@@ -2287,15 +2565,25 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
         "        icon: material/weather-sunny",
         "        name: 切换到浅色模式",
         "  features:",
-        "    - navigation.tracking",
+        "    - content.code.copy",
+        "    - navigation.footer",
+        "    - navigation.indexes",
+        "    - navigation.path",
+        # Without prune every page embeds all ~450 sidebar links (about 70% of each HTML file).
+        "    - navigation.prune",
+        "    - navigation.sections",
         "    - navigation.top",
+        "    - navigation.tracking",
         "    - search.highlight",
         "    - search.suggest",
+        "    - toc.follow",
         "plugins:",
         "  - search:",
         "      lang:",
         "        - zh",
         "        - en",
+        "hooks:",
+        "  - hooks/search_index_utf8.py",
         "markdown_extensions:",
         "  - admonition",
         "  - attr_list",
@@ -2309,20 +2597,20 @@ def generate_mkdocs_yml(courses: OrderedDict[Path, list[Note]], entries_by_path:
         "extra_javascript:",
         "  - assets/javascripts/ai-notes.js",
         "  - assets/javascripts/mathjax.js",
-        "  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js",
         "nav:",
         "  - 首页: index.md",
-        "  - 课程:",
     ]
-    for course_dir, notes in courses.items():
-        title = course_title(course_dir, entries_by_path)
-        if is_single_page_course(course_dir, notes):
-            lines.append(f"      - {yaml_quote(title)}: {yaml_quote(course_dir.as_posix() + '/index.md')}")
-            continue
-        lines.append(f"      - {yaml_quote(title)}:")
-        lines.append(f"          - 概览: {yaml_quote(course_dir.as_posix() + '/index.md')}")
-        for note in sorted(notes, key=lambda item: natural_key(item.route_dir)):
-            lines.append(f"          - {yaml_quote(note.title)}: {yaml_quote(note.route_dir.as_posix() + '/index.md')}")
+    for category, course_dirs in group_courses(courses, catalog_entries).items():
+        label = nav_category_label(category)
+        titles = {course_dir: course_title(course_dir, entries_by_path) for course_dir in course_dirs}
+        if len(course_dirs) == 1 and titles[course_dirs[0]] == label:
+            # One collection named like its category (the articles): avoid repeating the name, and
+            # keep its 25 links collapsed so they are pruned from every other page's sidebar.
+            only = course_dirs[0]
+            titles[only] = f"全部 {len(courses[only])} {note_unit(only)}"
+        lines.append(f"  - {yaml_quote(label)}:")
+        for course_dir in course_dirs:
+            lines.extend(nav_course_lines(course_dir, courses[course_dir], titles[course_dir], "      "))
     return "\n".join(lines) + "\n"
 
 
@@ -2364,6 +2652,9 @@ def prepare_output(output: Path, cache_root: Path | None = None) -> tuple[Path, 
     mkdocs_yml = output / "mkdocs.yml"
     if mkdocs_yml.exists():
         mkdocs_yml.unlink()
+    for generated_dir in (output / "hooks", output / "overrides"):
+        if generated_dir.exists():
+            shutil.rmtree(generated_dir)
     return docs_dir, cache_dir, image_cache_dir
 
 
@@ -2419,7 +2710,10 @@ def build_site(
     write_text(docs_dir / "assets" / "stylesheets" / "ai-notes.css", css_content())
     write_text(docs_dir / "assets" / "javascripts" / "ai-notes.js", sidebar_script())
     write_text(docs_dir / "assets" / "javascripts" / "mathjax.js", mathjax_config())
-    write_text(output / "mkdocs.yml", generate_mkdocs_yml(courses, entries_by_path))
+    shutil.copytree(MATHJAX_VENDOR_DIR, docs_dir / MATHJAX_SITE_DIR)
+    write_text(output / "hooks" / "search_index_utf8.py", search_index_hook())
+    write_text(output / "overrides" / "main.html", theme_main_override())
+    write_text(output / "mkdocs.yml", generate_mkdocs_yml(courses, entries_by_path, catalog_entries))
     print(f"Generated {len(notes)} note pages across {len(courses)} course pages in {output}")
     print_warning_report(ctx.warnings, verbose=verbose_warnings)
     if strict and not notes:
