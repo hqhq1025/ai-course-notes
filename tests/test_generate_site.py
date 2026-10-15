@@ -1,9 +1,11 @@
+import re
 import shutil
 import subprocess
 import sys
 import importlib.util
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 
@@ -520,6 +522,76 @@ skill/
     assert "未转换的 LaTeX 环境" not in page
 
 
+def write_vector_pdf(path: Path) -> None:
+    content = b"0 0 1 RG 4 w 10 10 m 190 90 l S"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+    ]
+    data = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(data))
+        data += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(data)
+    data += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    data += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    data += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    path.write_bytes(data)
+
+
+def test_renders_pdf_figures_as_svg_or_jpeg(tmp_path: Path) -> None:
+    if shutil.which("pdftocairo") is None:
+        pytest.skip("pdftocairo is not installed")
+    note_dir = tmp_path / "sample-course" / "lecture03"
+    (note_dir / "figures").mkdir(parents=True)
+    write_vector_pdf(note_dir / "figures" / "diagram.pdf")
+    pages = [Image.new("RGB", (800, 400), color) for color in ((220, 30, 30), (30, 30, 220))]
+    pages[0].save(note_dir / "figures" / "deck.pdf", save_all=True, append_images=pages[1:])
+    (note_dir / "figures" / "broken.pdf").write_bytes(b"%PDF-1.4")
+    (note_dir / "lecture03-notes.tex").write_text(
+        r"""
+\documentclass{article}
+\begin{document}
+\begin{figure}
+\includegraphics[width=0.92\textwidth]{figures/diagram.pdf}
+\caption{矢量图}
+\end{figure}
+\begin{figure}
+\includegraphics[width=\linewidth,page=2]{figures/deck.pdf}
+\caption{位图课件第二页}
+\end{figure}
+\begin{figure}
+\includegraphics[width=\textwidth]{figures/broken.pdf}
+\caption{损坏的 PDF}
+\end{figure}
+\end{document}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = run_generator(tmp_path, "--strict")
+
+    assert result.returncode == 0, result.stderr
+    out_dir = tmp_path / ".web-build" / "docs" / "sample-course" / "lecture03"
+    page = (out_dir / "index.md").read_text(encoding="utf-8")
+    previews = re.findall(r'<img src="(figures-web/[^"]+)" alt="([^"]+)"', page)
+    assert [(Path(src).suffix, alt) for src, alt in previews] == [(".svg", "矢量图"), (".jpg", "位图课件第二页")]
+    assert 'style="width: 92%"' in page
+    assert "<path" in (out_dir / previews[0][0]).read_text(encoding="utf-8")
+    with Image.open(out_dir / previews[1][0]) as rendered:
+        assert rendered.width == 1600
+        red, _green, blue = rendered.convert("RGB").getpixel((rendered.width // 2, rendered.height // 2))
+        assert blue > 150 and red < 100
+    assert "下载 PDF 原图" in page
+    assert "[打开 PDF 图示](https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture03/figures/broken.pdf)" in page
+
+    strict_result = run_generator(tmp_path, "--strict", "--fail-on-pdf-figure-warnings")
+    assert strict_result.returncode == 1
+
+
 def test_compresses_image_copies_without_touching_sources(tmp_path: Path) -> None:
     write_sample_repo(tmp_path)
     source = tmp_path / "sample-course" / "lecture01" / "diagram.jpg"
@@ -912,3 +984,5 @@ def test_pages_workflow_installs_tikz_font_dependencies_and_fails_on_fallback() 
     assert "texlive-fonts-recommended" in workflow
     assert "--fail-on-tikz-warnings" in workflow
     assert "--verbose-warnings" in workflow
+    assert "poppler-utils" in workflow
+    assert "--fail-on-pdf-figure-warnings" in workflow

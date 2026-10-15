@@ -27,6 +27,10 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 PDF_EXTENSIONS = {".pdf"}
 TIKZ_RENDERER_VERSION = "pdf-v2"
 IMAGE_CACHE_VERSION = "image-v1"
+PDF_FIGURE_RENDERER_VERSION = "pdf-figure-v1"
+# Keep a PDF figure as SVG only when it is mostly vector. Many "PDF figures" are bitmaps
+# wrapped in PDF; as SVG they become base64 blobs about 6x larger than a 1600px JPEG.
+PDF_FIGURE_MAX_BITMAP_SHARE = 0.2
 VISIBLE_SPACE_SYMBOL = "\u2423"
 FENCE_LINE_PATTERN = re.compile(r"^[ \t]*```", re.M)
 FENCED_CODE_BLOCK_PATTERN = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.M | re.S)
@@ -98,6 +102,7 @@ class BuildContext:
     image_max_width: int
     jpeg_quality: int
     image_cache_dir: Path | None = None
+    pdf_cache_dir: Path | None = None
     warnings: list[WarningEvent] = field(default_factory=list)
     tikz_preambles: dict[Path, str] = field(default_factory=dict)
     tikz_collector: list[Path] | None = None
@@ -830,11 +835,94 @@ def markdown_image_figure(ctx: BuildContext, src: Path, preview_path: str, capti
     )
 
 
+def render_pdf_figure(ctx: BuildContext, src: Path, page: int) -> Path | None:
+    """Render one PDF page to a cached SVG (mostly vector) or JPEG (bitmap-heavy)."""
+    note_path = ctx.current_note.rel_tex_path if ctx.current_note else src
+    cache_dir = ctx.pdf_cache_dir
+    if cache_dir is None:
+        return None
+    key = hashlib.sha256(
+        "\n".join(
+            [PDF_FIGURE_RENDERER_VERSION, file_sha256(src), str(page), str(ctx.image_max_width), str(ctx.jpeg_quality)]
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    for suffix in (".svg", ".jpg"):
+        cached = cache_dir / f"pdf-{key}{suffix}"
+        if cached.exists():
+            return cached
+    if not shutil.which("pdftocairo"):
+        ctx.warn("pdf_figure_skipped", f"pdftocairo unavailable for {note_path}; linking {src.name} instead")
+        return None
+    page_args = ["-f", str(page), "-l", str(page)]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            svg_path = tmp_path / "figure.svg"
+            subprocess.run(
+                ["pdftocairo", "-svg", *page_args, str(src), str(svg_path)],
+                check=True, capture_output=True, timeout=180,
+            )
+            svg = svg_path.read_text(encoding="utf-8", errors="ignore")
+            bitmap_bytes = sum(len(data) for data in re.findall(r"base64,([A-Za-z0-9+/=]+)", svg))
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            if bitmap_bytes < PDF_FIGURE_MAX_BITMAP_SHARE * len(svg):
+                target = cache_dir / f"pdf-{key}.svg"
+                shutil.copy2(svg_path, target)
+                return target
+            subprocess.run(
+                [
+                    "pdftocairo", "-png", "-singlefile", "-scale-to-x", str(ctx.image_max_width), "-scale-to-y", "-1",
+                    *page_args, str(src), str(tmp_path / "figure"),
+                ],
+                check=True, capture_output=True, timeout=180,
+            )
+            target = cache_dir / f"pdf-{key}.jpg"
+            with Image.open(tmp_path / "figure.png") as image:
+                image.convert("RGB").save(target, format="JPEG", quality=ctx.jpeg_quality, optimize=True, progressive=True)
+            return target
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        detail = exc.stderr.decode("utf-8", "replace").strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else exc
+        ctx.warn("pdf_figure_failed", f"PDF figure rendering failed for {note_path}: {src} page {page} ({detail})")
+        return None
+
+
+def markdown_rendered_pdf_figure(ctx: BuildContext, src: Path, rendered: Path, caption: str, width_percent: int | None) -> str:
+    out_dir = ctx.current_out_dir
+    if out_dir is None:
+        return markdown_pdf_figure(ctx, src, caption)
+    preview = f"figures-web/{rendered.name}"
+    (out_dir / "figures-web").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(rendered, out_dir / preview)
+    escaped_preview = html.escape(preview, quote=True)
+    escaped_pdf = html.escape(external_asset_url(ctx, src), quote=True)
+    escaped_caption = html.escape(caption)
+    style = f' style="width: {width_percent}%"' if width_percent else ""
+    return (
+        '\n<figure class="ai-notes-figure ai-notes-figure--pdf">\n'
+        f'  <a class="ai-notes-figure__preview" href="{escaped_preview}"{style} '
+        'target="_blank" rel="noopener noreferrer" aria-label="查看大图">\n'
+        f'    <img src="{escaped_preview}" alt="{html.escape(caption, quote=True)}" loading="lazy" decoding="async">\n'
+        '  </a>\n'
+        f'  <figcaption>{escaped_caption} '
+        f'<a class="ai-notes-figure__original" href="{escaped_pdf}" '
+        'target="_blank" rel="noopener noreferrer">下载 PDF 原图</a></figcaption>\n'
+        '</figure>\n\n'
+    )
+
+
+def includegraphics_width_percent(options: str) -> int | None:
+    match = re.search(r"width\s*=\s*([0-9]*\.?[0-9]*)\s*\\(?:textwidth|linewidth|columnwidth)", options)
+    if not match:
+        return None
+    factor = float(match.group(1)) if match.group(1) not in {"", "."} else 1.0
+    return max(10, min(100, round(factor * 100)))
+
+
 def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
     note = ctx.current_note
     if note is None:
         return ""
-    include = re.search(r"\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}", block.body)
+    include = re.search(r"\\includegraphics(?:\[([^\]]*)\])?\{([^{}]+)\}", block.body)
     if not include:
         caption = clean_latex_text(extract_command_arg(block.body, "caption"))
         body = remove_latex_command_with_arg(block.body, "caption")
@@ -842,14 +930,19 @@ def markdown_figure_from_block(ctx: BuildContext, block: EnvBlock) -> str:
         if caption:
             content = (content + "\n\n" if content else "") + f"*{caption}*"
         return f"\n{content}\n\n" if content else ""
-    image_ref = include.group(1).strip()
+    options = include.group(1) or ""
+    image_ref = include.group(2).strip()
     if image_ref == r"\videocoverpath":
         image_ref = note.cover_path
     caption = clean_latex_text(extract_command_arg(block.body, "caption")) or Path(image_ref).name
     src, relative_name = resolve_asset(note, image_ref)
     if is_pdf_asset(src):
         if src.is_file():
-            return markdown_pdf_figure(ctx, src, caption)
+            page_match = re.search(r"page\s*=\s*(\d+)", options)
+            rendered = render_pdf_figure(ctx, src, int(page_match.group(1)) if page_match else 1)
+            if rendered is None:
+                return markdown_pdf_figure(ctx, src, caption)
+            return markdown_rendered_pdf_figure(ctx, src, rendered, caption, includegraphics_width_percent(options))
         return (
             '\n??? warning "图片资源缺失"\n'
             "    ```latex\n"
@@ -1792,6 +1885,12 @@ def css_content() -> str:
   max-width: 100%;
 }
 
+.md-typeset .ai-notes-figure--pdf .ai-notes-figure__preview img {
+  width: 100%;
+  /* PDF pages render with a transparent background; keep dark text readable in dark mode. */
+  background: #fff;
+}
+
 .md-typeset .ai-notes-figure figcaption {
   color: var(--md-default-fg-color--light);
   font-size: 0.78rem;
@@ -2054,6 +2153,8 @@ def print_warning_report(warnings: list[WarningEvent], *, verbose: bool) -> None
         "image_compression_failed": "Image compression fallbacks",
         "tikz_failed": "TikZ diagrams kept as source",
         "tikz_skipped": "TikZ diagrams skipped",
+        "pdf_figure_failed": "PDF figures kept as links (render failed)",
+        "pdf_figure_skipped": "PDF figures kept as links (pdftocairo unavailable)",
     }
     counts = Counter(warning.kind for warning in warnings)
     print("\nWarning summary:")
@@ -2091,6 +2192,7 @@ def build_site(
     *,
     strict: bool,
     fail_on_tikz_warnings: bool,
+    fail_on_pdf_figure_warnings: bool,
     render_tikz: bool,
     verbose_warnings: bool,
     compress_images: bool,
@@ -2111,6 +2213,7 @@ def build_site(
         image_max_width=image_max_width,
         jpeg_quality=jpeg_quality,
         image_cache_dir=image_cache_dir,
+        pdf_cache_dir=image_cache_dir.parent / "pdf-figures",
     )
     catalog_entries = parse_readme_catalog(root)
     entries_by_path = {entry.path.as_posix(): entry for entry in catalog_entries}
@@ -2138,6 +2241,8 @@ def build_site(
         return 1
     if fail_on_tikz_warnings and any(warning.kind in {"tikz_failed", "tikz_skipped"} for warning in ctx.warnings):
         return 1
+    if fail_on_pdf_figure_warnings and any(warning.kind.startswith("pdf_figure_") for warning in ctx.warnings):
+        return 1
     return 0
 
 
@@ -2150,6 +2255,7 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="Return non-zero if no notes can be generated")
     parser.add_argument("--skip-tikz", action="store_true", help="Keep TikZ source blocks instead of rendering SVG")
     parser.add_argument("--fail-on-tikz-warnings", action="store_true", help="Return non-zero if TikZ diagrams fall back to source blocks")
+    parser.add_argument("--fail-on-pdf-figure-warnings", action="store_true", help="Return non-zero if PDF figures fall back to links")
     parser.add_argument("--verbose-warnings", action="store_true", help="Print detailed warning messages")
     parser.add_argument("--no-compress-images", action="store_true", help="Copy JPG/PNG assets without resizing or recompressing")
     parser.add_argument("--image-max-width", type=int, default=1600, help="Maximum width for copied JPG/PNG assets")
@@ -2181,6 +2287,7 @@ def main() -> int:
         args.output,
         strict=args.strict,
         fail_on_tikz_warnings=args.fail_on_tikz_warnings,
+        fail_on_pdf_figure_warnings=args.fail_on_pdf_figure_warnings,
         render_tikz=not args.skip_tikz,
         verbose_warnings=args.verbose_warnings,
         compress_images=not args.no_compress_images,
