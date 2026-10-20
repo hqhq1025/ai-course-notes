@@ -12,4 +12,4 @@
 - [x] 科研数据图区分工业酶与药物研发周期，没有虚构定量差别。
 - [x] 双向学习图将“学会如何学习”列为研究目标，没有宣称已经实现自主学习。
 
-`figure-audit.json` 保存边界检查结果和 PDF SHA256。图形可由 `render_figures.py` 重建；SVG 保留文字和形状，PDF 用于 LaTeX，PNG 用于预览。渲染调用系统 librsvg 和 Cairo，中文回退字体为 Droid Sans Fallback，英文由字体栈自动选择。
+`figure-audit.json` 保存边界检查结果。图形可由 `render_figures.py` 重建；SVG 保留文字和形状，PDF 用于 LaTeX，PNG 用于预览。渲染调用系统 librsvg 和 Cairo，中文回退字体为 Droid Sans Fallback，英文由字体栈自动选择。

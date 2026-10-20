@@ -21,10 +21,8 @@ _writer_spec.loader.exec_module(_writer)
 
 
 def request(prompt_file, prefix):
-    """Use the shared writer; source paths record evidence, not prompt content."""
-    sources = [EPISODE / 'sources']
-    sources += [p for p in EPISODE.iterdir() if p.suffix.lower() in {'.srt', '.vtt'}]
-    return _writer.request(prompt_file, prefix, sources=sources)
+    """Send the prepared prompt through the shared writer."""
+    return _writer.request(prompt_file, prefix)
 
 
 def prose(text):

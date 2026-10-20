@@ -72,8 +72,11 @@ reviews facts, renders the document, and checks the PDF and website.
 
 Read `docs/ARGON_WRITING_WORKFLOW.md` for the shared request command and receipts.
 Feed the relevant source text and timestamped spoken explanations into the
-actual prompt; a source filename or hash alone does not supply its contents.
+actual prompt; a source filename alone does not supply its contents.
 Organize prose around the questions, examples, and reasoning in the source.
+Keep routine checks focused on source content, complete model output, and rendered
+PDF/web pages. Do not generate file hashes, source snapshots, or separate
+provenance audit reports for routine note writing.
 Slide coverage remains required, but it does not require one prose unit per slide.
 
 Preserve successful chapter outputs and request a whole-document edit for

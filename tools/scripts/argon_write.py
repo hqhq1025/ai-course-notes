@@ -1,11 +1,10 @@
-"""Write structured course prose with Argon and preserve request evidence.
+"""Write structured course prose with Argon and keep recoverable results.
 
-Only --prompt is sent as user content. --source records file hashes for auditing;
-it never appends source files to the prompt. Long notes should request one chapter
-at a time. Each attempt requires a fresh output prefix, including after failure.
+The complete --prompt is sent as user content. Long notes should request one
+chapter at a time. Each attempt requires a fresh output prefix, including after
+failure.
 """
 import argparse
-import hashlib
 import json
 import os
 import time
@@ -23,10 +22,6 @@ SYSTEM_PROMPT = (
 )
 
 
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
 def reject_constant(value):
     raise ValueError(f'Invalid JSON constant: {value}')
 
@@ -35,35 +30,10 @@ def save_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
-def source_snapshot(sources):
-    """Hash explicit files/directories; this snapshot is not model input."""
-    paths = set()
-    for source in sources:
-        source = Path(source).resolve()
-        if source.is_file():
-            paths.add(source)
-        elif source.is_dir():
-            paths.update(p.resolve() for p in source.rglob('*') if p.is_file())
-        else:
-            raise FileNotFoundError(f'Source is not a file or directory: {source}')
-    snapshot = []
-    for path in sorted(paths):
-        hasher = hashlib.sha256()
-        size = 0
-        with path.open('rb') as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                hasher.update(chunk)
-                size += len(chunk)
-        snapshot.append({'path': str(path), 'bytes': size, 'sha256': hasher.hexdigest()})
-    return snapshot
-
-
-def sse_data(response, audit):
-    """Keep all received SSE lines and join data fields within each event."""
+def sse_data(response):
+    """Join data fields within each SSE event."""
     pending = []
     for line in response.iter_lines():
-        audit.write(line + b'\n')
-        audit.flush()
         if line == b'':
             if pending:
                 yield b'\n'.join(pending)
@@ -75,16 +45,15 @@ def sse_data(response, audit):
         yield b'\n'.join(pending)
 
 
-def request(prompt_file, prefix, sources=(), max_tokens=24000):
+def request(prompt_file, prefix, max_tokens=24000):
     """Return a JSON object only after validating model, stop, and DONE."""
     if max_tokens <= 0:
         raise ValueError('max_tokens must be positive')
     prompt_file, prefix = Path(prompt_file), Path(prefix)
     prompt = prompt_file.read_text(encoding='utf-8')
-    snapshot = source_snapshot(sources)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     out = lambda suffix: Path(str(prefix) + suffix)
-    suffixes = ['-prompt.txt', '-raw.txt', '-receipt.json', '.json', '-events.sse']
+    suffixes = ['-prompt.txt', '-raw.txt', '-receipt.json', '.json']
     if any(out(s).exists() for s in suffixes):
         raise FileExistsError(f'Use a fresh output prefix to preserve prior receipts: {prefix}')
     with out('-prompt.txt').open('x', encoding='utf-8') as handle:
@@ -99,14 +68,14 @@ def request(prompt_file, prefix, sources=(), max_tokens=24000):
     done, usage, error, parsed = False, None, None, None
     http_error = None
     try:
-        with out('-events.sse').open('wb') as audit, requests.post(
+        with requests.post(
                 endpoint, json=payload, stream=True, timeout=(15, 300)) as response:
             try:
                 response.raise_for_status()
             except requests.HTTPError:
                 http_error = {'status': response.status_code, 'body': response.text}
                 raise
-            for value in sse_data(response, audit):
+            for value in sse_data(response):
                 if value.strip() == b'[DONE]':
                     done = True
                     break
@@ -157,11 +126,7 @@ def request(prompt_file, prefix, sources=(), max_tokens=24000):
         'http_error': http_error,
         'endpoint': endpoint, 'started_at': datetime.fromtimestamp(started, timezone.utc).isoformat(),
         'duration_seconds': round(time.time() - started, 2), 'usage': usage,
-        'system_prompt': SYSTEM_PROMPT, 'max_tokens': max_tokens, 'reasoning_effort': 'medium',
-        'prompt_sha256': digest(prompt.encode()), 'output_sha256': digest(raw.encode()),
-        'request_sha256': digest(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()),
-        'source_mode': 'audit_only_not_appended_to_prompt', 'source_snapshot': snapshot,
-        'source_snapshot_sha256': digest(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()),
+        'max_tokens': max_tokens, 'reasoning_effort': 'medium',
     }
     save_json(out('-receipt.json'), receipt)
     if error:
@@ -175,11 +140,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prompt', type=Path, required=True, help='Complete prompt sent to Argon')
     parser.add_argument('--output-prefix', type=Path, required=True, help='Fresh prefix for output and receipts')
-    parser.add_argument('--source', type=Path, action='append', default=[],
-                        help='File or directory to hash for evidence only; repeatable, not added to prompt')
     parser.add_argument('--max-tokens', type=int, default=24000)
     args = parser.parse_args()
-    request(args.prompt, args.output_prefix, args.source, args.max_tokens)
+    request(args.prompt, args.output_prefix, max_tokens=args.max_tokens)
 
 
 if __name__ == '__main__':

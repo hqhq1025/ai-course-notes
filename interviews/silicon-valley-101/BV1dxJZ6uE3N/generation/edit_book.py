@@ -1,11 +1,10 @@
 """Assemble chapters, request Argon's complete-document edit, and apply exact edits."""
 import argparse
 import copy
-import hashlib
 import json
 from pathlib import Path
 
-from write_chapters import blueprint, episode, source_names, source_text, writer
+from write_chapters import blueprint, episode, source_text, writer
 
 
 def save(path, value):
@@ -43,20 +42,16 @@ edits只修改字符串叶节点；path使用从0开始的列表索引；old必�
         prompt += '\n【完整来源及核对】\n' + source_text
         prompt += '\n【本批返回范围与精简格式，覆盖上方返回格式】\n'
         prompt += f'本次仍通读全文，但只返回章节 {args.sections} 的文字修改及这些章节的配图。章节编号从1开始，JSON路径sections从0开始。'
-        prompt += 'edits每项仅含path和new，不重复old原文。new是该字符串字段的完整替换值。脚本用本次请求中的全文初稿哈希绑定版本，再逐字段替换。请完整落实这些章的审查意见，不输出其他章节的改动。'
+        prompt += 'edits每项仅含path和new，不重复old原文。new是该字符串字段的完整替换值，脚本会逐字段应用到保存的初稿。请完整落实这些章的审查意见，不输出其他章节的改动。'
         prompt += '仅当包含第1章时返回lead和conclusion，否则省略这两个字段。figures只含本批章节，editor_note照常返回。修改正确清楚的段落无须返回。'
         path = Path(str(prefix) + '-input.txt')
         path.write_text(prompt)
-        writer.request(path, prefix, sources=[folder / 'book-draft.json', *[episode / 'sources' / name for name in source_names]])
+        writer.request(path, prefix)
         return
     original = folder / 'book-draft.json'
     book = copy.deepcopy(json.loads(original.read_text()))
     responses = []
     for name in args.edits or [args.edit]:
-        receipt = json.loads((folder / (name + '-receipt.json')).read_text())
-        digest = hashlib.sha256(original.read_bytes()).hexdigest()
-        if not any(entry['sha256'] == digest and Path(entry['path']).name == original.name for entry in receipt['source_snapshot']):
-            raise ValueError('Draft differs from the version used for editing')
         responses.append(json.loads((folder / (name + '.json')).read_text()))
     response = {'edits': [e for r in responses for e in r['edits']],
                 'figures': [f for r in responses for f in r['figures']],
@@ -98,8 +93,6 @@ edits只修改字符串叶节点；path使用从0开始的列表索引；old必�
     save(folder / 'editorial-applied.json', {
         'model': writer.MODEL, 'edits': len(response['edits']),
         'codex_verified_factual_corrections': len(corrections),
-        'draft_sha256': hashlib.sha256(original.read_bytes()).hexdigest(),
-        'final_sha256': hashlib.sha256((folder / 'book.json').read_bytes()).hexdigest(),
         'editor_note': response['editor_note']})
     print('Applied', len(response['edits']), 'exact edits')
 

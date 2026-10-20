@@ -32,7 +32,7 @@ def chapter(section, attempt):
     prompt = instruction+'\n【整篇核定蓝图】\n'+json.dumps(blueprint,ensure_ascii=False)+'\n【本次章节】\n'+json.dumps(section,ensure_ascii=False)+'\n'+source_text
     input_path = Path(str(prefix)+'-input.txt')
     input_path.write_text(prompt)
-    return writer.request(input_path, prefix, sources=[episode/'sources'/name for name in source_names])
+    return writer.request(input_path, prefix)
 
 
 if __name__ == '__main__':

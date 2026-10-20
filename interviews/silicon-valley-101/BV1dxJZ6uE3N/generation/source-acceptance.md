@@ -3,7 +3,6 @@
 验收对象：Argon 两批整篇编辑后的 `generation/book.json`，2026-10-20。
 审查范围：对照 `review-findings.md`、七章蓝图与两份来源精读记录，逐章检查正文、框、表、小结及新增配图说明和结语。未修改正文文件。
 
-最终复核对象 SHA256：`d0ec077ee625b5c40a6aa2f7e014f13cf07366e1e0cd55c603fa3bbe432ab0f5`。
 
 ## 结论
 

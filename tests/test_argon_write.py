@@ -1,5 +1,4 @@
-"""Exercise streaming failures and source provenance without model requests."""
-import hashlib
+"""Exercise prompt delivery and streaming failures without model requests."""
 import importlib.util
 import json
 from pathlib import Path
@@ -66,35 +65,24 @@ def receipt(prefix):
     return json.loads(Path(str(prefix) + '-receipt.json').read_text())
 
 
-def test_full_prompt_and_source_hashes_are_separate(monkeypatch, tmp_path, inputs):
+def test_full_prompt_is_sent_and_saved(monkeypatch, inputs):
     prompt, prefix = inputs
-    sources = tmp_path / 'sources'
-    (sources / 'nested').mkdir(parents=True)
-    original = sources / 'nested' / 'transcript.txt'
-    original.write_text('SOURCE-ONLY-TEXT', encoding='utf-8')
-    extra = tmp_path / 'official.txt'
-    extra.write_text('原始资料', encoding='utf-8')
     calls = stub(monkeypatch, [event('{"标题":'), event('"学习"}', finish='stop'),
                                {'choices': [], 'usage': {'total_tokens': 90}}, b'[DONE]'])
     monkeypatch.setenv('ARGON_ENDPOINT', 'http://127.0.0.1:9999/v1/chat/completions')
-    assert writer.request(prompt, prefix, [sources, extra, original], max_tokens=1234) == {'标题': '学习'}
+    assert writer.request(prompt, prefix, max_tokens=1234) == {'标题': '学习'}
     assert len(calls) == 1
     assert calls[0][0] == 'http://127.0.0.1:9999/v1/chat/completions'
     payload = calls[0][1]['json']
     assert payload['messages'][1]['content'] == prompt.read_text()
-    assert 'SOURCE-ONLY-TEXT' not in json.dumps(payload)
     assert payload['max_tokens'] == 1234
     assert payload['model'] == writer.MODEL
     audit = receipt(prefix)
     assert audit['usage']['total_tokens'] == 90
     assert audit['stream_done'] and not audit['error']
-    assert audit['source_mode'] == 'audit_only_not_appended_to_prompt'
-    assert len(audit['source_snapshot']) == 2
-    actual = {p['path']: p['sha256'] for p in audit['source_snapshot']}
-    assert actual[str(original)] == hashlib.sha256(original.read_bytes()).hexdigest()
-    assert audit['prompt_sha256'] == hashlib.sha256(prompt.read_bytes()).hexdigest()
     assert Path(str(prefix) + '-prompt.txt').read_bytes() == prompt.read_bytes()
-    assert b': heartbeat' in Path(str(prefix) + '-events.sse').read_bytes()
+    assert Path(str(prefix) + '-raw.txt').read_text() == '{"标题":"学习"}'
+    assert not Path(str(prefix) + '-events.sse').exists()
 
 
 @pytest.mark.parametrize('events,expected', [
@@ -125,8 +113,9 @@ def test_failed_stream_keeps_evidence_and_does_not_retry(monkeypatch, inputs, ev
     assert not Path(str(prefix) + '.json').exists()
     audit = receipt(prefix)
     assert audit['error']
-    raw = Path(str(prefix) + '-raw.txt').read_bytes()
-    assert audit['output_sha256'] == hashlib.sha256(raw).hexdigest()
+    assert Path(str(prefix) + '-raw.txt').exists()
+    if expected == 'ReadTimeout':
+        assert Path(str(prefix) + '-raw.txt').read_text() == '{'
     before = Path(str(prefix) + '-receipt.json').read_bytes()
     with pytest.raises(FileExistsError, match='fresh output prefix'):
         writer.request(prompt, prefix)
@@ -160,16 +149,11 @@ def test_multiline_sse_and_done_at_eof(monkeypatch, inputs):
     assert writer.request(prompt, prefix) == {}
 
 
-def test_cli_defaults_and_repeatable_source(monkeypatch, tmp_path, inputs):
+def test_cli_defaults(monkeypatch, inputs):
     prompt, prefix = inputs
-    first, second = tmp_path / 'first.txt', tmp_path / 'second.txt'
-    first.write_text('first')
-    second.write_text('second')
     calls = stub(monkeypatch, [event('{}', finish='stop'), b'[DONE]'])
     monkeypatch.delenv('ARGON_ENDPOINT', raising=False)
-    monkeypatch.setattr('sys.argv', ['argon_write.py', '--prompt', str(prompt), '--output-prefix', str(prefix),
-                                    '--source', str(first), '--source', str(second)])
+    monkeypatch.setattr('sys.argv', ['argon_write.py', '--prompt', str(prompt), '--output-prefix', str(prefix)])
     writer.main()
     assert calls[0][0] == writer.DEFAULT_ENDPOINT
     assert calls[0][1]['json']['max_tokens'] == 24000
-    assert len(receipt(prefix)['source_snapshot']) == 2

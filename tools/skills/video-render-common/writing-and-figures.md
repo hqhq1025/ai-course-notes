@@ -11,6 +11,8 @@ Include actual source text in the prompt. Write around questions, examples,
 and reasoning; complete slide coverage does not require fixed per-slide prose.
 Preserve completed chapters, edit the assembled document for continuity, and
 keep failed request receipts instead of silently switching to another model.
+Check source content, complete model output, and rendered pages. Routine note
+writing does not need file hashes, source snapshots, or provenance audit reports.
 
 ## Subtitle Preprocessing
 

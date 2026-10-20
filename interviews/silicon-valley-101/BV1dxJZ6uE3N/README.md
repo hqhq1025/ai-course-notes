@@ -31,7 +31,7 @@
 - [核定蓝图](generation/accepted-blueprint.json)记录各章需要解释的例子和概念。
 - [配图说明](assets/figures.json)与[配图验收](assets/figure-audit.md)记录图源和检查结果。
 - [制作进度](progress.md)记录当前完成情况。
-- [写作输入核验](provenance.json)记录九次成功请求：七次章节写作和两次读取全文的编辑。每次均核验完整转录进入实际提示词。
+- 七次章节写作和两次整篇编辑的实际请求均包含完整转录；Codex 复核来源并检查最终 PDF。
 - [来源验收](generation/source-acceptance.md)和 [PDF 视觉验收](qa/BV1dxJZ6uE3N-notes/qa-report.md)记录最终检查。
 
 节目内容归原作者及相应权利人所有。此目录提供重组讲解和自绘机制图；完整转录、原始媒体和包含转录的模型输入保留在本地。
