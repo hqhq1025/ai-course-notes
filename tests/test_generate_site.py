@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -264,6 +265,51 @@ def run_generator(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         text=True,
         capture_output=True,
     )
+
+
+def test_published_pdfs_work_in_clean_checkout_and_override_local_copies(tmp_path: Path) -> None:
+    course = tmp_path / "sample-course"
+    urls = {
+        "lecture01/lecture01-notes.pdf": "https://example.org/release/lecture01.pdf",
+        "lecture02/lecture02-notes.pdf": "https://example.org/release/lecture02.pdf",
+    }
+    for number in range(1, 5):
+        name = f"lecture{number:02}"
+        directory = course / name
+        directory.mkdir(parents=True)
+        (directory / f"{name}-notes.tex").write_text(
+            rf"\documentclass{{article}}\newcommand{{\notetitle}}{{Lecture {number}}}"
+            r"\begin{document}\section{Content}Teaching text.\end{document}",
+            encoding="utf-8",
+        )
+        if number in (2, 3):
+            (directory / f"{name}-notes.pdf").write_bytes(b"%PDF-1.4")
+    (course / "published-pdfs.json").write_text(json.dumps(urls), encoding="utf-8")
+
+    result = run_generator(tmp_path, "--strict")
+    assert result.returncode == 0, result.stderr
+    docs = tmp_path / ".web-build/docs/sample-course"
+    listing = (docs / "index.md").read_text()
+    for number in (1, 2):
+        name = f"lecture{number:02}"
+        url = urls[f"{name}/{name}-notes.pdf"]
+        page = (docs / name / "index.md").read_text()
+        assert f"[备用 PDF]({url})" in listing
+        assert f"[备用 PDF]({url})" in page
+        assert f"raw/main/sample-course/{name}/{name}-notes.pdf" not in page
+    tracked_pdf = "https://github.com/hqhq1025/ai-course-notes/raw/main/sample-course/lecture03/lecture03-notes.pdf"
+    assert f"[备用 PDF]({tracked_pdf})" in listing
+    assert f"[备用 PDF]({tracked_pdf})" in (docs / "lecture03/index.md").read_text()
+    assert "备用 PDF" not in (docs / "lecture04/index.md").read_text()
+    assert listing.count("[备用 PDF]") == 3
+
+
+@pytest.mark.parametrize("manifest", [[], {"lecture01/lecture01-notes.pdf": 42}, {"lecture01/lecture01-notes.pdf": "file:///tmp/private.pdf"}])
+def test_invalid_published_pdf_metadata_fails_explicitly(tmp_path: Path, manifest) -> None:
+    (tmp_path / "published-pdfs.json").write_text(json.dumps(manifest), encoding="utf-8")
+    generator = load_generator_module()
+    with pytest.raises(ValueError, match="published-pdfs.json"):
+        generator.published_pdf_url(tmp_path, tmp_path / "lecture01/lecture01-notes.pdf")
 
 
 def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:

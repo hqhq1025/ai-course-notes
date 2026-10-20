@@ -41,4 +41,4 @@
 
 本批八份讲义共 438 页。发布时接入远端新增的六讲 CMU 课程，仓库合计 384 份 TeX 源讲义。README 的讲义总数按源码统计；本批 PDF 通过 Release 下载。
 
-本批结果保存在本地工作区，课程 README 与项目跟踪文件已更新。
+本批已提交并推送至 GitHub，内容提交为 `700cf357`。八份 PDF 和 SHA-256 校验文件已发布至 [nju-gse-2026-argon-v1](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v1)。课程 README 与项目跟踪文件已更新阅读和下载入口。

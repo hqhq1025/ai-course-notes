@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import html
 import itertools
+import json
 import os
 import re
 import shutil
@@ -18,7 +19,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from PIL import Image, ImageOps
 
@@ -135,10 +136,17 @@ class Note:
     video_url: str = ""
     cover_path: str = ""
     graphics_paths: tuple[str, ...] = ()
+    published_pdf_url: str = ""
 
     @property
     def pdf_path(self) -> Path:
         return self.tex_path.with_suffix(".pdf")
+
+    @property
+    def pdf_url(self) -> str:
+        if self.published_pdf_url:
+            return self.published_pdf_url
+        return raw_github_url(self.pdf_path.relative_to(self.root)) if self.pdf_path.is_file() else ""
 
     @property
     def rel_tex_path(self) -> Path:
@@ -2494,6 +2502,23 @@ def convert_latex_body(fragment: str, ctx: BuildContext) -> str:
     return normalize_markdown(text)
 
 
+def published_pdf_url(course_path: Path, pdf_path: Path) -> str:
+    """Read explicit publication URLs so clean checkouts can link PDFs hosted outside Git."""
+    manifest = course_path / "published-pdfs.json"
+    if not manifest.is_file():
+        return ""
+    urls = json.loads(read_text(manifest))
+    if not isinstance(urls, dict):
+        raise ValueError(f"{manifest}: expected an object mapping relative PDF paths to URLs")
+    for key, value in urls.items():
+        if not isinstance(value, str):
+            raise ValueError(f"{manifest}: {key} must have an HTTP(S) URL")
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or re.search(r"\s", value):
+            raise ValueError(f"{manifest}: {key} must have an HTTP(S) URL")
+    return urls.get(pdf_path.relative_to(course_path).as_posix(), "")
+
+
 def parse_note(root: Path, tex_path: Path) -> Note:
     tex = read_note_source(tex_path, root)
     route_dir = tex_path.parent.relative_to(root)
@@ -2515,6 +2540,7 @@ def parse_note(root: Path, tex_path: Path) -> Note:
         video_url=extract_newcommand(tex, "videourl"),
         cover_path=extract_newcommand(tex, "videocoverpath"),
         graphics_paths=extract_graphics_paths(tex),
+        published_pdf_url=published_pdf_url(root / course_dir, tex_path.with_suffix(".pdf")),
     )
 
 
@@ -2786,9 +2812,7 @@ def note_unit(course_dir: Path) -> str:
 def copy_note_static_files(ctx: BuildContext, note: Note, out_dir: Path) -> tuple[str, str, str]:
     ctx.current_note = note
     ctx.current_out_dir = out_dir
-    pdf_link = ""
-    if note.pdf_path.is_file():
-        pdf_link = raw_github_url(note.pdf_path.relative_to(note.root))
+    pdf_link = note.pdf_url
     shutil.copy2(note.tex_path, out_dir / note.tex_path.name)
     tex_link = note.tex_path.name
     cover_link = ""
@@ -2865,8 +2889,8 @@ def course_page_markdown(course_dir: Path, notes: list[Note], title: str, topic:
     for note in sorted(notes, key=lambda item: natural_key(item.route_dir)):
         page_rel = markdown_page_target(course_dir, note.route_dir)
         resources = [f"[LaTeX]({github_blob_url(note.rel_tex_path)})"]
-        if note.pdf_path.is_file():
-            resources.append(f"[备用 PDF]({raw_github_url(note.pdf_path.relative_to(note.root))})")
+        if note.pdf_url:
+            resources.append(f"[备用 PDF]({note.pdf_url})")
         cells = [f"[{note.title}]({page_rel})", note.date or "—"]
         if shared_channel is None:
             cells.append(note.channel or "—")
