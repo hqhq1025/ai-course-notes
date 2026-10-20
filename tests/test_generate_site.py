@@ -312,6 +312,27 @@ def test_invalid_published_pdf_metadata_fails_explicitly(tmp_path: Path, manifes
         generator.published_pdf_url(tmp_path, tmp_path / "lecture01/lecture01-notes.pdf")
 
 
+@pytest.mark.parametrize("dates", [("", ""), ("2026-10-20", ""), ("2026-10-20", "2026-10-21")])
+def test_course_dates_are_shown_only_when_present(tmp_path: Path, dates) -> None:
+    generator = load_generator_module()
+    notes = [
+        generator.Note(
+            root=tmp_path, tex_path=tmp_path / f"course/lecture{i}/notes.tex",
+            route_dir=Path(f"course/lecture{i}"), course_dir=Path("course"), title=f"Lecture {i}", date=date,
+        )
+        for i, date in enumerate(dates)
+    ]
+    page = generator.course_page_markdown(Path("course"), notes, "Course", "")
+    if any(dates):
+        assert "| 讲义 | 日期 | 资源 |" in page
+        for note in notes:
+            assert f"| {note.date or '—'} |" in page
+    else:
+        assert "| 讲义 | 资源 |" in page
+        assert "日期" not in page
+        assert "| — |" not in page
+
+
 def test_generates_mkdocs_site_from_latex_notes(tmp_path: Path) -> None:
     write_sample_repo(tmp_path)
 

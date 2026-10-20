@@ -2875,7 +2875,8 @@ def course_page_markdown(course_dir: Path, notes: list[Note], title: str, topic:
     summary = f"共 {len(notes)} {note_unit(course_dir)}"
     if shared_channel:
         summary += f"，来源：{shared_channel}"
-    header = ["讲义", "日期"] + ([] if shared_channel is not None else ["来源"]) + ["资源"]
+    show_date = any(note.date for note in notes)
+    header = ["讲义"] + (["日期"] if show_date else []) + ([] if shared_channel is not None else ["来源"]) + ["资源"]
     lines.extend(
         [
             f"{summary}。",
@@ -2891,7 +2892,9 @@ def course_page_markdown(course_dir: Path, notes: list[Note], title: str, topic:
         resources = [f"[LaTeX]({github_blob_url(note.rel_tex_path)})"]
         if note.pdf_url:
             resources.append(f"[备用 PDF]({note.pdf_url})")
-        cells = [f"[{note.title}]({page_rel})", note.date or "—"]
+        cells = [f"[{note.title}]({page_rel})"]
+        if show_date:
+            cells.append(note.date or "—")
         if shared_channel is None:
             cells.append(note.channel or "—")
         cells.append(" · ".join(resources))
@@ -2999,6 +3002,22 @@ def css_content() -> str:
 
 .md-typeset .ai-notes-course-table td:last-child {
   white-space: nowrap;
+}
+
+@media screen and (max-width: 44.984375em) {
+  .md-typeset .ai-notes-course-table td:first-child {
+    min-width: 12em;
+  }
+
+  .md-typeset .ai-notes-course-table td:last-child {
+    width: 6em;
+    white-space: normal;
+  }
+
+  .md-typeset .ai-notes-course-table td:last-child a {
+    display: inline-block;
+    white-space: nowrap;
+  }
 }
 
 .md-typeset .course-grid {

@@ -325,7 +325,9 @@ def test_generated_workspace_builds_strict_with_utf8_search_index(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     site = output / "site"
     index = (site / "search" / "search_index.json").read_text(encoding="utf-8")
-    assert "从零构建语言模型" in index
+    # Jieba inserts zero-width word separators while keeping Chinese text as UTF-8.
+    assert "\u200b" in index
+    assert "从零构建语言模型" in index.replace("\u200b", "")
     html = (site / "cs336-2026" / "lecture01" / "index.html").read_text(encoding="utf-8")
     assert "fonts.googleapis.com" not in html and "unpkg.com" not in html
     assert "<title>CS336 2026 Lecture 1：从零构建语言模型 - AI Course Notes</title>" in html
