@@ -1,6 +1,6 @@
 # Note Generation Todo
 
-> Maintained by Codex. Last updated: 2026-08-18.
+> Maintained by Codex. Last updated: 2026-10-20.
 
 ## Status Legend
 - `todo`: not started
@@ -12,6 +12,7 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
+| done | 硅谷101播客 | Agent、机器人与 AI 制药 | `BV1dxJZ6uE3N` | `interviews/silicon-valley-101/BV1dxJZ6uE3N/` | 30 页、七章、七张机制图、七张对照表、21 个讲解框；完整口述进入 Argon 请求，整篇编辑与来源核查完成，三星质量、双遍编译和视觉验收记录随附。 |
 | done | NJU 生成式软件工程 2026 | Lecture 01-02 图文课堂实录 | `BV1pb8o6yE8f`, `BV1CQt365EzW` | `nju-generative-software-engineering-2026/lecture01-02/` | 按课堂时间线整理为 Markdown/HTML；保留原始与校订字幕，共 308 张课堂画面，不作总结式改写。 |
 | done | NJU 生成式软件工程 2026 | Lecture 01–08 Argon 教学讲义 | 官网讲义、290 页课件、课堂字幕与 GitHub 案例 | `nju-generative-software-engineering-2026/argon-rewrite/` | 8 讲 / 445 页 / 8 张机制图；Argon 全文重写、整讲编辑与事实复核完成，双遍编译、覆盖、⭐⭐⭐ 检查和 PDF 视觉验收通过。 |
 | done | Agentic AI MOOC Fall 2025 | Full 12-lecture course | official course page, decks, videos, subtitles | `talks/berkeley-llm-agents/f25/lecture01-12/` | 12/12 complete; 497 pages, 472 teaching visuals, 589 boxes; all lectures pass strict coverage, `⭐⭐⭐`, stabilized XeLaTeX builds, artifact audit, and signed visual QA. |
