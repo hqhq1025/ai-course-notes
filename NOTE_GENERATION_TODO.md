@@ -12,6 +12,10 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
+| done | 硅谷101播客 | 大模型如何变成生意 | `BV1cZ6qB6EMk` | `interviews/silicon-valley-101/BV1cZ6qB6EMk/` | 29 页，完整口述输入 Argon，七章、七图、七表；编译与视觉检查完成。 |
+| done | 硅谷101播客 | AI 时代怎样学习 | `BV1zD5a6bEoY` | `interviews/silicon-valley-101/BV1zD5a6bEoY/` | 28 页，完整口述输入 Argon，七章、七图、七表；保留嘉宾分歧并核对 METR 研究。 |
+| done | 硅谷101播客 | AI 如何自我提升 | `BV1sAT16WEYg` | `interviews/silicon-valley-101/BV1sAT16WEYg/` | 25 页，完整口述输入 Argon，七章、七图、七表；区分自我验证、单轮提升和持续递归。 |
+| done | 硅谷101播客 | AI 数据生意 | `BV1imaq6mEof` | `interviews/silicon-valley-101/BV1imaq6mEof/` | 22 页，完整口述输入 Argon，六章、六图、六表；已核对案例、训练条件与图文关系。 |
 | done | 硅谷101播客 | Agent、机器人与 AI 制药 | `BV1dxJZ6uE3N` | `interviews/silicon-valley-101/BV1dxJZ6uE3N/` | 30 页、七章、七张机制图、七张对照表、21 个讲解框；完整口述进入 Argon 请求，整篇编辑与来源核查完成，三星质量、双遍编译和视觉验收记录随附。 |
 | done | NJU 生成式软件工程 2026 | Lecture 01-02 图文课堂实录 | `BV1pb8o6yE8f`, `BV1CQt365EzW` | `nju-generative-software-engineering-2026/lecture01-02/` | 按课堂时间线整理为 Markdown/HTML；保留原始与校订字幕，共 308 张课堂画面，不作总结式改写。 |
 | done | NJU 生成式软件工程 2026 | Lecture 01–08 Argon 教学讲义 | 官网讲义、290 页课件、课堂字幕与 GitHub 案例 | `nju-generative-software-engineering-2026/argon-rewrite/` | 8 讲 / 445 页 / 8 张机制图；Argon 全文重写、整讲编辑与事实复核完成，双遍编译、覆盖、⭐⭐⭐ 检查和 PDF 视觉验收通过。 |

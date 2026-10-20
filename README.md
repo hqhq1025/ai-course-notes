@@ -2,12 +2,12 @@
 
 # 📚 AI Course Notes
 
-385 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译
+389 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-385份-blue?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-389份-blue?style=for-the-badge)](.)
 [![Collections](https://img.shields.io/badge/内容系列-19个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
@@ -86,9 +86,9 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | Berkeley 课程 | 36 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
 | CMU 课程 | 6 | CMU 11-768 AI Agents |
 | B 站系列课程 | 56 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026、南京大学生成式软件工程 |
-| 演讲与访谈 | 68 | Lex Fridman、Dwarkesh Patel、硅谷101、青稞、WhynotTV、张小珺等 |
+| 演讲与访谈 | 72 | Lex Fridman、Dwarkesh Patel、硅谷101、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| 合计 | 385 | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| 合计 | 389 | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -151,11 +151,11 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | [**Self-Evolving Agents 2026**](self-evolving-agents-2026/) | 因果世界模型、Agentic RL、经验智能、能力外部化与 Agent 理论 | 1 册 / 9 单元 | NICE 学术 |
 | [南京大学生成式软件工程 2026](nju-generative-software-engineering-2026/argon-rewrite/) | 提示词、版本管理、需求架构与 Agent 开发；另有前两讲图文实录 | 8 份讲义 + 2 讲实录 | 蒋炎岩 |
 
-### 🎤 演讲与访谈 (30 份)
+### 🎤 演讲与访谈 (34 份)
 
 | 来源 / 频道 | 主题 | 数量 | 目录 |
 |-------------|------|------|------|
-| [硅谷101播客](interviews/silicon-valley-101/) | Agent、机器人与 AI 制药 | 1 | interviews |
+| [硅谷101播客](interviews/silicon-valley-101/) | Agent、机器人与 AI 制药；商业化、大学学习、自我进化与数据行业 | 5 | interviews |
 | [**Lex Fridman Podcast**](talks/lex-fridman/) | Dario Amodei、Jensen Huang、State of AI、DeepSeek、中国 AI、OpenClaw | 5 | talks |
 | [**AITIME 论道**](talks/aitime/) | 张钹、林俊旸、姚顺雨、杨植麟 | 4 | talks |
 | [**青稞社区**](talks/qingke/) | LLM、Agentic、RL、Infra 圆桌 | 4 | talks |
