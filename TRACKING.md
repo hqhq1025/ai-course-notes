@@ -6,6 +6,16 @@
 
 ## ✅ 进行中 / 活跃更新
 
+### 南京大学《生成式软件工程》（2026）
+- **状态**：官网当前 8 讲已完成 Argon 教学讲义重写；前两讲图文课堂实录保留
+- **讲师**：蒋炎岩
+- **Bilibili 合集**：`[连载] 2026南京大学《生成式软件工程》(蒋炎岩)`
+- **已收录**：Lecture 01–08，覆盖提示词、版本管理、软件工程、需求架构与 Agent Native 开发
+- **教学讲义**：`nju-generative-software-engineering-2026/argon-rewrite/`，8 讲共 438 页、290 张官方课件与 8 张机制图；正文和整讲编辑由 `gemini-4-argon` 完成，双遍编译、覆盖检查、`⭐⭐⭐` 质量检查与 PDF 视觉验收通过
+- **本地形式**：`nju-generative-software-engineering-2026/lecture01-02/`，按课堂时间线提供 Markdown、HTML、原始/校订字幕和 308 张课堂画面
+- **两种形式**：教学讲义按问题、机制与例子组织；原图文实录保留老师原始讲述顺序
+- **检查方式**：官方课程页 `https://jyywiki.cn/GSE/2026/` 与 Bilibili 合集新增正课视频；本批来源快照为 2026-10-20 UTC
+
 ### Stanford CS336 - Language Modeling from Scratch (Spring 2026)
 - **状态**：Spring 2026 已完结；本地讲义制作完成，仅监控缺失嘉宾录像是否补发
 - **讲师**：Percy Liang, Tatsu Hashimoto

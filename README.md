@@ -2,13 +2,13 @@
 
 # 📚 AI Course Notes
 
-**376 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译**
+384 份 AI / LLM 中文讲义，支持在线阅读、LaTeX 源码查看与本地 PDF 编译
 
 基于公开课视频字幕、课程 slides、访谈、技术文章与公开资料整理，使用 LaTeX 生成 PDF，并自动发布为可搜索的网页阅读站。
 
 [![Online Reading](https://img.shields.io/badge/在线阅读-GitHub%20Pages-00A884?style=for-the-badge)](https://hqhq1025.github.io/ai-course-notes/)
-[![Total Notes](https://img.shields.io/badge/讲义总数-376份-blue?style=for-the-badge)](.)
-[![Collections](https://img.shields.io/badge/内容系列-18个-green?style=for-the-badge)](.)
+[![Total Notes](https://img.shields.io/badge/讲义总数-384份-blue?style=for-the-badge)](.)
+[![Collections](https://img.shields.io/badge/内容系列-19个-green?style=for-the-badge)](.)
 [![Format](https://img.shields.io/badge/格式-Web%20%7C%20LaTeX%20%7C%20Local%20PDF-red?style=for-the-badge)](.)
 
 [🌐 在线阅读](https://hqhq1025.github.io/ai-course-notes/) · [📄 浏览目录](#-课程一览) · [🤝 参与贡献](CONTRIBUTING.md)
@@ -31,7 +31,7 @@
 
 站点由 [tools/web/generate_site.py](tools/web/generate_site.py) 从仓库中的 LaTeX 讲义自动生成 MkDocs 项目，并通过 [.github/workflows/pages.yml](.github/workflows/pages.yml) 在 `main` 分支更新后部署到 GitHub Pages。
 
-> 大多数用户**不需要 clone** —— 直接访问在线站即可阅读、搜索全部 376 份讲义。
+> 大多数用户不需要 clone，直接访问在线站即可阅读、搜索已发布的讲义。本地新增讲义在下一次发布后进入在线站。
 
 ## 📥 克隆指南
 
@@ -85,10 +85,10 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | KAIST 课程 | 15 | CS492D Diffusion Models and Flow Models |
 | Berkeley 课程 | 36 | CS294 LLM Agents / Advanced LLM Agents / Agentic AI |
 | CMU 课程 | 6 | CMU 11-768 AI Agents |
-| B 站系列课程 | 48 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026 |
+| B 站系列课程 | 56 | Modern Agent、LLM Architect、Agentic RL、Self-Evolving Agents 2026、南京大学生成式软件工程 |
 | 演讲与访谈 | 67 | Lex Fridman、Dwarkesh Patel、青稞、WhynotTV、张小珺等 |
 | 技术文章笔记 | 25 | Agent Harness、Claude Code、Codex、Agentic Memory 等 |
-| **合计** | **376** | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
+| 合计 | 384 | 统计口径：仓库内 `*-notes.tex` 讲义源文件 |
 
 ---
 
@@ -141,7 +141,7 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 |------|------|------|------|
 | [**CMU 11-768**](cmu-11-768/) | AI Agents (Fall 2026) | 6 | Graham Neubig, Daniel Fried |
 
-### 🇨🇳 B 站系列课程 (48 份)
+### 🇨🇳 B 站系列课程 (56 份讲义 + 2 讲图文实录)
 
 | 系列 | 主题 | 讲数 | UP 主 |
 |------|------|------|------|
@@ -149,6 +149,7 @@ xelatex -interaction=nonstopmode -halt-on-error lecture01-notes.tex
 | [**LLM Architect**](llm-architect/) | 模型架构 (MoE, RoPE, VLM, K2.5) | 10 | 五道口纳什 |
 | [**Agentic RL**](agentic-rl/) | RL for LLM (PPO→GRPO→DPO, veRL) | 20 | 五道口纳什 |
 | [**Self-Evolving Agents 2026**](self-evolving-agents-2026/) | 因果世界模型、Agentic RL、经验智能、能力外部化与 Agent 理论 | 1 册 / 9 单元 | NICE 学术 |
+| [南京大学生成式软件工程 2026](nju-generative-software-engineering-2026/argon-rewrite/) | 提示词、版本管理、需求架构与 Agent 开发；另有前两讲图文实录 | 8 份讲义 + 2 讲实录 | 蒋炎岩 |
 
 ### 🎤 演讲与访谈 (29 份)
 

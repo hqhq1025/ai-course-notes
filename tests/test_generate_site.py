@@ -518,6 +518,52 @@ skill/
     assert "未转换的 LaTeX 环境" not in page
 
 
+def test_converts_argon_course_layout_and_math_without_changing_code(tmp_path: Path) -> None:
+    note_dir = tmp_path / "sample-course" / "argon-rewrite" / "lecture08"
+    note_dir.mkdir(parents=True)
+    write_image(note_dir / "frame.png", (100, 50))
+    (note_dir / "lecture08-notes.tex").write_text(
+        r"""
+\documentclass{ctexart}
+\newCJKfontfamily\cjkfallback{Droid Sans Fallback}
+\begin{document}
+\begin{titlepage}
+{\Huge\bfseries 第 8 讲：Agent Native 开发\par}
+\end{titlepage}
+\needspace{8\baselineskip}\section{自{\cjkfallback 働}化}
+准确率\ensuremath{\approx}能力。
+嵌套数学\ensuremath{\frac{a_1}{\text{total}}}和已有数学\(x_1\)。
+\Needspace*{5\baselineskip}
+\begin{center}\small\begin{tabularx}{\linewidth}{YYY}
+\toprule 名称 & 机制 & 符号\\
+自{\cjkfallback 働}化 & 停线 & \ensuremath{\rightarrow}\\[3pt]
+\bottomrule\end{tabularx}\end{center}
+\begin{figure}[H]
+\includegraphics[width=\linewidth]{frame.png}
+\caption{验收\ensuremath{\rightarrow}反馈}
+\end{figure}
+\begin{lstlisting}[basicstyle={\ttfamily\small\linespread{1}\selectfont},captionpos=t,caption={最小 Agent 循环}]
+literal = r"\ensuremath{\approx} \needspace{8\baselineskip} \cjkfallback"
+\end{lstlisting}
+\end{document}
+""".strip(), encoding="utf-8",
+    )
+    result = run_generator(tmp_path, "--strict")
+    assert result.returncode == 0, result.stderr
+    page = (tmp_path / ".web-build/docs/sample-course/argon-rewrite/lecture08/index.md").read_text()
+    assert "# 第 8 讲：Agent Native 开发" in page
+    assert "## 自働化" in page
+    assert r"准确率\(\approx\)能力" in page
+    assert r"\(\frac{a_1}{\text{total}}\)" in page
+    assert r"\(x_1\)" in page
+    assert r"| 自働化 | 停线 | \(\rightarrow\) |" in page
+    assert '<span class="arithmatex">\\(\\rightarrow\\)</span>' in page
+    assert '``` title="最小 Agent 循环"' in page
+    assert r'literal = r"\ensuremath{\approx} \needspace{8\baselineskip} \cjkfallback"' in page
+    generator = load_generator_module()
+    assert not generator.latex_command_leaks(page)
+
+
 def write_vector_pdf(path: Path) -> None:
     content = b"0 0 1 RG 4 w 10 10 m 190 90 l S"
     objects = [

@@ -12,6 +12,8 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
+| done | NJU 生成式软件工程 2026 | Lecture 01-02 图文课堂实录 | `BV1pb8o6yE8f`, `BV1CQt365EzW` | `nju-generative-software-engineering-2026/lecture01-02/` | 按课堂时间线整理为 Markdown/HTML；保留原始与校订字幕，共 308 张课堂画面，不作总结式改写。 |
+| done | NJU 生成式软件工程 2026 | Lecture 01–08 Argon 教学讲义 | 官网讲义、290 页课件、课堂字幕与 GitHub 案例 | `nju-generative-software-engineering-2026/argon-rewrite/` | 8 讲 / 438 页 / 8 张机制图；Argon 全文重写、整讲编辑与事实复核完成，双遍编译、覆盖、⭐⭐⭐ 检查和 PDF 视觉验收通过。 |
 | done | Agentic AI MOOC Fall 2025 | Full 12-lecture course | official course page, decks, videos, subtitles | `talks/berkeley-llm-agents/f25/lecture01-12/` | 12/12 complete; 497 pages, 472 teaching visuals, 589 boxes; all lectures pass strict coverage, `⭐⭐⭐`, stabilized XeLaTeX builds, artifact audit, and signed visual QA. |
 | done | CS336 Spring 2026 | Lecture 01: Overview and Tokenization | `lecture01-slides.py` + transcript | `cs336-2026/lecture01/` | 22p / 15 figures / 44 boxes; source-node-complete rewrite with transcript teacher voice; strict zero-warning, ⭐⭐⭐, double-pass build and signed QA. |
 | done | CS336 Spring 2026 | Lecture 02: Resource Accounting | `lecture02-slides.py` | `cs336-2026/lecture02/` | 22p / 11 figures / 51 boxes; compute, memory and bandwidth accounting with executable narration; strict zero-warning, ⭐⭐⭐ and signed QA. |

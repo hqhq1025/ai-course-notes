@@ -742,7 +742,7 @@ REMOVED_COMMANDS = {
     "vspace": 1, "enlargethispage": 1, "setcounter": 2, "addtocounter": 2, "setlength": 2, "addtolength": 2,
     "linespread": 1, "fontsize": 2, "pagestyle": 1, "thispagestyle": 1, "phantom": 1, "hphantom": 1,
     "vphantom": 1, "index": 1, "addcontentsline": 3, "captionsetup": 1, "color": 1, "renewcommand": 2,
-    "pdfbookmark": 2, "rule": 2,
+    "pdfbookmark": 2, "rule": 2, "needspace": 1, "Needspace": 1,
 }
 LATEX_DECLARATIONS = (
     "tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|"
@@ -917,6 +917,8 @@ def convert_inline_latex(text: str) -> str:
     text = replace_latex_command(text, "texttt", 1, lambda args: stash.put(texttt_markdown(args[0])))
     text = replace_latex_quote_pairs(text)
     text = MARKDOWN_PROTECTED_PATTERN.sub(lambda match: stash.put(protected_markdown(match.group(0))), text)
+    # \ensuremath enters math mode inside ordinary prose; stash its argument before prose formatting.
+    text = replace_latex_command(text, "ensuremath", 1, lambda args: stash.put(r"\(" + args[0] + r"\)"))
     text = text.replace("''", "”")
     text = replace_multicolumn_commands(text)
     text = re.sub(r"\\footnotemark(?:\[[^\]]*\])?", "", text)
@@ -1492,6 +1494,7 @@ INLINE_MATH_PATTERN = re.compile(r"(?<!\\)\$(?!\$)((?:\\.|[^$])+?)(?<!\\)\$|\\\(
 
 def caption_html(raw: str) -> str:
     """Escape a LaTeX caption for raw HTML while keeping inline math renderable by MathJax."""
+    raw = replace_latex_command(raw, "ensuremath", 1, lambda args: r"\(" + args[0] + r"\)")
     pieces: list[str] = []
     pos = 0
     for match in INLINE_MATH_PATTERN.finditer(raw):
@@ -2174,9 +2177,16 @@ def expand_note_macros(tex: str) -> str:
     if not begin:
         return tex
     macros = collect_macro_definitions(tex[: begin.start()])
-    if not macros:
+    # Font-family switches select print fonts, while the web stylesheet supplies the font.
+    # Only strip names declared by this note, leaving unknown content macros visible for the audit.
+    font_names = re.findall(
+        r"\\(?:new|renew)(?:CJK)?fontfamily\s*\{?\s*\\([A-Za-z@]+)", tex[: begin.start()]
+    )
+    if not macros and not font_names:
         return tex
     body, restore = protect_verbatim(tex[begin.start() :])
+    for name in font_names:
+        body = re.sub(rf"\\{re.escape(name)}(?![A-Za-z@])[ \t]*", "", body)
 
     def substitute(template: str, args: list[str]) -> str:
         def param(match: re.Match[str]) -> str:
