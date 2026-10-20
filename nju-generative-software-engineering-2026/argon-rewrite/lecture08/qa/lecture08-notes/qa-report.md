@@ -3,7 +3,7 @@
 - PDF: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/lecture08-notes.pdf`
 - Rendered pages: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/qa/lecture08-notes`
 - Contact sheet: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/qa/lecture08-notes/contact.png`
-- Page count rendered: 44
+- Page count rendered: 45
 - Renderer: pdftoppm
 - Renderer log: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/qa/lecture08-notes/pdftoppm.log`
 - Near-blank rendered pages: none
@@ -13,13 +13,12 @@
 - [x] Figures render and are readable.
 - [x] Tables/formulas/code do not spill outside margins.
 - [x] Important figures have nearby explanations.
-- [x] No orphan captions or stranded headings; intentional whitespace is recorded below.
+- [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## 最终人工检查
+## Presentation revision visual review
 
-最终 PDF 为 44 页，SHA-256：`b4b59655c36a5d39cafb490993747f36448f976ae628b6ab0abe6224f9ceb071`。
-
-前轮已全览课件、机制图、术语表与代码。本轮重新查看全部 44 页联系表，放大物理第 13、14、24、25、44 页。代码标题移至上方，并使用正常代码行距；第一段代码完整落在第 13 页，不再将底框、标题或最后一行孤立到下一页。第二段 CI 示例正常跨页，here-string、长行折行与解释均可读。目录中的“强制验证”、Jidoka 字形与长 URL 已复查。
-
-最终第二遍编译无 Missing character 或 Overfull。接受目录及参考资料末页的自然留白。未发现剩余裁切、缺图、孤立图注或标题。
+- Reviewed on 2026-10-20: full contact sheet and full-size PDF page 20 in the first presentation build; final full-size PDF pages 42–43 after the final build. The lecture body is unchanged between these builds.
+- The four CI/CD exception cases, summary bullets, bold terms, and numbered acceptance criteria render correctly. Exercise headings have one number and remain with their task text; continuation of a numbered list onto the following page is readable.
+- The final compile-pass2 log has no Overfull or missing-character messages.
+- Reviewed PDF SHA-256: `5cbca3deb5d95ede90458e5ffe8802f0f8d3146f1c2fd372bbeb28c634edf5d2`.

@@ -11,8 +11,8 @@
 - **讲师**：蒋炎岩
 - **Bilibili 合集**：`[连载] 2026南京大学《生成式软件工程》(蒋炎岩)`
 - **已收录**：Lecture 01–08，覆盖提示词、版本管理、软件工程、需求架构与 Agent Native 开发
-- **教学讲义**：`nju-generative-software-engineering-2026/argon-rewrite/`，8 讲共 438 页、290 张官方课件与 8 张机制图；正文和整讲编辑由 `gemini-4-argon` 完成，双遍编译、覆盖检查、`⭐⭐⭐` 质量检查与 PDF 视觉验收通过
-- **发布入口**：[在线阅读](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/) · [八讲 PDF 下载](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v1)；内容已推送 GitHub（`700cf357`）
+- **教学讲义**：`nju-generative-software-engineering-2026/argon-rewrite/`，8 讲共 445 页、290 张官方课件与 8 张机制图；正文和整讲编辑由 `gemini-4-argon` 完成，双遍编译、覆盖检查、`⭐⭐⭐` 质量检查与 PDF 视觉验收通过
+- **发布入口**：[在线阅读](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/) · [八讲 PDF 下载](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v2)；内容已推送 GitHub（`700cf357`）
 - **本地形式**：`nju-generative-software-engineering-2026/lecture01-02/`，按课堂时间线提供 Markdown、HTML、原始/校订字幕和 308 张课堂画面
 - **两种形式**：教学讲义按问题、机制与例子组织；原图文实录保留老师原始讲述顺序
 - **检查方式**：官方课程页 `https://jyywiki.cn/GSE/2026/` 与 Bilibili 合集新增正课视频；本批来源快照为 2026-10-20 UTC

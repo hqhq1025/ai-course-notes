@@ -2961,7 +2961,74 @@ def css_content() -> str:
   --ai-notes-card-border: color-mix(in srgb, var(--md-default-fg-color), transparent 78%);
 }
 
+.ai-notes-sidebar-controls,
+.ai-notes-sidebar-toggle {
+  display: none;
+}
+
+.ai-notes-sidebar-toggle {
+  align-items: center;
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.3rem;
+  color: var(--md-default-fg-color--light);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  gap: 0.3rem;
+  min-height: 1.7rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.ai-notes-sidebar-toggle:hover,
+.ai-notes-sidebar-toggle:focus-visible {
+  border-color: var(--md-accent-fg-color);
+  color: var(--md-default-fg-color);
+}
+
+.ai-notes-sidebar-toggle:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+
+/* Match Material's separate desktop breakpoints; mobile keeps its native drawers. */
+@media screen and (min-width: 60em) {
+  html[data-ai-sidebar-secondary] .ai-notes-sidebar-controls {
+    align-items: center;
+    background: var(--md-default-bg-color);
+    display: flex;
+    gap: 0.5rem;
+    justify-content: space-between;
+    margin: 0 0 1.1rem;
+    padding: 0.35rem 0;
+    position: sticky;
+    top: var(--md-header-height, 2.4rem);
+    z-index: 2;
+  }
+
+  .ai-notes-sidebar-toggle[data-ai-sidebar-toggle="secondary"]:not([hidden]) {
+    display: inline-flex;
+    margin-left: auto;
+  }
+
+  html[data-ai-sidebar-secondary="closed"] .md-sidebar--secondary {
+    display: none;
+  }
+
+  html[data-ai-sidebar-secondary] .md-typeset :target {
+    --md-scroll-margin: calc(var(--md-header-height, 2.4rem) + 3rem);
+  }
+}
+
 @media screen and (min-width: 76.25em) {
+  .ai-notes-sidebar-toggle[data-ai-sidebar-toggle="primary"]:not([hidden]) {
+    display: inline-flex;
+  }
+
+  html[data-ai-sidebar-primary="closed"] .md-sidebar--primary {
+    display: none;
+  }
+
   .md-grid {
     max-width: min(96rem, calc(100vw - 2 * var(--ai-notes-page-gutter)));
   }
@@ -3310,9 +3377,46 @@ def css_content() -> str:
 
 
 def sidebar_script() -> str:
-    """Reader script: remember the scroll position of each page across reloads in this tab."""
+    """Remember desktop sidebar preferences and this tab's per-page scroll position."""
     return """
 (function () {
+  function installSidebarControls() {
+    ["primary", "secondary"].forEach(function (side) {
+      var button = document.querySelector('[data-ai-sidebar-toggle="' + side + '"]');
+      var sidebar = document.querySelector(".md-sidebar--" + side);
+      if (!button) {
+        return;
+      }
+      if (!sidebar || sidebar.hidden || !sidebar.querySelector(".md-nav__list")) {
+        button.hidden = true;
+        return;
+      }
+      sidebar.id = button.getAttribute("aria-controls");
+      var attribute = "data-ai-sidebar-" + side;
+      var label = side === "primary" ? "课程导航" : "本页目录";
+
+      function updateButton() {
+        var expanded = document.documentElement.getAttribute(attribute) === "open";
+        button.setAttribute("aria-expanded", String(expanded));
+        button.textContent = (expanded ? "收起" : "展开") + label;
+      }
+
+      updateButton();
+      button.addEventListener("click", function () {
+        var next = document.documentElement.getAttribute(attribute) === "open" ? "closed" : "open";
+        document.documentElement.setAttribute(attribute, next);
+        updateButton();
+        try {
+          localStorage.setItem("ai-notes-sidebar-" + side, next);
+        } catch (_error) {
+          // The current page still toggles when storage is unavailable.
+        }
+        // Material measures sticky sidebar scroll areas on viewport changes.
+        window.dispatchEvent(new Event("resize"));
+      });
+    });
+  }
+
   function scrollKey() {
     return "ai-notes-scroll:" + location.origin + location.pathname + location.search;
   }
@@ -3366,7 +3470,10 @@ def sidebar_script() -> str:
     restoreScrollPosition();
   }
 
-  document.addEventListener("DOMContentLoaded", installScrollMemory);
+  document.addEventListener("DOMContentLoaded", function () {
+    installSidebarControls();
+    installScrollMemory();
+  });
 })();
 """.strip()
 
@@ -3422,9 +3529,40 @@ def on_post_build(config, **kwargs):
 
 
 def theme_main_override() -> str:
-    """Material template override that delays the search index download until search is used."""
+    """Material reader controls and on-demand search index loading."""
     return """
 {% extends "base.html" %}
+
+{% block extrahead %}
+{{ super() }}
+<script id="ai-notes-sidebar-state">
+/* Set preferences before first paint so navigation does not flash open on each page. */
+(function () {
+  ["primary", "secondary"].forEach(function (side) {
+    var state = side === "primary" ? "closed" : "open";
+    try {
+      var saved = localStorage.getItem("ai-notes-sidebar-" + side);
+      if (saved === "open" || saved === "closed") {
+        state = saved;
+      }
+    } catch (_error) {
+      // Use the reading defaults when the browser blocks storage.
+    }
+    document.documentElement.setAttribute("data-ai-sidebar-" + side, state);
+  });
+})();
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="ai-notes-sidebar-controls" role="group" aria-label="阅读布局">
+  <button type="button" class="ai-notes-sidebar-toggle" data-ai-sidebar-toggle="primary"
+    aria-controls="ai-notes-navigation" aria-expanded="false">展开课程导航</button>
+  <button type="button" class="ai-notes-sidebar-toggle" data-ai-sidebar-toggle="secondary"
+    aria-controls="ai-notes-toc" aria-expanded="true">收起本页目录</button>
+</div>
+{{ super() }}
+{% endblock %}
 
 {% block scripts %}
 <script>

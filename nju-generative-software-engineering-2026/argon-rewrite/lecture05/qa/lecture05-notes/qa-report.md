@@ -13,13 +13,12 @@
 - [x] Figures render and are readable.
 - [x] Tables/formulas/code do not spill outside margins.
 - [x] Important figures have nearby explanations.
-- [x] No orphan captions or stranded headings; intentional whitespace is recorded below.
+- [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## 人工检查记录
+## Presentation revision visual review
 
-已查看全部 59 页缩略图，并放大 PDF 第 14、24、40、48、52、59 页。Office Assistant 视频帧、契约公式、术语表、代码及参考链接均已检查。课件截图保持原始布局，密集内容可放大阅读。
-
-已修复并复查：PDF 第 48、52 页正文及表格的并集符号 ∪ 原先漏印，重新编译后已显示完整。展示公式、周围段落和表格均正常。最新编译日志无 Missing character、Overfull 或 Underfull。
-
-接受的留白：目录末页、PDF 第 40 页章末和第 59 页参考资料末页。内容完整，无孤立图注。未发现表格、代码或 URL 越界。
+- Reviewed on 2026-10-20: full contact sheet; full-size PDF pages 57–58 after the final build. The lecture body is unchanged from the first presentation build.
+- The stranded exercise 2 heading on page 57 was fixed. It now starts with its task text on page 58. Exercise numbering is no longer duplicated; acceptance lists and emphasis are readable.
+- The final compile-pass2 log has no Overfull or missing-character messages.
+- Reviewed PDF SHA-256: `a903172cd259b70a6b53fdfdf88ea23cb4f873586ab291762411bef013447ccb`.

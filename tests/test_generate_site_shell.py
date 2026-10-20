@@ -286,6 +286,116 @@ console.log(JSON.stringify({ before, afterUnrelatedFocus, after: sent }));
 """
 
 
+SIDEBAR_HARNESS = r"""
+const vm = require("vm");
+const [bootstrap, script, initial, blocked] = process.argv.slice(2);
+const saved = JSON.parse(initial);
+function page() {
+  const root = {};
+  const listeners = {};
+  const buttons = {};
+  const sidebars = {};
+  const localStorage = {
+    getItem: (key) => { if (blocked === "true") throw Error("storage blocked"); return saved[key] || null; },
+    setItem: (key, value) => { if (blocked === "true") throw Error("storage blocked"); saved[key] = value; },
+  };
+  for (const side of ["primary", "secondary"]) {
+    const attrs = { "aria-controls": side === "primary" ? "ai-notes-navigation" : "ai-notes-toc" };
+    buttons[side] = {
+      getAttribute: (key) => attrs[key],
+      setAttribute: (key, value) => { attrs[key] = value; },
+      addEventListener: (type, fn) => { buttons[side][type] = fn; },
+      attrs,
+    };
+    sidebars[side] = { querySelector: () => ({}) };
+  }
+  const context = {
+    localStorage,
+    sessionStorage: { getItem: () => null },
+    location: { origin: "https://example.test", pathname: "/lecture/", search: "", hash: "" },
+    history: {},
+    Event: function (type) { this.type = type; },
+    document: {
+      documentElement: {
+        getAttribute: (key) => root[key],
+        setAttribute: (key, value) => { root[key] = value; },
+      },
+      querySelector: (selector) => {
+        const side = selector.includes("primary") ? "primary" : "secondary";
+        return selector.startsWith(".md-sidebar") ? sidebars[side] : buttons[side];
+      },
+      addEventListener: (type, fn) => { listeners[type] = fn; },
+    },
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+  };
+  context.window = context;
+  vm.runInNewContext(bootstrap, context);
+  const beforeDOM = { ...root };
+  vm.runInNewContext(script, context);
+  listeners.DOMContentLoaded();
+  function state() {
+    return Object.fromEntries(Object.entries(buttons).map(([side, button]) => [side, {
+      expanded: button.attrs["aria-expanded"],
+      label: button.textContent,
+      controls: button.attrs["aria-controls"],
+      sidebarID: sidebars[side].id,
+      state: root["data-ai-sidebar-" + side],
+    }]));
+  }
+  return { buttons, beforeDOM, state };
+}
+const first = page();
+const original = first.state();
+first.buttons.primary.click();
+const afterLeft = first.state();
+first.buttons.secondary.click();
+const afterBoth = first.state();
+const nextPage = page();
+console.log(JSON.stringify({ beforeDOM: first.beforeDOM, original, afterLeft, afterBoth, nextPage: nextPage.state(), saved }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize(
+    ("saved", "blocked", "primary", "secondary"),
+    [
+        ({}, False, "closed", "open"),
+        ({"ai-notes-sidebar-primary": "open", "ai-notes-sidebar-secondary": "closed"}, False, "open", "closed"),
+        ({"ai-notes-sidebar-primary": "invalid"}, False, "closed", "open"),
+        ({"ai-notes-sidebar-primary": "open"}, True, "closed", "open"),
+    ],
+)
+def test_sidebar_preferences_toggle_independently_and_survive_navigation(
+    tmp_path: Path, saved: dict, blocked: bool, primary: str, secondary: str
+) -> None:
+    generator = load_generator()
+    template = generator.theme_main_override()
+    bootstrap = template.split('<script id="ai-notes-sidebar-state">', 1)[1].split("</script>", 1)[0]
+    harness = tmp_path / "sidebars.js"
+    harness.write_text(SIDEBAR_HARNESS, encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(harness), bootstrap, generator.sidebar_script(), json.dumps(saved), str(blocked).lower()],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    state = json.loads(result.stdout)
+    assert state["beforeDOM"] == {"data-ai-sidebar-primary": primary, "data-ai-sidebar-secondary": secondary}
+    for side, expected in [("primary", primary), ("secondary", secondary)]:
+        control = state["original"][side]
+        assert control["state"] == expected
+        assert control["expanded"] == str(expected == "open").lower()
+        assert control["controls"] == control["sidebarID"]
+    assert state["afterLeft"]["secondary"] == state["original"]["secondary"]
+    assert state["afterLeft"]["primary"]["expanded"] != state["original"]["primary"]["expanded"]
+    assert state["afterBoth"]["primary"] == state["afterLeft"]["primary"]
+    assert state["afterBoth"]["secondary"]["expanded"] != state["original"]["secondary"]["expanded"]
+    assert state["afterBoth"]["primary"]["label"] == ("收起课程导航" if primary == "closed" else "展开课程导航")
+    assert state["afterBoth"]["secondary"]["label"] == ("收起本页目录" if secondary == "closed" else "展开本页目录")
+    assert state["nextPage"] == (state["original"] if blocked else state["afterBoth"])
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 @pytest.mark.parametrize(
     ("search", "held"),
@@ -331,6 +441,9 @@ def test_generated_workspace_builds_strict_with_utf8_search_index(tmp_path: Path
     html = (site / "cs336-2026" / "lecture01" / "index.html").read_text(encoding="utf-8")
     assert "fonts.googleapis.com" not in html and "unpkg.com" not in html
     assert "<title>CS336 2026 Lecture 1：从零构建语言模型 - AI Course Notes</title>" in html
+    assert 'type="button" class="ai-notes-sidebar-toggle" data-ai-sidebar-toggle="primary"' in html
+    assert 'aria-controls="ai-notes-toc" aria-expanded="true">收起本页目录</button>' in html
+    assert 'data-md-toggle="drawer"' in html
     assert (site / "assets" / "vendor" / "mathjax" / "input" / "tex" / "extensions" / "boldsymbol.js").is_file()
 
 

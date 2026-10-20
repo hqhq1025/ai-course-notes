@@ -2,7 +2,7 @@
 
 主讲：蒋炎岩
 
-本目录提供 [Argon 全系列教学讲义](argon-rewrite/README.md)：8 讲共 438 页，依据官方讲义、全部 290 页课件、课堂字幕和相关 GitHub 案例重写。每讲包含 PDF、Markdown、LaTeX 源码与机制图。
+本目录提供 [Argon 全系列教学讲义](argon-rewrite/README.md)：8 讲共 445 页，依据官方讲义、全部 290 页课件、课堂字幕和相关 GitHub 案例重写。每讲包含 PDF、Markdown、LaTeX 源码与机制图。
 
 前两讲另保留课堂图文实录：沿用老师实际讲课顺序，以时间戳、课堂画面和经过校对的讲述文字组成正文。
 

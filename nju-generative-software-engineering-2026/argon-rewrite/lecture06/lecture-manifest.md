@@ -4,6 +4,9 @@
 
 - `coverage-matrix.md`
 - `lecture-manifest.md`
+- `lecture06-notes.md`
+- `lecture06-notes.pdf`
+- `lecture06-notes.tex`
 - `source.json`
 
 ## Supplementary Source Materials
@@ -119,7 +122,7 @@
 
 ## Existing Note
 
-- none
+- `lecture06-notes.tex`
 
 ## Generation Contract
 

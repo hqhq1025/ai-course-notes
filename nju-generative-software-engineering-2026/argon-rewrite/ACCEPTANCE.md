@@ -37,8 +37,14 @@
 
 逐讲最终检查记录见 `lectureNN/qa/lectureNN-notes/qa-report.md`。八讲均已完成最终视觉验收；第八讲的代码标题、跨页和长行也已复查。
 
+## 阅读排版更新
+
+八讲新增 186 处排版调整：长段总结分点、步骤编号、关键短语加粗，代码标识符使用等宽字。`generation/presentation.json` 保存逐段排版记录，渲染前核对原文和公式，原始 `prose.json` 不变。练习标题与题干、验收标签与列表保持同页起排。
+
+新版 PDF 通过 [nju-gse-2026-argon-v2](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v2) 下载。首版保留在 v1，便于对照。
+
 ## 文件统计
 
-本批八份讲义共 438 页。发布时接入远端新增的六讲 CMU 课程，仓库合计 384 份 TeX 源讲义。README 的讲义总数按源码统计；本批 PDF 通过 Release 下载。
+本批八份讲义共 445 页。发布时接入远端新增的六讲 CMU 课程，仓库合计 384 份 TeX 源讲义。README 的讲义总数按源码统计；本批 PDF 通过 Release 下载。
 
 本批已提交并推送至 GitHub，内容提交为 `700cf357`。八份 PDF 和 SHA-256 校验文件已发布至 [nju-gse-2026-argon-v1](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v1)。课程 README 与项目跟踪文件已更新阅读和下载入口。

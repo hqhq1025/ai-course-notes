@@ -3,7 +3,7 @@
 - PDF: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/lecture02-notes.pdf`
 - Rendered pages: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/qa/lecture02-notes`
 - Contact sheet: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/qa/lecture02-notes/contact.png`
-- Page count rendered: 56
+- Page count rendered: 59
 - Renderer: pdftoppm
 - Renderer log: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/qa/lecture02-notes/pdftoppm.log`
 - Near-blank rendered pages: none
@@ -16,12 +16,10 @@
 - [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## 最终人工验收
+## 2026-10-20 分点与强调版复查
 
-已核对第二轮 Argon 修订后的 56 页 PDF，重新检查全部联系表及物理第 22、47 页原图。第 22 页公式说明改为可读文字，原先外露的 LaTeX 命令和右侧溢出已消失。第 47 页 Jidoka 条目改为“异常自动停机”，不存在缺字方框。课件、机制图、术语表及代码均正常；第二遍编译日志没有 Overfull 或 Missing character。
+已检查全讲联系表及第 8、11、24、56 页，确认列表层级、粗体、公式与表格无溢出。首轮第 56 页的孤立练习标题已修复；最终重编译后复查第 56、57 页，练习标题、题干及验收标准连续可读。第 11 页为章末小结，保留章末留白，接受该分页。以上页码均为 PDF 物理页码。
 
-接受物理第 31 页的章末留白：该页包含约 400 字的代码说明及完整小结，内容连续，没有孤立标题或 3 行小结单占一页。第 56 页为参考文献尾页。此处“无大面积空白页”检查已在明确接受自然章末和参考尾页留白的条件下通过。
+最终 PDF：59 页。检查在 `presentation-final-build.log` 对应讲次报告 `BUILT` 后完成。
 
-事实残留项已逐项核对修复，记录在 `../../generation/residual-findings.md`。章节引导段实际有问题与上下文联系，接受自动连接词检测的启发式警告。
-
-验收结果：通过，保留上述已接受的自然留白。PDF SHA-256：`8ab76229dbaf46bf70847b5c20e2eb23ceb8ff3f3d9ddf4a156286960218cc54`。
+SHA-256：`85f147a9f5cf2c61c68246d8c229ab9e7e9dc36ac83fd5d2161639fc8afb6836`。

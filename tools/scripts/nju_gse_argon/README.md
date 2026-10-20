@@ -21,9 +21,11 @@ python3 tools/scripts/nju_gse_argon/build_notes.py 1 2 3 4 5 6 7 8
 1. `run_chapters.py` 读取 `generation/plan.json`，复用分章和首尾段缓存；缺少缓存时调用 Argon。已有 `prose.json` 不会被这一步覆盖。
 2. `edit_lectures.py` 从 `prose-draft.json` 恢复整讲编辑；`editorial-matching.json` 保存已有编辑的原文匹配修正。
 3. `refine_lectures.py` 从 `refinement-draft.json` 恢复复核修正。本批只有第 1、2、3、4、8 讲需要这一步。先整讲编辑，再复核修正，才能恢复最终正文。
-4. `render_notes.py` 读取最终 `prose.json`，生成 TeX、Markdown、来源清单与覆盖矩阵。
+4. `render_notes.py` 读取最终 `prose.json`，叠加 `presentation.json` 中的分点和强调标记，生成 TeX、Markdown、来源清单与覆盖矩阵。排版记录逐段核对原文，只允许插入 Markdown 标记和空白；原始 Argon 正文保持不变。
 5. `build_notes.py` 编译两遍，运行覆盖、质量和 PDF 渲染检查。安装了 `~/.agents/skills/speak-plainly/scripts/check.py` 时也运行语言检查；未安装则明确记录 `SKIP`。
 
 生成 PDF 后，检查 `qa/` 中的联系表和报告，并打开可疑页面。自动检查不替代页面检查。
 
 `generation/` 中的完整响应 JSON 会直接复用；只有 `*-partial.txt` 的请求会重新发起。修改提示词后，已有缓存仍会生效，因此保留当前缓存和编辑快照，另行准备新一轮生成输入。`argon_writer.py plan` 可生成缺失蓝图；日常写作使用上述分章流程。
+
+排版使用 `**重点**`、行内反引号、`- ` 列表和 `1. ` 编号。TeX 分别渲染为粗体、等宽字、`itemize` 和 `enumerate`，Markdown 保留对应语法。推导、图前引导和因果解释仍以段落呈现。

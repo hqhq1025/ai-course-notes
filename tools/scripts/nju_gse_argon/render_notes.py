@@ -20,11 +20,15 @@ def esc(s):
         '∨':r'\ensuremath{\lor}', '⊨':r'\ensuremath{\models}',
         '∪':r'\ensuremath{\cup}', '∩':r'\ensuremath{\cap}',
         '′':r'\ensuremath{\prime}', '働':r'{\cjkfallback 働}'})
-    s = str(s).replace('**', '').replace('並', '并').replace('僅', '仅').replace('強', '强')
-    parts = re.split(r'(\$(?!\{)[^$\n\u4e00-\u9fff]+\$|\\\([^\n]*?\\\)|\\Delta(?:_\{[^}]+\}|_[A-Za-z0-9])?)', s)
+    s = str(s).replace('並', '并').replace('僅', '仅').replace('強', '强')
+    parts = re.split(r'(`[^`\n]+`|\*\*[^*\n]+\*\*|\$(?!\{)[^$\n\u4e00-\u9fff]+\$|\\\([^\n]*?\\\)|\\Delta(?:_\{[^}]+\}|_[A-Za-z0-9])?)', s)
     output = []
     for part in parts:
-        if part.startswith('$') and part.endswith('$'):
+        if part.startswith('**') and part.endswith('**'):
+            output.append(r'\textbf{'+esc(part[2:-2])+'}')
+        elif part.startswith('`') and part.endswith('`'):
+            output.append(r'\texttt{'+''.join(replacements.get(c,c) for c in part[1:-1])+'}')
+        elif part.startswith('$') and part.endswith('$'):
             output.append(r'\('+part[1:-1]+r'\)')
         elif part.startswith(r'\(') and part.endswith(r'\)'):
             output.append(part)
@@ -33,6 +37,68 @@ def esc(s):
         else:
             output.append(''.join(replacements.get(c,c) for c in part).replace('`', ''))
     return ''.join(output)
+
+
+def prose(s):
+    """Render paragraphs and flat Markdown lists without changing their wording."""
+    output = []
+    active_list = None
+    for line in str(s).splitlines():
+        if not line.strip():
+            output.append('')
+            continue
+        match = re.match(r'^\s*(?:([-*]) |(\d+)\. )(.*)$', line)
+        kind = ('itemize' if match.group(1) else 'enumerate') if match else None
+        if active_list and kind != active_list:
+            output.append(r'\end{'+active_list+'}')
+            active_list = None
+        if kind:
+            if active_list is None:
+                output.append(r'\begin{'+kind+'}')
+                active_list = kind
+            output.append(r'\item '+esc(match.group(3)))
+        else:
+            output.append(esc(line))
+    if active_list:
+        output.append(r'\end{'+active_list+'}')
+    return '\n'.join(output)
+
+
+def presentation_text(s):
+    """Ignore only presentation markup when verifying a formatting-only edit."""
+    s = re.sub(r'^\s*(?:[-*] |\d+\. )', '', s, flags=re.M)
+    return re.sub(r'\s+', '', s.replace('**', '').replace('`', ''))
+
+
+def inline_presentation_text(s):
+    return re.sub(r'\s+', '', s.replace('**', '').replace('`', ''))
+
+
+def apply_presentation(obj, edits):
+    for edit in edits:
+        target = obj
+        for key in edit['path'][:-1]:
+            target = target[key]
+        key = edit['path'][-1]
+        if target[key] != edit['before']:
+            raise ValueError(f"Presentation source changed: {edit['path']}")
+        if (inline_presentation_text(edit['before']) != inline_presentation_text(edit['after'])
+                and presentation_text(edit['before']) != presentation_text(edit['after'])):
+            raise ValueError(f"Presentation edit changes wording: {edit['path']}")
+        math = r'\$(?!\{)[^$\n\u4e00-\u9fff]+\$|\\\([^\n]*?\\\)'
+        if re.findall(math, edit['before']) != re.findall(math, edit['after']):
+            raise ValueError(f"Presentation edit changes a formula: {edit['path']}")
+        target[key] = edit['after']
+    return obj
+
+
+def exercise_parts(number, task):
+    parts = task.split('\n\n', 1)
+    if len(parts) == 2 and len(parts[0]) < 160:
+        title = parts[0].replace('**', '').strip()
+        title = re.sub(r'^练习\s*[一二三四五六七八九十\d]+\s*[：:]\s*', '', title)
+        return f'练习 {number}：'+title.strip('【】').rstrip('。：:'), parts[1]
+    return f'练习 {number}', task
 
 
 PREAMBLE = r'''\documentclass[UTF8,a4paper,11pt,fontset=fandol]{ctexart}
@@ -44,7 +110,8 @@ PREAMBLE = r'''\documentclass[UTF8,a4paper,11pt,fontset=fandol]{ctexart}
 \usepackage[margin=22mm,headheight=15pt]{geometry}
 \usepackage{graphicx,float,xcolor,amsmath,amssymb,booktabs,longtable,array,tabularx}
 \usepackage[most]{tcolorbox}
-\usepackage{listings,needspace,fancyhdr}
+\usepackage{listings,needspace,fancyhdr,enumitem}
+\setlist{leftmargin=2em,itemsep=0.35em,topsep=0.4em,parsep=0pt}
 \usepackage[unicode,colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black,breaklinks=true]{hyperref}
 \usepackage{xurl}
 \setlength{\parindent}{0pt}
@@ -65,6 +132,9 @@ PREAMBLE = r'''\documentclass[UTF8,a4paper,11pt,fontset=fandol]{ctexart}
 def render(i):
     d = ROOT/f'lecture{i:02d}'
     obj = json.loads((d/'generation/prose.json').read_text())
+    presentation = d/'generation/presentation.json'
+    if presentation.is_file():
+        obj = apply_presentation(obj, json.loads(presentation.read_text()))
     plan = json.loads((d/'generation/plan.json').read_text())
     slides = json.loads((d/'sources/slides.json').read_text())
     used = [u['slide_id'] for s in obj['sections'] for u in s['units']]
@@ -95,7 +165,7 @@ def render(i):
            r'主讲与原始讲义作者：蒋炎岩\par',
            r'资料快照：2026-10-20\par\vfill', esc(source_note),
            r'\vspace{8mm}\url{https://jyywiki.cn/GSE/2026/}',r'\end{titlepage}',
-           r'\tableofcontents\clearpage',r'\section*{导读}\addcontentsline{toc}{section}{导读}',esc(obj['lead'])]
+           r'\tableofcontents\clearpage',r'\section*{导读}\addcontentsline{toc}{section}{导读}',prose(obj['lead'])]
     md = [f'# {title}', '', source_note, '', obj['lead'], '']
     diagram = json.loads((d/'assets/mechanism.json').read_text())
     tex += [r'\paragraph{机制总览}',esc(diagram['before']),
@@ -105,17 +175,17 @@ def render(i):
     md += ['### 机制总览','',diagram['before'],'','![机制总览](assets/mechanism.svg)','',
            '读图：'+diagram['reading'],'',diagram['after'],'']
     for sec in obj['sections']:
-        tex += [r'\needspace{8\baselineskip}\section{'+esc(sec['title'])+'}',esc(sec['intro'])]
+        tex += [r'\needspace{8\baselineskip}\section{'+esc(sec['title'])+'}',prose(sec['intro'])]
         md += ['## '+sec['title'],'',sec['intro'],'']
         for u in sec['units']:
             sid = u['slide_id']; page = int(sid.split('-')[1])
-            tex += [r'\subsection{'+esc(u['title'])+'}',esc(u['before']),
+            tex += [r'\subsection{'+esc(u['title'])+'}',prose(u['before']),
                     r'\begin{figure}[H]\centering',
                     r'\includegraphics[width=\linewidth]{slides-images/'+sid+'.png}',
                     r'\caption{'+esc(u['title'])+f'（官方课件第 {page} 页）'+'}',
                     r'\end{figure}',
-                    esc(u['reading']),
-                    esc(u['after'])]
+                    prose(u['reading']),
+                    prose(u['after'])]
             md += ['### '+u['title'],'',u['before'],'',f'![官方课件第 {page} 页](slides-images/{sid}.png)','',
                    u['reading'],'',u['after'],'']
             if i == 5 and page == 7:
@@ -128,7 +198,7 @@ def render(i):
                     md += [f'![课件内嵌视频补充帧]({f})' for f in frames]+['']
         for b in sec['boxes']:
             assert b['kind'] in ['importantbox','knowledgebox','warningbox']
-            tex += ['\\begin{'+b['kind']+'}{'+esc(b['title'])+'}',esc(b['text']),'\\end{'+b['kind']+'}']
+            tex += ['\\begin{'+b['kind']+'}{'+esc(b['title'])+'}',prose(b['text']),'\\end{'+b['kind']+'}']
             md += ['> '+b['title'],'>','> '+b['text'].replace('\n','\n> '),'']
         table = sec.get('table')
         if table:
@@ -142,21 +212,22 @@ def render(i):
             md += ['| '+' | '.join(str(c).replace('|','／') for c in row)+' |' for row in table['rows']]+['']
         code = sec.get('code')
         if code:
-            tex += [r'\begin{lstlisting}[basicstyle={\ttfamily\small\linespread{1}\selectfont},captionpos=t,caption={'+esc(code['caption'])+'}]\n'+code['source'].strip('\n')+'\n'+r'\end{lstlisting}',esc(code['explanation'])]
+            tex += [r'\begin{lstlisting}[basicstyle={\ttfamily\small\linespread{1}\selectfont},captionpos=t,caption={'+esc(code['caption'])+'}]\n'+code['source'].strip('\n')+'\n'+r'\end{lstlisting}',prose(code['explanation'])]
             md += ['```'+code.get('language','text'),code['source'],'```','',code['explanation'],'']
         eq = sec.get('equation')
         if eq:
-            tex += [r'\['+'\n'+eq['latex']+'\n'+r'\]',esc(eq['explanation'])]
+            tex += [r'\['+'\n'+eq['latex']+'\n'+r'\]',prose(eq['explanation'])]
             md += ['$$',eq['latex'],'$$','',eq['explanation'],'']
-        tex += [r'\needspace{7\baselineskip}\subsection{本章小结}',esc(sec['summary'])]
+        tex += [r'\needspace{7\baselineskip}\subsection{本章小结}',prose(sec['summary'])]
         md += ['### 本章小结','',sec['summary'],'']
-    tex += [r'\needspace{8\baselineskip}\section{总结与延伸}',esc(obj['conclusion']),r'\subsection{学习练习}',
+    tex += [r'\needspace{8\baselineskip}\section{总结与延伸}',prose(obj['conclusion']),r'\subsection{学习练习}',
             '用下面的延伸练习检查自己能否应用本讲方法。']
     md += ['## 总结与延伸','',obj['conclusion'],'','### 学习练习','',
            '用下面的延伸练习检查自己能否应用本讲方法。','']
     for n, exercise in enumerate(obj['practice'],1):
-        tex += [r'\paragraph{练习 '+str(n)+'}',esc(exercise['task']),r'\par 验收标准：'+esc(exercise['acceptance'])]
-        md += [f'{n}. {exercise["task"]}','',f'   验收标准：{exercise["acceptance"]}','']
+        heading, task = exercise_parts(n, exercise['task'])
+        tex += [r'\needspace{6\baselineskip}\subsubsection*{'+esc(heading)+'}',prose(task),r'\par\needspace{4\baselineskip}\textbf{验收标准：}',prose(exercise['acceptance'])]
+        md += ['#### '+heading,'',task,'','**验收标准：**','',exercise['acceptance'],'']
     tex += [r'\subsection{拓展阅读}',
             '下面列出本讲的原始讲义、课件和相关项目，便于回看案例、查阅代码并继续实践。',
             r'\begin{itemize}']
@@ -172,8 +243,8 @@ def render(i):
         tex += [r'\item '+esc(ref['title'])+r'：\url{'+ref['url']+'}']
         md += [f'- [{ref["title"]}]({ref["url"]})']
     tex += [r'\end{itemize}',r'\end{document}']
-    (d/f'lecture{i:02d}-notes.tex').write_text('\n\n'.join(tex)+'\n')
-    (d/f'lecture{i:02d}-notes.md').write_text('\n'.join(md)+'\n')
+    (d/f'lecture{i:02d}-notes.tex').write_text('\n'.join(line.rstrip() for line in '\n\n'.join(tex).splitlines())+'\n')
+    (d/f'lecture{i:02d}-notes.md').write_text('\n'.join(line.rstrip() for line in '\n'.join(md).splitlines())+'\n')
     print(i, 'rendered', len(used), 'slides', flush=True)
 
 

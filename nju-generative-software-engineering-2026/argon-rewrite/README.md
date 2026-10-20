@@ -5,20 +5,20 @@
 `gemini-4-argon` 重新编写；Codex 负责来源核查、配图、可视化与排版验收。
 此目录与此前前两讲的课堂图文实录分别保存。
 
-八讲已完成全文重写和整讲编辑，共 438 页。包括全部 290 张官方课件、8 张机制图、术语解释、代码示例和学习练习。
+八讲已完成全文重写和整讲编辑，共 445 页。包括全部 290 张官方课件、8 张机制图、术语解释、代码示例和学习练习。
 
-[在线阅读全系列](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/) · [下载全部 PDF](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v1)
+[在线阅读全系列](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/) · [下载全部 PDF](https://github.com/hqhq1025/ai-course-notes/releases/tag/nju-gse-2026-argon-v2)
 
 | 讲次 | 官方主题 | 课件页数 | 讲义页数 | 阅读 |
 |---|---|---:|---:|---|
-| 01 | 欢迎来到未来 | 44 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture01-notes.pdf) · [文字](lecture01/lecture01-notes.md) |
-| 02 | 提示词与上下文工程 | 37 | 56 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture02-notes.pdf) · [文字](lecture02/lecture02-notes.md) |
-| 03 | 版本管理 | 35 | 53 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture03/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture03-notes.pdf) · [文字](lecture03/lecture03-notes.md) |
-| 04 | 版本管理（2） | 25 | 43 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture04/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture04-notes.pdf) · [文字](lecture04/lecture04-notes.md) |
-| 05 | 软件工程的来龙去脉 | 39 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture05/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture05-notes.pdf) · [文字](lecture05/lecture05-notes.md) |
-| 06 | 需求和架构（1） | 47 | 65 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture06/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture06-notes.pdf) · [文字](lecture06/lecture06-notes.md) |
-| 07 | 需求和架构（2） | 39 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture07/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture07-notes.pdf) · [文字](lecture07/lecture07-notes.md) |
-| 08 | Agent Native 开发 | 24 | 44 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v1/lecture08-notes.pdf) · [文字](lecture08/lecture08-notes.md) |
+| 01 | 欢迎来到未来 | 44 | 60 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture01-notes.pdf) · [文字](lecture01/lecture01-notes.md) |
+| 02 | 提示词与上下文工程 | 37 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture02/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture02-notes.pdf) · [文字](lecture02/lecture02-notes.md) |
+| 03 | 版本管理 | 35 | 54 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture03/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture03-notes.pdf) · [文字](lecture03/lecture03-notes.md) |
+| 04 | 版本管理（2） | 25 | 44 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture04/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture04-notes.pdf) · [文字](lecture04/lecture04-notes.md) |
+| 05 | 软件工程的来龙去脉 | 39 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture05/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture05-notes.pdf) · [文字](lecture05/lecture05-notes.md) |
+| 06 | 需求和架构（1） | 47 | 65 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture06/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture06-notes.pdf) · [文字](lecture06/lecture06-notes.md) |
+| 07 | 需求和架构（2） | 39 | 59 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture07/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture07-notes.pdf) · [文字](lecture07/lecture07-notes.md) |
+| 08 | Agent Native 开发 | 24 | 45 | [网页](https://hqhq1025.github.io/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture08/) · [PDF](https://github.com/hqhq1025/ai-course-notes/releases/download/nju-gse-2026-argon-v2/lecture08-notes.pdf) · [文字](lecture08/lecture08-notes.md) |
 
 第一次学习可按讲次阅读：前两讲建立委托任务和组织上下文的方法；第三、四讲学习保存与整合修改；第五到七讲把需求、约束、历史事实和派生结果组织成可维护的系统；第八讲将这些方法接入 Agent、持续集成与发布流程。每讲末尾的练习提供可检查的完成标准。
 

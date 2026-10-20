@@ -3,7 +3,7 @@
 - PDF: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/lecture01-notes.pdf`
 - Rendered pages: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/qa/lecture01-notes`
 - Contact sheet: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/qa/lecture01-notes/contact.png`
-- Page count rendered: 59
+- Page count rendered: 60
 - Renderer: pdftoppm
 - Renderer log: `/home/v-haoqiwang/ai-course-notes/nju-generative-software-engineering-2026/argon-rewrite/lecture01/qa/lecture01-notes/pdftoppm.log`
 - Near-blank rendered pages: none
@@ -16,10 +16,10 @@
 - [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## 最终人工验收
+## 2026-10-20 分点与强调版复查
 
-已核对第二轮 Argon 修订后的 59 页 PDF，重新检查全部联系表及物理第 42 页原图。此前检查的机制图、表格、盒子与参考链接布局保持正常；第 42 页正文中的 n 与 O(1) 已正确显示为行内数学，不再出现美元符号。第二遍编译日志没有 Overfull 或 Missing character。未见缺图、裁切、孤立标题或图注；首版仅有 3–4 行小结的近空白正文页已消失。
+已检查全讲联系表及第 8、20、58、59 页，确认分点、重点加粗、概率公式、表格与长链接排版可读。最终重编译后复查第 59 页，三道练习编号无重复，标题与题干保持同页。目录末页的留白为正常目录收尾。以上页码均为 PDF 物理页码。
 
-事实残留项已逐项核对修复，记录在 `../../generation/residual-findings.md`。章节引导段虽有部分未命中自动连接词规则，但实际提供了问题、前文联系或阅读目标，接受该启发式警告，不补充套话。
+最终 PDF：60 页。检查在 `presentation-final-build.log` 对应讲次报告 `BUILT` 后完成。
 
-验收结果：通过。PDF SHA-256：`4e0f902b0eb17bb4972f015ea910b9f9c581d2dc1c762b7c2102c4b7fb3c3a48`。
+SHA-256：`85b67542810e9840d0199d7473318e95dedb74898ed7b0e7081719b553aa18b2`。

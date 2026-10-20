@@ -13,13 +13,12 @@
 - [x] Figures render and are readable.
 - [x] Tables/formulas/code do not spill outside margins.
 - [x] Important figures have nearby explanations.
-- [x] No orphan captions or stranded headings; intentional whitespace is recorded below.
+- [x] No orphan captions, stranded headings, or mostly blank pages.
 - [x] Box titles and long URLs look sane.
 
-## 人工检查记录
+## Presentation revision visual review
 
-已查看全部 65 页缩略图，并放大 PDF 第 30、31、39、61、62、65 页。重点检查汉诺塔代码跨页、QR 中间表示代码、双时态数据结构和参考资料长 URL。代码能在页内换行，跨页内容连续，图注与图片相邻，未见文字裁切或图片缺失。课件截图保持原始布局，密集代码可放大阅读。
-
-编译日志无 Missing character、Overfull 或 Underfull。fontspec 的字体脚本声明警告未造成可见缺字。
-
-接受的留白：目录末页与参考资料末页。未发现教学正文近空白页。PDF 第 61 页代码仅开头两行，余下代码连续排入第 62 页，未丢行。
+- Reviewed on 2026-10-20: full contact sheet; full-size PDF pages 63–64 after the final build. The lecture body is unchanged from the first presentation build.
+- The stranded acceptance label on page 63 was fixed. The label now appears with its numbered requirements on page 64. The three architecture scales, emphasis, formula, and exercise headings are readable.
+- The final compile-pass2 log has no Overfull or missing-character messages.
+- Reviewed PDF SHA-256: `666c91ea4033b7d7394371895d3e84f816282b8dec26253d4b8d9f168e71dfd7`.
