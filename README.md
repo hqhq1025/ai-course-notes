@@ -260,13 +260,20 @@ graph LR
     C -->|是| D[下载 SRT]
     C -->|否| E[Whisper large-v3]
     E --> D
-    D --> F[Claude 智能整理]
+    D --> F[资料核对与写作蓝图]
     G[官方 Slides / 公开资料] --> F
-    F --> H[LaTeX 源文件]
+    F --> W[Argon 撰写与整篇润色]
+    W --> Q[内容复核与排版]
+    Q --> H[LaTeX 源文件]
     H --> I[XeLaTeX 编译]
     I --> J[PDF 讲义]
     H --> K[网页阅读站]
 ```
+
+新讲义及实质重写默认使用 Argon（`gemini-4-argon`）撰写正文和整篇润色。
+Codex 负责资料与字幕、结构和覆盖、配图、事实复核及页面验收。
+字幕内容进入实际写作请求，按讲者的问题、例子和推理组织正文。
+调用方法和回执见 [Argon 写作流程](docs/ARGON_WRITING_WORKFLOW.md)。历史讲义不因此改标作者模型。
 
 ### 本地预览在线阅读站
 

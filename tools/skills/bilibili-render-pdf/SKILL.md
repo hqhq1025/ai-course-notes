@@ -7,6 +7,11 @@ description: "Use when the user provides a Bilibili URL (BV number) and wants La
 
 Turn a Bilibili video into a complete, compileable `.tex` note and a rendered PDF.
 
+Use Argon (`gemini-4-argon`) for prose and the whole-document language edit.
+Codex prepares and checks sources, transcripts, structure, figures, and rendered
+output. In `ai-course-notes`, follow `docs/ARGON_WRITING_WORKFLOW.md` and use
+`tools/scripts/argon_write.py`. Pass the actual transcript text to the writer.
+
 This skill extends the youtube-render-pdf workflow with Bilibili-specific adaptations.
 
 ## Shared Rules

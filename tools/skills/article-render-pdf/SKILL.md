@@ -9,6 +9,12 @@ Use this skill to turn a web article, blog post, or X/Twitter article into a com
 
 This skill complements `youtube-render-pdf` and `bilibili-render-pdf` for text-based content sources.
 
+For notes in `ai-course-notes`, use Argon (`gemini-4-argon`) for prose and the
+whole-document language edit. Codex gathers and verifies sources, prepares the
+structure and figures, and validates the output. Follow
+`docs/ARGON_WRITING_WORKFLOW.md` and use `tools/scripts/argon_write.py`; put the
+actual source content in the prompt and preserve the request receipts.
+
 ## Supported Sources
 
 | Source | Fetch Method | Notes |

@@ -166,6 +166,13 @@ If CUDA transcription fails:
 
 ## Writing Standard For Interviews
 
+Use Argon for chapter prose and the final whole-document language edit, following
+[the shared writing workflow](ARGON_WRITING_WORKFLOW.md). Codex prepares the
+timestamped speaker ledger, source checks, structure, figures, and acceptance.
+Supply the transcript text in the prompt and retain speaker positions, examples,
+and disagreements. A fixed per-slide writing template is not appropriate for a
+roundtable or interview.
+
 Interview notes are not course notes, but they still need teaching structure.
 
 Required structure:

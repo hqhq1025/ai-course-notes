@@ -62,13 +62,34 @@ git diff --check
 
 ## Generation Workflow
 
+### Default Writing Model
+
+Use Argon (`gemini-4-argon`) for new or substantively rewritten note prose,
+including course notes, video notes, interviews, and article notes. Argon writes
+the chapter drafts and the final whole-document language edit. Codex gathers
+and verifies sources, prepares the coverage matrix and blueprint, draws figures,
+reviews facts, renders the document, and checks the PDF and website.
+
+Read `docs/ARGON_WRITING_WORKFLOW.md` for the shared request command and receipts.
+Feed the relevant source text and timestamped spoken explanations into the
+actual prompt; a source filename or hash alone does not supply its contents.
+Organize prose around the questions, examples, and reasoning in the source.
+Slide coverage remains required, but it does not require one prose unit per slide.
+
+Preserve successful chapter outputs and request a whole-document edit for
+continuity. Send substantive prose corrections back to Argon; mechanical TeX,
+formatting, spelling, and verified factual corrections can be applied directly.
+If an Argon request fails, keep the receipt and retry the affected portion after
+diagnosis. Do not silently use a different model or label Codex prose as Argon.
+Continue independent source, figure, and QA work while resolving the route.
+
 1. Discover official sources before writing: course site, GitHub lecture repo, slide PDFs, handouts, and video descriptions.
 2. Build a source manifest with `tools/scripts/build_lecture_manifest.py <lecture-dir>`.
 3. Create a coverage matrix and blueprint before writing TeX. Do not start prose until required source nodes have a planned treatment.
 4. Prefer official slides and executable lecture sources over transcript-only summaries.
 5. If slides are PDFs, render high-resolution page images into `slides-images/`.
 6. If only video is available, use subtitle-aligned frame search and inspect multiple nearby frames before selecting images.
-7. Write one lecture at a time, compile to PDF, run quality and coverage checks, perform visual PDF QA, and update tracking files.
+7. Have Argon write and edit one lecture at a time, compile to PDF, run quality and coverage checks, perform visual PDF QA, and update tracking files.
 8. Preserve unrelated dirty worktree changes; do not revert user edits.
 
 Workflow commands:

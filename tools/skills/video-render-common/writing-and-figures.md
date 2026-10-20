@@ -1,5 +1,17 @@
 # Shared Writing & Figure Rules for Video-to-PDF Skills
 
+## Default Prose Writer
+
+Use Argon (`gemini-4-argon`) for course/video-note prose, substantive rewrites,
+and the whole-document language edit. Codex gathers transcripts and other
+sources, prepares structure and coverage, draws figures, checks facts, and
+validates the rendered output. In `ai-course-notes`, follow
+`docs/ARGON_WRITING_WORKFLOW.md` and use `tools/scripts/argon_write.py`.
+Include actual source text in the prompt. Write around questions, examples,
+and reasoning; complete slide coverage does not require fixed per-slide prose.
+Preserve completed chapters, edit the assembled document for continuity, and
+keep failed request receipts instead of silently switching to another model.
+
 ## Subtitle Preprocessing
 
 YouTube auto-generated subtitles contain massive redundancy — each caption line repeats the tail of the previous line, causing the same sentence to appear 3-4 times. A raw 5-hour video can produce 80,000+ SRT lines, but only ~8,000 lines of unique content.
