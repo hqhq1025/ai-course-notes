@@ -1,6 +1,6 @@
 # Note Generation Todo
 
-> Maintained by Codex. Last updated: 2026-10-20.
+> Maintained by Codex. Last updated: 2026-10-25.
 
 ## Status Legend
 - `todo`: not started
@@ -12,6 +12,7 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
+| done | 月球大叔 | 朱邦华到 Brandon 陈春宇，连续 8 期 | 频道、前七期官网全文、Brandon 完整音频转写 | `youtube/uncle-moon/` | 每期一份 PDF，共 231 页、55 张机制图；Argon 章节写作与全文润色，口述覆盖、编译及 PDF 视觉检查完成。逐期状态见 queue.json。 |
 | done | 硅谷101播客 | 大模型如何变成生意 | `BV1cZ6qB6EMk` | `interviews/silicon-valley-101/BV1cZ6qB6EMk/` | 29 页，完整口述输入 Argon，七章、七图、七表；编译与视觉检查完成。 |
 | done | 硅谷101播客 | AI 时代怎样学习 | `BV1zD5a6bEoY` | `interviews/silicon-valley-101/BV1zD5a6bEoY/` | 28 页，完整口述输入 Argon，七章、七图、七表；保留嘉宾分歧并核对 METR 研究。 |
 | done | 硅谷101播客 | AI 如何自我提升 | `BV1sAT16WEYg` | `interviews/silicon-valley-101/BV1sAT16WEYg/` | 25 页，完整口述输入 Argon，七章、七图、七表；区分自我验证、单轮提升和持续递归。 |
