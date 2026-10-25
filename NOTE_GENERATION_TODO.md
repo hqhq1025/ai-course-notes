@@ -12,6 +12,7 @@
 
 | Status | Series | Item | Source | Local Target | Notes |
 |---|---|---|---|---|---|
+| done | 十字路口 | 李磊谈 AI 时代的 PhD | `BV1CAHV6PEPM`，完整音频转写与同源视频 | `interviews/crossroads/BV1CAHV6PEPM/` | 49 页，Argon 完成六章及全文编辑；30 组节目画面、42 个讲解框、6 张对照表。三星质量、来源覆盖、双遍编译、PDF 视觉验收与桌面/手机网页预览均完成。 |
 | done | 月球大叔 | 朱邦华到 Brandon 陈春宇，连续 8 期 | 频道、前七期官网全文、Brandon 完整音频转写 | `youtube/uncle-moon/` | 每期一份 PDF，共 231 页、55 张机制图；Argon 章节写作与全文润色，口述覆盖、编译及 PDF 视觉检查完成。逐期状态见 queue.json。 |
 | done | 硅谷101播客 | 大模型如何变成生意 | `BV1cZ6qB6EMk` | `interviews/silicon-valley-101/BV1cZ6qB6EMk/` | 29 页，完整口述输入 Argon，七章、七图、七表；编译与视觉检查完成。 |
 | done | 硅谷101播客 | AI 时代怎样学习 | `BV1zD5a6bEoY` | `interviews/silicon-valley-101/BV1zD5a6bEoY/` | 28 页，完整口述输入 Argon，七章、七图、七表；保留嘉宾分歧并核对 METR 研究。 |
